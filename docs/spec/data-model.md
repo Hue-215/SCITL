@@ -32,7 +32,8 @@
 | deadline | 締切日。未設定はNULL |
 | archived_at | アーカイブした日時。NULLなら未アーカイブ |
 | deleted_at | 削除した日時。NULLなら未削除 |
-| created_at / updated_at | 作成日時・更新日時 |
+| created_at | 作成日時 |
+| updated_at | 更新日時 |
 
 補足: 優先度を表すカラムは意図的に持たない(総合チャットでの相談ベースで判断する方針のため)。
 
