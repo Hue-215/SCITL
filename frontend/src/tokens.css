@@ -1,6 +1,15 @@
 /*
  * デザイントークン(色以外)。色は theme.ts が実行時に --color-* として適用する
  * (docs/spec/principles.md 6節「数値・色などのデザイントークンは一箇所に集約」)。
+ *
+ * theme.ts はロール名(camelCase)を roleNameToCssVar() で --color-kebab-case に
+ * 変換して発行するため、変数名で theme.ts 内を検索しても定義に辿り着けない。
+ * 発行される色トークンの一覧(2025-09時点、theme.ts のROLES/DANGER_ROLESと対応):
+ *   --color-bg, --color-surface, --color-surface-alt, --color-border,
+ *   --color-text, --color-text-secondary,
+ *   --color-primary, --color-on-primary,
+ *   --color-primary-container, --color-on-primary-container,
+ *   --color-danger, --color-danger-container, --color-on-danger-container
  */
 
 @font-face {
