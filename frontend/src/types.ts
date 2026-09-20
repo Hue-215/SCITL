@@ -12,6 +12,15 @@ export interface Task {
   updated_at: string
 }
 
+export interface TaskSummary {
+  id: number
+  title: string | null
+  deadline: string | null
+  archived_at: string | null
+  steps_done: number
+  steps_total: number
+}
+
 export type ResponseEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'tool_call'; id: string | null; name: string; arguments: unknown }
