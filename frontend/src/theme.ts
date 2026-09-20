@@ -40,7 +40,6 @@ const ROLES = {
 // 危険色は独自の色相を持つため、彩度は(シードではなく)固定値からの相対にする。
 const DANGER_ROLES = {
   danger: { light: { saturationFactor: 70, lightness: 42 }, dark: { saturationFactor: 65, lightness: 68 } },
-  onDanger: { light: { saturationFactor: 10, lightness: 99 }, dark: { saturationFactor: 15, lightness: 12 } },
   dangerContainer: { light: { saturationFactor: 75, lightness: 92 }, dark: { saturationFactor: 40, lightness: 26 } },
   onDangerContainer: {
     light: { saturationFactor: 65, lightness: 24 },
