@@ -136,6 +136,12 @@ body {
   color: #6b7280;
 }
 
+.entry-error {
+  align-self: flex-start;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .entry-pending {
   align-self: flex-start;
   font-style: italic;

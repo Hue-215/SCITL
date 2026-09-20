@@ -75,10 +75,30 @@ pub struct ToolSchema {
     pub parameters: serde_json::Value,
 }
 
+/// アダプタが構成不足で呼び出しに進めない状態(Issue #40)。プロバイダの選択有無は
+/// `Option<&dyn LlmAdapter>`の`None`で表すためここには含めない
+/// (`orchestration::turn_error::from_readiness`参照)。
+///
+/// APIキーの空・未設定はここに含めない。ローカルプロバイダーは認証不要で意図的に
+/// 空のままにする場合があり、空文字列だけでは「未設定で使えない」のか「設定不要」なのかを
+/// 区別できない(`main.rs::build_active_adapter`のドキュメント参照: 資格情報ストアが
+/// 使えない場合も鍵無し扱いで起動を続け、実際のAPI呼び出し時にプロバイダー側の認証エラー
+/// として表面化させる設計)。実際に鍵が必要なら呼び出しが401/403を返し、
+/// `turn_error::classify`が`Auth`として分類する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readiness {
+    Ready,
+    NoModel,
+}
+
 /// 具象プロバイダの境界。`orchestration::turn`はこのtraitのみを知り、
 /// プロバイダ固有の癖は各実装内に閉じ込める(architecture.md 3節)。
 #[async_trait::async_trait]
 pub trait LlmAdapter: Send + Sync {
+    /// モデル未選択・APIキー未設定を、実際にAPIを呼ぶ前に判定する。プロバイダごとに
+    /// 判定材料(保持しているモデル名・鍵)が異なるため各実装に委ねる。
+    fn readiness(&self) -> Readiness;
+
     async fn send(
         &self,
         messages: &[ChatMessage],

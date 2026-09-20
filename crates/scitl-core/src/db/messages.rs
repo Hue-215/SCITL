@@ -9,6 +9,7 @@ pub enum Role {
     User,
     Assistant,
     Tool,
+    Error,
 }
 
 impl Role {
@@ -17,6 +18,7 @@ impl Role {
             Role::User => "user",
             Role::Assistant => "assistant",
             Role::Tool => "tool",
+            Role::Error => "error",
         }
     }
 }
@@ -46,7 +48,8 @@ pub struct NewMessage<'a> {
     pub kind: Kind,
     pub source: Option<&'a str>,
     pub turn: Option<(&'a str, i64)>,
-    pub is_error: bool,
+    /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
+    pub error_kind: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,7 +60,7 @@ pub struct Message {
     pub content: String,
     pub kind: String,
     pub source: Option<String>,
-    pub is_error: bool,
+    pub error_kind: Option<String>,
     pub turn_id: Option<String>,
     pub attempt_no: Option<i64>,
     pub created_at: String,
@@ -70,7 +73,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     };
     conn.execute(
         "INSERT INTO messages
-            (task_id, role, content, kind, source, is_error, turn_id, attempt_no, created_at)
+            (task_id, role, content, kind, source, error_kind, turn_id, attempt_no, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             msg.task_id,
@@ -78,7 +81,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
             msg.content,
             msg.kind.as_str(),
             msg.source,
-            msg.is_error as i64,
+            msg.error_kind,
             turn_id,
             attempt_no,
             now_iso8601(),
@@ -92,7 +95,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// (data-model.md「ターン境界」— 外部経由の記録はturn_idを持たないため常に残る)。
 pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
-        "SELECT id, task_id, role, content, kind, source, is_error, turn_id, attempt_no, created_at
+        "SELECT id, task_id, role, content, kind, source, error_kind, turn_id, attempt_no, created_at
          FROM messages
          WHERE task_id = ?1
            AND deleted_at IS NULL
@@ -114,7 +117,7 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
                 content: row.get(3)?,
                 kind: row.get(4)?,
                 source: row.get(5)?,
-                is_error: row.get::<_, i64>(6)? != 0,
+                error_kind: row.get(6)?,
                 turn_id: row.get(7)?,
                 attempt_no: row.get(8)?,
                 created_at: row.get(9)?,
@@ -153,7 +156,7 @@ mod tests {
                 kind: Kind::Normal,
                 source: None,
                 turn: None,
-                is_error: false,
+                error_kind: None,
             },
         )
         .unwrap();
@@ -162,12 +165,12 @@ mod tests {
             &conn,
             NewMessage {
                 task_id: Some(task_id),
-                role: Role::Assistant,
-                content: "失敗した応答",
+                role: Role::Error,
+                content: "モデルからの応答が空でした",
                 kind: Kind::Normal,
                 source: None,
                 turn: Some(("turn-1", 1)),
-                is_error: true,
+                error_kind: Some("empty_response"),
             },
         )
         .unwrap();
@@ -181,7 +184,7 @@ mod tests {
                 kind: Kind::Normal,
                 source: None,
                 turn: Some(("turn-1", 2)),
-                is_error: false,
+                error_kind: None,
             },
         )
         .unwrap();
@@ -205,7 +208,7 @@ mod tests {
                 kind: Kind::ToolExecution,
                 source: Some("mcp:external-client"),
                 turn: None,
-                is_error: false,
+                error_kind: None,
             },
         )
         .unwrap();
@@ -213,5 +216,50 @@ mod tests {
         let messages = list_for_task(&conn, task_id).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].source.as_deref(), Some("mcp:external-client"));
+    }
+
+    #[test]
+    fn error_role_round_trips_with_error_kind() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+
+        insert_message(
+            &conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::Error,
+                content: "APIキーが設定されていません",
+                kind: Kind::Normal,
+                source: None,
+                turn: Some(("turn-1", 1)),
+                error_kind: Some("no_api_key"),
+            },
+        )
+        .unwrap();
+
+        let messages = list_for_task(&conn, task_id).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "error");
+        assert_eq!(messages[0].error_kind.as_deref(), Some("no_api_key"));
+    }
+
+    #[test]
+    fn error_role_without_error_kind_is_rejected_by_check_constraint() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+
+        let result = insert_message(
+            &conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::Error,
+                content: "壊れた呼び出し",
+                kind: Kind::Normal,
+                source: None,
+                turn: None,
+                error_kind: None,
+            },
+        );
+        assert!(result.is_err());
     }
 }

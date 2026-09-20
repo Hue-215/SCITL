@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
-use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolSchema};
+use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolSchema};
 use scitl_core::orchestration::{run_turn, SystemPrompts};
 use serde_json::json;
 
@@ -25,6 +25,10 @@ struct RecordingAdapter {
 
 #[async_trait::async_trait]
 impl LlmAdapter for RecordingAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
     async fn send(
         &self,
         messages: &[ChatMessage],
@@ -65,6 +69,10 @@ struct FakeAdapter {
 
 #[async_trait::async_trait]
 impl LlmAdapter for FakeAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
     async fn send(
         &self,
         _messages: &[ChatMessage],
@@ -102,6 +110,10 @@ struct MultiToolCallAdapter {
 
 #[async_trait::async_trait]
 impl LlmAdapter for MultiToolCallAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
     async fn send(
         &self,
         _messages: &[ChatMessage],
@@ -137,6 +149,89 @@ impl LlmAdapter for MultiToolCallAdapter {
     }
 }
 
+/// APIプロバイダーが失敗を返すケース(Issue #40)。
+struct FailingAdapter;
+
+#[async_trait::async_trait]
+impl LlmAdapter for FailingAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        Err(CoreError::Llm("http 401: invalid api key".to_string()))
+    }
+}
+
+/// テキストもツール呼び出しも無い応答を返すケース(Issue #40)。
+struct EmptyResponseAdapter;
+
+#[async_trait::async_trait]
+impl LlmAdapter for EmptyResponseAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        Ok(vec![ResponseEvent::Done {
+            finish_reason: FinishReason::Stop,
+        }])
+    }
+}
+
+/// 毎ラウンドtool_callsを返し続け、ツール呼び出し回数の上限到達を起こすケース(Issue #40)。
+struct AlwaysToolCallAdapter;
+
+#[async_trait::async_trait]
+impl LlmAdapter for AlwaysToolCallAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        Ok(vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_1".to_string()),
+                name: "add_steps".to_string(),
+                arguments: json!({ "descriptions": ["買い出し"] }),
+            },
+            ResponseEvent::Done {
+                finish_reason: FinishReason::ToolCall,
+            },
+        ])
+    }
+}
+
+/// モデル未選択・APIキー未設定を模すケース(Issue #40)。
+struct UnreadyAdapter(Readiness);
+
+#[async_trait::async_trait]
+impl LlmAdapter for UnreadyAdapter {
+    fn readiness(&self) -> Readiness {
+        self.0
+    }
+
+    async fn send(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        panic!("readiness()がReadyでない場合、sendは呼ばれないはず");
+    }
+}
+
 fn seed_task(conn: &Connection) -> i64 {
     let now = db::now_iso8601();
     conn.execute(
@@ -158,7 +253,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
 
     let events = run_turn(
         db.clone(),
-        &adapter,
+        Some(&adapter),
         task_id,
         "タイトルを「買い物」にして".to_string(),
         &SystemPrompts::default(),
@@ -208,7 +303,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     };
     run_turn(
         db.clone(),
-        &adapter,
+        Some(&adapter),
         task_id,
         "工程を追加して".to_string(),
         &prompts_config,
@@ -281,7 +376,7 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
 
     run_turn(
         db.clone(),
-        &adapter,
+        Some(&adapter),
         task_id,
         "工程を追加してタイトルも変えて".to_string(),
         &SystemPrompts::default(),
@@ -302,4 +397,166 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
         .filter(|m| m.kind == "tool_execution")
         .count();
     assert_eq!(tool_execution_count, 2);
+}
+
+/// LLM呼び出しの失敗はErrで落とさず、エラー発言として保存される(Issue #40)。
+#[tokio::test]
+async fn run_turn_persists_error_message_instead_of_returning_err() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    let events = run_turn(
+        db.clone(),
+        Some(&FailingAdapter),
+        task_id,
+        "こんにちは".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, ResponseEvent::Done { finish_reason: FinishReason::Error })));
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("auth"));
+}
+
+/// 空応答(テキストもツール呼び出しも無い)もエラー発言として保存される(Issue #40)。
+#[tokio::test]
+async fn run_turn_persists_error_message_for_empty_response() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&EmptyResponseAdapter),
+        task_id,
+        "こんにちは".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("empty_response"));
+}
+
+/// ツール呼び出しの上限到達もエラー発言として保存される(Issue #40)。
+#[tokio::test]
+async fn run_turn_persists_error_message_for_tool_round_limit() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&AlwaysToolCallAdapter),
+        task_id,
+        "工程を追加して".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("tool_round_limit"));
+}
+
+/// プロバイダー未選択(`None`)はエラー発言として保存され、`send`は一切呼ばれない
+/// (Issue #40)。
+#[tokio::test]
+async fn run_turn_persists_error_message_when_no_provider_is_configured() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        None,
+        task_id,
+        "こんにちは".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("no_provider"));
+}
+
+/// モデル未選択・APIキー未設定は`send`を呼ぶ前に検知され、エラー発言として保存される
+/// (Issue #40)。
+#[tokio::test]
+async fn run_turn_persists_error_message_for_unready_adapter_without_calling_send() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&UnreadyAdapter(Readiness::NoModel)),
+        task_id,
+        "こんにちは".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("no_model"));
+}
+
+/// エラー発言は次ターンのAPI送信用履歴に混入しない(`legacy/backend.md` 4節手順2)。
+#[tokio::test]
+async fn error_messages_are_excluded_from_the_next_turns_history() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&FailingAdapter),
+        task_id,
+        "1回目".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let adapter = RecordingAdapter {
+        calls: AtomicUsize::new(0),
+        sent_messages: Mutex::new(Vec::new()),
+    };
+    run_turn(
+        db.clone(),
+        Some(&adapter),
+        task_id,
+        "2回目".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let rounds = adapter.sent_messages.into_inner().unwrap();
+    let first_round = &rounds[0];
+    let has_error_content = first_round.iter().any(|m| match m {
+        ChatMessage::User(content) | ChatMessage::Assistant { content: Some(content), .. } => {
+            content.contains("APIキーが正しくない")
+        }
+        _ => false,
+    });
+    assert!(!has_error_content);
 }

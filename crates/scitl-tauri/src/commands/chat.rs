@@ -1,6 +1,6 @@
 use tauri::State;
 
-use scitl_core::llm::ResponseEvent;
+use scitl_core::llm::{LlmAdapter, ResponseEvent};
 use scitl_core::orchestration::{run_turn, SystemPrompts};
 
 use crate::AppState;
@@ -8,6 +8,10 @@ use crate::AppState;
 /// タスクチャットへの発言送信。`task_id`は文脈(表示中のタスク)から決まる引数であり、
 /// モデルへのツール引数には出てこない(update_taskのタスクチャット版と同じ区別。
 /// docs/spec/rebuild/tools.md 1節)。
+///
+/// プロバイダー未選択・モデル未選択・APIキー未設定・空応答等は`run_turn`内でエラー発言
+/// として保存され`Ok`で返る(Issue #40)。ここで`Err`になるのはDB自体への書き込み失敗など、
+/// 発言として保存すらできない場合のみ。
 #[tauri::command]
 pub async fn send_task_chat_message(
     state: State<'_, AppState>,
@@ -24,15 +28,14 @@ pub async fn send_task_chat_message(
             runtime.config.general.task_chat_system_prompt.clone(),
         )
     };
-    let adapter =
-        adapter.ok_or_else(|| "no LLM provider is configured; add one in settings".to_string())?;
+    let adapter_ref: Option<&dyn LlmAdapter> = adapter.as_deref().map(|a| a as &dyn LlmAdapter);
 
     let prompts = SystemPrompts {
         base: system_prompt.as_deref(),
         task_chat: task_chat_system_prompt.as_deref(),
     };
 
-    run_turn(state.db.clone(), adapter.as_ref(), task_id, text, &prompts)
+    run_turn(state.db.clone(), adapter_ref, task_id, text, &prompts)
         .await
         .map_err(|e| e.to_string())
 }

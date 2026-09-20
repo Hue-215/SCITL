@@ -8,6 +8,7 @@ use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, NewMessage, Role};
 use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest};
 use crate::orchestration::state_prompt::build_system_prompt;
+use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::SystemPrompts;
 use crate::tools;
 
@@ -21,9 +22,13 @@ pub type SharedConnection = Arc<Mutex<Connection>>;
 /// 1ターンの処理フロー(architecture.md 1節)。ユーザー発言の保存 → LLM呼び出し →
 /// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
 /// までを1つの関数に閉じる(docs/spec/principles.md 5節)。
+///
+/// `adapter`が`None`(プロバイダー未選択)・モデル未選択・APIキー未設定・空応答・
+/// コンテキスト超過・ツール呼び出し回数の上限到達は、`Err`で上位に返さずエラー発言として
+/// 保存し`Ok`で返す(Issue #40)。DB自体への書き込みが失敗する場合のみ`Err`のまま返る。
 pub async fn run_turn(
     db: SharedConnection,
-    adapter: &dyn LlmAdapter,
+    adapter: Option<&dyn LlmAdapter>,
     task_id: i64,
     user_text: String,
     prompts: &SystemPrompts<'_>,
@@ -38,7 +43,7 @@ pub async fn run_turn(
                 kind: Kind::Normal,
                 source: None,
                 turn: None,
-                is_error: false,
+                error_kind: None,
             },
         )?;
         build_history(conn, task_id)
@@ -51,6 +56,14 @@ pub async fn run_turn(
     // 「turn_idごとの最新attempt_noのみ表示」規則により前のラウンドの記録が
     // 隠れてしまう)。
     let attempt_no: i64 = 1;
+
+    let Some(adapter) = adapter else {
+        return fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::NoProvider).await;
+    };
+    if let Some(failure) = turn_error::from_readiness(adapter.readiness()) {
+        return fail_turn(db, task_id, &turn_id, attempt_no, failure).await;
+    }
+
     let mut all_events = Vec::new();
     // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
     // 変換しておく(`SystemPrompts`自体はDBスレッドとやり取りするラウンドごとに組み直す)。
@@ -82,7 +95,13 @@ pub async fn run_turn(
         messages_to_send.extend(history.iter().cloned());
         messages_to_send.extend(round_trip.iter().cloned());
 
-        let events = adapter.send(&messages_to_send, &tools::task_chat_tools()).await?;
+        let events = match adapter.send(&messages_to_send, &tools::task_chat_tools()).await {
+            Ok(events) => events,
+            Err(e) => {
+                let failure = turn_error::classify(&e);
+                return fail_turn(db, task_id, &turn_id, attempt_no, failure).await;
+            }
+        };
 
         let mut text = String::new();
         let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
@@ -102,6 +121,11 @@ pub async fn run_turn(
         all_events.extend(events);
 
         if tool_calls.is_empty() {
+            if text.is_empty() {
+                return fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::EmptyResponse)
+                    .await;
+            }
+
             let turn_id = turn_id.clone();
             db_call(db, move |conn| {
                 messages::insert_message(
@@ -113,7 +137,7 @@ pub async fn run_turn(
                         kind: Kind::Normal,
                         source: None,
                         turn: Some((&turn_id, attempt_no)),
-                        is_error: false,
+                        error_kind: None,
                     },
                 )?;
                 Ok(())
@@ -146,7 +170,7 @@ pub async fn run_turn(
                             kind: Kind::ToolExecution,
                             source: None,
                             turn: Some((&turn_id_for_db, attempt_no)),
-                            is_error: false,
+                            error_kind: None,
                         },
                     )?;
                     out.push((call, result));
@@ -169,10 +193,40 @@ pub async fn run_turn(
         }
     }
 
-    all_events.push(ResponseEvent::Done {
+    fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::ToolRoundLimit).await
+}
+
+/// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
+/// (定型文言、`Unexpected`の場合のみsanitize済みの詳細を含む)。
+async fn fail_turn(
+    db: SharedConnection,
+    task_id: i64,
+    turn_id: &str,
+    attempt_no: i64,
+    failure: TurnFailure,
+) -> Result<Vec<ResponseEvent>> {
+    let turn_id = turn_id.to_string();
+    let content = failure.user_message();
+    let error_kind = failure.kind();
+    db_call(db, move |conn| {
+        messages::insert_message(
+            conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::Error,
+                content: &content,
+                kind: Kind::Normal,
+                source: None,
+                turn: Some((&turn_id, attempt_no)),
+                error_kind: Some(error_kind),
+            },
+        )?;
+        Ok(())
+    })
+    .await?;
+    Ok(vec![ResponseEvent::Done {
         finish_reason: FinishReason::Error,
-    });
-    Ok(all_events)
+    }])
 }
 
 /// ロックの取得からドロップまでを`spawn_blocking`のクロージャ内に閉じ込める唯一の入口。
@@ -189,11 +243,14 @@ where
     .map_err(|e| CoreError::Llm(format!("db task panicked: {e}")))?
 }
 
+/// API送信用の履歴。エラー発言(`role='error'`)は除外する
+/// (`legacy/backend.md` 4節手順2「エラー発言・ツール実行記録はこのAPI送信用の履歴からは
+/// 除外する」)。表示・エクスポートには`list_for_task`経由で引き続き残る。
 fn build_history(conn: &Connection, task_id: i64) -> Result<Vec<ChatMessage>> {
     let stored = messages::list_for_task(conn, task_id)?;
     Ok(stored
         .into_iter()
-        .filter(|m| m.kind == "normal")
+        .filter(|m| m.kind == "normal" && m.role != "error")
         .map(|m| {
             if m.role == "user" {
                 ChatMessage::User(m.content)

@@ -4,7 +4,9 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::db::error::CoreError;
-use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest, ToolSchema};
+use crate::llm::{
+    ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolCallRequest, ToolSchema,
+};
 
 // reqwestの既定はタイムアウト無制限。応答しないエンドポイント1つでターンが
 // 永久に固まるのを避ける(生成が長い非ストリーミング応答も想定し余裕を持たせる)。
@@ -86,6 +88,18 @@ fn provider_error(e: reqwest::Error) -> CoreError {
 /// ゲートウェイがリクエストヘッダをエコーバックする構成だと`Authorization`ヘッダの
 /// 値がそのまま本文に現れうるため、512文字というサイズ制限だけでは防げない
 /// (Opusレビュー指摘)。
+/// `turn_error::classify`が`"http {status}: ..."`の数値部分を再パースして
+/// auth/rate_limit等を分類する(Opusレビュー指摘)。`StatusCode`のDisplayは
+/// `"401 Unauthorized"`のように理由句を含み再パースできないため、必ず`as_u16()`で
+/// 数値のみを埋め込む。HTTPリクエストから切り離してテストできるよう関数として独立させる。
+fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> CoreError {
+    CoreError::Llm(format!(
+        "http {}: {}",
+        status.as_u16(),
+        sanitize_error_body(body, api_key)
+    ))
+}
+
 fn sanitize_error_body(body: &str, api_key: &str) -> String {
     let redacted = if api_key.is_empty() {
         body.to_string()
@@ -228,6 +242,18 @@ struct ResponseFunctionCall {
 
 #[async_trait::async_trait]
 impl LlmAdapter for OpenAiCompatAdapter {
+    fn readiness(&self) -> Readiness {
+        // `main.rs::build_adapter_for`はモデル未選択でもエラーにせず空文字のまま
+        // `OpenAiCompatAdapter`を作る(全プロバイダー削除同様、チャット送信時に初めて
+        // 表面化させる設計)。APIキーの空はここでは判定しない(`Readiness`のドキュメント
+        // 参照: ローカルプロバイダーの「認証不要で意図的に空」と区別できないため)。
+        if self.model.is_empty() {
+            Readiness::NoModel
+        } else {
+            Readiness::Ready
+        }
+    }
+
     async fn send(
         &self,
         messages: &[ChatMessage],
@@ -264,10 +290,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(CoreError::Llm(format!(
-                "http {status}: {}",
-                sanitize_error_body(&text, self.api_key.expose_secret())
-            )));
+            return Err(http_error(status, &text, self.api_key.expose_secret()));
         }
 
         let parsed: CompletionResponse = response.json().await.map_err(provider_error)?;
@@ -356,6 +379,18 @@ mod tests {
             completions_endpoint("https://api.openai.com/v1/").unwrap().as_str(),
             "https://api.openai.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn http_error_embeds_numeric_status_code_only() {
+        let err = http_error(reqwest::StatusCode::UNAUTHORIZED, "invalid key", "");
+        let CoreError::Llm(message) = err else {
+            panic!("expected CoreError::Llm");
+        };
+        // `turn_error::classify`が期待する形式(`orchestration/turn_error.rs`の
+        // `parse_http_status`参照)。理由句(" Unauthorized"等)を含めてしまうと
+        // 再パースに失敗し、全HTTPエラーがUnexpectedに落ちる(Opusレビューで検出)。
+        assert_eq!(message, "http 401: invalid key");
     }
 
     #[test]

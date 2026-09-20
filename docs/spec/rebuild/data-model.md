@@ -62,12 +62,12 @@
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
 | task_id | INTEGER | NULL可。NULL=総合チャット |
-| role | TEXT | NOT NULL, `CHECK (role IN ('user','assistant','tool'))` |
+| role | TEXT | NOT NULL, `CHECK (role IN ('user','assistant','tool','error'))` |
 | content | TEXT | NOT NULL |
 | kind | TEXT | NOT NULL, `CHECK (kind IN ('normal','tool_execution'))` |
 | source | TEXT | NULL=内部。外部(MCP)経由には印を付ける |
 | reasoning | TEXT | NULL可。表示・エクスポート専用、APIには送らない |
-| is_error | INTEGER | NOT NULL DEFAULT 0(bool)。単一メッセージの結果を表すfactであり、 lifecycle状態(いつ起きたか)ではないためタイムスタンプ化は不要 |
+| error_kind | TEXT | NULL可。`role='error'`のときのみ非NULLで、安定した種別コードを持つ(例: `no_model`, `context_exceeded`) |
 | turn_id | TEXT | NULL可(下記「ターン境界」参照) |
 | attempt_no | INTEGER | NULL可 |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
@@ -75,6 +75,16 @@
 
 `CHECK (kind <> 'tool_execution' OR json_valid(content))` — ツール実行記録の `content` は
 構造化データ(JSON)であることを制約で保証する。
+
+`CHECK ((role = 'error') = (error_kind IS NOT NULL))` — エラー性を表すフラグは `role='error'`
+の1箇所に集約し、`error_kind` はその種別の記録専用にする。両方でエラー性を表すと
+「これはエラーか」の答えが2箇所に散るため。`error_kind` の値そのものにはCHECKを付けない
+(閉じた集合の`role`・`kind`と異なり種別は今後増えるため、SQL側にも列挙を置くと同じ判断が
+2箇所に散る)。
+
+**エラー発言の`content`**: ユーザー向けの定型文言を入れる(`content`はNOT NULL、
+エクスポートにもそのまま乗る)。APIから返る生の詳細(HTTPボディ等)をそのまま載せるのは、
+既知の種別に分類できずAPIキー等の秘密情報混入の恐れが無い場合(sanitize済みの場合)に限る。
 
 **`role='tool'` について**(Issue #11): ツール実行結果のうち「現在の状態」として
 言い表せないもの(検索結果・外部MCPツールの出力等)は、`role='tool'` として会話履歴にも
