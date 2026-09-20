@@ -42,6 +42,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::tasks::get_task_detail,
+            commands::tasks::list_tasks,
+            commands::tasks::create_task,
             commands::chat::send_task_chat_message,
         ])
         .run(tauri::generate_context!())
