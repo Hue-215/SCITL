@@ -11,7 +11,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 rusqlite_migration = "1.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 thiserror = "1"
 secrecy = "0.10"
@@ -20,3 +20,32 @@ ulid = "1"
 async-trait = "0.1"
 keyring = "3"
 toml = "0.8"
+# MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
+# 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
+# (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため。Opusレビュー指摘)。
+# `client`(素朴なクライアント)・`transport-child-process`(stdio)・
+# `transport-streamable-http-client-reqwest`(streamable_http、内部でreqwestを使う)のみ。
+rmcp = { version = "=3.4.0", default-features = false, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
+# rmcpが要求するreqwestは0.13系で、ワークスペース既定の0.12(LLMアダプタが使う)とは
+# 互換性が無いメジャーバージョン違い(cargo tree -e featuresで確認済み)。1つの
+# `reqwest::Client`型を両方で共有することはできないため、MCP用に別名で依存を分ける。
+# ハードニング項目(no_proxy・リダイレクト拒否・rustls)は`llm/providers/openai_compat.rs`と
+# `mcp/net.rs`の両方に存在するが、内容は`docs/spec/rebuild/architecture.md`5節を単一の
+# 正とし、双方のコメントから参照する
+mcp-reqwest = { package = "reqwest", version = "=0.13.5", default-features = false, features = [
+    "json",
+    "rustls",
+] }
+# rmcpのstdioトランスポートは子プロセスを`kill()`しても、子がさらに生んだ孫プロセス
+# (`npx`が起動する`node`等)までは殺さない(Opusレビュー指摘)。プロセスグループごと
+# kill(Unix)/ジョブオブジェクト(Windows)するために明示的に利用する
+process-wrap = { version = "10.0", default-features = false, features = [
+    "tokio1",
+    "process-group",
+    "job-object",
+    "kill-on-drop",
+] }

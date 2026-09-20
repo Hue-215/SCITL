@@ -61,31 +61,12 @@ impl OpenAiCompatAdapter {
 
 /// 非ループバックの`http://`宛に`bearer_auth`で鍵を送らないための検証。
 /// ローカル推論サーバー向けにhttpを許す必要はあるが、その用途はループバックに限られる
-/// (principles.md 4節、architecture.md 5節)。
-///
-/// query/fragment/userinfoも拒否する。エンドポイントは文字列連結ではなく`Url::join`で
-/// 組み立てるため、これらが混ざっているとリクエストパスが鍵の置き場所として使われかねない
-/// (Opusレビュー指摘: 「クエリに鍵を置く構成」を入口で消す)。
+/// (principles.md 4節、architecture.md 5節)。検証本体は[`crate::net::validate_external_url`]
+/// に集約する(MCP streamable_httpのURL検証と共有。Opusレビュー指摘)。
 pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
     let url = reqwest::Url::parse(base_url)
         .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
-
-    if url.query().is_some() || url.fragment().is_some() || !url.username().is_empty() || url.password().is_some() {
-        return Err(CoreError::ProviderConfig(
-            "base_url must not contain a query, fragment, or userinfo".to_string(),
-        ));
-    }
-
-    match url.scheme() {
-        "https" => Ok(()),
-        "http" if is_loopback(&url) => Ok(()),
-        "http" => Err(CoreError::ProviderConfig(
-            "http base_url is allowed only for loopback hosts".to_string(),
-        )),
-        other => Err(CoreError::ProviderConfig(format!(
-            "unsupported base_url scheme: {other}"
-        ))),
-    }
+    crate::net::validate_external_url(&url).map_err(CoreError::ProviderConfig)
 }
 
 /// `base_url`と`chat/completions`を安全に連結する。文字列の`format!`連結は末尾スラッシュの
@@ -99,15 +80,6 @@ fn completions_endpoint(base_url: &str) -> Result<reqwest::Url, CoreError> {
     }
     url.join("chat/completions")
         .map_err(|e| CoreError::ProviderConfig(format!("failed to build endpoint: {e}")))
-}
-
-fn is_loopback(url: &reqwest::Url) -> bool {
-    match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        None => false,
-    }
 }
 
 /// reqwestのエラーDisplayは要求URLを含む。base_urlにクエリ形式で鍵を置く構成の
