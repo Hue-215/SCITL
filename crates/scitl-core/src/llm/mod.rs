@@ -13,6 +13,13 @@ pub enum ResponseEvent {
     TextDelta {
         text: String,
     },
+    /// モデルの思考(reasoning)の断片(Issue #42)。表示・`messages.reasoning`への保存
+    /// 専用のイベントであり、`ChatMessage`には対応する構成要素が無い
+    /// (`docs/spec/principles.md` 3節「思考は履歴に送り返さない」)。次のAPI呼び出しの
+    /// 入力に混ざり込む経路が型として存在しないようにするための意図的な非対称設計。
+    ReasoningDelta {
+        text: String,
+    },
     ToolCall {
         /// プロバイダが払い出した呼び出しID。1応答に複数のツール呼び出しが載る場合に
         /// 結果と対応付けるために保持する。払い出さないプロバイダもあるためOption。

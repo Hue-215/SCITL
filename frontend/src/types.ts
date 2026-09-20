@@ -23,6 +23,9 @@ export interface TaskSummary {
 
 export type ResponseEvent =
   | { type: 'text_delta'; text: string }
+  // モデルの思考(reasoning)の断片(Issue #42)。表示・保存専用で、APIへの再送信には
+  // 使わない(docs/spec/principles.md 3節)。
+  | { type: 'reasoning_delta'; text: string }
   | { type: 'tool_call'; id: string | null; name: string; arguments: unknown }
   | { type: 'done'; finish_reason: 'stop' | 'tool_call' | 'length' | 'error' }
 
@@ -34,6 +37,8 @@ export interface Message {
   content: string
   kind: 'normal' | 'tool_execution'
   source: string | null
+  // 表示・エクスポート専用。APIへは送らない(data-model.md messagesテーブル)。
+  reasoning: string | null
   error_kind: string | null
   turn_id: string | null
   attempt_no: number | null

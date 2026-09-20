@@ -226,6 +226,14 @@ struct ResponseMessage {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<ResponseToolCall>,
+    /// 思考(reasoning)専用の本文(Issue #42)。標準のOpenAI Chat Completions APIには
+    /// 無いフィールドだが、`reasoning_content`はOpenAI互換を名乗るプロバイダ・ゲートウェイ
+    /// (DeepSeek、vLLMのreasoning parser経由の出力等)で広く使われている拡張のため対応する。
+    /// フィールド自体が無いプロバイダでは`None`のまま(`#[serde(default)]`)。新しい通信先を
+    /// 追加するものではなく既存エンドポイントの応答を追加で読むだけなので、Opusを呼ぶ条件
+    /// 「外部通信」には該当しないと判断した(PR本文に記載)。
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -302,6 +310,14 @@ impl LlmAdapter for OpenAiCompatAdapter {
             .ok_or_else(|| CoreError::Llm("empty choices".to_string()))?;
 
         let mut events = Vec::new();
+        // 思考は生成順として本文・ツール呼び出しより先に置く(`principles.md` 3節
+        // 「応答はイベントの並びとして受け取る」)。非ストリーミングAPIのため実際の生成順は
+        // 観測できないが、モデルが思考してから本文/ツール呼び出しを出す一般的な順序に合わせる。
+        if let Some(reasoning) = choice.message.reasoning_content {
+            if !reasoning.is_empty() {
+                events.push(ResponseEvent::ReasoningDelta { text: reasoning });
+            }
+        }
         if let Some(text) = choice.message.content {
             if !text.is_empty() {
                 events.push(ResponseEvent::TextDelta { text });
@@ -462,6 +478,26 @@ mod tests {
                 }]
             })
         );
+    }
+
+    #[test]
+    fn deserializes_reasoning_content_extension_when_present() {
+        let parsed: ResponseMessage = serde_json::from_value(serde_json::json!({
+            "content": "答え",
+            "reasoning_content": "考え中…"
+        }))
+        .unwrap();
+        assert_eq!(parsed.content.as_deref(), Some("答え"));
+        assert_eq!(parsed.reasoning_content.as_deref(), Some("考え中…"));
+    }
+
+    #[test]
+    fn reasoning_content_defaults_to_none_when_absent() {
+        let parsed: ResponseMessage = serde_json::from_value(serde_json::json!({
+            "content": "答え"
+        }))
+        .unwrap();
+        assert_eq!(parsed.reasoning_content, None);
     }
 
     #[test]

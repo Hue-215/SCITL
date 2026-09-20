@@ -8,16 +8,9 @@ import {
 } from './api'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
+import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
+import { finalEntryOf, groupMessages } from './thinking'
 import type { Message, PendingEntry, Task, TaskSummary } from './types'
-
-function toolSummary(content: string): string {
-  try {
-    const parsed = JSON.parse(content) as { tool?: string }
-    return `ツール実行: ${parsed.tool ?? '不明'}`
-  } catch {
-    return 'ツール実行'
-  }
-}
 
 function formatTime(createdAt: string): string {
   return new Date(createdAt).toLocaleString()
@@ -132,14 +125,40 @@ export default function App() {
         {error && <p className="error">{error}</p>}
 
         <ul className="chat-log">
-          {messages.map((message) => (
-            <li key={message.id} className={`entry entry-${message.role}`}>
-              <span className="entry-content">
-                {message.kind === 'tool_execution' ? toolSummary(message.content) : message.content}
-              </span>
-              <time className="entry-time">{formatTime(message.created_at)}</time>
-            </li>
-          ))}
+          {groupMessages(messages).map((item) => {
+            if (item.kind === 'plain') {
+              const message = item.message
+              // 外部(MCP)経由のツール呼び出しは「思考・ツール」の折りたたみに含めず、
+              // 独立した1行として表示する(docs/spec/legacy/frontend.md 1節)。
+              if (message.kind === 'tool_execution') {
+                return (
+                  <li key={message.id} className="entry entry-tool">
+                    <ExternalToolLine message={message} />
+                    <time className="entry-time">{formatTime(message.created_at)}</time>
+                  </li>
+                )
+              }
+              return (
+                <li key={message.id} className={`entry entry-${message.role}`}>
+                  <span className="entry-content">{message.content}</span>
+                  <time className="entry-time">{formatTime(message.created_at)}</time>
+                </li>
+              )
+            }
+
+            // SCITL自身の応答生成1ターン分。思考・内部ツール呼び出しを発生順の折りたたみで
+            // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する(Issue #42)。
+            const finalMessage = finalEntryOf(item.entries)
+            return (
+              <li key={`turn-${item.turnId}`} className="turn-group">
+                <ThinkingTools entries={item.entries} />
+                <div className={`entry entry-${finalMessage.role}`}>
+                  <span className="entry-content">{finalMessage.content}</span>
+                  <time className="entry-time">{formatTime(finalMessage.created_at)}</time>
+                </div>
+              </li>
+            )
+          })}
           {pending.map((entry, i) => (
             <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
               <span className="entry-content">{entry.content}</span>
