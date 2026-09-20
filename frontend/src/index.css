@@ -1,11 +1,21 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 :root {
   color-scheme: light dark;
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-family);
 }
 
 body {
   margin: 0;
   padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
 }
 
 .layout {
@@ -15,44 +25,51 @@ body {
 
 .layout main {
   flex: 1;
-  padding: 1rem;
+  padding: var(--space-4);
   overflow-y: auto;
 }
 
 .sidebar {
-  width: 16rem;
+  width: var(--sidebar-width);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding: 0.75rem;
-  border-right: 1px solid #d1d5db;
+  padding: var(--space-3);
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
   overflow-y: auto;
 }
 
 .sidebar-general-row {
   display: flex;
   align-items: stretch;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
 }
 
 .sidebar-general {
   flex: 1;
   text-align: left;
-  padding: 0.5rem;
+  padding: var(--space-2);
   border: none;
-  border-radius: 0.5rem;
-  background: #e5e7eb;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
   font-weight: 600;
 }
 
 .sidebar-settings-icon {
   flex-shrink: 0;
-  width: 2.25rem;
+  width: var(--control-size-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
-  border-radius: 0.5rem;
-  background: #e5e7eb;
-  font-size: 1rem;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  /* グリフをアイコン代わりに使う暫定実装。SVGアイコン導入時は箱(width/height)を
+     --icon-size-mdに、グリフ自体は内側の<svg>へ移す(tokens.css参照)。 */
+  font-size: var(--icon-size-md);
+  line-height: 1;
 }
 
 .sidebar-task-list {
@@ -61,44 +78,44 @@ body {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .sidebar-task {
   width: 100%;
   text-align: left;
-  padding: 0.5rem;
+  padding: var(--space-2);
   border: none;
-  border-radius: 0.5rem;
   background: transparent;
-  font-size: 0.85rem;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
 }
 
 .sidebar-task.selected {
-  background: #dbeafe;
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
 }
 
 .sidebar-archived {
-  margin-top: 0.5rem;
+  margin-top: var(--space-2);
 }
 
 .sidebar-archived-toggle {
   width: 100%;
   text-align: left;
-  padding: 0.5rem;
+  padding: var(--space-2);
   border: none;
   background: transparent;
-  color: #6b7280;
-  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .sidebar-add {
   margin-top: auto;
-  padding: 0.5rem;
+  padding: var(--space-2);
   border: none;
-  border-radius: 0.5rem;
-  background: #2563eb;
-  color: white;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
   font-weight: 600;
 }
 
@@ -107,101 +124,121 @@ body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  min-height: 200px;
+  gap: var(--space-2);
+  min-height: 12.5rem; /* 空チャット時の最低確保高さ。ここでしか使わないためトークン化しない */
 }
 
 .entry {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.5rem;
-  max-width: 32rem;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  max-width: clamp(var(--content-min-width), 60vw, var(--content-max-width));
 }
 
+/*
+ * 話者側と反対側(遠い側)の外側マージンを、話者側(近い側)の2倍にする。
+ * バブルが折り返してmax-widthいっぱいになっても、常に自分の側へ寄って見えるようにするため
+ * (色だけに頼らない話者の判別)。内側paddingは左右対称のまま(.entry)。
+ *
+ * entry-assistant・entry-error・thinking-tools・external-tool-lineは常に
+ * turn-group(アシスタント側)またはentry-tool(外部ツール側)に内包され、単独では
+ * chat-logの直接の子にならない(thinking.tsの分類ロジック参照)。そのためマージンは
+ * その2つの入れ物にだけ持たせ、内側の要素には重複して持たせない
+ * (principles.md 5節「1つの機能に関わる判断を1箇所に閉じる」)。
+ */
 .entry-user {
   align-self: flex-end;
-  background: #dbeafe;
+  margin-left: var(--space-4);
+  margin-right: var(--space-2);
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
 }
 
 .entry-assistant {
   align-self: flex-start;
-  background: #e5e7eb;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
 }
 
 .entry-tool {
   align-self: flex-start;
+  margin-left: var(--space-2);
+  margin-right: var(--space-4);
   font-style: italic;
-  color: #6b7280;
+  color: var(--color-text-secondary);
 }
 
 .entry-error {
   align-self: flex-start;
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--color-danger-container);
+  color: var(--color-on-danger-container);
 }
 
 .entry-pending {
   align-self: flex-start;
+  margin-left: var(--space-2);
+  margin-right: var(--space-4);
   font-style: italic;
-  color: #9ca3af;
+  color: var(--color-text-secondary);
 }
 
 .entry-time {
-  font-size: 0.7rem;
-  color: #6b7280;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 .entry-actions {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.15rem;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .entry-actions button {
   border: none;
   background: transparent;
-  color: #6b7280;
-  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
   padding: 0;
   cursor: pointer;
 }
 
 .entry-actions button:disabled {
-  color: #d1d5db;
+  color: var(--color-border);
   cursor: not-allowed;
 }
 
 .entry-edit-textarea {
   width: 100%;
-  min-height: 3rem;
+  min-height: 3rem; /* 編集欄の最低行数を確保する固有値。他箇所と共有しないためトークン化しない */
   font: inherit;
-  padding: 0.5rem;
-  border: 1px solid #d1d5db;
-  border-radius: 0.375rem;
-  box-sizing: border-box;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
 .error {
-  color: #b91c1c;
+  color: var(--color-danger);
 }
 
 .turn-group {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-1);
   align-items: flex-start;
-  max-width: 32rem;
+  align-self: flex-start;
+  margin-left: var(--space-2);
+  margin-right: var(--space-4);
+  max-width: clamp(var(--content-min-width), 60vw, var(--content-max-width));
 }
 
 .thinking-tools {
   align-self: flex-start;
-  font-size: 0.8rem;
-  color: #6b7280;
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
-  padding: 0.35rem 0.6rem;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
   max-width: 100%;
 }
 
@@ -212,11 +249,11 @@ body {
 }
 
 .thinking-tools-list {
-  margin: 0.4rem 0 0;
-  padding-left: 1.1rem;
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: var(--space-1);
 }
 
 .thinking-item {
@@ -224,29 +261,35 @@ body {
 }
 
 .tool-call-label {
-  margin: 0.3rem 0 0.1rem;
+  margin: var(--space-1) 0;
   font-weight: 600;
 }
 
 .tool-call-detail pre,
 .external-tool-line pre {
   margin: 0;
-  padding: 0.4rem;
-  background: #f3f4f6;
-  border-radius: 0.375rem;
+  padding: var(--space-2);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .thinking-tools-error {
-  color: #b91c1c;
+  color: var(--color-danger);
 }
 
 .external-tool-line {
   align-self: flex-start;
-  font-size: 0.8rem;
-  color: #6b7280;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.external-tool-line summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .external-tool-name {
@@ -254,38 +297,44 @@ body {
 }
 
 .external-tool-label {
-  margin-left: 0.5rem;
-  font-size: 0.7rem;
-  border: 1px solid #9ca3af;
-  border-radius: 0.25rem;
-  padding: 0 0.3rem;
+  font-size: var(--font-size-sm);
+  border: 1px solid var(--color-border);
+  padding: 0 var(--space-2);
 }
 
 .settings {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  box-sizing: border-box;
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
 .settings-header {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
 }
 
 .settings-header h1 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-tight);
 }
 
 .settings-back {
-  padding: 0.25rem 0.5rem;
+  width: var(--control-size-md);
+  height: var(--control-size-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
-  border-radius: 0.5rem;
   background: transparent;
-  font-size: 1.25rem;
+  color: var(--color-text);
+  /* sidebar-settings-iconと同じ暫定実装・同じ箱寸法で揃える。 */
+  font-size: var(--icon-size-md);
+  line-height: 1;
 }
 
 .settings-body {
@@ -295,61 +344,61 @@ body {
 }
 
 .settings-rail {
-  width: 12rem;
+  width: var(--settings-rail-width);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.75rem;
-  border-right: 1px solid #d1d5db;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-right: 1px solid var(--color-border);
 }
 
 .settings-tab {
   text-align: left;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
   border: none;
-  border-radius: 0.5rem;
   background: transparent;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--color-text-secondary);
 }
 
 .settings-tab.selected {
-  background: #e5e7eb;
-  color: inherit;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
 }
 
 .settings-content {
   flex: 1;
-  max-width: 40rem;
-  padding: 1rem;
+  max-width: clamp(var(--content-min-width), 70vw, var(--content-max-width));
+  padding: var(--space-4);
   overflow-y: auto;
 }
 
 .settings-panel {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: var(--space-5);
 }
 
 .settings-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .settings-field textarea,
 .settings-field input,
 .settings-field select {
-  padding: 0.5rem;
-  border: 1px solid #d1d5db;
-  border-radius: 0.375rem;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
   font: inherit;
 }
 
 .settings-hint {
-  color: #6b7280;
-  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
@@ -359,7 +408,7 @@ body {
 }
 
 .settings-advanced[open] summary {
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-4);
 }
 
 .provider-list {
@@ -368,13 +417,12 @@ body {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .provider-card {
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
-  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  padding: var(--space-3);
 }
 
 .provider-card-header {
@@ -384,9 +432,9 @@ body {
 }
 
 .provider-card-meta {
-  color: #6b7280;
-  font-size: 0.85rem;
-  margin: 0.25rem 0 0.5rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin: var(--space-1) 0 var(--space-2);
 }
 
 .model-list {
@@ -395,7 +443,7 @@ body {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .model-row {
@@ -405,27 +453,26 @@ body {
 }
 
 .model-row-empty {
-  color: #6b7280;
-  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .model-add-form,
 .provider-add-form {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .provider-add-form {
   flex-direction: column;
-  border-top: 1px solid #d1d5db;
-  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
 }
 
 button.danger {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--color-danger-container);
+  color: var(--color-on-danger-container);
   border: none;
-  border-radius: 0.375rem;
-  padding: 0.25rem 0.5rem;
+  padding: var(--space-1) var(--space-2);
 }

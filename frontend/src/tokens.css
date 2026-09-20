@@ -1,0 +1,78 @@
+/*
+ * デザイントークン(色以外)。色は theme.ts が実行時に --color-* として適用する
+ * (docs/spec/principles.md 6節「数値・色などのデザイントークンは一箇所に集約」)。
+ */
+
+@font-face {
+  font-family: 'Noto Serif CJK JP';
+  src: url('/fonts/NotoSerifCJKjp-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Serif CJK JP';
+  src: url('/fonts/NotoSerifCJKjp-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --font-family: 'Noto Serif CJK JP', serif;
+
+  /* 文字サイズ: 3段階(補助文 / 本文 / 見出し)。sm/md/lgの差が視認できない刻みは
+     置かない(Opusレビュー、Issue #79)。xlはMarkdown見出し(#39)用の予約枠で、
+     現時点ではどこからも参照しない。 */
+  --font-size-sm: 0.85rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.5rem;
+
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+
+  /* アイコンサイズ: 将来のSVGアイコン導入時にwidth/heightとして使う箱寸法。
+     文字サイズとは独立の刻みにする(同値は一箇所集約の原則に反するため)。
+     現状のテキストグリフ流用箇所(⚙・←)は `font-size: var(--icon-size-*); line-height: 1;`
+     と明記し、SVG化時に box(width/height)へ移すことが分かるようにする。
+     sm/lgは現時点で未使用の予約段階。用法: sm=文中に混ぜるアイコン、
+     md=操作ボタン既定、lg=空状態・強調。 */
+  --icon-size-sm: 1rem;
+  --icon-size-md: 1.5rem;
+  --icon-size-lg: 2rem;
+
+  /* アイコンボタンの当たり判定(正方形の箱寸法)。グリフ/アイコンのサイズとは別軸。 */
+  --control-size-md: 2.25rem;
+
+  /* 余白: 0.25rem(4px)刻み。1remまでは1刻み、それ以降は段差が詰まりすぎないよう
+     1.5倍刻みにする、一般的な spacing scale の考え方(Material/Tailwind等と同系統)。
+     使う予定のない段階は置かない(未使用だった--space-6は削除)。
+     配置する側ではなく中身が持つ(principles.md 6節)。 */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+
+  /* 角丸トークンは未導入。本格的なUI作り込みフェーズで角丸を使うかどうかごと検討する
+     ため、それまでは全要素直角(border-radius指定なし)で進める。 */
+
+  /* レスポンシブ計算の基準値。frontend.md 5節「レスポンシブ」の入力値をここに集約する */
+  --sidebar-width: 16rem;
+  --settings-rail-width: 12rem;
+  --content-min-width: 22rem;
+  --content-max-width: 42rem;
+}
+
+/*
+ * ウィンドウ最小幅(crates/scitl-tauri/tauri.conf.json の app.windows[].minWidth)の
+ * 導出式。この値はJSON側にコメントを書けないため、ここに残す。
+ *
+ *   --sidebar-width(16rem) + --content-min-width(22rem)
+ *   + .layout main の左右padding(var(--space-4) x2 = 2rem)
+ *   + バブルの近い側・遠い側マージン合計(var(--space-2) + var(--space-4) = 1.5rem)
+ *   = 41.5rem = 664px(16px/rem換算)
+ *
+ * トークンやマージン設計(.entry-user等)を変えたときは、この式とminWidthの両方を
+ * 見直すこと。minHeightの480pxはこの式と独立した目視での妥当値。
+ */
