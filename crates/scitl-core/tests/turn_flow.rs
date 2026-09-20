@@ -312,7 +312,9 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     .unwrap();
 
     let rounds = adapter.sent_messages.into_inner().unwrap();
-    assert_eq!(rounds.len(), 2);
+    // 3ラウンド目は自動タイトル付け(Issue #46)。add_stepsの実行で工程が非空になり
+    // 生成条件を満たすため、このタスクは最初のターンだけでタイトルが生成される。
+    assert_eq!(rounds.len(), 3);
 
     // 1ラウンド目: システムプロンプトに基本/タスクチャット用の両方が入り、まだ工程は無い。
     let round1_system = system_prompt_content(&rounds[0][0]);
@@ -346,6 +348,13 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
         }
         other => panic!("expected Tool, got {other:?}"),
     }
+
+    // 3ラウンド目: タイトル生成専用の呼び出しで、通常ターンのシステムプロンプト
+    // (base/task_chat/最新状態JSON)とは別の、ツール無し・短い応答限定のプロンプトを使う。
+    assert_eq!(rounds[2].len(), 2);
+    let round3_system = system_prompt_content(&rounds[2][0]);
+    assert!(!round3_system.contains("base prompt"));
+    assert!(round3_system.contains("タイトル"));
 
     // DBには実行記録(tool_execution)と最終応答(normal)だけが残る。往復用の
     // assistant(tool_calls)/toolはDBの行としては存在しない(このターン限りのため)。

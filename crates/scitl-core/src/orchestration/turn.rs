@@ -7,6 +7,7 @@ use ulid::Ulid;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, NewMessage, Role};
 use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest};
+use crate::orchestration::auto_title;
 use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::SystemPrompts;
@@ -127,6 +128,8 @@ pub async fn run_turn(
             }
 
             let turn_id = turn_id.clone();
+            // 自動タイトル付け(Issue #46)用にDBハンドルの複製を確保しておく。
+            let title_db = db.clone();
             db_call(db, move |conn| {
                 messages::insert_message(
                     conn,
@@ -143,6 +146,13 @@ pub async fn run_turn(
                 Ok(())
             })
             .await?;
+
+            // `legacy/backend.md` 4節手順8。付随機能のため、失敗してもこのターンの
+            // 成功応答(`all_events`)はそのまま返す(DB書き込み失敗のみログに残す)。
+            if let Err(e) = auto_title::maybe_generate_title(title_db, adapter, task_id).await {
+                eprintln!("auto title generation failed to write: {e}");
+            }
+
             return Ok(all_events);
         }
 
@@ -230,7 +240,8 @@ async fn fail_turn(
 }
 
 /// ロックの取得からドロップまでを`spawn_blocking`のクロージャ内に閉じ込める唯一の入口。
-async fn db_call<F, T>(db: SharedConnection, f: F) -> Result<T>
+/// `orchestration`内の他モジュール(`auto_title`)からも同じ経路を使わせるため`pub(crate)`。
+pub(crate) async fn db_call<F, T>(db: SharedConnection, f: F) -> Result<T>
 where
     F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     T: Send + 'static,

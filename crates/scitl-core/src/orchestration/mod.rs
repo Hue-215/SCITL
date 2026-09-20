@@ -1,3 +1,4 @@
+mod auto_title;
 mod state_prompt;
 pub mod turn;
 pub mod turn_error;
