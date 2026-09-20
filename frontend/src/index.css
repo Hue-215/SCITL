@@ -223,6 +223,12 @@ body {
   font: inherit;
 }
 
+.settings-hint {
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
 .provider-list {
   list-style: none;
   padding: 0;

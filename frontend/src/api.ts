@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { ApiFormat, ResponseEvent, SettingsView, Task, TaskSummary } from './types'
+import type {
+  ApiFormat,
+  McpToolInfo,
+  ResponseEvent,
+  SettingsView,
+  Task,
+  TaskSummary,
+} from './types'
 
 // フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
 // docs/spec/rebuild/architecture.md 7節。
@@ -63,4 +70,32 @@ export function removeModel(providerId: string, model: string): Promise<Settings
 
 export function setActiveModel(providerId: string, model: string): Promise<SettingsView> {
   return invoke('set_active_model', { providerId, model })
+}
+
+export type NewMcpEndpoint =
+  | { transport: 'stdio'; command: string; args: string[]; env: [string, string][] }
+  | { transport: 'streamable_http'; url: string; headers: [string, string][] }
+
+export function addMcpServer(name: string, endpoint: NewMcpEndpoint): Promise<SettingsView> {
+  return invoke('add_mcp_server', { name, endpoint })
+}
+
+export function deleteMcpServer(serverId: string): Promise<SettingsView> {
+  return invoke('delete_mcp_server', { serverId })
+}
+
+export function setMcpServerEnabled(serverId: string, enabled: boolean): Promise<SettingsView> {
+  return invoke('set_mcp_server_enabled', { serverId, enabled })
+}
+
+export function setMcpToolEnabled(
+  serverId: string,
+  toolName: string,
+  enabled: boolean,
+): Promise<SettingsView> {
+  return invoke('set_mcp_tool_enabled', { serverId, toolName, enabled })
+}
+
+export function fetchMcpTools(serverId: string): Promise<McpToolInfo[]> {
+  return invoke('fetch_mcp_tools', { serverId })
 }
