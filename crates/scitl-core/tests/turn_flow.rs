@@ -270,6 +270,57 @@ impl LlmAdapter for TextAdapter {
     }
 }
 
+/// 1回目はツール呼び出しの前に思考を出し、2回目は思考の後に最終応答を出すケース
+/// (Issue #42)。ラウンドごとに思考が正しい行に紐付き、モデルへの再送信には
+/// 一切含まれないことを検証する。送信された発言列も記録し、再送信への非混入を確認する。
+struct ReasoningAdapter {
+    calls: AtomicUsize,
+    sent_messages: Mutex<Vec<Vec<ChatMessage>>>,
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for ReasoningAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        self.sent_messages.lock().unwrap().push(messages.to_vec());
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            Ok(vec![
+                ResponseEvent::ReasoningDelta {
+                    text: "工程を追加すべきか考える".to_string(),
+                },
+                ResponseEvent::ToolCall {
+                    id: Some("call_1".to_string()),
+                    name: "add_steps".to_string(),
+                    arguments: json!({ "descriptions": ["買い出し"] }),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::ToolCall,
+                },
+            ])
+        } else {
+            Ok(vec![
+                ResponseEvent::ReasoningDelta {
+                    text: "結果を報告する文面を考える".to_string(),
+                },
+                ResponseEvent::TextDelta {
+                    text: "工程を追加しました".to_string(),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                },
+            ])
+        }
+    }
+}
+
 fn seed_task(conn: &Connection) -> i64 {
     let now = db::now_iso8601();
     conn.execute(
@@ -648,6 +699,62 @@ async fn edit_user_message_truncates_and_regenerates() {
         )
         .unwrap();
     assert!(deleted_at.is_some());
+}
+
+/// 思考(reasoning)は該当する行の`reasoning`列に保存され、モデルへの再送信には
+/// 一切含まれないことを検証する(Issue #42、principles.md 3節「思考は履歴に送り返さない」)。
+#[tokio::test]
+async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = ReasoningAdapter {
+        calls: AtomicUsize::new(0),
+        sent_messages: Mutex::new(Vec::new()),
+    };
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&adapter),
+        task_id,
+        "工程を追加して".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let by_kind: Vec<_> = messages
+        .iter()
+        .map(|m| (m.role.as_str(), m.kind.as_str(), m.reasoning.as_deref()))
+        .collect();
+    assert_eq!(
+        by_kind,
+        vec![
+            ("user", "normal", None),
+            ("assistant", "tool_execution", Some("工程を追加すべきか考える")),
+            ("assistant", "normal", Some("結果を報告する文面を考える")),
+        ]
+    );
+
+    // モデルへ送り返す発言列(ChatMessage)には思考が現れる余地が無い
+    // (`ChatMessage`に思考を運ぶ構成要素自体が無いため型で保証される)。
+    // ここでは実際に送信された本文にも思考テキストが混入していないことを重ねて確認する。
+    let rounds = adapter.sent_messages.into_inner().unwrap();
+    for round in &rounds {
+        for message in round {
+            match message {
+                ChatMessage::User(content) | ChatMessage::Assistant { content: Some(content), .. } => {
+                    assert!(!content.contains("考える"));
+                }
+                ChatMessage::Tool { content, .. } => {
+                    assert!(!content.contains("考える"));
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// 編集の対象はユーザー発言のみ。アシスタント発言を編集しようとするとエラーになる。

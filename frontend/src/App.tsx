@@ -11,16 +11,9 @@ import {
 } from './api'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
+import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
+import { finalEntryOf, groupMessages } from './thinking'
 import type { Message, PendingEntry, Task, TaskSummary } from './types'
-
-function toolSummary(content: string): string {
-  try {
-    const parsed = JSON.parse(content) as { tool?: string }
-    return `ツール実行: ${parsed.tool ?? '不明'}`
-  } catch {
-    return 'ツール実行'
-  }
-}
 
 function formatTime(createdAt: string): string {
   return new Date(createdAt).toLocaleString()
@@ -194,85 +187,125 @@ export default function App() {
         {error && <p className="error">{error}</p>}
 
         <ul className="chat-log">
-          {messages.map((message) => {
-            // 編集・再試行・削除(Issue #41)。対象はツール実行記録を除く通常発言のみ
-            // (data-model.md「ツール実行記録は通常発言の編集・削除・再試行の対象に
-            // 含めない」)。編集はユーザー発言のみ、再試行はアシスタント発言のみ、
-            // 削除は両方に共通(legacy/frontend.md 1節)。
-            const isNormal = message.kind === 'normal'
-            const canEdit = isNormal && message.role === 'user'
-            const canRetry = isNormal && message.role === 'assistant'
-            const canDelete = isNormal && (message.role === 'user' || message.role === 'assistant')
+          {groupMessages(messages).map((item) => {
+            if (item.kind === 'plain') {
+              const message = item.message
+              // 外部(MCP)経由のツール呼び出しは「思考・ツール」の折りたたみに含めず、
+              // 独立した1行として表示する(docs/spec/legacy/frontend.md 1節)。
+              if (message.kind === 'tool_execution') {
+                return (
+                  <li key={message.id} className="entry entry-tool">
+                    <ExternalToolLine message={message} />
+                    <time className="entry-time">{formatTime(message.created_at)}</time>
+                  </li>
+                )
+              }
 
-            if (editingId === message.id) {
+              // 編集・削除(Issue #41)。対象はツール実行記録を除く通常発言のみ
+              // (data-model.md「ツール実行記録は通常発言の編集・削除・再試行の対象に
+              // 含めない」)。`plain`項目は常にユーザー発言のため、編集はここでのみ
+              // 起こりうる(legacy/frontend.md 1節)。
+              const canEdit = message.role === 'user'
+              const canDelete = message.role === 'user'
+
+              if (editingId === message.id) {
+                return (
+                  <li key={message.id} className={`entry entry-${message.role}`}>
+                    <textarea
+                      className="entry-edit-textarea"
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                          e.preventDefault()
+                          void submitEdit(message.id)
+                        } else if (e.key === 'Escape') {
+                          setEditingId(null)
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <div className="entry-actions">
+                      <button type="button" onClick={() => setEditingId(null)}>
+                        キャンセル
+                      </button>
+                      <button type="button" onClick={() => void submitEdit(message.id)}>
+                        送信
+                      </button>
+                    </div>
+                  </li>
+                )
+              }
+
               return (
                 <li key={message.id} className={`entry entry-${message.role}`}>
-                  <textarea
-                    className="entry-edit-textarea"
-                    value={editDraft}
-                    onChange={(e) => setEditDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                        e.preventDefault()
-                        void submitEdit(message.id)
-                      } else if (e.key === 'Escape') {
-                        setEditingId(null)
-                      }
-                    }}
-                    autoFocus
-                  />
-                  <div className="entry-actions">
-                    <button type="button" onClick={() => setEditingId(null)}>
-                      キャンセル
-                    </button>
-                    <button type="button" onClick={() => void submitEdit(message.id)}>
-                      送信
-                    </button>
-                  </div>
+                  <span className="entry-content">{message.content}</span>
+                  <time className="entry-time">{formatTime(message.created_at)}</time>
+                  {(canEdit || canDelete) && (
+                    <div className="entry-actions">
+                      {canEdit && (
+                        <button
+                          type="button"
+                          disabled={disableActions}
+                          onClick={() => {
+                            setEditingId(message.id)
+                            setEditDraft(message.content)
+                          }}
+                        >
+                          編集
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          disabled={disableActions}
+                          onClick={() => void remove(message.id)}
+                        >
+                          削除
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </li>
               )
             }
 
+            // SCITL自身の応答生成1ターン分。思考・内部ツール呼び出しを発生順の折りたたみで
+            // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する(Issue #42)。
+            // 再試行・削除(Issue #41)の対象は、この最終行の通常発言のみ
+            // (data-model.md「ツール実行記録は…対象に含めない」)。
+            const finalMessage = finalEntryOf(item.entries)
+            const canRetry = finalMessage.kind === 'normal' && finalMessage.role === 'assistant'
+            const canDelete = finalMessage.kind === 'normal' && finalMessage.role === 'assistant'
             return (
-              <li key={message.id} className={`entry entry-${message.role}`}>
-                <span className="entry-content">
-                  {message.kind === 'tool_execution' ? toolSummary(message.content) : message.content}
-                </span>
-                <time className="entry-time">{formatTime(message.created_at)}</time>
-                {(canEdit || canRetry || canDelete) && (
-                  <div className="entry-actions">
-                    {canEdit && (
-                      <button
-                        type="button"
-                        disabled={disableActions}
-                        onClick={() => {
-                          setEditingId(message.id)
-                          setEditDraft(message.content)
-                        }}
-                      >
-                        編集
-                      </button>
-                    )}
-                    {canRetry && (
-                      <button
-                        type="button"
-                        disabled={disableActions}
-                        onClick={() => void retry(message.id)}
-                      >
-                        再試行
-                      </button>
-                    )}
-                    {canDelete && (
-                      <button
-                        type="button"
-                        disabled={disableActions}
-                        onClick={() => void remove(message.id)}
-                      >
-                        削除
-                      </button>
-                    )}
-                  </div>
-                )}
+              <li key={`turn-${item.turnId}`} className="turn-group">
+                <ThinkingTools entries={item.entries} />
+                <div className={`entry entry-${finalMessage.role}`}>
+                  <span className="entry-content">{finalMessage.content}</span>
+                  <time className="entry-time">{formatTime(finalMessage.created_at)}</time>
+                  {(canRetry || canDelete) && (
+                    <div className="entry-actions">
+                      {canRetry && (
+                        <button
+                          type="button"
+                          disabled={disableActions}
+                          onClick={() => void retry(finalMessage.id)}
+                        >
+                          再試行
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          disabled={disableActions}
+                          onClick={() => void remove(finalMessage.id)}
+                        >
+                          削除
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </li>
             )
           })}

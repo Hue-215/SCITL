@@ -44,6 +44,7 @@ pub async fn run_turn(
                 source: None,
                 turn: None,
                 error_kind: None,
+                reasoning: None,
             },
         )?;
         Ok(())
@@ -86,6 +87,7 @@ pub async fn edit_user_message(
                 source: None,
                 turn: None,
                 error_kind: None,
+                reasoning: None,
             },
         )?;
         Ok(())
@@ -227,10 +229,14 @@ async fn generate_turn_response(
         };
 
         let mut text = String::new();
+        // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの
+        // 再送信用)には載せない(principles.md 3節「思考は履歴に送り返さない」)。
+        let mut reasoning = String::new();
         let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
         for event in &events {
             match event {
                 ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
+                ResponseEvent::ReasoningDelta { text: delta } => reasoning.push_str(delta),
                 ResponseEvent::ToolCall { id, name, arguments } => {
                     tool_calls.push(ToolCallRequest {
                         id: id.clone(),
@@ -242,6 +248,7 @@ async fn generate_turn_response(
             }
         }
         all_events.extend(events);
+        let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
 
         if tool_calls.is_empty() {
             if text.is_empty() {
@@ -261,6 +268,7 @@ async fn generate_turn_response(
                         source: None,
                         turn: Some((&turn_id, attempt_no)),
                         error_kind: None,
+                        reasoning: reasoning_for_db.as_deref(),
                     },
                 )?;
                 Ok(())
@@ -275,9 +283,14 @@ async fn generate_turn_response(
         let executed: Vec<(ToolCallRequest, serde_json::Value)> =
             db_call(db.clone(), move |conn| {
                 let mut out = Vec::with_capacity(pending.len());
-                for call in pending {
+                for (i, call) in pending.into_iter().enumerate() {
                     let result =
                         tools::execute_task_chat_tool(conn, task_id, &call.name, &call.arguments)?;
+
+                    // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
+                    // 1回だけ紐付ける(発生順に混在させて表示するため。同一ラウンドの
+                    // 全呼び出しに複製すると「思考・ツール」折りたたみの件数が水増しされる)。
+                    let reasoning_for_row = if i == 0 { reasoning_for_db.as_deref() } else { None };
 
                     messages::insert_message(
                         conn,
@@ -294,6 +307,7 @@ async fn generate_turn_response(
                             source: None,
                             turn: Some((&turn_id_for_db, attempt_no)),
                             error_kind: None,
+                            reasoning: reasoning_for_row,
                         },
                     )?;
                     out.push((call, result));
@@ -342,6 +356,7 @@ async fn fail_turn(
                 source: None,
                 turn: Some((&turn_id, attempt_no)),
                 error_kind: Some(error_kind),
+                reasoning: None,
             },
         )?;
         Ok(())
