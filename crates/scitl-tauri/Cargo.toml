@@ -17,3 +17,10 @@ tokio = { workspace = true }
 [[bin]]
 name = "scitl-tauri"
 path = "src/main.rs"
+
+[features]
+# このフィーチャの有無が、Tauriが `devUrl`(Vite開発サーバー)と埋め込み済みの
+# フロントエンドのどちらを読むかを決める(ビルドプロファイルではない)。
+# 無効のままだと本番ビルドでも devUrl を読みに行き、開発サーバーが無い環境で
+# 起動できない。tauri-cliは本番ビルド時にこれを有効にする。
+custom-protocol = ["tauri/custom-protocol"]
