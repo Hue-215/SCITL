@@ -31,9 +31,12 @@ fn main() {
             let model =
                 std::env::var("SCITL_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
+            let adapter = OpenAiCompatAdapter::new(base_url, api_key, model)
+                .map_err(|e| format!("invalid LLM provider configuration: {e}"))?;
+
             app.manage(AppState {
                 db: Arc::new(Mutex::new(conn)),
-                adapter: Box::new(OpenAiCompatAdapter::new(base_url, api_key, model)),
+                adapter: Box::new(adapter),
             });
             Ok(())
         })

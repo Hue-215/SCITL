@@ -58,7 +58,7 @@ pub async fn run_turn(
         for event in &events {
             match event {
                 ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
-                ResponseEvent::ToolCall { name, arguments } => {
+                ResponseEvent::ToolCall { name, arguments, .. } => {
                     tool_call = Some((name.clone(), arguments.clone()));
                 }
                 ResponseEvent::Done { .. } => {}

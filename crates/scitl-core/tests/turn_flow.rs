@@ -25,6 +25,7 @@ impl LlmAdapter for FakeAdapter {
         if call == 0 {
             Ok(vec![
                 ResponseEvent::ToolCall {
+                    id: Some("call_1".to_string()),
                     name: "update_task".to_string(),
                     arguments: json!({ "title": "買い物" }),
                 },

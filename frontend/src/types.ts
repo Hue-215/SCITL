@@ -14,8 +14,8 @@ export interface Task {
 
 export type ResponseEvent =
   | { type: 'text_delta'; text: string }
-  | { type: 'tool_call'; name: string; arguments: unknown }
-  | { type: 'done'; finish_reason: 'stop' | 'tool_call' | 'error' }
+  | { type: 'tool_call'; id: string | null; name: string; arguments: unknown }
+  | { type: 'done'; finish_reason: 'stop' | 'tool_call' | 'length' | 'error' }
 
 export interface ChatEntry {
   role: 'user' | 'assistant' | 'tool'

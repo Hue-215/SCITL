@@ -10,9 +10,19 @@ use crate::db::error::CoreError;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseEvent {
-    TextDelta { text: String },
-    ToolCall { name: String, arguments: serde_json::Value },
-    Done { finish_reason: FinishReason },
+    TextDelta {
+        text: String,
+    },
+    ToolCall {
+        /// プロバイダが払い出した呼び出しID。1応答に複数のツール呼び出しが載る場合に
+        /// 結果と対応付けるために保持する。払い出さないプロバイダもあるためOption。
+        id: Option<String>,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    Done {
+        finish_reason: FinishReason,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -20,6 +30,8 @@ pub enum ResponseEvent {
 pub enum FinishReason {
     Stop,
     ToolCall,
+    /// 出力が長さ制限で打ち切られた。Stopに潰すと打ち切りを上位層が検知できない。
+    Length,
     Error,
 }
 
