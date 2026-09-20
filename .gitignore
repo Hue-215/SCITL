@@ -1,4 +1,19 @@
+# ビルド生成物
 /target/
 node_modules/
 frontend/dist/
 crates/scitl-tauri/gen/
+
+# 秘密情報
+.env
+.env.*
+
+# ローカルのデータベース(通常はapp_data_dir配下だが、リポジトリ内に作った場合の保険)
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# エディタ・OS
+.vscode/
+.idea/
+.DS_Store
