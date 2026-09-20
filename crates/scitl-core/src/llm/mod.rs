@@ -75,10 +75,24 @@ pub struct ToolSchema {
     pub parameters: serde_json::Value,
 }
 
+/// アダプタが構成不足で呼び出しに進めない状態(Issue #40)。プロバイダの選択有無は
+/// `Option<&dyn LlmAdapter>`の`None`で表すためここには含めない
+/// (`orchestration::turn_error::from_readiness`参照)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readiness {
+    Ready,
+    NoModel,
+    NoApiKey,
+}
+
 /// 具象プロバイダの境界。`orchestration::turn`はこのtraitのみを知り、
 /// プロバイダ固有の癖は各実装内に閉じ込める(architecture.md 3節)。
 #[async_trait::async_trait]
 pub trait LlmAdapter: Send + Sync {
+    /// モデル未選択・APIキー未設定を、実際にAPIを呼ぶ前に判定する。プロバイダごとに
+    /// 判定材料(保持しているモデル名・鍵)が異なるため各実装に委ねる。
+    fn readiness(&self) -> Readiness;
+
     async fn send(
         &self,
         messages: &[ChatMessage],

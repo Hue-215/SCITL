@@ -1,0 +1,245 @@
+//! LLM呼び出しの失敗をユーザー向けのエラー発言に変換する(Issue #40)。
+//! 種別コード・文言・`CoreError`からの分類をここ1箇所に閉じる(`principles.md` 5節)。
+
+use crate::db::error::CoreError;
+use crate::llm::Readiness;
+
+/// エラー発言としてDBに保存する1件分。`kind()`が`messages.error_kind`、
+/// `user_message()`が`messages.content`に入る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnFailure {
+    NoProvider,
+    NoModel,
+    NoApiKey,
+    EmptyResponse,
+    /// 上限が未設定なら設定を促すヒントを文言に加える(`legacy/backend.md` 4節手順6)。
+    /// `config.rs`に上限の項目自体が無いため、#40時点では常に`false`。
+    ContextExceeded { limit_configured: bool },
+    ToolRoundLimit,
+    Auth,
+    RateLimit,
+    /// 設定不備(鍵ストア・プロバイダー設定・設定ファイル)。鍵名やパスを含みうるため
+    /// 詳細は出さない。
+    ProviderConfig,
+    /// 上記のいずれにも分類できないプロバイダー呼び出しの失敗。
+    Provider,
+    /// `classify`のmatchはCoreErrorの全バリアントを網羅するため、ここへ落ちるのは
+    /// `CoreError::Llm`の中身が既知パターンに当たらなかった場合のみ。detailは
+    /// sanitize済みの文字列に限る(`sanitize_error_body`を通ったもの)。
+    Unexpected { detail: String },
+}
+
+impl TurnFailure {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            TurnFailure::NoProvider => "no_provider",
+            TurnFailure::NoModel => "no_model",
+            TurnFailure::NoApiKey => "no_api_key",
+            TurnFailure::EmptyResponse => "empty_response",
+            TurnFailure::ContextExceeded { .. } => "context_exceeded",
+            TurnFailure::ToolRoundLimit => "tool_round_limit",
+            TurnFailure::Auth => "auth",
+            TurnFailure::RateLimit => "rate_limit",
+            TurnFailure::ProviderConfig => "provider_config",
+            TurnFailure::Provider => "provider",
+            TurnFailure::Unexpected { .. } => "unexpected",
+        }
+    }
+
+    pub fn user_message(&self) -> String {
+        match self {
+            TurnFailure::NoProvider => {
+                "LLMプロバイダーが設定されていません。設定画面で追加してください。".to_string()
+            }
+            TurnFailure::NoModel => {
+                "モデルが選択されていません。設定画面でモデルを選択してください。".to_string()
+            }
+            TurnFailure::NoApiKey => {
+                "APIキーが設定されていません。設定画面で登録してください。".to_string()
+            }
+            TurnFailure::EmptyResponse => {
+                "モデルからの応答が空でした。もう一度お試しください。".to_string()
+            }
+            TurnFailure::ContextExceeded { limit_configured } => {
+                if *limit_configured {
+                    "会話がコンテキストの上限を超えました。".to_string()
+                } else {
+                    "会話がコンテキストの上限を超えた可能性があります。設定画面でコンテキスト\
+                     上限を設定すると、次回から早めに警告できます。"
+                        .to_string()
+                }
+            }
+            TurnFailure::ToolRoundLimit => {
+                "ツールの呼び出しが上限回数に達したため、応答の生成を打ち切りました。".to_string()
+            }
+            TurnFailure::Auth => {
+                "APIキーが正しくないか、権限がありません。設定画面でAPIキーを確認してください。"
+                    .to_string()
+            }
+            TurnFailure::RateLimit => {
+                "APIの利用制限に達しました。しばらく待ってから再度お試しください。".to_string()
+            }
+            TurnFailure::ProviderConfig => {
+                "プロバイダーの設定に問題があります。設定画面を確認してください。".to_string()
+            }
+            TurnFailure::Provider => {
+                "LLMプロバイダーとの通信に失敗しました。".to_string()
+            }
+            TurnFailure::Unexpected { detail } => {
+                format!("予期しないエラーが発生しました: {detail}")
+            }
+        }
+    }
+}
+
+/// アダプタが構成不足で呼び出しに進めない場合の分類。準備が整っていれば`None`。
+pub fn from_readiness(readiness: Readiness) -> Option<TurnFailure> {
+    match readiness {
+        Readiness::Ready => None,
+        Readiness::NoModel => Some(TurnFailure::NoModel),
+        Readiness::NoApiKey => Some(TurnFailure::NoApiKey),
+    }
+}
+
+/// `CoreError`の全バリアントを網羅する(`_ =>`を書かない)。バリアントが増えたときに
+/// このmatchがコンパイルエラーになることで、分類漏れが黙って`unexpected`に落ちるのを防ぐ
+/// (`principles.md` 1節「症状ではなく原因を直す」)。
+pub fn classify(err: &CoreError) -> TurnFailure {
+    match err {
+        CoreError::Llm(detail) => classify_llm_error(detail),
+        CoreError::Secrets(_) | CoreError::ProviderConfig(_) | CoreError::Config(_) => {
+            TurnFailure::ProviderConfig
+        }
+        // MCP呼び出しは現時点でtask_chat_toolsに含まれず、run_turn内では発生しない想定だが、
+        // 発生した場合もプロバイダー起因の失敗として扱う(詳細はMCPサーバーのURL等を
+        // 含みうるため出さない)。
+        CoreError::Mcp(_) => TurnFailure::Provider,
+        // 内部エラー。ユーザーに見せて意味のある文言が作れないため`unexpected`に寄せるが、
+        // detailにはバリアント名相当の短い識別子のみを載せ、生の`to_string()`は使わない。
+        CoreError::Db(_) => unexpected("db"),
+        CoreError::Migration(_) => unexpected("migration"),
+        CoreError::TaskNotFound(_) => unexpected("task_not_found"),
+        CoreError::TaskStepNotFound(_) => unexpected("task_step_not_found"),
+        CoreError::UnknownArgument(_) => unexpected("unknown_argument"),
+        CoreError::InvalidArgument { .. } => unexpected("invalid_argument"),
+    }
+}
+
+fn unexpected(detail: &str) -> TurnFailure {
+    TurnFailure::Unexpected {
+        detail: detail.to_string(),
+    }
+}
+
+/// `CoreError::Llm`の中身を判定する。判定材料は`openai_compat.rs`が組み立てる
+/// `"http {status}: {body}"`とそれ以外の固定文字列(`"empty choices"`等)のみで、
+/// プロバイダ実装依存のため必ず外れるケースが残る。外れたものは`Unexpected`に落ちる。
+fn classify_llm_error(detail: &str) -> TurnFailure {
+    if detail == "empty choices" {
+        return TurnFailure::EmptyResponse;
+    }
+
+    if let Some((status, body)) = parse_http_status(detail) {
+        return match status {
+            401 | 403 => TurnFailure::Auth,
+            429 => TurnFailure::RateLimit,
+            _ if looks_like_context_exceeded(body) => {
+                TurnFailure::ContextExceeded { limit_configured: false }
+            }
+            _ => TurnFailure::Provider,
+        };
+    }
+
+    unexpected(detail)
+}
+
+fn parse_http_status(detail: &str) -> Option<(u16, &str)> {
+    let rest = detail.strip_prefix("http ")?;
+    let (status_str, body) = rest.split_once(':')?;
+    let status = status_str.trim().parse().ok()?;
+    Some((status, body))
+}
+
+fn looks_like_context_exceeded(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.contains("context_length_exceeded")
+        || lower.contains("maximum context length")
+        || lower.contains("context length")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_maps_known_llm_errors() {
+        assert_eq!(
+            classify(&CoreError::Llm("empty choices".to_string())),
+            TurnFailure::EmptyResponse
+        );
+        assert_eq!(
+            classify(&CoreError::Llm("http 401: unauthorized".to_string())),
+            TurnFailure::Auth
+        );
+        assert_eq!(
+            classify(&CoreError::Llm("http 429: rate limited".to_string())),
+            TurnFailure::RateLimit
+        );
+        assert_eq!(
+            classify(&CoreError::Llm(
+                "http 400: This model's maximum context length is 8192 tokens".to_string()
+            )),
+            TurnFailure::ContextExceeded { limit_configured: false }
+        );
+        assert_eq!(
+            classify(&CoreError::Llm("http 500: internal error".to_string())),
+            TurnFailure::Provider
+        );
+    }
+
+    #[test]
+    fn classify_falls_back_to_unexpected_with_detail_for_unknown_llm_errors() {
+        let failure = classify(&CoreError::Llm("connection reset by peer".to_string()));
+        assert_eq!(
+            failure,
+            TurnFailure::Unexpected {
+                detail: "connection reset by peer".to_string()
+            }
+        );
+        assert!(failure.user_message().contains("connection reset by peer"));
+    }
+
+    #[test]
+    fn classify_never_leaks_secret_store_or_config_details() {
+        let cases = [
+            CoreError::Secrets("keyring locked at /home/user/.keyring".to_string()),
+            CoreError::ProviderConfig("base_url is not a valid URL: /etc/secret".to_string()),
+            CoreError::Config("failed to read config.toml: /home/user/secret".to_string()),
+        ];
+        for err in cases {
+            let failure = classify(&err);
+            assert_eq!(failure, TurnFailure::ProviderConfig);
+            assert!(!failure.user_message().contains("keyring"));
+            assert!(!failure.user_message().contains("secret"));
+        }
+    }
+
+    #[test]
+    fn classify_reduces_internal_errors_to_unexpected_without_raw_detail() {
+        let failure = classify(&CoreError::TaskNotFound(42));
+        assert_eq!(
+            failure,
+            TurnFailure::Unexpected {
+                detail: "task_not_found".to_string()
+            }
+        );
+        assert!(!failure.user_message().contains("42"));
+    }
+
+    #[test]
+    fn from_readiness_maps_unready_states() {
+        assert_eq!(from_readiness(Readiness::Ready), None);
+        assert_eq!(from_readiness(Readiness::NoModel), Some(TurnFailure::NoModel));
+        assert_eq!(from_readiness(Readiness::NoApiKey), Some(TurnFailure::NoApiKey));
+    }
+}

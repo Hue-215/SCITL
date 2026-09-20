@@ -30,11 +30,11 @@ export type ResponseEvent =
 export interface Message {
   id: number
   task_id: number | null
-  role: 'user' | 'assistant' | 'tool'
+  role: 'user' | 'assistant' | 'tool' | 'error'
   content: string
   kind: 'normal' | 'tool_execution'
   source: string | null
-  is_error: boolean
+  error_kind: string | null
   turn_id: string | null
   attempt_no: number | null
   created_at: string

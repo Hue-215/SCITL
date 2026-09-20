@@ -25,18 +25,19 @@ CREATE TABLE task_steps (
 CREATE TABLE messages (
     id          INTEGER PRIMARY KEY,
     task_id     INTEGER NULL REFERENCES tasks(id),
-    role        TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+    role        TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'error')),
     content     TEXT NOT NULL,
     kind        TEXT NOT NULL CHECK (kind IN ('normal', 'tool_execution')),
     source      TEXT NULL,
     reasoning   TEXT NULL,
-    is_error    INTEGER NOT NULL DEFAULT 0,
+    error_kind  TEXT NULL,
     turn_id     TEXT NULL,
     attempt_no  INTEGER NULL,
     deleted_at  TEXT NULL,
     created_at  TEXT NOT NULL,
     CHECK (kind <> 'tool_execution' OR json_valid(content)),
-    CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
+    CHECK ((turn_id IS NULL) = (attempt_no IS NULL)),
+    CHECK ((role = 'error') = (error_kind IS NOT NULL))
 );
 
 CREATE TABLE attachments (
