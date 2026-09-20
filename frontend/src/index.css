@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 1rem;
+}
+
+.chat-log {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 200px;
+}
+
+.entry {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  max-width: 32rem;
+}
+
+.entry-user {
+  align-self: flex-end;
+  background: #dbeafe;
+}
+
+.entry-assistant {
+  align-self: flex-start;
+  background: #e5e7eb;
+}
+
+.entry-tool {
+  align-self: flex-start;
+  font-style: italic;
+  color: #6b7280;
+}
+
+.error {
+  color: #b91c1c;
+}
