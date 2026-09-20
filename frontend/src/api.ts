@@ -38,14 +38,15 @@ export function getSettings(): Promise<SettingsView> {
   return invoke('get_settings')
 }
 
-export function updateGeneralSettings(
-  systemPrompt: string | null,
-  responseTimeoutSecs: number | null,
-): Promise<SettingsView> {
-  return invoke('update_general_settings', {
-    systemPrompt,
-    responseTimeoutSecs,
-  })
+// systemPrompt/taskChatSystemPromptはどちらも`string | null`で並ぶため、位置引数だと
+// 呼び出し側での取り違えに気付きにくい(docs/spec/rebuild/tools.md 1節が修正した
+// 「対象タスクの取り違え」と同種の事故)。名前で縛るためオブジェクト引数にする。
+export function updateGeneralSettings(args: {
+  systemPrompt: string | null
+  taskChatSystemPrompt: string | null
+  responseTimeoutSecs: number | null
+}): Promise<SettingsView> {
+  return invoke('update_general_settings', args)
 }
 
 export function addProvider(

@@ -141,11 +141,13 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
 pub fn update_general_settings(
     state: State<'_, AppState>,
     system_prompt: Option<String>,
+    task_chat_system_prompt: Option<String>,
     response_timeout_secs: Option<u64>,
 ) -> Result<SettingsView, String> {
     let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
     runtime.config.general = GeneralConfig {
         system_prompt: system_prompt.filter(|s| !s.is_empty()),
+        task_chat_system_prompt: task_chat_system_prompt.filter(|s| !s.is_empty()),
         response_timeout_secs,
     };
     persist_and_rebuild(&state.config_path, runtime)

@@ -6,7 +6,9 @@ use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, NewMessage, Role};
-use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent};
+use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest};
+use crate::orchestration::state_prompt::build_system_prompt;
+use crate::orchestration::SystemPrompts;
 use crate::tools;
 
 const MAX_TOOL_ROUNDS: u32 = 4;
@@ -24,9 +26,9 @@ pub async fn run_turn(
     adapter: &dyn LlmAdapter,
     task_id: i64,
     user_text: String,
-    system_prompt: Option<&str>,
+    prompts: &SystemPrompts<'_>,
 ) -> Result<Vec<ResponseEvent>> {
-    let mut history = db_call(db.clone(), move |conn| {
+    let history = db_call(db.clone(), move |conn| {
         messages::insert_message(
             conn,
             NewMessage {
@@ -43,19 +45,6 @@ pub async fn run_turn(
     })
     .await?;
 
-    // システムプロンプトは会話履歴として保存せず、送信のたびに現在の設定値を先頭に足す
-    // (設定画面(Issue #22)で変更したら次のターンから即座に反映されるべきであり、
-    // 発言として`messages`に残す対象ではないため)。
-    if let Some(prompt) = system_prompt.filter(|p| !p.is_empty()) {
-        history.insert(
-            0,
-            ChatMessage {
-                role: "system",
-                content: prompt.to_string(),
-            },
-        );
-    }
-
     let turn_id = Ulid::new().to_string();
     // 再試行(失敗後の再送)が無い限り1のまま。ツール呼び出しの複数ラウンドはリトライでは
     // ないため、ラウンドごとに増やさない(増やすとdata-model.mdの
@@ -63,28 +52,85 @@ pub async fn run_turn(
     // 隠れてしまう)。
     let attempt_no: i64 = 1;
     let mut all_events = Vec::new();
+    // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
+    // 変換しておく(`SystemPrompts`自体はDBスレッドとやり取りするラウンドごとに組み直す)。
+    let base_owned = prompts.base.map(str::to_string);
+    let task_chat_owned = prompts.task_chat.map(str::to_string);
+    // 同一ターン内のツール呼び出し往復。分類(状態系/事実系)によらずモデルに返す
+    // (docs/spec/rebuild/tools.md 4節「同一ターン内では分類によらず結果を返す」)。
+    // このターンのリクエスト組み立てにのみ使い、DBの`messages`テーブルには書かない
+    // (書くと次ターン以降の履歴に残ってしまう)。
+    let mut round_trip: Vec<ChatMessage> = Vec::new();
 
     for _round in 1..=MAX_TOOL_ROUNDS {
-        let events = adapter.send(&history, &tools::task_chat_tools()).await?;
+        let system_prompt_text = db_call(db.clone(), {
+            let base_owned = base_owned.clone();
+            let task_chat_owned = task_chat_owned.clone();
+            move |conn| {
+                let prompts = SystemPrompts {
+                    base: base_owned.as_deref(),
+                    task_chat: task_chat_owned.as_deref(),
+                };
+                build_system_prompt(conn, task_id, &prompts)
+            }
+        })
+        .await?;
+
+        let mut messages_to_send =
+            Vec::with_capacity(1 + history.len() + round_trip.len());
+        messages_to_send.push(ChatMessage::System(system_prompt_text));
+        messages_to_send.extend(history.iter().cloned());
+        messages_to_send.extend(round_trip.iter().cloned());
+
+        let events = adapter.send(&messages_to_send, &tools::task_chat_tools()).await?;
 
         let mut text = String::new();
-        let mut tool_call = None;
+        let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
         for event in &events {
             match event {
                 ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
-                ResponseEvent::ToolCall { name, arguments, .. } => {
-                    tool_call = Some((name.clone(), arguments.clone()));
+                ResponseEvent::ToolCall { id, name, arguments } => {
+                    tool_calls.push(ToolCallRequest {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    });
                 }
                 ResponseEvent::Done { .. } => {}
             }
         }
         all_events.extend(events);
 
-        match tool_call {
-            Some((name, arguments)) => {
-                let turn_id = turn_id.clone();
-                let result = db_call(db.clone(), move |conn| {
-                    let result = tools::execute_task_chat_tool(conn, task_id, &name, &arguments)?;
+        if tool_calls.is_empty() {
+            let turn_id = turn_id.clone();
+            db_call(db, move |conn| {
+                messages::insert_message(
+                    conn,
+                    NewMessage {
+                        task_id: Some(task_id),
+                        role: Role::Assistant,
+                        content: &text,
+                        kind: Kind::Normal,
+                        source: None,
+                        turn: Some((&turn_id, attempt_no)),
+                        is_error: false,
+                    },
+                )?;
+                Ok(())
+            })
+            .await?;
+            return Ok(all_events);
+        }
+
+        // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。
+        let turn_id_for_db = turn_id.clone();
+        let pending = tool_calls.clone();
+        let executed: Vec<(ToolCallRequest, serde_json::Value)> =
+            db_call(db.clone(), move |conn| {
+                let mut out = Vec::with_capacity(pending.len());
+                for call in pending {
+                    let result =
+                        tools::execute_task_chat_tool(conn, task_id, &call.name, &call.arguments)?;
 
                     messages::insert_message(
                         conn,
@@ -92,48 +138,34 @@ pub async fn run_turn(
                             task_id: Some(task_id),
                             role: Role::Assistant,
                             content: &json!({
-                                "tool": name.clone(),
-                                "arguments": arguments,
+                                "tool": call.name.clone(),
+                                "arguments": call.arguments.clone(),
                                 "result": result.clone(),
                             })
                             .to_string(),
                             kind: Kind::ToolExecution,
                             source: None,
-                            turn: Some((&turn_id, attempt_no)),
+                            turn: Some((&turn_id_for_db, attempt_no)),
                             is_error: false,
                         },
                     )?;
-                    Ok((name, result))
-                })
-                .await?;
+                    out.push((call, result));
+                }
+                Ok(out)
+            })
+            .await?;
 
-                // 状態系ツールの結果は会話履歴には投入しない(docs/spec/rebuild/tools.md 4節)。
-                // 「現在の状態」を今回のリクエスト限りでモデルに返し、確定した応答を得る。
-                history.push(ChatMessage {
-                    role: "user",
-                    content: format!("[tool result: {}] {}", result.0, result.1),
-                });
-            }
-            None => {
-                let turn_id = turn_id.clone();
-                db_call(db, move |conn| {
-                    messages::insert_message(
-                        conn,
-                        NewMessage {
-                            task_id: Some(task_id),
-                            role: Role::Assistant,
-                            content: &text,
-                            kind: Kind::Normal,
-                            source: None,
-                            turn: Some((&turn_id, attempt_no)),
-                            is_error: false,
-                        },
-                    )?;
-                    Ok(())
-                })
-                .await?;
-                return Ok(all_events);
-            }
+        // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
+        // OpenAI互換プロトコルの標準的な表現に合わせる(architecture.md 3節)。
+        round_trip.push(ChatMessage::Assistant {
+            content: if text.is_empty() { None } else { Some(text) },
+            tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
+        });
+        for (call, result) in executed {
+            round_trip.push(ChatMessage::Tool {
+                tool_call_id: call.id,
+                content: result.to_string(),
+            });
         }
     }
 
@@ -162,9 +194,15 @@ fn build_history(conn: &Connection, task_id: i64) -> Result<Vec<ChatMessage>> {
     Ok(stored
         .into_iter()
         .filter(|m| m.kind == "normal")
-        .map(|m| ChatMessage {
-            role: if m.role == "user" { "user" } else { "assistant" },
-            content: m.content,
+        .map(|m| {
+            if m.role == "user" {
+                ChatMessage::User(m.content)
+            } else {
+                ChatMessage::Assistant {
+                    content: Some(m.content),
+                    tool_calls: Vec::new(),
+                }
+            }
         })
         .collect())
 }

@@ -4,7 +4,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::db::error::CoreError;
-use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolSchema};
+use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest, ToolSchema};
 
 // reqwestの既定はタイムアウト無制限。応答しないエンドポイント1つでターンが
 // 永久に固まるのを避ける(生成が長い非ストリーミング応答も想定し余裕を持たせる)。
@@ -112,10 +112,74 @@ struct RequestBody<'a> {
     stream: bool,
 }
 
+/// `ChatMessage`(core側の型)をOpenAI互換の発言列に変換する。役割ごとに必要な
+/// フィールドだけを持たせるのは`ChatMessage`と同じ理由(architecture.md 3節)。
 #[derive(Serialize)]
-struct RequestMessage {
-    role: &'static str,
-    content: String,
+#[serde(tag = "role", rename_all = "snake_case")]
+enum RequestMessage {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<RequestToolCall>,
+    },
+    Tool {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        content: String,
+    },
+}
+
+#[derive(Serialize)]
+struct RequestToolCall {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: RequestToolCallFunction,
+}
+
+#[derive(Serialize)]
+struct RequestToolCallFunction {
+    name: String,
+    arguments: String,
+}
+
+fn to_request_message(message: &ChatMessage) -> RequestMessage {
+    match message {
+        ChatMessage::System(content) => RequestMessage::System {
+            content: content.clone(),
+        },
+        ChatMessage::User(content) => RequestMessage::User {
+            content: content.clone(),
+        },
+        ChatMessage::Assistant { content, tool_calls } => RequestMessage::Assistant {
+            content: content.clone(),
+            tool_calls: tool_calls.iter().map(to_request_tool_call).collect(),
+        },
+        ChatMessage::Tool { tool_call_id, content } => RequestMessage::Tool {
+            tool_call_id: tool_call_id.clone(),
+            content: content.clone(),
+        },
+    }
+}
+
+fn to_request_tool_call(call: &ToolCallRequest) -> RequestToolCall {
+    RequestToolCall {
+        id: call.id.clone(),
+        kind: "function",
+        function: RequestToolCallFunction {
+            name: call.name.clone(),
+            // モデルへ返す際は受け取った引数をそのまま再直列化する
+            // (往復であり、こちらで内容を作り変えない)。
+            arguments: call.arguments.to_string(),
+        },
+    }
 }
 
 #[derive(Serialize)]
@@ -171,13 +235,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         let body = RequestBody {
             model: &self.model,
-            messages: messages
-                .iter()
-                .map(|m| RequestMessage {
-                    role: m.role,
-                    content: m.content.clone(),
-                })
-                .collect(),
+            messages: messages.iter().map(to_request_message).collect(),
             tools: tools
                 .iter()
                 .map(|t| RequestTool {
@@ -316,5 +374,80 @@ mod tests {
         let sanitized = sanitize_error_body(body, "sk-supersecret1234");
         assert!(!sanitized.contains("sk-supersecret1234"));
         assert!(sanitized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn serializes_system_user_and_assistant_text_as_openai_expects() {
+        let system = serde_json::to_value(to_request_message(&ChatMessage::System(
+            "be helpful".to_string(),
+        )))
+        .unwrap();
+        assert_eq!(system, serde_json::json!({"role": "system", "content": "be helpful"}));
+
+        let user =
+            serde_json::to_value(to_request_message(&ChatMessage::User("hi".to_string())))
+                .unwrap();
+        assert_eq!(user, serde_json::json!({"role": "user", "content": "hi"}));
+
+        let assistant = serde_json::to_value(to_request_message(&ChatMessage::Assistant {
+            content: Some("done".to_string()),
+            tool_calls: Vec::new(),
+        }))
+        .unwrap();
+        assert_eq!(
+            assistant,
+            serde_json::json!({"role": "assistant", "content": "done"})
+        );
+    }
+
+    #[test]
+    fn serializes_assistant_tool_calls_with_json_encoded_arguments() {
+        let assistant = serde_json::to_value(to_request_message(&ChatMessage::Assistant {
+            content: None,
+            tool_calls: vec![ToolCallRequest {
+                id: Some("call_1".to_string()),
+                name: "add_steps".to_string(),
+                arguments: serde_json::json!({ "descriptions": ["買い出し"] }),
+            }],
+        }))
+        .unwrap();
+
+        assert_eq!(
+            assistant,
+            serde_json::json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "add_steps",
+                        "arguments": "{\"descriptions\":[\"買い出し\"]}"
+                    }
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_tool_response_and_omits_missing_tool_call_id() {
+        let with_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
+            tool_call_id: Some("call_1".to_string()),
+            content: "{}".to_string(),
+        }))
+        .unwrap();
+        assert_eq!(
+            with_id,
+            serde_json::json!({"role": "tool", "tool_call_id": "call_1", "content": "{}"})
+        );
+
+        // 呼び出しIDを払い出さないプロバイダー向け: 捏造せずフィールドごと省略する
+        // (architecture.md 3節)。
+        let without_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
+            tool_call_id: None,
+            content: "{}".to_string(),
+        }))
+        .unwrap();
+        assert_eq!(without_id, serde_json::json!({"role": "tool", "content": "{}"}));
     }
 }

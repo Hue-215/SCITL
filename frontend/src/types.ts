@@ -52,6 +52,7 @@ export type ApiFormat = 'open_ai_compat'
 
 export interface GeneralSettings {
   system_prompt: string | null
+  task_chat_system_prompt: string | null
   response_timeout_secs: number | null
 }
 

@@ -54,6 +54,11 @@ impl ProviderConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeneralConfig {
     pub system_prompt: Option<String>,
+    /// タスクチャットでのみ追加するシステムプロンプト。総合チャット(#43)と
+    /// タスクチャットでは公開ツールが異なるため(docs/spec/rebuild/tools.md 5節)、
+    /// 工程ツールの使い分けのようなタスクチャット固有の指示は`system_prompt`とは
+    /// 別に持つ(docs/spec/legacy/data-model.md 3節「システムプロンプト3種」)。
+    pub task_chat_system_prompt: Option<String>,
     /// 応答タイムアウト(秒)。未設定はアダプタ側の既定値を使う。
     pub response_timeout_secs: Option<u64>,
 }
@@ -260,5 +265,36 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("scitl-config-test-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// `task_chat_system_prompt`追加前のTOML(このキーを含まない)が引き続き読めることを
+    /// 保証する。`Option<T>`フィールドは`#[serde(default)]`が無くても欠損時`None`になる
+    /// serde_deriveの挙動に頼っているため、将来型を変える際の回帰検知として残す。
+    #[test]
+    fn load_reads_config_without_task_chat_system_prompt_key() {
+        let dir = tempdir();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+active_provider_id = "default"
+
+[general]
+system_prompt = "base"
+
+[[providers]]
+id = "default"
+name = "OpenAI"
+api_format = "open_ai_compat"
+base_url = "https://api.openai.com/v1"
+models = ["gpt-4o-mini"]
+active_model = "gpt-4o-mini"
+"#,
+        )
+        .unwrap();
+
+        let config = load(&path).unwrap();
+        assert_eq!(config.general.system_prompt.as_deref(), Some("base"));
+        assert!(config.general.task_chat_system_prompt.is_none());
     }
 }
