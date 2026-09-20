@@ -181,10 +181,14 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
 ///
 /// ツール実行記録(`kind='tool_execution'`)は対象に含めない
 /// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない
-/// (会話の整合性より実行記録の保全を優先する)」)。この結果、編集・再試行で消えた
-/// ターンのツール実行記録は行として残り続けるが、`list_for_task`の
-/// `turn_id`ごとの最新`attempt_no`絞り込みにより表示からは外れる
-/// (対応するassistant発言の行が消えて当該`attempt_no`がそのターンの最新でなくなるため)。
+/// (会話の整合性より実行記録の保全を優先する)」)。
+///
+/// この結果、経路によって表示上の見え方が異なる点に注意。**再試行**は同一`turn_id`のまま
+/// `attempt_no`を増やすため、`list_for_task`の「`turn_id`ごとの最新`attempt_no`」絞り込みで
+/// 旧試行のツール実行記録は自動的に表示から外れる。一方**編集**は新しい`turn_id`を振って
+/// 会話を再生成するため、旧ターンの`turn_id`自体はもう他のどの行にも使われず「最新」のまま
+/// 残り続け、対応する通常発言が消えた後も旧ターンのツール実行記録だけが単独で表示に残る
+/// (`soft_delete_normal_from_cascades_but_spares_tool_execution_rows`で確認済み)。
 pub fn soft_delete_normal_from(conn: &Connection, task_id: i64, from_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
