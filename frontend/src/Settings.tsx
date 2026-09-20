@@ -278,79 +278,85 @@ function ProvidersTab({
   return (
     <div className="settings-panel">
       <ul className="provider-list">
-        {settings.providers.map((provider) => (
-          <li key={provider.id} className="provider-card">
-            <div className="provider-card-header">
-              <label>
-                <input
-                  type="radio"
-                  name="active-provider"
-                  checked={settings.active_provider_id === provider.id}
-                  onChange={() => onSetActiveProvider(provider.id)}
-                />
-                <strong>{provider.name}</strong>
-              </label>
-              <button
-                type="button"
-                className="danger"
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      `プロバイダー「${provider.name}」を削除しますか?保存済みのAPIキーも同時に削除されます。`,
-                    )
-                  ) {
-                    onDeleteProvider(provider.id)
-                  }
+        {settings.providers.map((provider) => {
+          const hasModel = provider.models.length > 0
+          return (
+            <li key={provider.id} className="provider-card">
+              <div className="provider-card-header">
+                <label title={hasModel ? undefined : 'モデルを1件以上登録すると選択できます'}>
+                  <input
+                    type="radio"
+                    name="active-provider"
+                    checked={settings.active_provider_id === provider.id}
+                    onChange={() => onSetActiveProvider(provider.id)}
+                    disabled={!hasModel}
+                  />
+                  <strong>{provider.name}</strong>
+                </label>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `プロバイダー「${provider.name}」を削除しますか?保存済みのAPIキーも同時に削除されます。`,
+                      )
+                    ) {
+                      onDeleteProvider(provider.id)
+                    }
+                  }}
+                >
+                  削除
+                </button>
+              </div>
+              <p className="provider-card-meta">
+                {provider.base_url} · {provider.has_api_key ? 'APIキー設定済み' : 'APIキー未設定'}
+              </p>
+
+              <ul className="model-list">
+                {provider.models.map((model) => (
+                  <li key={model} className="model-row">
+                    <label>
+                      <input
+                        type="radio"
+                        name={`active-model-${provider.id}`}
+                        checked={provider.active_model === model}
+                        onChange={() => onSetActiveModel(provider.id, model)}
+                      />
+                      {model}
+                    </label>
+                    <button type="button" onClick={() => onRemoveModel(provider.id, model)}>
+                      削除
+                    </button>
+                  </li>
+                ))}
+                {provider.models.length === 0 && (
+                  <li className="model-row-empty">モデル未登録(登録するとアクティブに選択できます)</li>
+                )}
+              </ul>
+
+              <form
+                className="model-add-form"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  const model = (newModelByProvider[provider.id] ?? '').trim()
+                  if (!model) return
+                  onAddModel(provider.id, model)
+                  setNewModelByProvider((prev) => ({ ...prev, [provider.id]: '' }))
                 }}
               >
-                削除
-              </button>
-            </div>
-            <p className="provider-card-meta">
-              {provider.base_url} · {provider.has_api_key ? 'APIキー設定済み' : 'APIキー未設定'}
-            </p>
-
-            <ul className="model-list">
-              {provider.models.map((model) => (
-                <li key={model} className="model-row">
-                  <label>
-                    <input
-                      type="radio"
-                      name={`active-model-${provider.id}`}
-                      checked={provider.active_model === model}
-                      onChange={() => onSetActiveModel(provider.id, model)}
-                    />
-                    {model}
-                  </label>
-                  <button type="button" onClick={() => onRemoveModel(provider.id, model)}>
-                    削除
-                  </button>
-                </li>
-              ))}
-              {provider.models.length === 0 && <li className="model-row-empty">モデル未登録</li>}
-            </ul>
-
-            <form
-              className="model-add-form"
-              onSubmit={(e) => {
-                e.preventDefault()
-                const model = (newModelByProvider[provider.id] ?? '').trim()
-                if (!model) return
-                onAddModel(provider.id, model)
-                setNewModelByProvider((prev) => ({ ...prev, [provider.id]: '' }))
-              }}
-            >
-              <input
-                value={newModelByProvider[provider.id] ?? ''}
-                onChange={(e) =>
-                  setNewModelByProvider((prev) => ({ ...prev, [provider.id]: e.target.value }))
-                }
-                placeholder="モデル名を入力して追加"
-              />
-              <button type="submit">追加</button>
-            </form>
-          </li>
-        ))}
+                <input
+                  value={newModelByProvider[provider.id] ?? ''}
+                  onChange={(e) =>
+                    setNewModelByProvider((prev) => ({ ...prev, [provider.id]: e.target.value }))
+                  }
+                  placeholder="モデル名を入力して追加"
+                />
+                <button type="submit">追加</button>
+              </form>
+            </li>
+          )
+        })}
         {settings.providers.length === 0 && <p>プロバイダーが未登録です。</p>}
       </ul>
 
