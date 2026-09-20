@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   createTask,
+  deleteTaskChatMessage,
+  editTaskChatMessage,
   getTaskDetail,
   listTaskMessages,
   listTasks,
+  retryTaskChatMessage,
   sendTaskChatMessage,
 } from './api'
 import Settings from './Settings'
@@ -34,6 +37,10 @@ export default function App() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 編集モード(Issue #41)。ユーザー発言のみが対象。応答待ち中は開始できない
+  // (`disableActions`参照)。
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editDraft, setEditDraft] = useState('')
 
   const loadTasks = useCallback(async () => {
     try {
@@ -59,6 +66,7 @@ export default function App() {
       setTask(detail)
       setMessages(history)
       setPending([])
+      setEditingId(null)
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -108,6 +116,60 @@ export default function App() {
     }
   }
 
+  // 応答待ち中は編集・再試行・削除のすべてを不可にする(Issue #41、legacy/frontend.md 1節)。
+  const disableActions = sending || taskId === null
+
+  const submitEdit = async (messageId: number) => {
+    const text = editDraft.trim()
+    if (!text || disableActions || taskId === null) return
+    setEditingId(null)
+    setPending([
+      { role: 'user', content: text },
+      { role: 'pending', content: '応答待ち…' },
+    ])
+    setSending(true)
+    setError(null)
+    try {
+      await editTaskChatMessage(taskId, messageId, text)
+      await loadTask(taskId)
+      await loadTasks()
+    } catch (e) {
+      setError(String(e))
+      await loadTask(taskId)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const retry = async (messageId: number) => {
+    if (disableActions || taskId === null) return
+    setPending([{ role: 'pending', content: '応答待ち…' }])
+    setSending(true)
+    setError(null)
+    try {
+      await retryTaskChatMessage(taskId, messageId)
+      await loadTask(taskId)
+      await loadTasks()
+    } catch (e) {
+      setError(String(e))
+      await loadTask(taskId)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const remove = async (messageId: number) => {
+    // 確認ダイアログ無しの即座に取り消し可能な論理削除(legacy/frontend.md 1節)。
+    if (disableActions || taskId === null) return
+    setError(null)
+    try {
+      await deleteTaskChatMessage(taskId, messageId)
+      await loadTask(taskId)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   if (settingsOpen) {
     return <Settings onClose={() => setSettingsOpen(false)} />
   }
@@ -132,14 +194,88 @@ export default function App() {
         {error && <p className="error">{error}</p>}
 
         <ul className="chat-log">
-          {messages.map((message) => (
-            <li key={message.id} className={`entry entry-${message.role}`}>
-              <span className="entry-content">
-                {message.kind === 'tool_execution' ? toolSummary(message.content) : message.content}
-              </span>
-              <time className="entry-time">{formatTime(message.created_at)}</time>
-            </li>
-          ))}
+          {messages.map((message) => {
+            // 編集・再試行・削除(Issue #41)。対象はツール実行記録を除く通常発言のみ
+            // (data-model.md「ツール実行記録は通常発言の編集・削除・再試行の対象に
+            // 含めない」)。編集はユーザー発言のみ、再試行はアシスタント発言のみ、
+            // 削除は両方に共通(legacy/frontend.md 1節)。
+            const isNormal = message.kind === 'normal'
+            const canEdit = isNormal && message.role === 'user'
+            const canRetry = isNormal && message.role === 'assistant'
+            const canDelete = isNormal && (message.role === 'user' || message.role === 'assistant')
+
+            if (editingId === message.id) {
+              return (
+                <li key={message.id} className={`entry entry-${message.role}`}>
+                  <textarea
+                    className="entry-edit-textarea"
+                    value={editDraft}
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault()
+                        void submitEdit(message.id)
+                      } else if (e.key === 'Escape') {
+                        setEditingId(null)
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <div className="entry-actions">
+                    <button type="button" onClick={() => setEditingId(null)}>
+                      キャンセル
+                    </button>
+                    <button type="button" onClick={() => void submitEdit(message.id)}>
+                      送信
+                    </button>
+                  </div>
+                </li>
+              )
+            }
+
+            return (
+              <li key={message.id} className={`entry entry-${message.role}`}>
+                <span className="entry-content">
+                  {message.kind === 'tool_execution' ? toolSummary(message.content) : message.content}
+                </span>
+                <time className="entry-time">{formatTime(message.created_at)}</time>
+                {(canEdit || canRetry || canDelete) && (
+                  <div className="entry-actions">
+                    {canEdit && (
+                      <button
+                        type="button"
+                        disabled={disableActions}
+                        onClick={() => {
+                          setEditingId(message.id)
+                          setEditDraft(message.content)
+                        }}
+                      >
+                        編集
+                      </button>
+                    )}
+                    {canRetry && (
+                      <button
+                        type="button"
+                        disabled={disableActions}
+                        onClick={() => void retry(message.id)}
+                      >
+                        再試行
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button
+                        type="button"
+                        disabled={disableActions}
+                        onClick={() => void remove(message.id)}
+                      >
+                        削除
+                      </button>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
           {pending.map((entry, i) => (
             <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
               <span className="entry-content">{entry.content}</span>

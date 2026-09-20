@@ -118,6 +118,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Migration(_) => unexpected("migration"),
         CoreError::TaskNotFound(_) => unexpected("task_not_found"),
         CoreError::TaskStepNotFound(_) => unexpected("task_step_not_found"),
+        CoreError::MessageNotFound(_) => unexpected("message_not_found"),
+        CoreError::InvalidMessageOperation(_) => unexpected("invalid_message_operation"),
         CoreError::UnknownArgument(_) => unexpected("unknown_argument"),
         CoreError::InvalidArgument { .. } => unexpected("invalid_argument"),
     }

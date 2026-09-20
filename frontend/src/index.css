@@ -153,6 +153,36 @@ body {
   color: #6b7280;
 }
 
+.entry-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+}
+
+.entry-actions button {
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  font-size: 0.75rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+.entry-actions button:disabled {
+  color: #d1d5db;
+  cursor: not-allowed;
+}
+
+.entry-edit-textarea {
+  width: 100%;
+  min-height: 3rem;
+  font: inherit;
+  padding: 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  box-sizing: border-box;
+}
+
 .error {
   color: #b91c1c;
 }

@@ -8,6 +8,10 @@ pub enum CoreError {
     TaskNotFound(i64),
     #[error("task step {0} not found")]
     TaskStepNotFound(i64),
+    #[error("message {0} not found")]
+    MessageNotFound(i64),
+    #[error("invalid message operation: {0}")]
+    InvalidMessageOperation(String),
     #[error("unknown argument: {0}")]
     UnknownArgument(String),
     #[error("invalid argument {name}: {reason}")]
