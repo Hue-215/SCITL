@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createTask, getTaskDetail, listTasks, sendTaskChatMessage } from './api'
+import Settings from './Settings'
 import Sidebar from './Sidebar'
 import type { ChatEntry, Task, TaskSummary } from './types'
 
@@ -12,6 +13,7 @@ export default function App() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const loadTasks = useCallback(async () => {
     try {
@@ -94,6 +96,10 @@ export default function App() {
     }
   }
 
+  if (settingsOpen) {
+    return <Settings onClose={() => setSettingsOpen(false)} />
+  }
+
   return (
     <div className="layout">
       <Sidebar
@@ -102,6 +108,7 @@ export default function App() {
         onSelect={setTaskId}
         onAddTask={() => void addTask()}
         adding={adding}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <main>

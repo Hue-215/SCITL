@@ -30,3 +30,27 @@ export interface ChatEntry {
   role: 'user' | 'assistant' | 'tool'
   content: string
 }
+
+// crates/scitl-tauri/src/commands/settings.rs の型と一致させる。
+export type ApiFormat = 'open_ai_compat'
+
+export interface GeneralSettings {
+  system_prompt: string | null
+  response_timeout_secs: number | null
+}
+
+export interface ProviderView {
+  id: string
+  name: string
+  api_format: ApiFormat
+  base_url: string
+  models: string[]
+  active_model: string | null
+  has_api_key: boolean
+}
+
+export interface SettingsView {
+  general: GeneralSettings
+  providers: ProviderView[]
+  active_provider_id: string | null
+}
