@@ -138,6 +138,19 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
     get_task(conn, task_id)
 }
 
+/// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない
+/// (docs/spec/rebuild/data-model.md「論理削除の伝播について」)。ツールには非公開
+/// (docs/spec/rebuild/tools.md 2節「意図的に非公開」)、画面・CLIからのみ呼ぶ。
+pub fn delete_task(conn: &Connection, task_id: i64) -> Result<()> {
+    get_task(conn, task_id)?;
+    let now = now_iso8601();
+    conn.execute(
+        "UPDATE tasks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+        rusqlite::params![now, task_id],
+    )?;
+    Ok(())
+}
+
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
         id: row.get(0)?,
@@ -276,5 +289,42 @@ mod tests {
         .unwrap();
 
         assert!(list_tasks(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_task_marks_deleted_but_keeps_steps_untouched() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        let now = now_iso8601();
+        conn.execute(
+            "INSERT INTO task_steps (task_id, description, order_index, created_at)
+             VALUES (?1, 'buy', 0, ?2)",
+            rusqlite::params![id, now],
+        )
+        .unwrap();
+
+        delete_task(&conn, id).unwrap();
+
+        assert!(matches!(
+            get_task(&conn, id).unwrap_err(),
+            CoreError::TaskNotFound(_)
+        ));
+        let deleted_at: Option<String> = conn
+            .query_row(
+                "SELECT deleted_at FROM task_steps WHERE task_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(deleted_at.is_none());
+    }
+
+    #[test]
+    fn delete_task_missing_returns_not_found() {
+        let conn = db::open_in_memory().unwrap();
+        assert!(matches!(
+            delete_task(&conn, 999).unwrap_err(),
+            CoreError::TaskNotFound(999)
+        ));
     }
 }

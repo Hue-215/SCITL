@@ -6,6 +6,8 @@ pub enum CoreError {
     Migration(#[from] rusqlite_migration::Error),
     #[error("task {0} not found")]
     TaskNotFound(i64),
+    #[error("task step {0} not found")]
+    TaskStepNotFound(i64),
     #[error("unknown argument: {0}")]
     UnknownArgument(String),
     #[error("invalid argument {name}: {reason}")]

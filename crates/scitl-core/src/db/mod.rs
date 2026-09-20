@@ -1,5 +1,6 @@
 pub mod error;
 pub mod messages;
+pub mod task_steps;
 pub mod tasks;
 
 use rusqlite::Connection;
