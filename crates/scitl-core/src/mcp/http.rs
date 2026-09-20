@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use mcp_reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::ServiceExt;
@@ -18,7 +18,8 @@ pub(super) async fn list_tools(
     url: &str,
     header_refs: &[SecretRef],
 ) -> Result<Vec<McpToolInfo>, CoreError> {
-    let client = super::net::hardened_client(url, LIST_TOOLS_TIMEOUT)?;
+    let client =
+        crate::net::hardened_client(url, LIST_TOOLS_TIMEOUT).map_err(|e| CoreError::Mcp(e.to_string()))?;
 
     let mut headers = HashMap::with_capacity(header_refs.len());
     for r in header_refs {

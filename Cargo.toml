@@ -12,7 +12,11 @@ rusqlite_migration = "1.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# LLMアダプタとMCPクライアントの双方が使う唯一のHTTPクライアント。バージョンはrmcpの
+# 要求(0.13.2以上)に合わせてある。`rustls` featureはaws-lc-rs + rustls-platform-verifier
+# (信頼ルートはOSの証明書ストア)を選ぶ。ハードニング設定は`scitl-core/src/net.rs`の
+# `hardened_client`1箇所に集約する(architecture.md 5節)
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 thiserror = "1"
 secrecy = "0.10"
 url = "2"
@@ -29,16 +33,6 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
-] }
-# rmcpが要求するreqwestは0.13系で、ワークスペース既定の0.12(LLMアダプタが使う)とは
-# 互換性が無いメジャーバージョン違い(cargo tree -e featuresで確認済み)。1つの
-# `reqwest::Client`型を両方で共有することはできないため、MCP用に別名で依存を分ける。
-# ハードニング項目(no_proxy・リダイレクト拒否・rustls)は`llm/providers/openai_compat.rs`と
-# `mcp/net.rs`の両方に存在するが、内容は`docs/spec/rebuild/architecture.md`5節を単一の
-# 正とし、双方のコメントから参照する
-mcp-reqwest = { package = "reqwest", version = "=0.13.5", default-features = false, features = [
-    "json",
-    "rustls",
 ] }
 # rmcpのstdioトランスポートは子プロセスを`kill()`しても、子がさらに生んだ孫プロセス
 # (`npx`が起動する`node`等)までは殺さない(Opusレビュー指摘)。プロセスグループごと

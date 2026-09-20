@@ -8,7 +8,6 @@ use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolSchem
 
 // reqwestの既定はタイムアウト無制限。応答しないエンドポイント1つでターンが
 // 永久に固まるのを避ける(生成が長い非ストリーミング応答も想定し余裕を持たせる)。
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// HTTPエラー時にエラー文へ載せるプロバイダ応答本文の上限。
@@ -40,16 +39,9 @@ impl OpenAiCompatAdapter {
         let base_url = base_url.into();
         validate_base_url(&base_url)?;
 
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            // architecture.md 5節が求めるのは「クロスホストのリダイレクトを拒否」だが、
-            // チャットコンプリーションAPIが正当な理由でリダイレクトを返すことは
-            // 想定していないため、同一ホスト内も含めて一律拒否する方が単純で安全。
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(request_timeout.unwrap_or(REQUEST_TIMEOUT))
-            .build()
-            .expect("reqwest client construction failed");
+        // ハードニング済みクライアントの組み立ては`net::hardened_client`に集約する
+        // (MCP streamable_httpと共有。Opusレビュー指摘)。
+        let client = crate::net::hardened_client(&base_url, request_timeout.unwrap_or(REQUEST_TIMEOUT))?;
         Ok(Self {
             client,
             base_url,

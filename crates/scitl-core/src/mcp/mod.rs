@@ -12,7 +12,6 @@
 //! principles.md 1節、Opusレビュー指摘)。
 
 mod http;
-mod net;
 mod stdio;
 
 use std::time::Duration;
@@ -33,8 +32,12 @@ pub struct McpToolInfo {
 }
 
 /// streamable_http方式のURLを検証する(実際に接続する前、サーバー登録時のIPC層から呼ぶ)。
+/// 検証本体は[`crate::net::validate_external_url`]に集約する(LLMプロバイダーのbase_url
+/// 検証と共有。Opusレビュー指摘)。
 pub fn validate_streamable_http_url(url: &str) -> Result<(), CoreError> {
-    net::validate(url)
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| CoreError::Mcp(format!("url is not a valid URL: {e}")))?;
+    crate::net::validate_external_url(&parsed).map_err(CoreError::Mcp)
 }
 
 /// サーバーへ接続し、ツール一覧を取得する。成功・失敗どちらの場合も接続は残さない。
