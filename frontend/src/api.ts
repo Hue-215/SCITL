@@ -34,6 +34,27 @@ export function listTaskMessages(taskId: number): Promise<Message[]> {
   return invoke('list_task_messages', { taskId })
 }
 
+// 編集・再試行・削除(Issue #41)。いずれも対象は`messageId`で指定し、
+// タスクの取り違え防止のため`taskId`も渡す(tools.md 1節と同じ理由)。
+export function editTaskChatMessage(
+  taskId: number,
+  messageId: number,
+  text: string,
+): Promise<ResponseEvent[]> {
+  return invoke('edit_task_chat_message', { taskId, messageId, text })
+}
+
+export function retryTaskChatMessage(
+  taskId: number,
+  messageId: number,
+): Promise<ResponseEvent[]> {
+  return invoke('retry_task_chat_message', { taskId, messageId })
+}
+
+export function deleteTaskChatMessage(taskId: number, messageId: number): Promise<void> {
+  return invoke('delete_task_chat_message', { taskId, messageId })
+}
+
 export function getSettings(): Promise<SettingsView> {
   return invoke('get_settings')
 }

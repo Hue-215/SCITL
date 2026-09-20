@@ -5,7 +5,9 @@ use rusqlite::Connection;
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolSchema};
-use scitl_core::orchestration::{run_turn, SystemPrompts};
+use scitl_core::orchestration::{
+    delete_message, edit_user_message, retry_assistant_message, run_turn, SystemPrompts,
+};
 use serde_json::json;
 
 fn system_prompt_content(message: &ChatMessage) -> &str {
@@ -229,6 +231,42 @@ impl LlmAdapter for UnreadyAdapter {
         _tools: &[ToolSchema],
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         panic!("readiness()がReadyでない場合、sendは呼ばれないはず");
+    }
+}
+
+/// テキストのみを返す固定応答アダプタ(Issue #41: 編集・再試行のテスト用)。
+/// ツール呼び出しループの検証は既存のFakeAdapter等が担っているため、ここでは
+/// 「渡された文言をそのまま最終応答として返す」だけの単純なものにする。
+struct TextAdapter {
+    replies: Mutex<Vec<String>>,
+}
+
+impl TextAdapter {
+    fn one(text: &str) -> Self {
+        TextAdapter {
+            replies: Mutex::new(vec![text.to_string()]),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for TextAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        let text = self.replies.lock().unwrap().remove(0);
+        Ok(vec![
+            ResponseEvent::TextDelta { text },
+            ResponseEvent::Done {
+                finish_reason: FinishReason::Stop,
+            },
+        ])
     }
 }
 
@@ -612,6 +650,57 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
     assert!(!has_error_content);
 }
 
+/// 編集(Issue #41): 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から
+/// 会話が再生成される。旧アシスタント応答は履歴から消え、新しい応答だけが残る。
+#[tokio::test]
+async fn edit_user_message_truncates_and_regenerates() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&TextAdapter::one("応答A")),
+        task_id,
+        "元の質問".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "user").unwrap().id
+    };
+
+    edit_user_message(
+        db.clone(),
+        Some(&TextAdapter::one("応答B")),
+        task_id,
+        user_message_id,
+        "編集後の質問".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, vec!["編集後の質問", "応答B"]);
+
+    // 旧ユーザー発言は物理削除ではなく論理削除(deleted_atが立つだけ)。
+    let deleted_at: Option<String> = conn
+        .query_row(
+            "SELECT deleted_at FROM messages WHERE id = ?1",
+            [user_message_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(deleted_at.is_some());
+}
+
 /// 思考(reasoning)は該当する行の`reasoning`列に保存され、モデルへの再送信には
 /// 一切含まれないことを検証する(Issue #42、principles.md 3節「思考は履歴に送り返さない」)。
 #[tokio::test]
@@ -666,4 +755,158 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
             }
         }
     }
+}
+
+/// 編集の対象はユーザー発言のみ。アシスタント発言を編集しようとするとエラーになる。
+#[tokio::test]
+async fn edit_user_message_rejects_assistant_target() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&TextAdapter::one("応答A")),
+        task_id,
+        "質問".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let assistant_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "assistant").unwrap().id
+    };
+
+    let result = edit_user_message(
+        db.clone(),
+        Some(&TextAdapter::one("応答B")),
+        task_id,
+        assistant_message_id,
+        "書き換え".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await;
+    assert!(result.is_err());
+}
+
+/// 再試行(Issue #41): 同じ`turn_id`のまま`attempt_no`が増え、旧アシスタント応答は
+/// 表示から外れて新しい応答に置き換わる。対応するユーザー発言はそのまま残る。
+#[tokio::test]
+async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&TextAdapter::one("応答A")),
+        task_id,
+        "質問".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let (assistant_message_id, original_turn_id) = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let m = messages.iter().find(|m| m.role == "assistant").unwrap();
+        (m.id, m.turn_id.clone().unwrap())
+    };
+
+    retry_assistant_message(
+        db.clone(),
+        Some(&TextAdapter::one("応答B")),
+        task_id,
+        assistant_message_id,
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[1].content, "応答B");
+    assert_eq!(messages[1].turn_id.as_deref(), Some(original_turn_id.as_str()));
+    assert_eq!(messages[1].attempt_no, Some(2));
+}
+
+/// 再試行の対象はアシスタント発言のみ。ユーザー発言を再試行しようとするとエラーになる。
+#[tokio::test]
+async fn retry_assistant_message_rejects_user_target() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&TextAdapter::one("応答A")),
+        task_id,
+        "質問".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "user").unwrap().id
+    };
+
+    let result = retry_assistant_message(
+        db.clone(),
+        Some(&TextAdapter::one("応答B")),
+        task_id,
+        user_message_id,
+        &SystemPrompts::default(),
+    )
+    .await;
+    assert!(result.is_err());
+}
+
+/// 削除(Issue #41): カスケードしない単発の論理削除。対象以外の発言はそのまま残る。
+#[tokio::test]
+async fn delete_message_removes_only_the_target_without_cascade() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&TextAdapter::one("応答1")),
+        task_id,
+        "1回目".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+    run_turn(
+        db.clone(),
+        Some(&TextAdapter::one("応答2")),
+        task_id,
+        "2回目".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let first_user_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "user").unwrap().id
+    };
+
+    delete_message(db.clone(), task_id, first_user_id).await.unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    // カスケードしないため、1回目の応答・2回目のやり取りはそのまま残る。
+    assert_eq!(contents, vec!["応答1", "2回目", "応答2"]);
 }
