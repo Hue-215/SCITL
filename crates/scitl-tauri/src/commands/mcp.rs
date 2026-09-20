@@ -38,18 +38,37 @@ pub enum NewMcpEndpoint {
 }
 
 /// 秘密情報の値を`secrets.rs`へ保存し、`(name, key_ref)`の組に変換する。途中で失敗したら
-/// 呼び出し元がサーバー登録自体を中断する(`add_provider`と同じ方針。legacy/frontend.md
-/// 3節)。それより前に保存済みの値はkeyring上に孤児として残るが、config.tomlからは
-/// 参照されないため実害は無い(既知の制限としてOpusレビューでも指摘済み)。
+/// それまでに保存した分を削除してからエラーを返す(孤児を残さない。Opusレビュー指摘)。
 fn store_secret_refs(pairs: Vec<(String, String)>) -> Result<Vec<SecretRef>, String> {
-    pairs
-        .into_iter()
-        .map(|(name, value)| {
-            let key_ref = format!("mcp:{}", ulid::Ulid::new());
-            secrets::store(&key_ref, &SecretString::from(value)).map_err(|e| e.to_string())?;
-            Ok(SecretRef { name, key_ref })
-        })
-        .collect()
+    let mut refs = Vec::with_capacity(pairs.len());
+    for (name, value) in pairs {
+        let key_ref = format!("mcp:{}", ulid::Ulid::new());
+        match secrets::store(&key_ref, &SecretString::from(value)) {
+            Ok(()) => refs.push(SecretRef { name, key_ref }),
+            Err(e) => {
+                delete_secret_refs(&refs);
+                return Err(e.to_string());
+            }
+        }
+    }
+    Ok(refs)
+}
+
+/// `refs`が指す秘密情報をすべて削除する。1件が失敗しても残りは試す(複数件あり得るため、
+/// `delete_provider`のような早期returnはしない。Opusレビュー指摘)。
+fn delete_secret_refs(refs: &[SecretRef]) {
+    for r in refs {
+        if let Err(e) = secrets::delete(&r.key_ref) {
+            eprintln!("failed to delete MCP secret '{}' from secret store: {e}", r.name);
+        }
+    }
+}
+
+fn endpoint_secret_refs(endpoint: &McpEndpoint) -> &[SecretRef] {
+    match endpoint {
+        McpEndpoint::Stdio { env_refs, .. } => env_refs,
+        McpEndpoint::StreamableHttp { header_refs, .. } => header_refs,
+    }
 }
 
 #[tauri::command]
@@ -60,6 +79,16 @@ pub fn add_mcp_server(
 ) -> Result<SettingsView, String> {
     let name = name.trim().to_string();
     validate_mcp_server_name(&name).map_err(|e| e.to_string())?;
+
+    // 重複チェックはkeyringへのI/Oより先に行う(安価なチェックを先に。ここで弾ければ
+    // 秘密情報を1件も保存せずに済む)。ただしロックを持ったままI/Oを跨がせないため、
+    // 保存後にもう一度同じチェックをやり直す(Opusレビュー指摘: 重複登録で孤児を残さない)。
+    {
+        let runtime = state.runtime.lock().expect("runtime mutex poisoned");
+        if runtime.config.mcp_servers.iter().any(|s| s.name == name) {
+            return Err(format!("MCP server name already registered: {name}"));
+        }
+    }
 
     let endpoint = match endpoint {
         NewMcpEndpoint::Stdio { command, args, env } => {
@@ -75,6 +104,10 @@ pub fn add_mcp_server(
         }
         NewMcpEndpoint::StreamableHttp { url, headers } => {
             mcp::validate_streamable_http_url(&url).map_err(|e| e.to_string())?;
+            for (name, value) in &headers {
+                mcp::validate_header_name(name).map_err(|e| e.to_string())?;
+                mcp::validate_header_value(value).map_err(|e| e.to_string())?;
+            }
             McpEndpoint::StreamableHttp {
                 url,
                 header_refs: store_secret_refs(headers)?,
@@ -84,6 +117,9 @@ pub fn add_mcp_server(
 
     let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
     if runtime.config.mcp_servers.iter().any(|s| s.name == name) {
+        // 秘密情報の保存中に別の呼び出しが同名で登録を終えた場合(通常のUI操作では
+        // まず起きないが、保証として)。保存済みの分を削除してから中断する。
+        delete_secret_refs(endpoint_secret_refs(&endpoint));
         return Err(format!("MCP server name already registered: {name}"));
     }
 
@@ -110,17 +146,8 @@ pub fn delete_mcp_server(state: State<'_, AppState>, server_id: String) -> Resul
     let removed = runtime.config.mcp_servers.remove(index);
 
     // 保存済みの秘密情報も同時に削除する(legacy/frontend.md 4節「削除には確認ダイアログを
-    // 挟み、保存済みの秘密情報も消える旨を警告する」)。1件の削除に失敗しても残りは試す
-    // (delete_providerと異なり複数件あるため、早期returnしない。Opusレビュー指摘)。
-    let refs = match &removed.endpoint {
-        McpEndpoint::Stdio { env_refs, .. } => env_refs,
-        McpEndpoint::StreamableHttp { header_refs, .. } => header_refs,
-    };
-    for r in refs {
-        if let Err(e) = secrets::delete(&r.key_ref) {
-            eprintln!("failed to delete MCP secret '{}' from secret store: {e}", r.name);
-        }
-    }
+    // 挟み、保存済みの秘密情報も消える旨を警告する」)。
+    delete_secret_refs(endpoint_secret_refs(&removed.endpoint));
 
     persist_and_rebuild(&state.config_path, runtime)
 }

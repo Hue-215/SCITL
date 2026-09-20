@@ -10,9 +10,8 @@ use secrecy::ExposeSecret;
 
 use crate::config::SecretRef;
 use crate::db::error::CoreError;
-use crate::secrets;
 
-use super::{sanitize_tool_text, McpToolInfo, LIST_TOOLS_TIMEOUT};
+use super::{resolve_secrets, sanitize_tool_text, McpToolInfo, LIST_TOOLS_TIMEOUT};
 
 pub(super) async fn list_tools(
     url: &str,
@@ -21,14 +20,14 @@ pub(super) async fn list_tools(
     let client =
         crate::net::hardened_client(url, LIST_TOOLS_TIMEOUT).map_err(|e| CoreError::Mcp(e.to_string()))?;
 
-    let mut headers = HashMap::with_capacity(header_refs.len());
-    for r in header_refs {
-        let name = HeaderName::from_bytes(r.name.as_bytes())
-            .map_err(|e| CoreError::Mcp(format!("invalid header name '{}': {e}", r.name)))?;
-        let secret = secrets::load(&r.key_ref)?;
-        let value = HeaderValue::from_str(secret.expose_secret())
-            .map_err(|_| CoreError::Mcp(format!("invalid header value for '{}'", r.name)))?;
-        headers.insert(name, value);
+    let resolved = resolve_secrets(header_refs).await?;
+    let mut headers = HashMap::with_capacity(resolved.len());
+    for (name, secret) in &resolved {
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|e| CoreError::Mcp(format!("invalid header name '{name}': {e}")))?;
+        let header_value = HeaderValue::from_str(secret.expose_secret())
+            .map_err(|_| CoreError::Mcp(format!("invalid header value for '{name}'")))?;
+        headers.insert(header_name, header_value);
     }
 
     let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())

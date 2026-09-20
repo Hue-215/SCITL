@@ -24,9 +24,8 @@ use tokio::process::ChildStderr;
 
 use crate::config::SecretRef;
 use crate::db::error::CoreError;
-use crate::secrets;
 
-use super::{sanitize_tool_text, McpToolInfo};
+use super::{resolve_secrets, sanitize_tool_text, McpToolInfo};
 
 /// 子プロセスの標準エラーから読み取る上限バイト数。エラー表示に使う分だけあればよく、
 /// サーバーが大量に出力してもメモリを食い潰さないようにする。
@@ -48,9 +47,9 @@ pub(super) async fn list_tools(
             cmd.env(name, value);
         }
     }
-    for r in env_refs {
-        let secret = secrets::load(&r.key_ref)?;
-        cmd.env(&r.name, secret.expose_secret());
+    let resolved = resolve_secrets(env_refs).await?;
+    for (name, secret) in &resolved {
+        cmd.env(name, secret.expose_secret());
     }
 
     let mut wrapped: CommandWrap = cmd.into();
