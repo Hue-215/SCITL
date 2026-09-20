@@ -1,0 +1,12 @@
+{
+  "name": "scitl-tauri-dev",
+  "private": true,
+  "version": "0.0.0",
+  "description": "開発用: tauri CLI(npm run tauri dev)をこのディレクトリから使えるようにするためだけのpackage.json。実行時のフロントエンドは frontend/ を参照する(tauri.conf.json参照)。",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
