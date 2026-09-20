@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolSchema};
-use scitl_core::orchestration::run_turn;
+use scitl_core::orchestration::{run_turn, SystemPrompts};
 use serde_json::json;
 
 /// 各ラウンドで渡されたシステムプロンプトを記録するアダプタ。
@@ -115,7 +115,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
         &adapter,
         task_id,
         "タイトルを「買い物」にして".to_string(),
-        None,
+        &SystemPrompts::default(),
     )
     .await
     .unwrap();
@@ -156,20 +156,25 @@ async fn run_turn_rebuilds_system_prompt_with_latest_state_each_round() {
     };
     let db = Arc::new(Mutex::new(conn));
 
+    let prompts_config = SystemPrompts {
+        base: Some("base prompt"),
+        task_chat: Some("task chat prompt"),
+    };
     run_turn(
         db.clone(),
         &adapter,
         task_id,
         "工程を追加して".to_string(),
-        Some("base prompt"),
+        &prompts_config,
     )
     .await
     .unwrap();
 
     let prompts = adapter.system_prompts.into_inner().unwrap();
     assert_eq!(prompts.len(), 2);
-    // 1ラウンド目: まだ工程は無い。
+    // 1ラウンド目: まだ工程は無い。基本/タスクチャット用の両方が入る。
     assert!(prompts[0].contains("base prompt"));
+    assert!(prompts[0].contains("task chat prompt"));
     assert!(!prompts[0].contains("買い出し"));
     // 2ラウンド目: add_stepsの実行結果が最新状態として反映され、
     // 実行済み操作の再掲にも載る(重複呼び出し防止)。

@@ -243,6 +243,15 @@ body {
   margin: 0;
 }
 
+.settings-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.settings-advanced[open] summary {
+  margin-bottom: 1rem;
+}
+
 .provider-list {
   list-style: none;
   padding: 0;

@@ -102,8 +102,14 @@ export default function Settings({ onClose }: SettingsProps) {
           ) : tab === 'general' ? (
             <GeneralTab
               settings={settings}
-              onSave={(systemPrompt, timeout) =>
-                runOrReportError(() => updateGeneralSettings(systemPrompt, timeout))
+              onSave={(systemPrompt, taskChatSystemPrompt, timeout) =>
+                runOrReportError(() =>
+                  updateGeneralSettings({
+                    systemPrompt,
+                    taskChatSystemPrompt,
+                    responseTimeoutSecs: timeout,
+                  }),
+                )
               }
             />
           ) : tab === 'providers' ? (
@@ -145,13 +151,20 @@ export default function Settings({ onClose }: SettingsProps) {
 
 interface GeneralTabProps {
   settings: SettingsView
-  onSave: (systemPrompt: string | null, responseTimeoutSecs: number | null) => void
+  onSave: (
+    systemPrompt: string | null,
+    taskChatSystemPrompt: string | null,
+    responseTimeoutSecs: number | null,
+  ) => void
 }
 
 // フォーカスを外すと自動保存(legacy/frontend.md 2節)。入力中は自身のstateだけを更新し、
 // blur時にのみ親へ確定した値を渡す。
 function GeneralTab({ settings, onSave }: GeneralTabProps) {
   const [systemPrompt, setSystemPrompt] = useState(settings.general.system_prompt ?? '')
+  const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
+    settings.general.task_chat_system_prompt ?? '',
+  )
   const [timeoutText, setTimeoutText] = useState(
     settings.general.response_timeout_secs?.toString() ?? '',
   )
@@ -159,6 +172,7 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
 
   useEffect(() => {
     setSystemPrompt(settings.general.system_prompt ?? '')
+    setTaskChatSystemPrompt(settings.general.task_chat_system_prompt ?? '')
     setTimeoutText(settings.general.response_timeout_secs?.toString() ?? '')
   }, [settings])
 
@@ -166,7 +180,7 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
     const trimmed = timeoutText.trim()
     if (trimmed === '') {
       setTimeoutError(false)
-      onSave(systemPrompt || null, null)
+      onSave(systemPrompt || null, taskChatSystemPrompt || null, null)
       return
     }
     const parsed = Number(trimmed)
@@ -175,7 +189,7 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
       return
     }
     setTimeoutError(false)
-    onSave(systemPrompt || null, parsed)
+    onSave(systemPrompt || null, taskChatSystemPrompt || null, parsed)
   }
 
   return (
@@ -186,7 +200,13 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
           rows={6}
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
-          onBlur={() => onSave(systemPrompt || null, settings.general.response_timeout_secs)}
+          onBlur={() =>
+            onSave(
+              systemPrompt || null,
+              taskChatSystemPrompt || null,
+              settings.general.response_timeout_secs,
+            )
+          }
         />
       </label>
 
@@ -202,6 +222,29 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
         />
         {timeoutError && <p className="error">1以上の整数を入力してください</p>}
       </label>
+
+      <details className="settings-advanced">
+        <summary>高度な設定</summary>
+        <label className="settings-field">
+          <span>タスクチャット用のシステムプロンプト</span>
+          <textarea
+            rows={6}
+            value={taskChatSystemPrompt}
+            onChange={(e) => setTaskChatSystemPrompt(e.target.value)}
+            onBlur={() =>
+              onSave(
+                systemPrompt || null,
+                taskChatSystemPrompt || null,
+                settings.general.response_timeout_secs,
+              )
+            }
+          />
+          <p className="settings-hint">
+            総合チャットには無い、工程の追加・更新・削除など個別タスクの操作に関する指示は
+            こちらに書く(上のシステムプロンプトの後ろに追加される)。
+          </p>
+        </label>
+      </details>
     </div>
   )
 }

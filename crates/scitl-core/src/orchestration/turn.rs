@@ -8,6 +8,7 @@ use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, NewMessage, Role};
 use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent};
 use crate::orchestration::state_prompt::build_system_prompt;
+use crate::orchestration::SystemPrompts;
 use crate::tools;
 
 const MAX_TOOL_ROUNDS: u32 = 4;
@@ -25,7 +26,7 @@ pub async fn run_turn(
     adapter: &dyn LlmAdapter,
     task_id: i64,
     user_text: String,
-    system_prompt: Option<&str>,
+    prompts: &SystemPrompts<'_>,
 ) -> Result<Vec<ResponseEvent>> {
     let history = db_call(db.clone(), move |conn| {
         messages::insert_message(
@@ -56,12 +57,23 @@ pub async fn run_turn(
     // 重複操作を防ぐため、実行済みの操作だけをここに積んで毎ラウンドのプロンプトに再掲する
     // (docs/spec/legacy/backend.md 4節 手順2)。
     let mut executed_ops: Vec<Value> = Vec::new();
+    // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
+    // 変換しておく(`SystemPrompts`自体はDBスレッドとやり取りするラウンドごとに組み直す)。
+    let base_owned = prompts.base.map(str::to_string);
+    let task_chat_owned = prompts.task_chat.map(str::to_string);
 
     for _round in 1..=MAX_TOOL_ROUNDS {
         let system_prompt_text = db_call(db.clone(), {
             let executed_ops = executed_ops.clone();
-            let system_prompt = system_prompt.map(str::to_string);
-            move |conn| build_system_prompt(conn, task_id, system_prompt.as_deref(), &executed_ops)
+            let base_owned = base_owned.clone();
+            let task_chat_owned = task_chat_owned.clone();
+            move |conn| {
+                let prompts = SystemPrompts {
+                    base: base_owned.as_deref(),
+                    task_chat: task_chat_owned.as_deref(),
+                };
+                build_system_prompt(conn, task_id, &prompts, &executed_ops)
+            }
         })
         .await?;
 

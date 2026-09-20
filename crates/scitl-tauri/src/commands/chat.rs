@@ -1,7 +1,7 @@
 use tauri::State;
 
 use scitl_core::llm::ResponseEvent;
-use scitl_core::orchestration::run_turn;
+use scitl_core::orchestration::{run_turn, SystemPrompts};
 
 use crate::AppState;
 
@@ -14,24 +14,27 @@ pub async fn send_task_chat_message(
     task_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    // ロックはアダプタの`Arc`とシステムプロンプトの複製を取るまでだけ持つ(main.rsの
+    // ロックはアダプタの`Arc`と2種のシステムプロンプトの複製を取るまでだけ持つ(main.rsの
     // `AppState::runtime`のドキュメント参照)。`run_turn`のawaitをロック保持中にまたがせない。
-    let (adapter, system_prompt) = {
+    let (adapter, system_prompt, task_chat_system_prompt) = {
         let runtime = state.runtime.lock().expect("runtime mutex poisoned");
-        (runtime.adapter.clone(), runtime.config.general.system_prompt.clone())
+        (
+            runtime.adapter.clone(),
+            runtime.config.general.system_prompt.clone(),
+            runtime.config.general.task_chat_system_prompt.clone(),
+        )
     };
     let adapter =
         adapter.ok_or_else(|| "no LLM provider is configured; add one in settings".to_string())?;
 
-    run_turn(
-        state.db.clone(),
-        adapter.as_ref(),
-        task_id,
-        text,
-        system_prompt.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())
+    let prompts = SystemPrompts {
+        base: system_prompt.as_deref(),
+        task_chat: task_chat_system_prompt.as_deref(),
+    };
+
+    run_turn(state.db.clone(), adapter.as_ref(), task_id, text, &prompts)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// タスクチャンネルの発言履歴取得(#37)。`commands::tasks`と同じ
