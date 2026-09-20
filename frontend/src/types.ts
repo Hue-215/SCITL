@@ -49,8 +49,26 @@ export interface ProviderView {
   has_api_key: boolean
 }
 
+export type McpEndpointView =
+  | { transport: 'stdio'; command: string; args: string[]; env_names: string[] }
+  | { transport: 'streamable_http'; url: string; header_names: string[] }
+
+export interface McpServerView {
+  id: string
+  name: string
+  enabled: boolean
+  endpoint: McpEndpointView
+  enabled_tools: string[]
+}
+
+export interface McpToolInfo {
+  name: string
+  description: string | null
+}
+
 export interface SettingsView {
   general: GeneralSettings
   providers: ProviderView[]
   active_provider_id: string | null
+  mcp_servers: McpServerView[]
 }

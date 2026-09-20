@@ -11,8 +11,12 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 rusqlite_migration = "1.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
+# LLMアダプタとMCPクライアントの双方が使う唯一のHTTPクライアント。バージョンはrmcpの
+# 要求(0.13.2以上)に合わせてある。`rustls` featureはaws-lc-rs + rustls-platform-verifier
+# (信頼ルートはOSの証明書ストア)を選ぶ。ハードニング設定は`scitl-core/src/net.rs`の
+# `hardened_client`1箇所に集約する(architecture.md 5節)
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 thiserror = "1"
 secrecy = "0.10"
 url = "2"
@@ -20,3 +24,22 @@ ulid = "1"
 async-trait = "0.1"
 keyring = "3"
 toml = "0.8"
+# MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
+# 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
+# (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため。Opusレビュー指摘)。
+# `client`(素朴なクライアント)・`transport-child-process`(stdio)・
+# `transport-streamable-http-client-reqwest`(streamable_http、内部でreqwestを使う)のみ。
+rmcp = { version = "=3.4.0", default-features = false, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
+# rmcpのstdioトランスポートは子プロセスを`kill()`しても、子がさらに生んだ孫プロセス
+# (`npx`が起動する`node`等)までは殺さない(Opusレビュー指摘)。プロセスグループごと
+# kill(Unix)/ジョブオブジェクト(Windows)するために明示的に利用する
+process-wrap = { version = "10.0", default-features = false, features = [
+    "tokio1",
+    "process-group",
+    "job-object",
+    "kill-on-drop",
+] }

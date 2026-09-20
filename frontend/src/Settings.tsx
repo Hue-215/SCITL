@@ -1,15 +1,22 @@
 import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import {
+  addMcpServer,
   addModel,
   addProvider,
+  deleteMcpServer,
   deleteProvider,
+  fetchMcpTools,
   getSettings,
   removeModel,
   setActiveModel,
   setActiveProvider,
+  setMcpServerEnabled,
+  setMcpToolEnabled,
   updateGeneralSettings,
+  type NewMcpEndpoint,
 } from './api'
-import type { ApiFormat, SettingsView } from './types'
+import type { ApiFormat, McpServerView, McpToolInfo, SettingsView } from './types'
 
 interface SettingsProps {
   onClose: () => void
@@ -19,10 +26,9 @@ const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
   open_ai_compat: 'https://api.openai.com/v1',
 }
 
-// 設定画面(legacy/frontend.md 2〜3節)。「ツール」タブはMCPクライアントという新しい
-// 外部通信手段の導入を伴い、Opusレビュー対象のため別Issueで実装する(Issue #22コメント参照)。
+// 設定画面(legacy/frontend.md 2〜4節)。
 export default function Settings({ onClose }: SettingsProps) {
-  const [tab, setTab] = useState<'general' | 'providers'>('general')
+  const [tab, setTab] = useState<'general' | 'providers' | 'mcp'>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -79,6 +85,13 @@ export default function Settings({ onClose }: SettingsProps) {
           >
             APIプロバイダー
           </button>
+          <button
+            type="button"
+            className={tab === 'mcp' ? 'settings-tab selected' : 'settings-tab'}
+            onClick={() => setTab('mcp')}
+          >
+            ツール/MCP
+          </button>
         </nav>
 
         <div className="settings-content">
@@ -93,7 +106,7 @@ export default function Settings({ onClose }: SettingsProps) {
                 runOrReportError(() => updateGeneralSettings(systemPrompt, timeout))
               }
             />
-          ) : (
+          ) : tab === 'providers' ? (
             <ProvidersTab
               settings={settings}
               onAddProvider={(name, format, baseUrl, apiKey) =>
@@ -109,6 +122,18 @@ export default function Settings({ onClose }: SettingsProps) {
               }
               onSetActiveModel={(providerId, model) =>
                 runOrReportError(() => setActiveModel(providerId, model))
+              }
+            />
+          ) : (
+            <McpTab
+              settings={settings}
+              onAddServer={(name, endpoint) => runOrReportError(() => addMcpServer(name, endpoint))}
+              onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
+              onSetServerEnabled={(id, enabled) =>
+                runOrReportError(() => setMcpServerEnabled(id, enabled))
+              }
+              onSetToolEnabled={(id, toolName, enabled) =>
+                runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
               }
             />
           )}
@@ -343,6 +368,304 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
           placeholder="ローカル推論サーバー等では省略可"
         />
       </label>
+      <button type="submit">追加</button>
+    </form>
+  )
+}
+
+// 「1行1件、KEY=VALUE」形式のテキストをパースする(legacy/frontend.md 4節)。
+// エラーは行ごとに個別指摘する。
+function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
+  const pairs: [string, string][] = []
+  const errors: string[] = []
+  text.split('\n').forEach((line, i) => {
+    const trimmed = line.trim()
+    if (trimmed === '') return
+    const eq = trimmed.indexOf('=')
+    if (eq <= 0) {
+      errors.push(`${i + 1}行目: "キー=値"の形式で入力してください`)
+      return
+    }
+    const key = trimmed.slice(0, eq).trim()
+    const value = trimmed.slice(eq + 1).trim()
+    if (key === '') {
+      errors.push(`${i + 1}行目: キーが空です`)
+      return
+    }
+    pairs.push([key, value])
+  })
+  return { pairs, errors }
+}
+
+const MCP_NAME_PATTERN = /^[A-Za-z0-9_]{1,16}$/
+
+interface McpTabProps {
+  settings: SettingsView
+  onAddServer: (name: string, endpoint: NewMcpEndpoint) => void
+  onDeleteServer: (serverId: string) => void
+  onSetServerEnabled: (serverId: string, enabled: boolean) => void
+  onSetToolEnabled: (serverId: string, toolName: string, enabled: boolean) => void
+}
+
+function McpTab({
+  settings,
+  onAddServer,
+  onDeleteServer,
+  onSetServerEnabled,
+  onSetToolEnabled,
+}: McpTabProps) {
+  return (
+    <div className="settings-panel">
+      <p className="settings-hint">
+        登録したサーバーのツール説明はそのままモデルに渡ります。信頼できるサーバーだけを
+        登録してください。
+      </p>
+
+      <ul className="provider-list">
+        {settings.mcp_servers.map((server) => (
+          <McpServerCard
+            key={server.id}
+            server={server}
+            onDelete={() => onDeleteServer(server.id)}
+            onSetEnabled={(enabled) => onSetServerEnabled(server.id, enabled)}
+            onSetToolEnabled={(toolName, enabled) => onSetToolEnabled(server.id, toolName, enabled)}
+          />
+        ))}
+        {settings.mcp_servers.length === 0 && <p>サーバーが未登録です。</p>}
+      </ul>
+
+      <AddMcpServerForm existingNames={settings.mcp_servers.map((s) => s.name)} onAdd={onAddServer} />
+    </div>
+  )
+}
+
+interface McpServerCardProps {
+  server: McpServerView
+  onDelete: () => void
+  onSetEnabled: (enabled: boolean) => void
+  onSetToolEnabled: (toolName: string, enabled: boolean) => void
+}
+
+const TOOL_COLLAPSE_THRESHOLD = 5
+
+function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: McpServerCardProps) {
+  const [tools, setTools] = useState<McpToolInfo[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
+
+  const handleFetchTools = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setTools(await fetchMcpTools(server.id))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const endpointSummary =
+    server.endpoint.transport === 'stdio'
+      ? `標準入出力: ${[server.endpoint.command, ...server.endpoint.args].join(' ')}`
+      : `streamable HTTP: ${server.endpoint.url}`
+  const secretNames =
+    server.endpoint.transport === 'stdio' ? server.endpoint.env_names : server.endpoint.header_names
+  const secretLabel = server.endpoint.transport === 'stdio' ? '環境変数' : 'ヘッダー'
+
+  const collapsible = tools !== null && tools.length >= TOOL_COLLAPSE_THRESHOLD
+  const visibleTools = collapsible && !expanded ? [] : (tools ?? [])
+
+  return (
+    <li className="provider-card">
+      <div className="provider-card-header">
+        <label>
+          <input
+            type="checkbox"
+            checked={server.enabled}
+            onChange={(e) => onSetEnabled(e.target.checked)}
+          />
+          <strong>{server.name}</strong>
+        </label>
+        <button
+          type="button"
+          className="danger"
+          onClick={() => {
+            if (
+              window.confirm(
+                `サーバー「${server.name}」を削除しますか?保存済みの秘密情報も同時に削除されます。`,
+              )
+            ) {
+              onDelete()
+            }
+          }}
+        >
+          削除
+        </button>
+      </div>
+
+      <p className="provider-card-meta">{endpointSummary}</p>
+      {secretNames.length > 0 && (
+        <p className="provider-card-meta">
+          {secretLabel}: {secretNames.join(', ')}(値は安全な場所に保存されています)
+        </p>
+      )}
+
+      {tools === null ? (
+        <p className="model-row-empty">ツール一覧は未取得です。</p>
+      ) : tools.length === 0 ? (
+        <p className="model-row-empty">ツールがありません。</p>
+      ) : (
+        <>
+          {collapsible && (
+            <button type="button" onClick={() => setExpanded((v) => !v)}>
+              {expanded ? '折りたたむ' : `${tools.length}件のツールを表示`}
+            </button>
+          )}
+          <ul className="model-list">
+            {visibleTools.map((tool) => (
+              <li key={tool.name} className="model-row">
+                <label title={tool.description ?? undefined}>
+                  <input
+                    type="checkbox"
+                    checked={server.enabled_tools.includes(tool.name)}
+                    onChange={(e) => onSetToolEnabled(tool.name, e.target.checked)}
+                  />
+                  {tool.name}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {error && <p className="error">{error}</p>}
+      <button type="button" onClick={handleFetchTools} disabled={loading}>
+        {loading ? '取得中…' : 'ツール一覧を取得'}
+      </button>
+    </li>
+  )
+}
+
+interface AddMcpServerFormProps {
+  existingNames: string[]
+  onAdd: (name: string, endpoint: NewMcpEndpoint) => void
+}
+
+function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
+  const [name, setName] = useState('')
+  const [transport, setTransport] = useState<'stdio' | 'streamable_http'>('stdio')
+  const [command, setCommand] = useState('')
+  const [argsText, setArgsText] = useState('')
+  const [envText, setEnvText] = useState('')
+  const [url, setUrl] = useState('')
+  const [headersText, setHeadersText] = useState('')
+  const [errors, setErrors] = useState<string[]>([])
+
+  const reset = () => {
+    setName('')
+    setCommand('')
+    setArgsText('')
+    setEnvText('')
+    setUrl('')
+    setHeadersText('')
+  }
+
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const trimmedName = name.trim()
+    const validationErrors: string[] = []
+    if (!MCP_NAME_PATTERN.test(trimmedName)) {
+      validationErrors.push('識別子は16字以内の英数字とアンダースコアのみで入力してください')
+    } else if (existingNames.includes(trimmedName)) {
+      validationErrors.push(`識別子「${trimmedName}」は既に使われています`)
+    }
+
+    if (transport === 'stdio') {
+      if (!command.trim()) validationErrors.push('コマンドを入力してください')
+      const args = argsText
+        .split('\n')
+        .map((s) => s.trim())
+        .filter((s) => s !== '')
+      const { pairs, errors: envErrors } = parseKeyValueLines(envText)
+      validationErrors.push(...envErrors)
+      if (validationErrors.length > 0) {
+        setErrors(validationErrors)
+        return
+      }
+      setErrors([])
+      onAdd(trimmedName, { transport: 'stdio', command: command.trim(), args, env: pairs })
+    } else {
+      if (!url.trim()) validationErrors.push('URLを入力してください')
+      const { pairs, errors: headerErrors } = parseKeyValueLines(headersText)
+      validationErrors.push(...headerErrors)
+      if (validationErrors.length > 0) {
+        setErrors(validationErrors)
+        return
+      }
+      setErrors([])
+      onAdd(trimmedName, { transport: 'streamable_http', url: url.trim(), headers: pairs })
+    }
+    reset()
+  }
+
+  return (
+    <form className="provider-add-form" onSubmit={submit}>
+      <h2>サーバーを追加</h2>
+      <label className="settings-field">
+        <span>識別子(16字以内、英数字とアンダースコアのみ)</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={16} required />
+      </label>
+      <label className="settings-field">
+        <span>接続方式</span>
+        <select
+          value={transport}
+          onChange={(e) => setTransport(e.target.value as 'stdio' | 'streamable_http')}
+        >
+          <option value="stdio">標準入出力(コマンド実行)</option>
+          <option value="streamable_http">streamable HTTP</option>
+        </select>
+      </label>
+
+      {transport === 'stdio' ? (
+        <>
+          <label className="settings-field">
+            <span>コマンド</span>
+            <input value={command} onChange={(e) => setCommand(e.target.value)} required />
+          </label>
+          <label className="settings-field">
+            <span>引数(1行に1つ)</span>
+            <textarea rows={3} value={argsText} onChange={(e) => setArgsText(e.target.value)} />
+          </label>
+          <label className="settings-field">
+            <span>環境変数(1行1件、キー=値)</span>
+            <textarea rows={3} value={envText} onChange={(e) => setEnvText(e.target.value)} />
+            <p className="settings-hint">値は安全な場所(秘密情報ストア)に保存されます。</p>
+          </label>
+          <p className="settings-hint">
+            この方式はアプリと同じ権限でコマンドを実行します。信頼できるコマンドだけを登録してください。
+          </p>
+        </>
+      ) : (
+        <>
+          <label className="settings-field">
+            <span>URL</span>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} required />
+          </label>
+          <label className="settings-field">
+            <span>ヘッダー(1行1件、キー=値)</span>
+            <textarea rows={3} value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
+            <p className="settings-hint">値は安全な場所(秘密情報ストア)に保存されます。</p>
+          </label>
+        </>
+      )}
+
+      {errors.map((e) => (
+        <p key={e} className="error">
+          {e}
+        </p>
+      ))}
       <button type="submit">追加</button>
     </form>
   )

@@ -18,6 +18,8 @@ pub enum CoreError {
     Secrets(String),
     #[error("config file error: {0}")]
     Config(String),
+    #[error("MCP server error: {0}")]
+    Mcp(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

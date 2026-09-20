@@ -102,7 +102,14 @@ HTTPクライアント(`reqwest`)は既定のままだと以下が「意図し�
 - **環境変数のプロキシ設定を既定で読む**: プロキシを使う場合は設定項目として明示させ、
   既定では `.no_proxy()` を指定する
 - **クロスホストのリダイレクトを既定で追う**: 登録先と異なるホストへのリダイレクトは拒否する
-- **TLSバックエンド**: `rustls` を選び、OS依存のTLS実装によるばらつきを減らす
+- **TLSバックエンド**: `rustls` を選び、OS依存のTLS実装によるばらつきを減らす。信頼ルートは
+  `rustls-platform-verifier`(reqwestの`rustls` feature)経由でOSの証明書ストアを使う
+  (TLS実装自体はrustlsのままで、証明書の検証元だけをOS標準に揃える)
+
+**この設定は`scitl-core/src/net.rs`の`hardened_client`1関数に集約し、LLMプロバイダー
+(`llm/providers/openai_compat.rs`)とMCP streamable_http(`mcp/http.rs`)を含む全HTTP経路が
+必ずここを通る**(1つの機能に関わる判断を1箇所に閉じる。`../principles.md` 5節)。同じ設定を
+経路ごとに書くと、一方だけ直されて食い違う設定が静かに残るため(Opusレビュー指摘)。
 
 ## 6. 秘密情報
 
