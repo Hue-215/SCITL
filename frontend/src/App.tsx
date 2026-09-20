@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getTaskDetail, sendTaskChatMessage } from './api'
 import type { ChatEntry, Task } from './types'
 
@@ -12,14 +12,18 @@ export default function App() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const loadTask = async () => {
+  const loadTask = useCallback(async () => {
     try {
       setTask(await getTaskDetail(TASK_ID))
       setError(null)
     } catch (e) {
       setError(String(e))
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    void loadTask()
+  }, [loadTask])
 
   const send = async () => {
     const text = draft.trim()
@@ -57,11 +61,8 @@ export default function App() {
   return (
     <main>
       <header>
-        <h1>SCITL</h1>
-        <button type="button" onClick={loadTask}>
-          タスクを読み込む(id={TASK_ID})
-        </button>
-        {task && <p>{task.title ?? '(無題)'}</p>}
+        <h1>{task ? (task.title ?? '(無題)') : 'SCITL'}</h1>
+        {task?.description && <p>{task.description}</p>}
       </header>
 
       {error && <p className="error">{error}</p>}
