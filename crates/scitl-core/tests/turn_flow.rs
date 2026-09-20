@@ -70,6 +70,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
         &adapter,
         task_id,
         "タイトルを「買い物」にして".to_string(),
+        None,
     )
     .await
     .unwrap();
