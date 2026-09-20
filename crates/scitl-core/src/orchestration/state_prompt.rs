@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::db::error::Result;
 use crate::db::{now_iso8601, task_steps, tasks};
@@ -16,15 +16,16 @@ pub struct SystemPrompts<'a> {
 }
 
 /// 基本システムプロンプト + タスクチャット用システムプロンプト + 現在日時 +
-/// タスク・工程の最新状態JSON + 同一ターン内で実行済みの操作の再掲、を毎ターン組み立てる
-/// (docs/spec/legacy/backend.md 4節 手順2、docs/spec/principles.md 3節
-/// 「最新状態は毎ターン渡す」)。状態系ツールの実行結果はこの再構築で完全に代替できるため、
-/// 会話履歴には別途投入しない(docs/spec/rebuild/tools.md 4節)。
+/// タスク・工程の最新状態JSONを毎ターン組み立てる(docs/spec/principles.md 3節
+/// 「最新状態は毎ターン渡す」)。この最新状態は**次ターン以降**の入力履歴を代替するもので、
+/// 同一ターン内のツール呼び出しループでの往復は`turn.rs`が別途モデルに返す
+/// (docs/spec/rebuild/tools.md 4節「同一ターン内では分類によらず結果を返す」)。
+/// このため、旧実装にあった「同一ターン内で実行済みの操作の再掲」はここでは持たない
+/// (往復そのものが同じ事実を伝えるため二重になる)。
 pub fn build_system_prompt(
     conn: &Connection,
     task_id: i64,
     prompts: &SystemPrompts,
-    executed_ops: &[Value],
 ) -> Result<String> {
     let task = tasks::get_task(conn, task_id)?;
     let steps = task_steps::list_for_task(conn, task_id)?;
@@ -42,13 +43,6 @@ pub fn build_system_prompt(
     let state = json!({ "task": task, "steps": steps });
     sections.push(format!("current task state:\n{state}"));
 
-    if !executed_ops.is_empty() {
-        sections.push(format!(
-            "operations already executed this turn (do not repeat them):\n{}",
-            json!(executed_ops)
-        ));
-    }
-
     Ok(sections.join("\n\n"))
 }
 
@@ -58,31 +52,19 @@ mod tests {
     use crate::db;
 
     #[test]
-    fn includes_base_prompt_state_and_executed_ops() {
+    fn includes_base_prompt_and_state() {
         let conn = db::open_in_memory().unwrap();
         let task_id = db::tasks::create_task(&conn).unwrap().id;
         db::task_steps::add_steps(&conn, task_id, &["買い出し".to_string()]).unwrap();
 
-        let executed_ops = vec![json!({ "tool": "add_steps", "result": "ok" })];
         let prompts = SystemPrompts {
             base: Some("base prompt"),
             task_chat: None,
         };
-        let prompt = build_system_prompt(&conn, task_id, &prompts, &executed_ops).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &prompts).unwrap();
 
         assert!(prompt.contains("base prompt"));
         assert!(prompt.contains("買い出し"));
-        assert!(prompt.contains("add_steps"));
-    }
-
-    #[test]
-    fn omits_executed_ops_section_when_empty() {
-        let conn = db::open_in_memory().unwrap();
-        let task_id = db::tasks::create_task(&conn).unwrap().id;
-
-        let prompt = build_system_prompt(&conn, task_id, &SystemPrompts::default(), &[]).unwrap();
-
-        assert!(!prompt.contains("already executed"));
     }
 
     #[test]
@@ -94,7 +76,7 @@ mod tests {
             base: Some("base prompt"),
             task_chat: Some("task chat prompt"),
         };
-        let prompt = build_system_prompt(&conn, task_id, &prompts, &[]).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &prompts).unwrap();
 
         let base_pos = prompt.find("base prompt").unwrap();
         let task_chat_pos = prompt.find("task chat prompt").unwrap();
@@ -110,8 +92,18 @@ mod tests {
             base: None,
             task_chat: Some("task chat prompt"),
         };
-        let prompt = build_system_prompt(&conn, task_id, &prompts, &[]).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &prompts).unwrap();
 
         assert!(prompt.contains("task chat prompt"));
+    }
+
+    #[test]
+    fn works_with_no_prompts_at_all() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = db::tasks::create_task(&conn).unwrap().id;
+
+        let prompt = build_system_prompt(&conn, task_id, &SystemPrompts::default()).unwrap();
+
+        assert!(prompt.contains("current task state"));
     }
 }
