@@ -17,3 +17,6 @@ crates/scitl-tauri/gen/
 .vscode/
 .idea/
 .DS_Store
+
+# Claude Code のローカル作業領域(サブエージェント用worktreeなど)
+.claude/
