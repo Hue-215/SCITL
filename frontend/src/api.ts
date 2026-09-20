@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
   McpToolInfo,
+  Message,
   ResponseEvent,
   SettingsView,
   Task,
@@ -27,6 +28,10 @@ export function sendTaskChatMessage(
   text: string,
 ): Promise<ResponseEvent[]> {
   return invoke('send_task_chat_message', { taskId, text })
+}
+
+export function listTaskMessages(taskId: number): Promise<Message[]> {
+  return invoke('list_task_messages', { taskId })
 }
 
 export function getSettings(): Promise<SettingsView> {

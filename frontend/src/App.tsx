@@ -1,15 +1,35 @@
 import { useCallback, useEffect, useState } from 'react'
-import { createTask, getTaskDetail, listTasks, sendTaskChatMessage } from './api'
+import {
+  createTask,
+  getTaskDetail,
+  listTaskMessages,
+  listTasks,
+  sendTaskChatMessage,
+} from './api'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
-import type { ChatEntry, Task, TaskSummary } from './types'
+import type { Message, PendingEntry, Task, TaskSummary } from './types'
+
+function toolSummary(content: string): string {
+  try {
+    const parsed = JSON.parse(content) as { tool?: string }
+    return `ツール実行: ${parsed.tool ?? '不明'}`
+  } catch {
+    return 'ツール実行'
+  }
+}
+
+function formatTime(createdAt: string): string {
+  return new Date(createdAt).toLocaleString()
+}
 
 export default function App() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [taskId, setTaskId] = useState<number | null>(null)
   const [adding, setAdding] = useState(false)
   const [task, setTask] = useState<Task | null>(null)
-  const [entries, setEntries] = useState<ChatEntry[]>([])
+  const [messages, setMessages] = useState<Message[]>([])
+  const [pending, setPending] = useState<PendingEntry[]>([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -35,8 +55,10 @@ export default function App() {
 
   const loadTask = useCallback(async (id: number) => {
     try {
-      setTask(await getTaskDetail(id))
-      setEntries([])
+      const [detail, history] = await Promise.all([getTaskDetail(id), listTaskMessages(id)])
+      setTask(detail)
+      setMessages(history)
+      setPending([])
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -66,31 +88,21 @@ export default function App() {
     const text = draft.trim()
     if (!text || sending || taskId === null) return
     setDraft('')
-    setEntries((prev) => [...prev, { role: 'user', content: text }])
+    // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
+    // DBから引き直す(docs/spec/principles.md 3節「保存するのは組み立て終わった応答」)。
+    setPending([
+      { role: 'user', content: text },
+      { role: 'pending', content: '応答待ち…' },
+    ])
     setSending(true)
     setError(null)
     try {
-      const events = await sendTaskChatMessage(taskId, text)
-      let assistantText = ''
-      const newEntries: ChatEntry[] = []
-      for (const event of events) {
-        if (event.type === 'text_delta') {
-          assistantText += event.text
-        } else if (event.type === 'tool_call') {
-          newEntries.push({
-            role: 'tool',
-            content: `ツール実行: ${event.name}`,
-          })
-        }
-      }
-      if (assistantText) {
-        newEntries.push({ role: 'assistant', content: assistantText })
-      }
-      setEntries((prev) => [...prev, ...newEntries])
+      await sendTaskChatMessage(taskId, text)
       await loadTask(taskId)
       await loadTasks()
     } catch (e) {
       setError(String(e))
+      await loadTask(taskId)
     } finally {
       setSending(false)
     }
@@ -120,9 +132,17 @@ export default function App() {
         {error && <p className="error">{error}</p>}
 
         <ul className="chat-log">
-          {entries.map((entry, i) => (
-            <li key={i} className={`entry entry-${entry.role}`}>
-              {entry.content}
+          {messages.map((message) => (
+            <li key={message.id} className={`entry entry-${message.role}`}>
+              <span className="entry-content">
+                {message.kind === 'tool_execution' ? toolSummary(message.content) : message.content}
+              </span>
+              <time className="entry-time">{formatTime(message.created_at)}</time>
+            </li>
+          ))}
+          {pending.map((entry, i) => (
+            <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
+              <span className="entry-content">{entry.content}</span>
             </li>
           ))}
         </ul>
