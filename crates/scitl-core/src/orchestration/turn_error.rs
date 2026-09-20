@@ -10,12 +10,14 @@ use crate::llm::Readiness;
 pub enum TurnFailure {
     NoProvider,
     NoModel,
-    NoApiKey,
     EmptyResponse,
     /// 上限が未設定なら設定を促すヒントを文言に加える(`legacy/backend.md` 4節手順6)。
     /// `config.rs`に上限の項目自体が無いため、#40時点では常に`false`。
     ContextExceeded { limit_configured: bool },
     ToolRoundLimit,
+    /// APIキー未設定・不正のどちらも実際の呼び出しがHTTP 401/403を返してここに落ちる
+    /// (`Readiness`のドキュメント参照。事前チェックでは「未設定」と「認証不要」を
+    /// 区別できないため、実際に呼んで判定する設計)。
     Auth,
     RateLimit,
     /// 設定不備(鍵ストア・プロバイダー設定・設定ファイル)。鍵名やパスを含みうるため
@@ -34,7 +36,6 @@ impl TurnFailure {
         match self {
             TurnFailure::NoProvider => "no_provider",
             TurnFailure::NoModel => "no_model",
-            TurnFailure::NoApiKey => "no_api_key",
             TurnFailure::EmptyResponse => "empty_response",
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
@@ -54,9 +55,6 @@ impl TurnFailure {
             TurnFailure::NoModel => {
                 "モデルが選択されていません。設定画面でモデルを選択してください。".to_string()
             }
-            TurnFailure::NoApiKey => {
-                "APIキーが設定されていません。設定画面で登録してください。".to_string()
-            }
             TurnFailure::EmptyResponse => {
                 "モデルからの応答が空でした。もう一度お試しください。".to_string()
             }
@@ -73,7 +71,8 @@ impl TurnFailure {
                 "ツールの呼び出しが上限回数に達したため、応答の生成を打ち切りました。".to_string()
             }
             TurnFailure::Auth => {
-                "APIキーが正しくないか、権限がありません。設定画面でAPIキーを確認してください。"
+                "APIキーが未設定か正しくないか、権限がありません。設定画面でAPIキーを\
+                 確認してください。"
                     .to_string()
             }
             TurnFailure::RateLimit => {
@@ -97,7 +96,6 @@ pub fn from_readiness(readiness: Readiness) -> Option<TurnFailure> {
     match readiness {
         Readiness::Ready => None,
         Readiness::NoModel => Some(TurnFailure::NoModel),
-        Readiness::NoApiKey => Some(TurnFailure::NoApiKey),
     }
 }
 
@@ -240,6 +238,15 @@ mod tests {
     fn from_readiness_maps_unready_states() {
         assert_eq!(from_readiness(Readiness::Ready), None);
         assert_eq!(from_readiness(Readiness::NoModel), Some(TurnFailure::NoModel));
-        assert_eq!(from_readiness(Readiness::NoApiKey), Some(TurnFailure::NoApiKey));
+    }
+
+    #[test]
+    fn classify_maps_missing_or_invalid_api_key_to_auth() {
+        // APIキー未設定・不正のどちらも、実際の呼び出しが401/403を返すことで初めて
+        // 判明する(事前チェックでは「未設定」と「ローカルプロバイダーの認証不要」を
+        // 区別できないため)。
+        let failure = classify(&CoreError::Llm("http 401: missing bearer token".to_string()));
+        assert_eq!(failure, TurnFailure::Auth);
+        assert!(failure.user_message().contains("未設定"));
     }
 }

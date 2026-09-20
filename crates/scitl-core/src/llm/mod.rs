@@ -78,11 +78,17 @@ pub struct ToolSchema {
 /// アダプタが構成不足で呼び出しに進めない状態(Issue #40)。プロバイダの選択有無は
 /// `Option<&dyn LlmAdapter>`の`None`で表すためここには含めない
 /// (`orchestration::turn_error::from_readiness`参照)。
+///
+/// APIキーの空・未設定はここに含めない。ローカルプロバイダーは認証不要で意図的に
+/// 空のままにする場合があり、空文字列だけでは「未設定で使えない」のか「設定不要」なのかを
+/// 区別できない(`main.rs::build_active_adapter`のドキュメント参照: 資格情報ストアが
+/// 使えない場合も鍵無し扱いで起動を続け、実際のAPI呼び出し時にプロバイダー側の認証エラー
+/// として表面化させる設計)。実際に鍵が必要なら呼び出しが401/403を返し、
+/// `turn_error::classify`が`Auth`として分類する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Readiness {
     Ready,
     NoModel,
-    NoApiKey,
 }
 
 /// 具象プロバイダの境界。`orchestration::turn`はこのtraitのみを知り、

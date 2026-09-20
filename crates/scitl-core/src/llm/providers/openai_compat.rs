@@ -243,13 +243,12 @@ struct ResponseFunctionCall {
 #[async_trait::async_trait]
 impl LlmAdapter for OpenAiCompatAdapter {
     fn readiness(&self) -> Readiness {
-        // `main.rs::build_adapter_for`はモデル未選択・鍵未設定でもエラーにせず空文字の
-        // まま`OpenAiCompatAdapter`を作る(全プロバイダー削除同様、チャット送信時に
-        // 初めて表面化させる設計)。空文字かどうかがここでの唯一の判定材料になる。
+        // `main.rs::build_adapter_for`はモデル未選択でもエラーにせず空文字のまま
+        // `OpenAiCompatAdapter`を作る(全プロバイダー削除同様、チャット送信時に初めて
+        // 表面化させる設計)。APIキーの空はここでは判定しない(`Readiness`のドキュメント
+        // 参照: ローカルプロバイダーの「認証不要で意図的に空」と区別できないため)。
         if self.model.is_empty() {
             Readiness::NoModel
-        } else if self.api_key.expose_secret().is_empty() {
-            Readiness::NoApiKey
         } else {
             Readiness::Ready
         }
