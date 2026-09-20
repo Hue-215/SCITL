@@ -11,6 +11,16 @@ type Role = {
 
 type RoleSet = Record<string, { light: Role; dark: Role }>
 
+// 危険色ロール: シードに依存しない固定色相を使うため、彩度は係数ではなく
+// パーセント値そのものを持つ(Roleの saturationFactor とは単位が異なる)。
+type DangerRole = {
+  /** 彩度(%)そのもの。RoleのsaturationFactorと違い、シード彩度には掛けない。 */
+  saturation: number
+  lightness: number
+}
+
+type DangerRoleSet = Record<string, { light: DangerRole; dark: DangerRole }>
+
 // 危険色(エラー表示)はシードから独立した固定色相を使う。シードが何色でも
 // 「エラーは赤系」という読み取りやすさを保つため。
 const DANGER_HUE = 4
@@ -39,13 +49,13 @@ const ROLES = {
 
 // 危険色は独自の色相を持つため、彩度は(シードではなく)固定値からの相対にする。
 const DANGER_ROLES = {
-  danger: { light: { saturationFactor: 70, lightness: 42 }, dark: { saturationFactor: 65, lightness: 68 } },
-  dangerContainer: { light: { saturationFactor: 75, lightness: 92 }, dark: { saturationFactor: 40, lightness: 26 } },
+  danger: { light: { saturation: 70, lightness: 42 }, dark: { saturation: 65, lightness: 68 } },
+  dangerContainer: { light: { saturation: 75, lightness: 92 }, dark: { saturation: 40, lightness: 26 } },
   onDangerContainer: {
-    light: { saturationFactor: 65, lightness: 24 },
-    dark: { saturationFactor: 35, lightness: 92 },
+    light: { saturation: 65, lightness: 24 },
+    dark: { saturation: 35, lightness: 92 },
   },
-}
+} satisfies DangerRoleSet
 
 function hexToHueSaturation(hex: string): { h: number; s: number } {
   const r = parseInt(hex.slice(1, 3), 16) / 255
@@ -79,8 +89,8 @@ function buildPalette(seedHex: string, mode: 'light' | 'dark'): Record<string, s
     palette[name] = `hsl(${h.toFixed(1)} ${(s * saturationFactor).toFixed(1)}% ${lightness}%)`
   }
   for (const [name, role] of Object.entries(DANGER_ROLES)) {
-    const { saturationFactor, lightness } = role[mode]
-    palette[name] = `hsl(${DANGER_HUE} ${saturationFactor}% ${lightness}%)`
+    const { saturation, lightness } = role[mode]
+    palette[name] = `hsl(${DANGER_HUE} ${saturation}% ${lightness}%)`
   }
   return palette
 }
