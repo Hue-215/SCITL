@@ -50,6 +50,9 @@ pub struct NewMessage<'a> {
     pub turn: Option<(&'a str, i64)>,
     /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
     pub error_kind: Option<&'a str>,
+    /// モデルの思考(reasoning)。表示・エクスポート専用で、APIへの入力には使わない
+    /// (`docs/spec/rebuild/data-model.md` messagesテーブル、Issue #42)。
+    pub reasoning: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +63,7 @@ pub struct Message {
     pub content: String,
     pub kind: String,
     pub source: Option<String>,
+    pub reasoning: Option<String>,
     pub error_kind: Option<String>,
     pub turn_id: Option<String>,
     pub attempt_no: Option<i64>,
@@ -73,14 +77,15 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     };
     conn.execute(
         "INSERT INTO messages
-            (task_id, role, content, kind, source, error_kind, turn_id, attempt_no, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            (task_id, role, content, kind, source, reasoning, error_kind, turn_id, attempt_no, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             msg.task_id,
             msg.role.as_str(),
             msg.content,
             msg.kind.as_str(),
             msg.source,
+            msg.reasoning,
             msg.error_kind,
             turn_id,
             attempt_no,
@@ -95,7 +100,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// (data-model.md「ターン境界」— 外部経由の記録はturn_idを持たないため常に残る)。
 pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
-        "SELECT id, task_id, role, content, kind, source, error_kind, turn_id, attempt_no, created_at
+        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, turn_id, attempt_no, created_at
          FROM messages
          WHERE task_id = ?1
            AND deleted_at IS NULL
@@ -117,10 +122,11 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
                 content: row.get(3)?,
                 kind: row.get(4)?,
                 source: row.get(5)?,
-                error_kind: row.get(6)?,
-                turn_id: row.get(7)?,
-                attempt_no: row.get(8)?,
-                created_at: row.get(9)?,
+                reasoning: row.get(6)?,
+                error_kind: row.get(7)?,
+                turn_id: row.get(8)?,
+                attempt_no: row.get(9)?,
+                created_at: row.get(10)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -157,6 +163,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                reasoning: None,
             },
         )
         .unwrap();
@@ -171,6 +178,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: Some("empty_response"),
+                reasoning: None,
             },
         )
         .unwrap();
@@ -185,6 +193,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 2)),
                 error_kind: None,
+                reasoning: None,
             },
         )
         .unwrap();
@@ -209,6 +218,7 @@ mod tests {
                 source: Some("mcp:external-client"),
                 turn: None,
                 error_kind: None,
+                reasoning: None,
             },
         )
         .unwrap();
@@ -233,6 +243,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: Some("no_api_key"),
+                reasoning: None,
             },
         )
         .unwrap();
@@ -258,6 +269,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                reasoning: None,
             },
         );
         assert!(result.is_err());
