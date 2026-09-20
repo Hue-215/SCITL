@@ -12,6 +12,8 @@ pub enum CoreError {
     InvalidArgument { name: String, reason: String },
     #[error("llm provider error: {0}")]
     Llm(String),
+    #[error("invalid provider configuration: {0}")]
+    ProviderConfig(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
