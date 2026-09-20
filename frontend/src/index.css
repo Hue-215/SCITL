@@ -112,6 +112,9 @@ body {
 }
 
 .entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
   padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
   max-width: 32rem;
@@ -130,6 +133,17 @@ body {
 .entry-tool {
   align-self: flex-start;
   font-style: italic;
+  color: #6b7280;
+}
+
+.entry-pending {
+  align-self: flex-start;
+  font-style: italic;
+  color: #9ca3af;
+}
+
+.entry-time {
+  font-size: 0.7rem;
   color: #6b7280;
 }
 

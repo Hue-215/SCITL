@@ -26,8 +26,24 @@ export type ResponseEvent =
   | { type: 'tool_call'; id: string | null; name: string; arguments: unknown }
   | { type: 'done'; finish_reason: 'stop' | 'tool_call' | 'length' | 'error' }
 
-export interface ChatEntry {
+// crates/scitl-core/src/db/messages.rs の Message と一致させる。
+export interface Message {
+  id: number
+  task_id: number | null
   role: 'user' | 'assistant' | 'tool'
+  content: string
+  kind: 'normal' | 'tool_execution'
+  source: string | null
+  is_error: boolean
+  turn_id: string | null
+  attempt_no: number | null
+  created_at: string
+}
+
+// DBに未確定の、送信直後の楽観表示専用のプレースホルダ(principles.md 3節「保存するのは
+// 組み立て終わった応答」に従い、確定後はlist_task_messagesで引き直して置き換える)。
+export interface PendingEntry {
+  role: 'user' | 'pending'
   content: string
 }
 

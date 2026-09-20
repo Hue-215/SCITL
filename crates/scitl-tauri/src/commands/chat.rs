@@ -33,3 +33,20 @@ pub async fn send_task_chat_message(
     .await
     .map_err(|e| e.to_string())
 }
+
+/// タスクチャンネルの発言履歴取得(#37)。`commands::tasks`と同じ
+/// `spawn_blocking` + ロックの型を踏襲する。
+#[tauri::command]
+pub async fn list_task_messages(
+    state: State<'_, AppState>,
+    task_id: i64,
+) -> Result<Vec<scitl_core::db::messages::Message>, String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db.lock().expect("db mutex poisoned");
+        scitl_core::db::messages::list_for_task(&conn, task_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}

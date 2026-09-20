@@ -71,6 +71,7 @@ fn main() {
             commands::tasks::list_tasks,
             commands::tasks::create_task,
             commands::chat::send_task_chat_message,
+            commands::chat::list_task_messages,
             commands::settings::get_settings,
             commands::settings::update_general_settings,
             commands::settings::add_provider,
