@@ -25,12 +25,12 @@ pub struct OpenAiCompatAdapter {
 }
 
 impl OpenAiCompatAdapter {
-    /// `api_key`は呼び出し元(`secrets.rs`経由)から受け取る。このアダプタ自身は
-    /// keyringに触れない(architecture.md 6節)。保持中は`SecretString`に包み、
-    /// Debug出力への露出とDrop後のメモリ残留を防ぐ。
+    /// `api_key`は呼び出し元(`secrets.rs`経由)から`SecretString`のまま受け取る。
+    /// このアダプタ自身はkeyringに触れない(architecture.md 6節)。`SecretString`を
+    /// 引数の型にすることで、呼び出し元が平文`String`を経由する経路を作れないようにする。
     pub fn new(
         base_url: impl Into<String>,
-        api_key: impl Into<String>,
+        api_key: SecretString,
         model: impl Into<String>,
     ) -> Result<Self, CoreError> {
         let base_url = base_url.into();
@@ -49,7 +49,7 @@ impl OpenAiCompatAdapter {
         Ok(Self {
             client,
             base_url,
-            api_key: SecretString::from(api_key.into()),
+            api_key,
             model: model.into(),
         })
     }

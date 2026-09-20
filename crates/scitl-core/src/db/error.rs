@@ -14,6 +14,10 @@ pub enum CoreError {
     Llm(String),
     #[error("invalid provider configuration: {0}")]
     ProviderConfig(String),
+    #[error("secret store error: {0}")]
+    Secrets(String),
+    #[error("config file error: {0}")]
+    Config(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
