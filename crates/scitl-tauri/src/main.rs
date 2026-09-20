@@ -2,6 +2,7 @@
 
 mod commands;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -38,6 +39,11 @@ pub struct AppState {
     pub db: SharedConnection,
     pub config_path: PathBuf,
     pub runtime: Mutex<Runtime>,
+    /// `fetch_mcp_tools`の同時実行を1サーバーにつき1本に絞るためのガード
+    /// (`commands::mcp`)。ボタンの無効化(連打防止)はフロントエンド側の責務だが、
+    /// それだけでは保証にならないため、Rust側にも同時実行を防ぐ手段を持つ
+    /// (Opusレビュー指摘)。
+    pub mcp_fetch_in_flight: Mutex<HashSet<String>>,
 }
 
 fn main() {
@@ -56,6 +62,7 @@ fn main() {
                 db: Arc::new(Mutex::new(conn)),
                 config_path,
                 runtime: Mutex::new(Runtime { config, adapter }),
+                mcp_fetch_in_flight: Mutex::new(HashSet::new()),
             });
             Ok(())
         })
@@ -72,6 +79,11 @@ fn main() {
             commands::settings::add_model,
             commands::settings::remove_model,
             commands::settings::set_active_model,
+            commands::mcp::add_mcp_server,
+            commands::mcp::delete_mcp_server,
+            commands::mcp::set_mcp_server_enabled,
+            commands::mcp::set_mcp_tool_enabled,
+            commands::mcp::fetch_mcp_tools,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,10 +1,12 @@
-//! 設定画面(Issue #22)向けIPCコマンド。「一般」「APIプロバイダー」タブに対応する
-//! (「ツール」タブはMCPクライアントという新しい外部通信手段の導入を伴うため、
-//! CLAUDE.mdの規定によりOpusレビューを要する別Issueに切り出す)。
+//! 設定画面(Issue #22)向けIPCコマンド。「一般」「APIプロバイダー」タブに対応する。
+//! 「ツール/MCP」タブのコマンドは`commands::mcp`にある(MCPクライアントという新しい
+//! 外部通信手段の導入を伴い、CLAUDE.mdの規定によりOpusレビューを要したためIssue #28として
+//! 別に実装したが、`SettingsView`自体は1つの設定画面に対応する1つの構造として共有する)。
 //!
-//! フロントエンドには`key_ref`も平文APIキーも渡さない。プロバイダーに鍵が
+//! フロントエンドには`key_ref`も平文APIキー・秘密情報も渡さない。プロバイダーに鍵が
 //! 設定済みかどうかは`has_api_key`という真偽値だけで伝える(architecture.md 7節
-//! 「フロントエンドは秘密情報を一切受け取らない」)。
+//! 「フロントエンドは秘密情報を一切受け取らない」)。MCPサーバーの環境変数・ヘッダーも
+//! 同様に名前だけを伝え、値・key_refは伝えない(Opusレビュー指摘)。
 
 use std::sync::MutexGuard;
 
@@ -12,7 +14,7 @@ use secrecy::SecretString;
 use serde::Serialize;
 use tauri::State;
 
-use scitl_core::config::{self, ApiFormat, Config, GeneralConfig, ProviderConfig};
+use scitl_core::config::{self, ApiFormat, Config, GeneralConfig, McpEndpoint, ProviderConfig};
 use scitl_core::llm::providers::openai_compat::validate_base_url;
 use scitl_core::secrets;
 
@@ -30,13 +32,62 @@ pub struct ProviderView {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "transport", rename_all = "snake_case")]
+pub enum McpEndpointView {
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env_names: Vec<String>,
+    },
+    StreamableHttp {
+        url: String,
+        header_names: Vec<String>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpServerView {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub endpoint: McpEndpointView,
+    pub enabled_tools: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SettingsView {
     pub general: GeneralConfig,
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
+    pub mcp_servers: Vec<McpServerView>,
 }
 
-fn to_view(config: &Config) -> SettingsView {
+fn to_mcp_view(s: &scitl_core::config::McpServerConfig) -> McpServerView {
+    let endpoint = match &s.endpoint {
+        McpEndpoint::Stdio {
+            command,
+            args,
+            env_refs,
+        } => McpEndpointView::Stdio {
+            command: command.clone(),
+            args: args.clone(),
+            env_names: env_refs.iter().map(|r| r.name.clone()).collect(),
+        },
+        McpEndpoint::StreamableHttp { url, header_refs } => McpEndpointView::StreamableHttp {
+            url: url.clone(),
+            header_names: header_refs.iter().map(|r| r.name.clone()).collect(),
+        },
+    };
+    McpServerView {
+        id: s.id.clone(),
+        name: s.name.clone(),
+        enabled: s.enabled,
+        endpoint,
+        enabled_tools: s.enabled_tools.iter().cloned().collect(),
+    }
+}
+
+pub(crate) fn to_view(config: &Config) -> SettingsView {
     SettingsView {
         general: config.general.clone(),
         providers: config
@@ -53,6 +104,7 @@ fn to_view(config: &Config) -> SettingsView {
             })
             .collect(),
         active_provider_id: config.active_provider_id.clone(),
+        mcp_servers: config.mcp_servers.iter().map(to_mcp_view).collect(),
     }
 }
 
@@ -70,7 +122,7 @@ fn find_provider_mut<'a>(
 /// 設定変更後の共通の後始末: `config.toml`へ保存し、アクティブプロバイダーからアダプタを
 /// 作り直して`Runtime`へ差し替える。設定変更の経路をここ1箇所に閉じることで、
 /// 「保存し忘れ」「アダプタの再構築し忘れ」を構造的に防ぐ(principles.md 5節)。
-fn persist_and_rebuild(
+pub(crate) fn persist_and_rebuild(
     config_path: &std::path::Path,
     mut runtime: MutexGuard<'_, Runtime>,
 ) -> Result<SettingsView, String> {
