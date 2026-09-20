@@ -44,6 +44,57 @@ impl TaskStatus {
     }
 }
 
+/// サイドバーのタスク一覧表示に必要な最小限の情報。
+/// 本文(description)は一覧に出さないため含めない。
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskSummary {
+    pub id: i64,
+    pub title: Option<String>,
+    pub deadline: Option<String>,
+    pub archived_at: Option<String>,
+    pub steps_done: i64,
+    pub steps_total: i64,
+}
+
+/// 削除済み(deleted_at)を除く全タスクを作成日時昇順で返す。アーカイブ済みと未アーカイブの
+/// 振り分けはフロントエンド側(archived_atの有無)で行う。
+pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.title, t.deadline, t.archived_at,
+                COUNT(s.id) FILTER (WHERE s.done_at IS NOT NULL) AS steps_done,
+                COUNT(s.id) AS steps_total
+         FROM tasks t
+         LEFT JOIN task_steps s ON s.task_id = t.id AND s.deleted_at IS NULL
+         WHERE t.deleted_at IS NULL
+         GROUP BY t.id
+         ORDER BY t.created_at ASC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(TaskSummary {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                deadline: row.get(2)?,
+                archived_at: row.get(3)?,
+                steps_done: row.get(4)?,
+                steps_total: row.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う
+/// (principles.md 1節「チャットが操作の中心」)。
+pub fn create_task(conn: &Connection) -> Result<Task> {
+    let now = now_iso8601();
+    conn.execute(
+        "INSERT INTO tasks (title, created_at, updated_at) VALUES (NULL, ?1, ?1)",
+        [&now],
+    )?;
+    get_task(conn, conn.last_insert_rowid())
+}
+
 pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
         "SELECT id, title, description, deadline, archived_at, deleted_at, created_at, updated_at
@@ -173,5 +224,57 @@ mod tests {
     #[test]
     fn status_parse_rejects_unknown_value() {
         assert!(TaskStatus::parse("deleted").is_err());
+    }
+
+    #[test]
+    fn create_task_starts_with_null_fields() {
+        let conn = db::open_in_memory().unwrap();
+        let task = create_task(&conn).unwrap();
+        assert!(task.title.is_none());
+        assert!(task.deadline.is_none());
+        assert!(task.archived_at.is_none());
+    }
+
+    #[test]
+    fn list_tasks_reports_step_counts_and_excludes_deleted_steps() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        let now = now_iso8601();
+        conn.execute(
+            "INSERT INTO task_steps (task_id, description, done_at, order_index, created_at)
+             VALUES (?1, 'done', ?2, 0, ?2)",
+            rusqlite::params![id, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO task_steps (task_id, description, order_index, created_at)
+             VALUES (?1, 'pending', 1, ?2)",
+            rusqlite::params![id, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO task_steps (task_id, description, deleted_at, order_index, created_at)
+             VALUES (?1, 'deleted', ?2, 2, ?2)",
+            rusqlite::params![id, now],
+        )
+        .unwrap();
+
+        let summaries = list_tasks(&conn).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].steps_done, 1);
+        assert_eq!(summaries[0].steps_total, 2);
+    }
+
+    #[test]
+    fn list_tasks_excludes_deleted_tasks() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        conn.execute(
+            "UPDATE tasks SET deleted_at = ?1 WHERE id = ?2",
+            rusqlite::params![now_iso8601(), id],
+        )
+        .unwrap();
+
+        assert!(list_tasks(&conn).unwrap().is_empty());
     }
 }
