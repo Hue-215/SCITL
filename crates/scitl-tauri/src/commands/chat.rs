@@ -14,7 +14,22 @@ pub async fn send_task_chat_message(
     task_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    run_turn(state.db.clone(), state.adapter.as_ref(), task_id, text)
-        .await
-        .map_err(|e| e.to_string())
+    // ロックはアダプタの`Arc`とシステムプロンプトの複製を取るまでだけ持つ(main.rsの
+    // `AppState::runtime`のドキュメント参照)。`run_turn`のawaitをロック保持中にまたがせない。
+    let (adapter, system_prompt) = {
+        let runtime = state.runtime.lock().expect("runtime mutex poisoned");
+        (runtime.adapter.clone(), runtime.config.general.system_prompt.clone())
+    };
+    let adapter =
+        adapter.ok_or_else(|| "no LLM provider is configured; add one in settings".to_string())?;
+
+    run_turn(
+        state.db.clone(),
+        adapter.as_ref(),
+        task_id,
+        text,
+        system_prompt.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }

@@ -28,10 +28,14 @@ impl OpenAiCompatAdapter {
     /// `api_key`は呼び出し元(`secrets.rs`経由)から`SecretString`のまま受け取る。
     /// このアダプタ自身はkeyringに触れない(architecture.md 6節)。`SecretString`を
     /// 引数の型にすることで、呼び出し元が平文`String`を経由する経路を作れないようにする。
+    ///
+    /// `request_timeout`は設定画面(Issue #22)の「応答タイムアウト」。未設定(`None`)なら
+    /// [`REQUEST_TIMEOUT`]を既定値として使う。
     pub fn new(
         base_url: impl Into<String>,
         api_key: SecretString,
         model: impl Into<String>,
+        request_timeout: Option<Duration>,
     ) -> Result<Self, CoreError> {
         let base_url = base_url.into();
         validate_base_url(&base_url)?;
@@ -43,7 +47,7 @@ impl OpenAiCompatAdapter {
             // 想定していないため、同一ホスト内も含めて一律拒否する方が単純で安全。
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(request_timeout.unwrap_or(REQUEST_TIMEOUT))
             .build()
             .expect("reqwest client construction failed");
         Ok(Self {
@@ -62,7 +66,7 @@ impl OpenAiCompatAdapter {
 /// query/fragment/userinfoも拒否する。エンドポイントは文字列連結ではなく`Url::join`で
 /// 組み立てるため、これらが混ざっているとリクエストパスが鍵の置き場所として使われかねない
 /// (Opusレビュー指摘: 「クエリに鍵を置く構成」を入口で消す)。
-fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
+pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
     let url = reqwest::Url::parse(base_url)
         .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
 

@@ -24,6 +24,7 @@ pub async fn run_turn(
     adapter: &dyn LlmAdapter,
     task_id: i64,
     user_text: String,
+    system_prompt: Option<&str>,
 ) -> Result<Vec<ResponseEvent>> {
     let mut history = db_call(db.clone(), move |conn| {
         messages::insert_message(
@@ -41,6 +42,19 @@ pub async fn run_turn(
         build_history(conn, task_id)
     })
     .await?;
+
+    // システムプロンプトは会話履歴として保存せず、送信のたびに現在の設定値を先頭に足す
+    // (設定画面(Issue #22)で変更したら次のターンから即座に反映されるべきであり、
+    // 発言として`messages`に残す対象ではないため)。
+    if let Some(prompt) = system_prompt.filter(|p| !p.is_empty()) {
+        history.insert(
+            0,
+            ChatMessage {
+                role: "system",
+                content: prompt.to_string(),
+            },
+        );
+    }
 
     let turn_id = Ulid::new().to_string();
     // 再試行(失敗後の再送)が無い限り1のまま。ツール呼び出しの複数ラウンドはリトライでは

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { ResponseEvent, Task, TaskSummary } from './types'
+import type { ApiFormat, ResponseEvent, SettingsView, Task, TaskSummary } from './types'
 
 // フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
 // docs/spec/rebuild/architecture.md 7節。
@@ -20,4 +20,47 @@ export function sendTaskChatMessage(
   text: string,
 ): Promise<ResponseEvent[]> {
   return invoke('send_task_chat_message', { taskId, text })
+}
+
+export function getSettings(): Promise<SettingsView> {
+  return invoke('get_settings')
+}
+
+export function updateGeneralSettings(
+  systemPrompt: string | null,
+  responseTimeoutSecs: number | null,
+): Promise<SettingsView> {
+  return invoke('update_general_settings', {
+    systemPrompt,
+    responseTimeoutSecs,
+  })
+}
+
+export function addProvider(
+  name: string,
+  apiFormat: ApiFormat,
+  baseUrl: string,
+  apiKey: string | null,
+): Promise<SettingsView> {
+  return invoke('add_provider', { name, apiFormat, baseUrl, apiKey })
+}
+
+export function deleteProvider(providerId: string): Promise<SettingsView> {
+  return invoke('delete_provider', { providerId })
+}
+
+export function setActiveProvider(providerId: string): Promise<SettingsView> {
+  return invoke('set_active_provider', { providerId })
+}
+
+export function addModel(providerId: string, model: string): Promise<SettingsView> {
+  return invoke('add_model', { providerId, model })
+}
+
+export function removeModel(providerId: string, model: string): Promise<SettingsView> {
+  return invoke('remove_model', { providerId, model })
+}
+
+export function setActiveModel(providerId: string, model: string): Promise<SettingsView> {
+  return invoke('set_active_model', { providerId, model })
 }

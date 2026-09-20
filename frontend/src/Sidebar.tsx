@@ -7,6 +7,7 @@ interface SidebarProps {
   onSelect: (taskId: number) => void
   onAddTask: () => void
   adding: boolean
+  onOpenSettings: () => void
 }
 
 function taskLabel(task: TaskSummary): string {
@@ -24,6 +25,7 @@ export default function Sidebar({
   onSelect,
   onAddTask,
   adding,
+  onOpenSettings,
 }: SidebarProps) {
   const [archivedOpen, setArchivedOpen] = useState(false)
 
@@ -32,9 +34,20 @@ export default function Sidebar({
 
   return (
     <nav className="sidebar">
-      <button type="button" className="sidebar-general" disabled>
-        総合
-      </button>
+      <div className="sidebar-general-row">
+        <button type="button" className="sidebar-general" disabled>
+          総合
+        </button>
+        <button
+          type="button"
+          className="sidebar-settings-icon"
+          onClick={onOpenSettings}
+          aria-label="設定"
+          title="設定"
+        >
+          ⚙
+        </button>
+      </div>
 
       <ul className="sidebar-task-list">
         {active.map((task) => (
