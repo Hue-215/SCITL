@@ -17,7 +17,9 @@
   日時型で持つとタイムゾーンによって締切が前後にずれる
 - **`title` は `TEXT NULL`**(`../principles.md` 2節「未設定はnullに統一」に従う。
   `../legacy/data-model.md` の「空文字が未設定」は旧実装の記録であり本スキーマでは採らない)。
-  自動命名の判定は `title IS NULL`
+  `title IS NULL` は「未設定」を意味するだけで、専用の自動命名処理の対象という意味は持たない
+  (タイトルはモデルが `update_task` ツールで設定する。`tools.md` 2節)。未設定のまま残った
+  場合の一覧表示は表示側のフォールバックで扱い、`title` には書き込まない
 - 主キーは `INTEGER PRIMARY KEY`(SQLiteのrowidエイリアス)
 
 ## 2. テーブル
@@ -27,7 +29,7 @@
 | カラム | 型 | 制約・備考 |
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
-| title | TEXT | NULL可。NULL=未設定・自動命名の対象 |
+| title | TEXT | NULL可。NULL=未設定(表示側でフォールバック) |
 | description | TEXT | NULL可 |
 | deadline | TEXT | `YYYY-MM-DD`。NULL可 |
 | archived_at | TEXT | ISO8601。NULL=未アーカイブ |
