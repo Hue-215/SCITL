@@ -1,0 +1,4 @@
+/target/
+node_modules/
+frontend/dist/
+crates/scitl-tauri/gen/
