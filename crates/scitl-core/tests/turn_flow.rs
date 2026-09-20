@@ -8,6 +8,51 @@ use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, Tool
 use scitl_core::orchestration::run_turn;
 use serde_json::json;
 
+/// 各ラウンドで渡されたシステムプロンプトを記録するアダプタ。
+/// 「最新状態は毎ターン渡す」(docs/spec/principles.md 3節)がturn.rs側で
+/// 実際に組み立てられていることを検証する。
+struct RecordingAdapter {
+    calls: AtomicUsize,
+    system_prompts: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for RecordingAdapter {
+    async fn send(
+        &self,
+        messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        self.system_prompts
+            .lock()
+            .unwrap()
+            .push(messages[0].content.clone());
+
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            Ok(vec![
+                ResponseEvent::ToolCall {
+                    id: Some("call_1".to_string()),
+                    name: "add_steps".to_string(),
+                    arguments: json!({ "descriptions": ["買い出し"] }),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::ToolCall,
+                },
+            ])
+        } else {
+            Ok(vec![
+                ResponseEvent::TextDelta {
+                    text: "工程を追加しました".to_string(),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                },
+            ])
+        }
+    }
+}
+
 /// 1回目はupdate_taskの呼び出し、2回目はツール結果を踏まえた確定応答を返す
 /// フェイクアダプタ。実プロバイダを使わずにturn.rsのループを検証する。
 struct FakeAdapter {
@@ -99,4 +144,43 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
             ("assistant", "normal"),
         ]
     );
+}
+
+#[tokio::test]
+async fn run_turn_rebuilds_system_prompt_with_latest_state_each_round() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = RecordingAdapter {
+        calls: AtomicUsize::new(0),
+        system_prompts: Mutex::new(Vec::new()),
+    };
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &adapter,
+        task_id,
+        "工程を追加して".to_string(),
+        Some("base prompt"),
+    )
+    .await
+    .unwrap();
+
+    let prompts = adapter.system_prompts.into_inner().unwrap();
+    assert_eq!(prompts.len(), 2);
+    // 1ラウンド目: まだ工程は無い。
+    assert!(prompts[0].contains("base prompt"));
+    assert!(!prompts[0].contains("買い出し"));
+    // 2ラウンド目: add_stepsの実行結果が最新状態として反映され、
+    // 実行済み操作の再掲にも載る(重複呼び出し防止)。
+    assert!(prompts[1].contains("買い出し"));
+    assert!(prompts[1].contains("add_steps"));
+
+    // 状態系ツールの結果はエフェメラルなuser発言としては会話履歴に残らない
+    // (docs/spec/rebuild/tools.md 4節)。
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    assert!(messages
+        .iter()
+        .all(|m| !m.content.starts_with("[tool result:")));
 }

@@ -1,12 +1,13 @@
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
-use serde_json::json;
+use serde_json::{json, Value};
 use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, NewMessage, Role};
 use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent};
+use crate::orchestration::state_prompt::build_system_prompt;
 use crate::tools;
 
 const MAX_TOOL_ROUNDS: u32 = 4;
@@ -26,7 +27,7 @@ pub async fn run_turn(
     user_text: String,
     system_prompt: Option<&str>,
 ) -> Result<Vec<ResponseEvent>> {
-    let mut history = db_call(db.clone(), move |conn| {
+    let history = db_call(db.clone(), move |conn| {
         messages::insert_message(
             conn,
             NewMessage {
@@ -43,19 +44,6 @@ pub async fn run_turn(
     })
     .await?;
 
-    // システムプロンプトは会話履歴として保存せず、送信のたびに現在の設定値を先頭に足す
-    // (設定画面(Issue #22)で変更したら次のターンから即座に反映されるべきであり、
-    // 発言として`messages`に残す対象ではないため)。
-    if let Some(prompt) = system_prompt.filter(|p| !p.is_empty()) {
-        history.insert(
-            0,
-            ChatMessage {
-                role: "system",
-                content: prompt.to_string(),
-            },
-        );
-    }
-
     let turn_id = Ulid::new().to_string();
     // 再試行(失敗後の再送)が無い限り1のまま。ツール呼び出しの複数ラウンドはリトライでは
     // ないため、ラウンドごとに増やさない(増やすとdata-model.mdの
@@ -63,9 +51,28 @@ pub async fn run_turn(
     // 隠れてしまう)。
     let attempt_no: i64 = 1;
     let mut all_events = Vec::new();
+    // 状態系ツールの実行結果は会話履歴に残さず、次ラウンドのシステムプロンプトの
+    // 「最新状態」再構築で完全に代替する(docs/spec/rebuild/tools.md 4節)。同一ターン内の
+    // 重複操作を防ぐため、実行済みの操作だけをここに積んで毎ラウンドのプロンプトに再掲する
+    // (docs/spec/legacy/backend.md 4節 手順2)。
+    let mut executed_ops: Vec<Value> = Vec::new();
 
     for _round in 1..=MAX_TOOL_ROUNDS {
-        let events = adapter.send(&history, &tools::task_chat_tools()).await?;
+        let system_prompt_text = db_call(db.clone(), {
+            let executed_ops = executed_ops.clone();
+            let system_prompt = system_prompt.map(str::to_string);
+            move |conn| build_system_prompt(conn, task_id, system_prompt.as_deref(), &executed_ops)
+        })
+        .await?;
+
+        let mut messages_to_send = Vec::with_capacity(history.len() + 1);
+        messages_to_send.push(ChatMessage {
+            role: "system",
+            content: system_prompt_text,
+        });
+        messages_to_send.extend(history.iter().cloned());
+
+        let events = adapter.send(&messages_to_send, &tools::task_chat_tools()).await?;
 
         let mut text = String::new();
         let mut tool_call = None;
@@ -83,7 +90,7 @@ pub async fn run_turn(
         match tool_call {
             Some((name, arguments)) => {
                 let turn_id = turn_id.clone();
-                let result = db_call(db.clone(), move |conn| {
+                let (name, result) = db_call(db.clone(), move |conn| {
                     let result = tools::execute_task_chat_tool(conn, task_id, &name, &arguments)?;
 
                     messages::insert_message(
@@ -108,11 +115,9 @@ pub async fn run_turn(
                 .await?;
 
                 // 状態系ツールの結果は会話履歴には投入しない(docs/spec/rebuild/tools.md 4節)。
-                // 「現在の状態」を今回のリクエスト限りでモデルに返し、確定した応答を得る。
-                history.push(ChatMessage {
-                    role: "user",
-                    content: format!("[tool result: {}] {}", result.0, result.1),
-                });
+                // 次ラウンドのシステムプロンプトの最新状態JSONが結果を完全に代替し、ここでは
+                // 同一ターン内の重複操作を防ぐための再掲だけを積む。
+                executed_ops.push(json!({ "tool": name, "result": result }));
             }
             None => {
                 let turn_id = turn_id.clone();
