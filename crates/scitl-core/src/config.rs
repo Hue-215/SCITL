@@ -2,6 +2,7 @@
 //! ここが持つのは`key_ref`という不透明な参照文字列だけで、平文の鍵を持つフィールドは
 //! 型として存在させない。実際の鍵の出し入れは[`crate::secrets`]の責務。
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,75 @@ pub struct GeneralConfig {
     pub response_timeout_secs: Option<u64>,
 }
 
+/// [`crate::secrets`]に保存した1つの値(環境変数またはHTTPヘッダーの値)を指す参照。
+/// `name`(環境変数名/ヘッダー名)と`key_ref`(秘密情報ストア上の不透明な参照)は別物であり、
+/// `key_ref`は`name`から機械的に導出しない(Opusレビュー指摘: `name`はユーザー入力で
+/// `:`等を含みうるため、そこから`key_ref`を組み立てると衝突・曖昧さの元になる。
+/// `provider:{ULID}`と同様、`key_ref`はULIDで払い出す)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecretRef {
+    pub name: String,
+    pub key_ref: String,
+}
+
+/// MCPサーバーへの接続方式。フィールドの組み合わせを型で保証するため、
+/// (transport種別, command, url)のような別々のフィールドに分けず、
+/// タグ付きenumとして接続方式ごとに必要な値だけを持たせる
+/// (`ProviderConfig`のような平坦な構造だと、`Stdio`なのに`url`が入っている
+/// といった不正な状態を型で防げない)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "transport", rename_all = "snake_case")]
+pub enum McpEndpoint {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env_refs: Vec<SecretRef>,
+    },
+    StreamableHttp {
+        url: String,
+        #[serde(default)]
+        header_refs: Vec<SecretRef>,
+    },
+}
+
+/// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない(architecture.md 6節)。
+/// ツール一覧そのもの(名前・説明)はここに永続化しない。旧実装と同じく画面側で
+/// 都度取得する(legacy/frontend.md 4節「未取得時は案内文を表示する」)。永続化すると、
+/// 起動のたびに古い一覧と実サーバーの食い違いを気にする必要が生まれるため
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub id: String,
+    /// サーバー識別子(画面表示名を兼ねる)。[`validate_mcp_server_name`]の制約に従う。
+    pub name: String,
+    pub enabled: bool,
+    pub endpoint: McpEndpoint,
+    /// 有効なツール名の集合(opt-in)。ここに無い名前は無効として扱う。取得したツール
+    /// 一覧に無い名前が残っていても実害はない(実行時に積集合を取るだけ)。逆に、
+    /// サーバー側が後からツールを追加しても、ユーザーが明示的に有効化するまで
+    /// 使われない(`HashMap<String, bool>`による「既定で有効」の読み方を型で排除する。
+    /// Opusレビュー指摘)。
+    #[serde(default)]
+    pub enabled_tools: BTreeSet<String>,
+}
+
+/// サーバー識別子の制約(legacy/frontend.md 4節: 16字以内、英数字とアンダースコアのみ)。
+/// UIでの入力チェックはセキュリティ境界ではないため、Rust側でも検証する。
+pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
+    if name.is_empty() || name.len() > 16 {
+        return Err(CoreError::Config(
+            "MCP server name must be 1-16 characters".to_string(),
+        ));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(CoreError::Config(
+            "MCP server name must be alphanumeric or underscore".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -64,6 +134,8 @@ pub struct Config {
     pub active_provider_id: Option<String>,
     #[serde(default)]
     pub general: GeneralConfig,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 impl Config {
@@ -117,6 +189,20 @@ mod tests {
             }],
             active_provider_id: Some("default".to_string()),
             general: GeneralConfig::default(),
+            mcp_servers: vec![McpServerConfig {
+                id: "srv".to_string(),
+                name: "my_tools".to_string(),
+                enabled: true,
+                endpoint: McpEndpoint::Stdio {
+                    command: "npx".to_string(),
+                    args: vec!["-y".to_string(), "some-server".to_string()],
+                    env_refs: vec![SecretRef {
+                        name: "API_TOKEN".to_string(),
+                        key_ref: "mcp:01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+                    }],
+                },
+                enabled_tools: BTreeSet::from(["list_things".to_string()]),
+            }],
         };
 
         save(&path, &config).unwrap();
@@ -132,6 +218,28 @@ mod tests {
             loaded.active_provider().unwrap().resolved_model(),
             Some("gpt-4o-mini")
         );
+
+        assert_eq!(loaded.mcp_servers.len(), 1);
+        let server = &loaded.mcp_servers[0];
+        assert!(server.enabled_tools.contains("list_things"));
+        match &server.endpoint {
+            McpEndpoint::Stdio {
+                command, env_refs, ..
+            } => {
+                assert_eq!(command, "npx");
+                assert_eq!(env_refs[0].name, "API_TOKEN");
+            }
+            McpEndpoint::StreamableHttp { .. } => panic!("expected stdio endpoint"),
+        }
+    }
+
+    #[test]
+    fn mcp_server_name_validation() {
+        assert!(validate_mcp_server_name("my_tools").is_ok());
+        assert!(validate_mcp_server_name("").is_err());
+        assert!(validate_mcp_server_name("this_name_is_way_too_long").is_err());
+        assert!(validate_mcp_server_name("has space").is_err());
+        assert!(validate_mcp_server_name("has-dash").is_err());
     }
 
     #[test]
