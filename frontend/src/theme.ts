@@ -2,6 +2,10 @@
 // 役割(background/surface/text/primary...)ごとに彩度・明度を決め打ちし、シードの色相(と
 // 危険色を除く彩度)だけを引き継ぐ。デザイントークンを1箇所に集約する方針
 // (docs/spec/principles.md 6節)の一部。
+//
+// シードの色味が乗るのは背景・面・境界線・プライマリだけで、文字(on*を含む)は
+// 無彩色で固定する。文字に色を付けると読みにくく、かつシードの選び方で
+// 読みやすさが変わってしまうため。例外はエラーの赤(DANGER_ROLES)だけ。
 
 type Role = {
   /** シード彩度に掛ける係数。0なら無彩色。 */
@@ -30,20 +34,23 @@ const ROLES = {
   surface: { light: { saturationFactor: 0.1, lightness: 95 }, dark: { saturationFactor: 0.14, lightness: 14 } },
   surfaceAlt: { light: { saturationFactor: 0.12, lightness: 90 }, dark: { saturationFactor: 0.16, lightness: 21 } },
   border: { light: { saturationFactor: 0.14, lightness: 82 }, dark: { saturationFactor: 0.16, lightness: 32 } },
-  text: { light: { saturationFactor: 0.2, lightness: 15 }, dark: { saturationFactor: 0.1, lightness: 94 } },
+  // 文字ロールは無彩色に固定する(saturationFactor: 0)。文字に色味が乗ると読みにくく、
+  // シード次第で読みやすさが変わってしまうため。明暗の反転(ライトで黒・ダークで白)は
+  // 明度側で保つ。エラーの赤だけはDANGER_ROLES側で別に持つ。
+  text: { light: { saturationFactor: 0, lightness: 15 }, dark: { saturationFactor: 0, lightness: 94 } },
   textSecondary: {
-    light: { saturationFactor: 0.12, lightness: 42 },
-    dark: { saturationFactor: 0.1, lightness: 68 },
+    light: { saturationFactor: 0, lightness: 42 },
+    dark: { saturationFactor: 0, lightness: 68 },
   },
   primary: { light: { saturationFactor: 1, lightness: 45 }, dark: { saturationFactor: 0.85, lightness: 70 } },
-  onPrimary: { light: { saturationFactor: 0, lightness: 100 }, dark: { saturationFactor: 0.3, lightness: 15 } },
+  onPrimary: { light: { saturationFactor: 0, lightness: 100 }, dark: { saturationFactor: 0, lightness: 15 } },
   primaryContainer: {
     light: { saturationFactor: 0.55, lightness: 90 },
     dark: { saturationFactor: 0.4, lightness: 28 },
   },
   onPrimaryContainer: {
-    light: { saturationFactor: 0.6, lightness: 20 },
-    dark: { saturationFactor: 0.3, lightness: 92 },
+    light: { saturationFactor: 0, lightness: 20 },
+    dark: { saturationFactor: 0, lightness: 92 },
   },
 } satisfies RoleSet
 
