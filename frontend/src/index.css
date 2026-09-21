@@ -201,11 +201,13 @@ option {
 
 .chat-compose {
   display: flex;
+  /* 複数行になった入力欄が伸びても送信ボタンは1行分の高さのまま下端に揃える。 */
+  align-items: flex-end;
   flex-shrink: 0;
   gap: var(--space-2);
 }
 
-.chat-compose input {
+.chat-compose textarea {
   flex: 1;
 }
 
@@ -384,6 +386,13 @@ option {
 .entry-error {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);
+}
+
+/* 入力欄が複数行化(#77)しても、保存済みの改行入り本文を空白に潰さず描画する。
+   本命はMarkdown描画(#39)で、入ればこの行は段落描画に置き換わる。 */
+.entry-content {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .entry-time {

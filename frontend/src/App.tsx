@@ -323,9 +323,23 @@ export default function App() {
             void send()
           }}
         >
-          <input
+          <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // IME変換確定のEnterでは送信しない。isComposingが正しく立たない古い
+              // WebKitGTKもあるため、keyCode 229(IME処理中を示す慣習値)も併せて見る
+              // (legacy/frontend.md 1節)。
+              if (
+                e.key === 'Enter' &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing &&
+                e.keyCode !== 229
+              ) {
+                e.preventDefault()
+                void send()
+              }
+            }}
             disabled={sending || taskId === null}
             placeholder="タスクについて話しかける"
           />
