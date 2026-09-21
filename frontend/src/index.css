@@ -216,9 +216,10 @@ option {
 
 .chat-compose textarea {
   flex: 1;
-  /* 基盤層の--textarea-min-height(2行分)より低くする下限。1行の中身がある限りは
-     内容側の高さがこれを上回るため実質効かないが、フォントサイズを変えたときの
-     保険として床に置く。ボタンとの実際の高さ揃えはpadding側(下記)で決まる。 */
+  /* 基盤層の--textarea-min-height(3rem)より低い下限に置き換える。1行の中身がある限り
+     内容側の高さ(1.5rem + padding・borderで約2.625rem)がこの2.25remを上回るため実質
+     効かないが、フォントサイズを変えたときの保険として床に置く。ボタンとの実際の
+     高さ揃えはpadding側(下記)で決まる。 */
   min-height: var(--control-size-md);
 }
 

@@ -38,11 +38,18 @@
 | アイコン・操作部品の寸法 | `--icon-size-sm/md/lg`(グリフ), `--control-size-md`(当たり判定の箱) |
 | 線 | `--border-width`, `--focus-ring-width` |
 | チャット吹き出しのマージン | `--bubble-margin-near`, `--bubble-margin-far`(近い側の2倍を式で持つ) |
+| 複数行入力欄が伸びる範囲 | `--textarea-min-height`, `--textarea-max-height`(全欄共通の1組) |
 | レイアウトの基準値 | `--sidebar-width`, `--settings-rail-width`, `--content-min-width`, `--content-max-width` |
 
 直値を書いてよいのは、**その1箇所でしか使わない見た目上の定数**だけ(セレクトの▼の
-大きさ、編集欄の最低高さ等)。その場合は「他と共有しないためトークン化しない」ことを
-コメントに明記する。逆に、2箇所目が出た時点でトークンに引き上げる。
+大きさ、グリフをアイコン代わりに使う箇所の `line-height` 等)。その場合は「他と共有しない
+ためトークン化しない」ことをコメントに明記する。逆に、2箇所目が出た時点でトークンに
+引き上げる。実際 `.entry-edit-textarea` の最低高さは1箇所限りの直値だったが、
+複数行入力欄の統一(Issue #96)で7箇所目になり `--textarea-min-height` へ移した。
+
+**高さ・幅のトークンは `box-sizing: border-box` 前提の値**である(基盤層が `*` に掛けて
+いる)。行数から決めるときは padding と border の分を足すこと。`tokens.css` の
+`--textarea-min-height` のコメントに内訳の例がある。
 
 値どうしの関係(遠い側マージンは近い側の2倍、など)は、**関係そのものを式で持つ**。
 別々のトークンに分けると、片方だけ変えたときに関係が崩れる。
@@ -107,7 +114,14 @@ UI作り込みフェーズで検討する)。
 
 WebKitGTK固有の挙動は、Chromiumでの確認では分からない。次の機能を使ったときは実機で
 見ること: `appearance`, `accent-color`, `border-radius` のネイティブ部品への適用,
-`min()` 内のパーセント混在計算, `padding-inline`, `aspect-ratio`。
+`min()` 内のパーセント混在計算, `padding-inline`, `aspect-ratio`, `field-sizing`。
+
+確認が済んだものは、**どのバージョンで見たかを併記して残す**(次に同じ調べ直しをしないため)。
+`field-sizing: content` は WebKitGTK 2.52.6 で対応を確認済み(Issue #96)。ただし配布先の
+WebKitGTKはOSのものを使うため、対応していない環境では指定が無視される点に注意する。
+複数行入力欄の場合、自動伸長が効かず `rows` 既定の2行分の高さ(`min-height`と
+`max-height`で挟まれた範囲に収まる)で固定される。#96 で `resize` を切っているため、
+手で広げることもできない。
 
 ## 7. 見た目の確認方法
 
