@@ -27,6 +27,12 @@ const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
   open_ai_compat: 'https://api.openai.com/v1',
 }
 
+// httpの許可範囲(crates/scitl-core/src/net.rsのclassify_host)が変わったときに
+// 片方だけ直し忘れないよう、URLを入力させる箇所で共通のヒント文を使う。
+function httpPlainTextHint(secretLabel: string): string {
+  return `httpsを推奨します。httpはループバックまたはプライベートIPアドレス(LAN内等)への接続のみ許可され、通信は暗号化されません。${secretLabel}も平文で流れます。`
+}
+
 // 設定画面(legacy/frontend.md 2〜4節)。
 export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<'general' | 'providers' | 'mcp'>('general')
@@ -448,6 +454,7 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
       <label className="settings-field">
         <span>ベースURL</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
+        <p className="settings-hint">{httpPlainTextHint('APIキー')}</p>
       </label>
       <label className="settings-field">
         <span>APIキー</span>
@@ -733,6 +740,7 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
           <label className="settings-field">
             <span>URL</span>
             <input value={url} onChange={(e) => setUrl(e.target.value)} required />
+            <p className="settings-hint">{httpPlainTextHint('ヘッダーの値(認証情報を含む)')}</p>
           </label>
           <label className="settings-field">
             <span>ヘッダー(1行1件、キー=値)</span>

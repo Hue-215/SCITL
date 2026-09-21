@@ -11,7 +11,48 @@ use crate::db::error::CoreError;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// スキーム・ループバック・query/fragment/userinfoの検証。LLMプロバイダーのbase_url、
+/// ホストの分類。平文http可否の判定(このファイル)と、将来のオフラインスイッチ
+/// (Issue #3、宛先の段階: 外部通信許可/プライベートIPのみ/localhostのみ)の両方が
+/// この分類を読む(1つの機能に関わる判断を1箇所に閉じる。principles.md 5節)。
+/// 2つの軸は独立: 宛先の段階を緩めても、平文httpが許されるかどうかは
+/// `classify_host`だけが決める(ANDで合成する。architecture.md 5節)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostClass {
+    /// ループバック(127.0.0.0/8, ::1)またはホスト名`localhost`。
+    Loopback,
+    /// プライベートIPアドレスの**リテラル**(RFC1918: 10/8・172.16/12・192.168/16、
+    /// IPv6 ULA: fc00::/7)。ホスト名は対象外(下記コメント参照)。
+    PrivateLiteral,
+    /// 上記のいずれでもない(パブリックIP、ホスト名)。
+    Other,
+}
+
+/// ホストを分類する。ホスト名は`localhost`以外すべて`Other`として扱う
+/// (DNSリバインディング対策): プライベートIPかどうかをホスト名の名前解決結果で
+/// 判定すると、検証時と接続時で解決結果が変わりうる(検証だけ通してから接続先を
+/// すり替える攻撃が成立する)。IPアドレスとして直接書かれたリテラルだけを見れば、
+/// 検証した対象と実際に接続する対象が一致することが構造的に保証される
+/// (Opusレビュー指摘)。
+///
+/// IPv4のリンクローカル(169.254.0.0/16)は`PrivateLiteral`に含めない。
+/// 169.254.169.254はAWS/GCP/Azureのメタデータエンドポイント(IMDS)であり、
+/// 平文httpしか話さない代表的なSSRF標的のため、緩和の対象から明示的に外す
+/// (IPv6側もfe80::/10は`url`crateがパースできず対象外であり、IPv4だけ
+/// リンクローカルを許すと軸が揃わない。Opusレビュー指摘)。
+pub fn classify_host(url: &Url) -> HostClass {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) if ip.is_loopback() => HostClass::Loopback,
+        Some(url::Host::Ipv6(ip)) if ip.is_loopback() => HostClass::Loopback,
+        Some(url::Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost") => {
+            HostClass::Loopback
+        }
+        Some(url::Host::Ipv4(ip)) if ip.is_private() => HostClass::PrivateLiteral,
+        Some(url::Host::Ipv6(ip)) if ip.is_unique_local() => HostClass::PrivateLiteral,
+        _ => HostClass::Other,
+    }
+}
+
+/// スキーム・ホスト・query/fragment/userinfoの検証。LLMプロバイダーのbase_url、
 /// MCP streamable_httpのURLの両方に適用する(principles.md 4節、architecture.md 5節)。
 ///
 /// query/fragment/userinfoを拒否する理由: エンドポイントは`Url::join`で組み立てるため、
@@ -28,18 +69,16 @@ pub fn validate_external_url(url: &Url) -> Result<(), String> {
 
     match url.scheme() {
         "https" => Ok(()),
-        "http" if is_loopback(url) => Ok(()),
-        "http" => Err("http URL is allowed only for loopback hosts".to_string()),
+        "http" => match classify_host(url) {
+            HostClass::Loopback | HostClass::PrivateLiteral => Ok(()),
+            HostClass::Other if matches!(url.host(), Some(url::Host::Domain(_))) => {
+                Err("http URL with a hostname is not allowed; use https, or an IP literal for loopback/private addresses".to_string())
+            }
+            HostClass::Other => {
+                Err("http URL is allowed only for loopback or private IP addresses".to_string())
+            }
+        },
         other => Err(format!("unsupported URL scheme: {other}")),
-    }
-}
-
-pub fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        None => false,
     }
 }
 
@@ -55,7 +94,9 @@ pub fn hardened_client(url: &str, request_timeout: Duration) -> Result<reqwest::
         .no_proxy()
         // architecture.md 5節: クロスホストのリダイレクトは拒否する。チャット
         // コンプリーションAPI・MCPサーバーいずれも正当な理由でリダイレクトを返すことは
-        // 想定していないため、同一ホスト内も含めて一律拒否する方が単純で安全
+        // 想定していないため、同一ホスト内も含めて一律拒否する方が単純で安全。
+        // 平文httpをプライベートIPまで許すため、ここを緩めると登録先のLANサーバーが
+        // 公開ホストへ302を返すだけで通信先が広がる(Opusレビュー指摘)。
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(request_timeout)
@@ -86,10 +127,60 @@ mod tests {
     }
 
     #[test]
-    fn allows_http_only_for_loopback() {
+    fn allows_http_for_loopback() {
         assert!(validate_external_url(&Url::parse("http://localhost:8080/mcp").unwrap()).is_ok());
         assert!(validate_external_url(&Url::parse("http://127.0.0.1:8080/mcp").unwrap()).is_ok());
+        assert!(validate_external_url(&Url::parse("http://[::1]:8080/mcp").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn allows_http_for_private_ip_literal() {
+        // RFC1918: 10/8, 172.16/12, 192.168/16
+        assert!(validate_external_url(&Url::parse("http://10.0.0.1/mcp").unwrap()).is_ok());
+        assert!(validate_external_url(&Url::parse("http://172.16.0.0/mcp").unwrap()).is_ok());
+        assert!(validate_external_url(&Url::parse("http://172.31.255.255/mcp").unwrap()).is_ok());
+        assert!(validate_external_url(&Url::parse("http://192.168.1.107/mcp").unwrap()).is_ok());
+        // IPv6 ULA: fc00::/7
+        assert!(validate_external_url(&Url::parse("http://[fc00::1]/mcp").unwrap()).is_ok());
+        assert!(validate_external_url(&Url::parse("http://[fd12::1]/mcp").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn rejects_http_outside_private_ranges() {
+        // 172.16/12の外側
+        assert!(validate_external_url(&Url::parse("http://172.15.255.255/mcp").unwrap()).is_err());
+        assert!(validate_external_url(&Url::parse("http://172.32.0.0/mcp").unwrap()).is_err());
+        // 192.168/16の外側
+        assert!(validate_external_url(&Url::parse("http://192.167.0.1/mcp").unwrap()).is_err());
+        // パブリックIP
+        assert!(validate_external_url(&Url::parse("http://8.8.8.8/mcp").unwrap()).is_err());
+        // ホスト名(localhost以外)は名前解決しないため常に拒否
         assert!(validate_external_url(&Url::parse("http://example.com/mcp").unwrap()).is_err());
+        assert!(validate_external_url(&Url::parse("http://nas.local/mcp").unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_http_for_ipv4_link_local() {
+        // 169.254.169.254はクラウド各社のメタデータエンドポイント(IMDS)。SSRF対策として
+        // リンクローカル全体を対象から外す(Opusレビュー指摘)。
+        assert!(validate_external_url(&Url::parse("http://169.254.169.254/").unwrap()).is_err());
+        assert!(validate_external_url(&Url::parse("http://169.254.1.1/").unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_http_for_ipv6_link_local() {
+        // `url`クレートがスコープIDなしのfe80::をパースする場合に備えた回帰確認
+        // (スコープID付きは`url::Url::parse`自体が失敗するため、ここでは対象外)。
+        assert!(validate_external_url(&Url::parse("http://[fe80::1]/").unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_http_for_ipv4_mapped_ipv6_literal() {
+        // IPv4射影IPv6アドレスは`Ipv6Addr::is_unique_local`の対象にならないため拒否される。
+        // プライベートアドレスに接続したい場合はIPv4リテラルで書く必要がある。
+        assert!(
+            validate_external_url(&Url::parse("http://[::ffff:192.168.1.7]/").unwrap()).is_err()
+        );
     }
 
     // 以下は、`hardened_client`が実際に組み立てる`reqwest::Client`が全経路
