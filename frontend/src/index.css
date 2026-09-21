@@ -1,12 +1,167 @@
+/*
+ * スタイルは2層で構成する(principles.md 6節「採用するUIフレームワークの既定値に
+ * 頼らない。見た目の細部まで明示的に決める」)。
+ *
+ *   1. 基盤層(要素セレクタ): アプリで使う要素の既定の見た目をここで決める。
+ *      ブラウザとOS(WebKitGTK/GTKテーマ)の既定値は、クラスを付け忘れた要素にも
+ *      必ず適用されるため、クラス側で個別に打ち消すのでは必ず漏れる。
+ *   2. 画面層(クラスセレクタ): 基盤層との差分だけを書く。基盤層で足りているものを
+ *      再掲しない。
+ *
+ * 新しい要素を画面に足すときは、まず基盤層に既定があるかを確認すること。無ければ
+ * 画面側ではなく基盤層に足す。
+ */
+
+/* ---- 基盤層 ---- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  /* 角丸は使わない方針(tokens.css)。ネイティブ描画のフォーム部品はOSテーマ側で
+     角丸が付くため、指定しないだけでは直角にならない。 */
+  border-radius: 0;
+}
+
 :root {
   color-scheme: light dark;
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-family);
 }
 
 body {
   margin: 0;
   padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
 }
+
+/* 見出し: 文字サイズは3段階しかないため、画面名(h1)だけを1段大きくし、節の見出し
+   (h2以下)は本文サイズ+太字で段を作る(--font-size-xlはMarkdown描画(#39)用の
+   予約枠なのでここでは使わない)。要素間の余白は入れ物側のgapで一律に決めているので、
+   UA既定のmarginは二重になる分を落とす。 */
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: 700;
+  line-height: var(--line-height-tight);
+}
+
+h1 {
+  font-size: var(--font-size-lg);
+}
+
+p {
+  margin: 0;
+}
+
+ul,
+ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+strong {
+  font-weight: 700;
+}
+
+pre {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+summary {
+  cursor: pointer;
+}
+
+/* フォーム部品: OSのネイティブ描画(立体感・角丸・独自フォント・セレクトの矢印)を
+   すべて捨てて自前で描く。ここで既定を決めないと、クラスを付けていない<button>や
+   <input>だけがOS既定のまま浮く。
+   radioとcheckboxはネイティブ描画のまま残す(選択状態の描き分けを自前で持つと、
+   同じ判断が増えるため)。 */
+button,
+select,
+textarea,
+input:not([type='radio']):not([type='checkbox']) {
+  /* 古いWebKitGTKは未接頭辞のappearanceを解釈しないため、接頭辞付きも併記する */
+  -webkit-appearance: none;
+  appearance: none;
+  border: var(--border-width) solid var(--color-border);
+  font: inherit;
+  color: var(--color-text);
+}
+
+select,
+textarea,
+input:not([type='radio']):not([type='checkbox']) {
+  background: var(--color-bg);
+  padding: var(--space-2);
+}
+
+button {
+  background: var(--color-surface-alt);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+/* radioとcheckboxはネイティブ描画のままにする代わり、選択済みの色だけは
+   テーマに合わせる(既定のままだとOS既定の青がシード色と無関係に出る)。
+   全要素の角丸リセットからも外す。丸い形はこの部品の描画そのもので、
+   直角にする対象ではない。 */
+input[type='radio'],
+input[type='checkbox'] {
+  border-radius: revert;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+/* 見た目の異なる部品(塗り・枠のみ・文字だけ)でも同じ弱め方になるよう、
+   色ではなく不透明度で表す。 */
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+textarea {
+  resize: vertical;
+}
+
+/* appearance:noneで矢印も消えるため自前で描く。色をトークンから取れるよう
+   (currentColorが使える)SVGのdata URIではなくグラデーションの三角形で作る。
+   半分ずつの正方形2枚を並べて▼にするため、0.375remは三角形の片側の大きさ。
+   ここでしか使わない見た目上の定数なのでトークン化しない。 */
+select {
+  padding-right: calc(var(--space-2) * 2 + 0.75rem);
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    right calc(var(--space-2) + 0.375rem) center,
+    right var(--space-2) center;
+  background-size: 0.375rem 0.375rem;
+  background-repeat: no-repeat;
+}
+
+/* 開いた後の選択肢一覧はOSが描くため、CSSからは色しか渡せない(形は変えられない)。 */
+option {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* UA既定の青い枠はテーマ色と無関係なので、トークンで描き直す。 */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-primary);
+}
+
+/* ---- 画面層 ---- */
 
 .layout {
   display: flex;
@@ -15,277 +170,358 @@ body {
 
 .layout main {
   flex: 1;
-  padding: 1rem;
-  overflow-y: auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  /* 左右は空けない。ログの左右余白は吹き出し自身が持つ(.chat-log > *)ので、ここで
+     足すと窓端から見た近い側・遠い側が2倍の関係にならず、スクロールバーも窓の端から
+     内側へ浮く。 */
+  padding: var(--space-4) 0;
+  /* スクロールするのはログだけ。見出しと入力欄は常に同じ位置に留める。 */
+  overflow: hidden;
+}
+
+/* ログだけが窓端まで届く(スクロールバーを窓の端に出し、吹き出しのマージンを
+   窓端からの余白そのものにするため)。それ以外は自分で余白を持つ。幅は吹き出しの
+   近い側マージンに合わせ、左右の端が吹き出しと揃うようにする。ここに要素を足したときに
+   余白が抜けないよう、クラスごとではなく直接の子で指定する。 */
+.layout main > *:not(.chat-log) {
+  padding-inline: var(--bubble-margin-near);
+}
+
+.chat-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.chat-compose {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--space-2);
+}
+
+.chat-compose input {
+  flex: 1;
 }
 
 .sidebar {
-  width: 16rem;
+  width: var(--sidebar-width);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding: 0.75rem;
-  border-right: 1px solid #d1d5db;
-  overflow-y: auto;
+  gap: var(--space-2);
+  /* 左右は空けない。チャットのログと同じ理由で、スクロール領域を仕切り線の際まで
+     届かせ、スクロールバーが一覧の項目に被らないようにする(余白は中身側で持つ)。 */
+  padding: var(--space-3) 0;
+  border-right: var(--border-width) solid var(--color-border);
+  background: var(--color-surface);
+  /* スクロールするのはタスク一覧だけ。総合・設定・新規タスクは常に見える位置に留める。 */
+  overflow: hidden;
+}
+
+/* スクロール領域の外(総合行・新規タスク)と、中の一覧は、それぞれ自分で左右余白を持つ。
+   要素を足したときに抜けないよう、クラスごとではなく直接の子で指定する。 */
+.sidebar > *:not(.sidebar-scroll),
+.sidebar-scroll > * {
+  padding-inline: var(--space-3);
 }
 
 .sidebar-general-row {
   display: flex;
-  align-items: stretch;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .sidebar-general {
   flex: 1;
+  /* 設定アイコンを正方形にするため、行の高さを当たり判定の寸法に固定する。 */
+  height: var(--control-size-md);
   text-align: left;
-  padding: 0.5rem;
-  border: none;
-  border-radius: 0.5rem;
-  background: #e5e7eb;
-  font-weight: 600;
+  padding: 0 var(--space-2);
+  border-color: transparent;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-weight: 700;
 }
 
 .sidebar-settings-icon {
   flex-shrink: 0;
-  width: 2.25rem;
-  border: none;
-  border-radius: 0.5rem;
-  background: #e5e7eb;
-  font-size: 1rem;
+  width: var(--control-size-md);
+  height: var(--control-size-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-color: transparent;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  /* グリフをアイコン代わりに使う暫定実装。SVGアイコン導入時は箱(width/height)を
+     --icon-size-mdに、グリフ自体は内側の<svg>へ移す(tokens.css参照)。 */
+  font-size: var(--icon-size-md);
+  line-height: 1;
 }
 
 .sidebar-task-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .sidebar-task {
   width: 100%;
   text-align: left;
-  padding: 0.5rem;
-  border: none;
-  border-radius: 0.5rem;
+  padding: var(--space-2);
+  border-color: transparent;
   background: transparent;
-  font-size: 0.85rem;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
 }
 
 .sidebar-task.selected {
-  background: #dbeafe;
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
 }
 
 .sidebar-archived {
-  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .sidebar-archived-toggle {
   width: 100%;
   text-align: left;
-  padding: 0.5rem;
-  border: none;
+  padding: var(--space-2);
+  border-color: transparent;
   background: transparent;
-  color: #6b7280;
-  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .sidebar-add {
-  margin-top: auto;
-  padding: 0.5rem;
-  border: none;
-  border-radius: 0.5rem;
-  background: #2563eb;
-  color: white;
-  font-weight: 600;
+  flex-shrink: 0;
+  padding: var(--space-2);
+  border-color: transparent;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 700;
 }
 
 .chat-log {
-  list-style: none;
-  padding: 0;
+  flex: 1;
+  min-height: 0; /* 内容がはみ出したときに入力欄を押し出さず、ここでスクロールさせる */
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  min-height: 200px;
+  gap: var(--space-2);
 }
 
 .entry {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.5rem;
-  max-width: 32rem;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  max-width: 100%;
+}
+
+/*
+ * 吹き出しの横幅と左右マージンは、chat-logの直接の子(1つの吹き出し、または1ターンの塊)
+ * だけが持つ。どれが直接の子になりうるかは役割では決まらない(turn_idを持たない
+ * エラー発言はturn-groupに入らず直接の子になる)ため、役割ごとのクラスには持たせない。
+ *
+ * 横幅は「入れ物(ログ領域)」に追従させる。vwはサイドバーを含むウィンドウ全体の幅で
+ * ログ領域より広く、内容領域からはみ出すため使えない。左右マージンの分を差し引いた
+ * 残りが上限で、広い窓では--content-max-widthで頭打ちにする。この「マージンを含めて
+ * 入れ物に収まる」関係が、tokens.css末尾の最小幅の導出式の前提。
+ *
+ * マージンは近い側・遠い側の2倍の関係をトークン側(tokens.css)に持たせている。
+ * 折り返して上限幅まで広がっても、常に自分の側へ寄って見える。
+ * 内側のpaddingは左右対称のまま(.entry)。
+ */
+.chat-log > * {
+  align-self: flex-start;
+  margin-left: var(--bubble-margin-near);
+  margin-right: var(--bubble-margin-far);
+  max-width: min(
+    var(--content-max-width),
+    100% - var(--bubble-margin-near) - var(--bubble-margin-far)
+  );
+}
+
+.chat-log > .entry-user {
+  align-self: flex-end;
+  margin-left: var(--bubble-margin-far);
+  margin-right: var(--bubble-margin-near);
 }
 
 .entry-user {
-  align-self: flex-end;
-  background: #dbeafe;
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
 }
 
 .entry-assistant {
-  align-self: flex-start;
-  background: #e5e7eb;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
 }
 
 .entry-tool {
-  align-self: flex-start;
   font-style: italic;
-  color: #6b7280;
+  color: var(--color-text-secondary);
 }
 
 .entry-error {
-  align-self: flex-start;
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--color-danger-container);
+  color: var(--color-on-danger-container);
 }
 
 .entry-pending {
-  align-self: flex-start;
   font-style: italic;
-  color: #9ca3af;
+  color: var(--color-text-secondary);
 }
 
 .entry-time {
-  font-size: 0.7rem;
-  color: #6b7280;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 .entry-actions {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.15rem;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .entry-actions button {
-  border: none;
+  border-color: transparent;
   background: transparent;
-  color: #6b7280;
-  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
   padding: 0;
-  cursor: pointer;
-}
-
-.entry-actions button:disabled {
-  color: #d1d5db;
-  cursor: not-allowed;
 }
 
 .entry-edit-textarea {
   width: 100%;
-  min-height: 3rem;
-  font: inherit;
-  padding: 0.5rem;
-  border: 1px solid #d1d5db;
-  border-radius: 0.375rem;
-  box-sizing: border-box;
+  min-height: 3rem; /* 編集欄の最低行数を確保する固有値。他箇所と共有しないためトークン化しない */
 }
 
 .error {
-  color: #b91c1c;
+  color: var(--color-danger);
 }
 
 .turn-group {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--space-1);
   align-items: flex-start;
-  max-width: 32rem;
 }
 
 .thinking-tools {
   align-self: flex-start;
-  font-size: 0.8rem;
-  color: #6b7280;
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
-  padding: 0.35rem 0.6rem;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
   max-width: 100%;
 }
 
-.thinking-tools summary,
-.tool-call summary,
-.external-tool-line summary {
-  cursor: pointer;
-}
-
 .thinking-tools-list {
-  margin: 0.4rem 0 0;
-  padding-left: 1.1rem;
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: var(--space-1);
 }
 
 .thinking-item {
   font-style: italic;
 }
 
+.tool-call-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
 .tool-call-label {
-  margin: 0.3rem 0 0.1rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .tool-call-detail pre,
 .external-tool-line pre {
-  margin: 0;
-  padding: 0.4rem;
-  background: #f3f4f6;
-  border-radius: 0.375rem;
+  padding: var(--space-2);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .thinking-tools-error {
-  color: #b91c1c;
+  color: var(--color-danger);
 }
 
 .external-tool-line {
   align-self: flex-start;
-  font-size: 0.8rem;
-  color: #6b7280;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.external-tool-line summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .external-tool-name {
-  font-family: monospace;
+  font-family: var(--font-family-mono);
 }
 
 .external-tool-label {
-  margin-left: 0.5rem;
-  font-size: 0.7rem;
-  border: 1px solid #9ca3af;
-  border-radius: 0.25rem;
-  padding: 0 0.3rem;
+  font-size: var(--font-size-sm);
+  border: var(--border-width) solid var(--color-border);
+  padding: 0 var(--space-2);
 }
 
 .settings {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  box-sizing: border-box;
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
 .settings-header {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-}
-
-.settings-header h1 {
-  margin: 0;
-  font-size: 1.25rem;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
 }
 
 .settings-back {
-  padding: 0.25rem 0.5rem;
-  border: none;
-  border-radius: 0.5rem;
+  width: var(--control-size-md);
+  height: var(--control-size-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-color: transparent;
   background: transparent;
-  font-size: 1.25rem;
+  color: var(--color-text);
+  /* sidebar-settings-iconと同じ暫定実装・同じ箱寸法で揃える。 */
+  font-size: var(--icon-size-md);
+  line-height: 1;
 }
 
 .settings-body {
@@ -295,107 +531,116 @@ body {
 }
 
 .settings-rail {
-  width: 12rem;
+  width: var(--settings-rail-width);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.75rem;
-  border-right: 1px solid #d1d5db;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-right: var(--border-width) solid var(--color-border);
 }
 
 .settings-tab {
   text-align: left;
-  padding: 0.5rem 0.75rem;
-  border: none;
-  border-radius: 0.5rem;
+  padding: var(--space-2) var(--space-3);
+  border-color: transparent;
   background: transparent;
-  font-weight: 600;
-  color: #6b7280;
+  font-weight: 700;
+  color: var(--color-text-secondary);
 }
 
 .settings-tab.selected {
-  background: #e5e7eb;
-  color: inherit;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
 }
 
 .settings-content {
   flex: 1;
-  max-width: 40rem;
-  padding: 1rem;
+  min-width: 0;
+  /* 左右は空けない。ログ・サイドバーと同じ理由で、スクロールバーを窓の端に出す。 */
+  padding: var(--space-4) 0;
   overflow-y: auto;
 }
 
+/* 本文はメニューを除いた残りの領域の中で中央に置き、広い窓では--content-max-widthで
+   頭打ちにする(行が長くなりすぎると読みにくいため)。左右余白は中身側で持つ。 */
 .settings-panel {
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding-inline: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: var(--space-5);
 }
 
 .settings-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-}
-
-.settings-field textarea,
-.settings-field input,
-.settings-field select {
-  padding: 0.5rem;
-  border: 1px solid #d1d5db;
-  border-radius: 0.375rem;
-  font: inherit;
+  gap: var(--space-1);
 }
 
 .settings-hint {
-  color: #6b7280;
-  font-size: 0.85rem;
-  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .settings-advanced summary {
-  cursor: pointer;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .settings-advanced[open] summary {
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-4);
 }
 
 .provider-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .provider-card {
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
-  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--space-3);
+}
+
+/* カード内でボタンは文字幅のままにしたいのでカード自体はflex-startにし、
+   横いっぱいに広げる入れ物だけをここで指定する。 */
+.provider-card > .provider-card-header,
+.provider-card > .provider-card-meta,
+.provider-card > .model-list,
+.provider-card > .model-add-form {
+  align-self: stretch;
 }
 
 .provider-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--space-2);
+}
+
+/* ラジオ/チェックボックスと文言の組(選択行)。同じ形が
+   プロバイダー・モデル・MCPサーバー・ツールの4箇所に出るため共通で持つ。 */
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
 }
 
 .provider-card-meta {
-  color: #6b7280;
-  font-size: 0.85rem;
-  margin: 0.25rem 0 0.5rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .model-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .model-row {
@@ -404,28 +649,30 @@ body {
   align-items: center;
 }
 
-.model-row-empty {
-  color: #6b7280;
-  font-size: 0.85rem;
+/* 一覧が空のときの一文。プロバイダー・モデル・MCPサーバー・ツールで共通。 */
+.list-empty {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .model-add-form,
 .provider-add-form {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
+  gap: var(--space-2);
+}
+
+.model-add-form input {
+  flex: 1;
 }
 
 .provider-add-form {
   flex-direction: column;
-  border-top: 1px solid #d1d5db;
-  padding-top: 1rem;
+  border-top: var(--border-width) solid var(--color-border);
+  padding-top: var(--space-4);
 }
 
 button.danger {
-  background: #fee2e2;
-  color: #b91c1c;
-  border: none;
-  border-radius: 0.375rem;
-  padding: 0.25rem 0.5rem;
+  background: var(--color-danger-container);
+  color: var(--color-on-danger-container);
+  border-color: transparent;
 }
