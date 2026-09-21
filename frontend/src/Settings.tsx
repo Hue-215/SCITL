@@ -215,7 +215,6 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
       <label className="settings-field">
         <span>システムプロンプト</span>
         <textarea
-          rows={6}
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
           onBlur={() =>
@@ -246,7 +245,6 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
         <label className="settings-field">
           <span>タスクチャット用のシステムプロンプト</span>
           <textarea
-            rows={6}
             value={taskChatSystemPrompt}
             onChange={(e) => setTaskChatSystemPrompt(e.target.value)}
             onBlur={() =>
@@ -724,11 +722,11 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
           </label>
           <label className="settings-field">
             <span>引数(1行に1つ)</span>
-            <textarea rows={3} value={argsText} onChange={(e) => setArgsText(e.target.value)} />
+            <textarea value={argsText} onChange={(e) => setArgsText(e.target.value)} />
           </label>
           <label className="settings-field">
             <span>環境変数(1行1件、キー=値)</span>
-            <textarea rows={3} value={envText} onChange={(e) => setEnvText(e.target.value)} />
+            <textarea value={envText} onChange={(e) => setEnvText(e.target.value)} />
             <p className="settings-hint">値は安全な場所(秘密情報ストア)に保存されます。</p>
           </label>
           <p className="settings-hint">
@@ -744,7 +742,7 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
           </label>
           <label className="settings-field">
             <span>ヘッダー(1行1件、キー=値)</span>
-            <textarea rows={3} value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
+            <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
             <p className="settings-hint">値は安全な場所(秘密情報ストア)に保存されます。</p>
           </label>
         </>

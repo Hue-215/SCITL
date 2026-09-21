@@ -130,8 +130,15 @@ textarea:disabled {
   cursor: not-allowed;
 }
 
+/* 内容に応じて一定の高さまで自動で伸び、それ以降は内側でスクロールする(Issue #96)。
+   field-sizingの対応は実機(WebKitGTK)で確認済み(2.52.6)。自動で高さが決まる以上、
+   手動リサイズと二重に高さの決定権を持たせない(principles.md 5節)ため resize は切る。 */
 textarea {
-  resize: vertical;
+  field-sizing: content;
+  min-height: var(--textarea-min-height);
+  max-height: var(--textarea-max-height);
+  overflow-y: auto;
+  resize: none;
 }
 
 /* appearance:noneで矢印も消えるため自前で描く。色をトークンから取れるよう
@@ -209,6 +216,16 @@ option {
 
 .chat-compose textarea {
   flex: 1;
+  /* 基盤層の--textarea-min-height(2行分)より低くする下限。1行の中身がある限りは
+     内容側の高さがこれを上回るため実質効かないが、フォントサイズを変えたときの
+     保険として床に置く。ボタンとの実際の高さ揃えはpadding側(下記)で決まる。 */
+  min-height: var(--control-size-md);
+}
+
+/* ボタンの上下paddingは基盤層でtextareaより0.25rem(--space-1と--space-2の差)狭く、
+   揃えないと1行の高さでもボタンだけ低くなる。 */
+.chat-compose button {
+  padding-block: var(--space-2);
 }
 
 .sidebar {
@@ -415,7 +432,6 @@ option {
 
 .entry-edit-textarea {
   width: 100%;
-  min-height: 3rem; /* 編集欄の最低行数を確保する固有値。他箇所と共有しないためトークン化しない */
 }
 
 .error {

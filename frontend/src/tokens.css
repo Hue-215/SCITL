@@ -89,6 +89,14 @@
   --settings-rail-width: 12rem;
   --content-min-width: 22rem;
   --content-max-width: 42rem;
+
+  /* 複数行入力欄(textarea)が内容に応じて自動で伸びる範囲(Issue #96)。全箇所で共通の
+     1組にする(欄ごとの上限は設けない。内容が長い欄ほど自然に上限まで伸びるだけで、
+     用途によって伸びられる量を変える理由が無いため)。min-heightはentry-edit-textarea
+     (発言の編集欄)の先例だった3rem(2行相当)を踏襲する。max-heightは旧システムプロンプト欄
+     (rows=6)相当の高さで頭打ちにする。 */
+  --textarea-min-height: 3rem;
+  --textarea-max-height: 10rem;
 }
 
 /*
