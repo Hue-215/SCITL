@@ -1,4 +1,4 @@
-//! streamable_http方式のMCPサーバーへの接続とツール一覧取得。
+//! streamable_http方式のMCPサーバーへの接続。
 
 use std::collections::HashMap;
 
@@ -11,14 +11,14 @@ use secrecy::ExposeSecret;
 use crate::config::SecretRef;
 use crate::db::error::CoreError;
 
-use super::{resolve_secrets, sanitize_tool_text, McpToolInfo, LIST_TOOLS_TIMEOUT};
+use super::{resolve_secrets, ClientService, CONNECT_TIMEOUT};
 
-pub(super) async fn list_tools(
+pub(super) async fn connect(
     url: &str,
     header_refs: &[SecretRef],
-) -> Result<Vec<McpToolInfo>, CoreError> {
-    let client =
-        crate::net::hardened_client(url, LIST_TOOLS_TIMEOUT).map_err(|e| CoreError::Mcp(e.to_string()))?;
+) -> Result<ClientService, CoreError> {
+    let client = crate::net::hardened_client(url, CONNECT_TIMEOUT)
+        .map_err(|e| CoreError::Mcp(e.to_string()))?;
 
     let resolved = resolve_secrets(header_refs).await?;
     let mut headers = HashMap::with_capacity(resolved.len());
@@ -31,27 +31,12 @@ pub(super) async fn list_tools(
     }
 
     let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
-        .control_request_timeout(LIST_TOOLS_TIMEOUT)
+        .control_request_timeout(CONNECT_TIMEOUT)
         .custom_headers(headers);
     let transport = StreamableHttpClientTransport::with_client(client, config);
 
-    let service = ()
+    ()
         .serve(transport)
         .await
-        .map_err(|e| CoreError::Mcp(format!("failed to connect: {e}")))?;
-
-    let result = service.list_tools(None).await;
-    // 一覧取得の成否によらず、開いたセッションは必ず閉じる(取得の都度接続する
-    // ステートレス設計。常駐接続やコネクションプールは持たない)。
-    let _ = service.cancel().await;
-
-    let result = result.map_err(|e| CoreError::Mcp(format!("failed to list tools: {e}")))?;
-    Ok(result
-        .tools
-        .into_iter()
-        .map(|t| McpToolInfo {
-            name: sanitize_tool_text(&t.name),
-            description: t.description.as_deref().map(sanitize_tool_text),
-        })
-        .collect())
+        .map_err(|e| CoreError::Mcp(format!("failed to connect: {e}")))
 }
