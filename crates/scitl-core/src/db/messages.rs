@@ -373,6 +373,80 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// 複数回再試行したターンを、さらに前方の発言の編集で丸ごと破棄した場合
+    /// (Issue #95)。旧試行の行は`MAX(attempt_no)`で、最新試行の行は「通常発言が
+    /// 生き残っていない」判定で、それぞれ別の条件で外れる。両方が同時に効くことを固定する。
+    #[test]
+    fn a_retried_turn_discarded_by_a_later_edit_disappears_from_every_attempt() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+
+        let user_id = insert_message(
+            &conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::User,
+                content: "工程を作って",
+                kind: Kind::Normal,
+                source: None,
+                turn: None,
+                error_kind: None,
+                reasoning: None,
+            },
+        )
+        .unwrap();
+
+        // 同じturn_idのまま2回試行し、どちらもツール実行記録と通常応答を残す。
+        for attempt in 1..=2 {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role: Role::Assistant,
+                    content: r#"{"tool":"add_steps"}"#,
+                    kind: Kind::ToolExecution,
+                    source: None,
+                    turn: Some(("turn-1", attempt)),
+                    error_kind: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap();
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role: Role::Assistant,
+                    content: "追加しました",
+                    kind: Kind::Normal,
+                    source: None,
+                    turn: Some(("turn-1", attempt)),
+                    error_kind: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap();
+        }
+
+        // 前方のユーザー発言を編集した場合のカスケード。通常発言は全試行分が消える。
+        soft_delete_normal_from(&conn, task_id, user_id).unwrap();
+
+        // 旧試行・最新試行のどちらのツール実行記録も会話には出ない。
+        let remaining = list_for_task(&conn, task_id).unwrap();
+        assert!(remaining.is_empty(), "unexpected remaining rows: {remaining:?}");
+
+        // 記録自体は全試行分がDBに残る(保全優先)。
+        let kept: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages
+                 WHERE kind = 'tool_execution' AND deleted_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 2);
+    }
+
     #[test]
     fn soft_delete_message_hides_it_but_keeps_the_row() {
         let conn = db::open_in_memory().unwrap();
