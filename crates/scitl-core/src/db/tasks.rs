@@ -232,6 +232,34 @@ mod tests {
     }
 
     #[test]
+    fn update_task_strips_japanese_bracket_quotes_from_title() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+
+        let updated = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some("「買い物リストの作成」".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.title.as_deref(), Some("買い物リストの作成"));
+
+        let updated = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some("『買い物リストの作成』".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.title.as_deref(), Some("買い物リストの作成"));
+    }
+
+    #[test]
     fn update_task_ignores_title_that_is_blank_after_sanitizing() {
         let conn = db::open_in_memory().unwrap();
         let id = seed_task(&conn);
