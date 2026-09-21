@@ -81,6 +81,9 @@ export interface McpServerView {
   enabled: boolean
   endpoint: McpEndpointView
   enabled_tools: string[]
+  // 取得済みのツール一覧(Issue #104)。nullは「まだ取得していない」。
+  // 取得結果はRust側のキャッシュが持ち、画面はそれを描くだけ。
+  tools: McpToolInfo[] | null
 }
 
 export interface McpToolInfo {

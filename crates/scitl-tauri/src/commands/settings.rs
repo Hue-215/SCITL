@@ -45,6 +45,14 @@ pub enum McpEndpointView {
     },
 }
 
+/// 設定画面へ渡すツール1件。引数スキーマは表示に使わないので渡さない
+/// (表示に不要なサーバー由来のデータをWebViewへ出さない)。
+#[derive(Debug, Serialize)]
+pub struct McpToolView {
+    pub name: String,
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct McpServerView {
     pub id: String,
@@ -52,6 +60,9 @@ pub struct McpServerView {
     pub enabled: bool,
     pub endpoint: McpEndpointView,
     pub enabled_tools: Vec<String>,
+    /// 取得済みのツール一覧(Issue #104)。`None`は「まだ取得していない」。
+    /// 画面はこれを描くだけで、自前では保持しない。
+    pub tools: Option<Vec<McpToolView>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,7 +73,10 @@ pub struct SettingsView {
     pub mcp_servers: Vec<McpServerView>,
 }
 
-fn to_mcp_view(s: &scitl_core::config::McpServerConfig) -> McpServerView {
+fn to_mcp_view(
+    s: &scitl_core::config::McpServerConfig,
+    catalog: &scitl_core::mcp::ToolCatalog,
+) -> McpServerView {
     let endpoint = match &s.endpoint {
         McpEndpoint::Stdio {
             command,
@@ -84,10 +98,19 @@ fn to_mcp_view(s: &scitl_core::config::McpServerConfig) -> McpServerView {
         enabled: s.enabled,
         endpoint,
         enabled_tools: s.enabled_tools.iter().cloned().collect(),
+        tools: catalog.get(&s.id).map(|tools| {
+            tools
+                .into_iter()
+                .map(|t| McpToolView {
+                    name: t.name,
+                    description: t.description,
+                })
+                .collect()
+        }),
     }
 }
 
-pub(crate) fn to_view(config: &Config) -> SettingsView {
+pub(crate) fn to_view(config: &Config, catalog: &scitl_core::mcp::ToolCatalog) -> SettingsView {
     SettingsView {
         general: config.general.clone(),
         providers: config
@@ -104,7 +127,11 @@ pub(crate) fn to_view(config: &Config) -> SettingsView {
             })
             .collect(),
         active_provider_id: config.active_provider_id.clone(),
-        mcp_servers: config.mcp_servers.iter().map(to_mcp_view).collect(),
+        mcp_servers: config
+            .mcp_servers
+            .iter()
+            .map(|s| to_mcp_view(s, catalog))
+            .collect(),
     }
 }
 
@@ -125,16 +152,17 @@ fn find_provider_mut<'a>(
 pub(crate) fn persist_and_rebuild(
     config_path: &std::path::Path,
     mut runtime: MutexGuard<'_, Runtime>,
+    catalog: &scitl_core::mcp::ToolCatalog,
 ) -> Result<SettingsView, String> {
     config::save(config_path, &runtime.config).map_err(|e| e.to_string())?;
     runtime.adapter = build_active_adapter(&runtime.config).map_err(|e| e.to_string())?;
-    Ok(to_view(&runtime.config))
+    Ok(to_view(&runtime.config, catalog))
 }
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     let runtime = state.runtime.lock().expect("runtime mutex poisoned");
-    to_view(&runtime.config)
+    to_view(&runtime.config, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -150,7 +178,7 @@ pub fn update_general_settings(
         task_chat_system_prompt: task_chat_system_prompt.filter(|s| !s.is_empty()),
         response_timeout_secs,
     };
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -194,7 +222,7 @@ pub fn add_provider(
         runtime.config.active_provider_id = Some(id);
     }
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -224,7 +252,7 @@ pub fn delete_provider(
             runtime.config.providers.first().map(|p| p.id.clone());
     }
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -237,7 +265,7 @@ pub fn set_active_provider(
         return Err(format!("provider not found: {provider_id}"));
     }
     runtime.config.active_provider_id = Some(provider_id);
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -261,7 +289,7 @@ pub fn add_model(
         provider.active_model = Some(model);
     }
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -277,7 +305,7 @@ pub fn remove_model(
         provider.active_model = provider.models.first().cloned();
     }
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -293,5 +321,5 @@ pub fn set_active_model(
     }
     provider.active_model = Some(model);
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
