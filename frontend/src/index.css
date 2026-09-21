@@ -110,9 +110,12 @@ button {
 }
 
 /* radioとcheckboxはネイティブ描画のままにする代わり、選択済みの色だけは
-   テーマに合わせる(既定のままだとOS既定の青がシード色と無関係に出る)。 */
+   テーマに合わせる(既定のままだとOS既定の青がシード色と無関係に出る)。
+   全要素の角丸リセットからも外す。丸い形はこの部品の描画そのもので、
+   直角にする対象ではない。 */
 input[type='radio'],
 input[type='checkbox'] {
+  border-radius: revert;
   accent-color: var(--color-primary);
   cursor: pointer;
 }
