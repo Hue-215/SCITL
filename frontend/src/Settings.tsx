@@ -17,7 +17,7 @@ import {
   type NewMcpEndpoint,
 } from './api'
 import type { ApiFormat, McpServerView, McpToolInfo, ProviderView, SettingsView } from './types'
-import { ConfirmDialog } from './Dialog'
+import { ConfirmButton } from './Dialog'
 
 interface SettingsProps {
   onClose: () => void
@@ -326,7 +326,6 @@ function ProviderCard({
   onRemoveModel,
   onSetActiveModel,
 }: ProviderCardProps) {
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const hasModel = provider.models.length > 0
 
   return (
@@ -342,9 +341,12 @@ function ProviderCard({
           />
           <strong>{provider.name}</strong>
         </label>
-        <button type="button" className="danger" onClick={() => setConfirmDelete(true)}>
-          削除
-        </button>
+        <ConfirmButton
+          label="削除"
+          confirmTitle="プロバイダーを削除"
+          confirmMessage={`プロバイダー「${provider.name}」を削除しますか?保存済みのAPIキーも同時に削除されます。`}
+          onConfirm={onDeleteProvider}
+        />
       </div>
       <p className="provider-card-meta">
         {provider.base_url} · {provider.has_api_key ? 'APIキー設定済み' : 'APIキー未設定'}
@@ -389,18 +391,6 @@ function ProviderCard({
         />
         <button type="submit">追加</button>
       </form>
-
-      {confirmDelete && (
-        <ConfirmDialog
-          title="プロバイダーを削除"
-          message={`プロバイダー「${provider.name}」を削除しますか?保存済みのAPIキーも同時に削除されます。`}
-          onCancel={() => setConfirmDelete(false)}
-          onConfirm={() => {
-            setConfirmDelete(false)
-            onDeleteProvider()
-          }}
-        />
-      )}
     </li>
   )
 }
@@ -542,7 +532,6 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const handleFetchTools = async () => {
     setLoading(true)
@@ -578,9 +567,12 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
           />
           <strong>{server.name}</strong>
         </label>
-        <button type="button" className="danger" onClick={() => setConfirmDelete(true)}>
-          削除
-        </button>
+        <ConfirmButton
+          label="削除"
+          confirmTitle="サーバーを削除"
+          confirmMessage={`サーバー「${server.name}」を削除しますか?保存済みの秘密情報も同時に削除されます。`}
+          onConfirm={onDelete}
+        />
       </div>
 
       <p className="provider-card-meta">{endpointSummary}</p>
@@ -622,18 +614,6 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
       <button type="button" onClick={handleFetchTools} disabled={loading}>
         {loading ? '取得中…' : 'ツール一覧を取得'}
       </button>
-
-      {confirmDelete && (
-        <ConfirmDialog
-          title="サーバーを削除"
-          message={`サーバー「${server.name}」を削除しますか?保存済みの秘密情報も同時に削除されます。`}
-          onCancel={() => setConfirmDelete(false)}
-          onConfirm={() => {
-            setConfirmDelete(false)
-            onDelete()
-          }}
-        />
-      )}
     </li>
   )
 }
