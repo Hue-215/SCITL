@@ -40,7 +40,7 @@ export default function Sidebar({
         </button>
         <button
           type="button"
-          className="sidebar-settings-icon"
+          className="icon-button"
           onClick={onOpenSettings}
           aria-label="設定"
           title="設定"

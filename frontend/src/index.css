@@ -173,7 +173,10 @@ option {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  /* 入力欄の上が広いとログの見える範囲がその分狭くなるので詰める。gapは子の間すべてに
+     一律で効くため、ここを0にすると見出しやエラー行もログに接する(.errorもmainの
+     直接の子)。入力欄の上だけを0にはできないので、全体を1段落とす。 */
+  gap: var(--space-2);
   /* 左右は空けない。ログの左右余白は吹き出し自身が持つ(.chat-log > *)ので、ここで
      足すと窓端から見た近い側・遠い側が2倍の関係にならず、スクロールバーも窓の端から
      内側へ浮く。 */
@@ -211,10 +214,14 @@ option {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  /* スクロール領域の上下を16pxで挟む。新規タスクボタンは塗りと幅で左カラムの一覧から
+     独立して見えるので、ボタンに近づけるより一覧の枠としての見え方を優先する。 */
+  gap: var(--space-4);
   /* 左右は空けない。チャットのログと同じ理由で、スクロール領域を仕切り線の際まで
-     届かせ、スクロールバーが一覧の項目に被らないようにする(余白は中身側で持つ)。 */
-  padding: var(--space-3) 0;
+     届かせ、スクロールバーが一覧の項目に被らないようにする(余白は中身側で持つ)。
+     上はチャット欄(.layout main)と同じ16pxにし、総合行と画面名の頭を揃える。
+     下は新規タスクボタンを窓の下端に接させるため空けない。 */
+  padding: var(--space-4) 0 0;
   border-right: var(--border-width) solid var(--color-border);
   background: var(--color-surface);
   /* スクロールするのはタスク一覧だけ。総合・設定・新規タスクは常に見える位置に留める。 */
@@ -225,7 +232,7 @@ option {
    要素を足したときに抜けないよう、クラスごとではなく直接の子で指定する。 */
 .sidebar > *:not(.sidebar-scroll),
 .sidebar-scroll > * {
-  padding-inline: var(--space-3);
+  padding-inline: var(--space-4);
 }
 
 .sidebar-general-row {
@@ -246,17 +253,19 @@ option {
 
 .sidebar-general {
   flex: 1;
-  /* 設定アイコンを正方形にするため、行の高さを当たり判定の寸法に固定する。 */
+  /* 隣のアイコンボタンと高さを揃えるため、行の高さを当たり判定の寸法に固定する。 */
   height: var(--control-size-md);
   text-align: left;
   padding: 0 var(--space-2);
   border-color: transparent;
-  background: var(--color-surface-alt);
-  color: var(--color-text);
   font-weight: 700;
 }
 
-.sidebar-settings-icon {
+/* アイコン1つだけを置くボタンの箱。サイドバーの⚙と設定画面の←が同じ形で、
+   背景だけが違う。SVGアイコン導入時にグリフから箱へ移す作業をここ1箇所で済ませる。
+   グリフをアイコン代わりに使うのは暫定実装で、font-size/line-heightはそのための指定
+   (SVG化時はwidth/heightを内側の<svg>へ移す。tokens.css参照)。 */
+.icon-button {
   flex-shrink: 0;
   width: var(--control-size-md);
   height: var(--control-size-md);
@@ -265,49 +274,36 @@ option {
   justify-content: center;
   padding: 0;
   border-color: transparent;
-  background: var(--color-surface-alt);
-  color: var(--color-text);
-  /* グリフをアイコン代わりに使う暫定実装。SVGアイコン導入時は箱(width/height)を
-     --icon-size-mdに、グリフ自体は内側の<svg>へ移す(tokens.css参照)。 */
   font-size: var(--icon-size-md);
   line-height: 1;
 }
 
-.sidebar-task-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.sidebar-task {
-  width: 100%;
-  text-align: left;
-  padding: var(--space-2);
-  border-color: transparent;
-  background: transparent;
-  color: var(--color-text);
-  font-size: var(--font-size-sm);
-}
-
-.sidebar-task.selected {
-  background: var(--color-primary-container);
-  color: var(--color-on-primary-container);
-}
-
+/* 一覧の入れ物(通常・アーカイブ)。中身の並べ方は同じなので1箇所で決める。 */
+.sidebar-task-list,
 .sidebar-archived {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
 
+/* サイドバーの一覧行。タスクとアーカイブ折りたたみで形は同じで、文字色だけが違う。 */
+.sidebar-task,
 .sidebar-archived-toggle {
   width: 100%;
   text-align: left;
   padding: var(--space-2);
   border-color: transparent;
   background: transparent;
-  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+}
+
+.sidebar-archived-toggle {
+  color: var(--color-text-secondary);
+}
+
+.sidebar-task.selected {
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
 }
 
 .sidebar-add {
@@ -325,7 +321,9 @@ option {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  /* 発言どうしの間隔。1ターンの中(.turn-group)は--space-1で詰めてあるので、
+     ここを広げるとターンの塊と塊の切れ目だけが開く。 */
+  gap: var(--space-4);
 }
 
 .entry {
@@ -376,7 +374,9 @@ option {
   color: var(--color-text);
 }
 
-.entry-tool {
+/* ツール実行行と送信待ち行は、どちらも「本文ではない補助的な発言」として同じ見た目。 */
+.entry-tool,
+.entry-pending {
   font-style: italic;
   color: var(--color-text-secondary);
 }
@@ -384,11 +384,6 @@ option {
 .entry-error {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);
-}
-
-.entry-pending {
-  font-style: italic;
-  color: var(--color-text-secondary);
 }
 
 .entry-time {
@@ -399,7 +394,6 @@ option {
 .entry-actions {
   display: flex;
   gap: var(--space-2);
-  margin-top: var(--space-1);
 }
 
 .entry-actions button {
@@ -426,8 +420,9 @@ option {
   align-items: flex-start;
 }
 
+/* <details>はflexコンテナにしない(summaryの開閉描画がエンジンごとに崩れるため)。
+   そのため中身の間隔だけは入れ物のgapではなくmarginで持つ。 */
 .thinking-tools {
-  align-self: flex-start;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   border: var(--border-width) solid var(--color-border);
@@ -498,30 +493,18 @@ option {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: var(--color-bg);
-  color: var(--color-text);
 }
 
 .settings-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4);
 }
 
+/* 箱と字送りは.icon-buttonが持つ。ここは背景の差分だけ。 */
 .settings-back {
-  width: var(--control-size-md);
-  height: var(--control-size-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border-color: transparent;
   background: transparent;
-  color: var(--color-text);
-  /* sidebar-settings-iconと同じ暫定実装・同じ箱寸法で揃える。 */
-  font-size: var(--icon-size-md);
-  line-height: 1;
 }
 
 .settings-body {
@@ -536,7 +519,8 @@ option {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-3);
+  /* サイドバー・本文と同じ16px。 */
+  padding: var(--space-4);
   border-right: var(--border-width) solid var(--color-border);
 }
 
@@ -588,6 +572,8 @@ option {
   font-weight: 700;
 }
 
+/* .thinking-toolsと同じ理由で<details>はflexコンテナにしないため、
+   開いたときの本文との間隔だけmarginで持つ。 */
 .settings-advanced[open] summary {
   margin-bottom: var(--space-4);
 }
@@ -655,8 +641,8 @@ option {
   font-size: var(--font-size-sm);
 }
 
-.model-add-form,
-.provider-add-form {
+/* 1行に収める(入力欄+追加ボタン)。 */
+.model-add-form {
   display: flex;
   gap: var(--space-2);
 }
@@ -665,8 +651,11 @@ option {
   flex: 1;
 }
 
+/* こちらは項目数が多く縦に積む。model-add-formとはgap以外は共通点がない。 */
 .provider-add-form {
+  display: flex;
   flex-direction: column;
+  gap: var(--space-2);
   border-top: var(--border-width) solid var(--color-border);
   padding-top: var(--space-4);
 }

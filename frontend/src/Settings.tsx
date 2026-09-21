@@ -59,7 +59,7 @@ export default function Settings({ onClose }: SettingsProps) {
       <header className="settings-header">
         <button
           type="button"
-          className="settings-back"
+          className="icon-button settings-back"
           onClick={onClose}
           aria-label="戻る"
           title="戻る"
