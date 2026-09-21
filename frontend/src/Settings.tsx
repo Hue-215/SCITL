@@ -16,7 +16,8 @@ import {
   updateGeneralSettings,
   type NewMcpEndpoint,
 } from './api'
-import type { ApiFormat, McpServerView, McpToolInfo, SettingsView } from './types'
+import type { ApiFormat, McpServerView, McpToolInfo, ProviderView, SettingsView } from './types'
+import { ConfirmDialog } from './Dialog'
 
 interface SettingsProps {
   onClose: () => void
@@ -278,93 +279,129 @@ function ProvidersTab({
   return (
     <div className="settings-panel">
       <ul className="provider-list">
-        {settings.providers.map((provider) => {
-          const hasModel = provider.models.length > 0
-          return (
-            <li key={provider.id} className="provider-card">
-              <div className="provider-card-header">
-                <label
-                  className="choice"
-                  title={hasModel ? undefined : 'モデルを1件以上登録すると選択できます'}
-                >
-                  <input
-                    type="radio"
-                    name="active-provider"
-                    checked={settings.active_provider_id === provider.id}
-                    onChange={() => onSetActiveProvider(provider.id)}
-                    disabled={!hasModel}
-                  />
-                  <strong>{provider.name}</strong>
-                </label>
-                <button
-                  type="button"
-                  className="danger"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `プロバイダー「${provider.name}」を削除しますか?保存済みのAPIキーも同時に削除されます。`,
-                      )
-                    ) {
-                      onDeleteProvider(provider.id)
-                    }
-                  }}
-                >
-                  削除
-                </button>
-              </div>
-              <p className="provider-card-meta">
-                {provider.base_url} · {provider.has_api_key ? 'APIキー設定済み' : 'APIキー未設定'}
-              </p>
-
-              <ul className="model-list">
-                {provider.models.map((model) => (
-                  <li key={model} className="model-row">
-                    <label className="choice">
-                      <input
-                        type="radio"
-                        name={`active-model-${provider.id}`}
-                        checked={provider.active_model === model}
-                        onChange={() => onSetActiveModel(provider.id, model)}
-                      />
-                      {model}
-                    </label>
-                    <button type="button" onClick={() => onRemoveModel(provider.id, model)}>
-                      削除
-                    </button>
-                  </li>
-                ))}
-                {provider.models.length === 0 && (
-                  <li className="list-empty">モデル未登録(登録するとアクティブに選択できます)</li>
-                )}
-              </ul>
-
-              <form
-                className="model-add-form"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  const model = (newModelByProvider[provider.id] ?? '').trim()
-                  if (!model) return
-                  onAddModel(provider.id, model)
-                  setNewModelByProvider((prev) => ({ ...prev, [provider.id]: '' }))
-                }}
-              >
-                <input
-                  value={newModelByProvider[provider.id] ?? ''}
-                  onChange={(e) =>
-                    setNewModelByProvider((prev) => ({ ...prev, [provider.id]: e.target.value }))
-                  }
-                  placeholder="モデル名を入力して追加"
-                />
-                <button type="submit">追加</button>
-              </form>
-            </li>
-          )
-        })}
+        {settings.providers.map((provider) => (
+          <ProviderCard
+            key={provider.id}
+            provider={provider}
+            active={settings.active_provider_id === provider.id}
+            newModel={newModelByProvider[provider.id] ?? ''}
+            onSetNewModel={(value) =>
+              setNewModelByProvider((prev) => ({ ...prev, [provider.id]: value }))
+            }
+            onDeleteProvider={() => onDeleteProvider(provider.id)}
+            onSetActiveProvider={() => onSetActiveProvider(provider.id)}
+            onAddModel={(model) => onAddModel(provider.id, model)}
+            onRemoveModel={(model) => onRemoveModel(provider.id, model)}
+            onSetActiveModel={(model) => onSetActiveModel(provider.id, model)}
+          />
+        ))}
         {settings.providers.length === 0 && <li className="list-empty">プロバイダーが未登録です。</li>}
       </ul>
 
       <AddProviderForm onAdd={onAddProvider} />
     </div>
+  )
+}
+
+interface ProviderCardProps {
+  provider: ProviderView
+  active: boolean
+  newModel: string
+  onSetNewModel: (value: string) => void
+  onDeleteProvider: () => void
+  onSetActiveProvider: () => void
+  onAddModel: (model: string) => void
+  onRemoveModel: (model: string) => void
+  onSetActiveModel: (model: string) => void
+}
+
+function ProviderCard({
+  provider,
+  active,
+  newModel,
+  onSetNewModel,
+  onDeleteProvider,
+  onSetActiveProvider,
+  onAddModel,
+  onRemoveModel,
+  onSetActiveModel,
+}: ProviderCardProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const hasModel = provider.models.length > 0
+
+  return (
+    <li className="provider-card">
+      <div className="provider-card-header">
+        <label className="choice" title={hasModel ? undefined : 'モデルを1件以上登録すると選択できます'}>
+          <input
+            type="radio"
+            name="active-provider"
+            checked={active}
+            onChange={onSetActiveProvider}
+            disabled={!hasModel}
+          />
+          <strong>{provider.name}</strong>
+        </label>
+        <button type="button" className="danger" onClick={() => setConfirmDelete(true)}>
+          削除
+        </button>
+      </div>
+      <p className="provider-card-meta">
+        {provider.base_url} · {provider.has_api_key ? 'APIキー設定済み' : 'APIキー未設定'}
+      </p>
+
+      <ul className="model-list">
+        {provider.models.map((model) => (
+          <li key={model} className="model-row">
+            <label className="choice">
+              <input
+                type="radio"
+                name={`active-model-${provider.id}`}
+                checked={provider.active_model === model}
+                onChange={() => onSetActiveModel(model)}
+              />
+              {model}
+            </label>
+            <button type="button" onClick={() => onRemoveModel(model)}>
+              削除
+            </button>
+          </li>
+        ))}
+        {provider.models.length === 0 && (
+          <li className="list-empty">モデル未登録(登録するとアクティブに選択できます)</li>
+        )}
+      </ul>
+
+      <form
+        className="model-add-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          const model = newModel.trim()
+          if (!model) return
+          onAddModel(model)
+          onSetNewModel('')
+        }}
+      >
+        <input
+          value={newModel}
+          onChange={(e) => onSetNewModel(e.target.value)}
+          placeholder="モデル名を入力して追加"
+        />
+        <button type="submit">追加</button>
+      </form>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="プロバイダーを削除"
+          message={`プロバイダー「${provider.name}」を削除しますか?保存済みのAPIキーも同時に削除されます。`}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => {
+            setConfirmDelete(false)
+            onDeleteProvider()
+          }}
+        />
+      )}
+    </li>
   )
 }
 
@@ -505,6 +542,7 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const handleFetchTools = async () => {
     setLoading(true)
@@ -540,19 +578,7 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
           />
           <strong>{server.name}</strong>
         </label>
-        <button
-          type="button"
-          className="danger"
-          onClick={() => {
-            if (
-              window.confirm(
-                `サーバー「${server.name}」を削除しますか?保存済みの秘密情報も同時に削除されます。`,
-              )
-            ) {
-              onDelete()
-            }
-          }}
-        >
+        <button type="button" className="danger" onClick={() => setConfirmDelete(true)}>
           削除
         </button>
       </div>
@@ -596,6 +622,18 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
       <button type="button" onClick={handleFetchTools} disabled={loading}>
         {loading ? '取得中…' : 'ツール一覧を取得'}
       </button>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="サーバーを削除"
+          message={`サーバー「${server.name}」を削除しますか?保存済みの秘密情報も同時に削除されます。`}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => {
+            setConfirmDelete(false)
+            onDelete()
+          }}
+        />
+      )}
     </li>
   )
 }
