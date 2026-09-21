@@ -283,7 +283,10 @@ function ProvidersTab({
           return (
             <li key={provider.id} className="provider-card">
               <div className="provider-card-header">
-                <label title={hasModel ? undefined : 'モデルを1件以上登録すると選択できます'}>
+                <label
+                  className="choice"
+                  title={hasModel ? undefined : 'モデルを1件以上登録すると選択できます'}
+                >
                   <input
                     type="radio"
                     name="active-provider"
@@ -316,7 +319,7 @@ function ProvidersTab({
               <ul className="model-list">
                 {provider.models.map((model) => (
                   <li key={model} className="model-row">
-                    <label>
+                    <label className="choice">
                       <input
                         type="radio"
                         name={`active-model-${provider.id}`}
@@ -331,7 +334,7 @@ function ProvidersTab({
                   </li>
                 ))}
                 {provider.models.length === 0 && (
-                  <li className="model-row-empty">モデル未登録(登録するとアクティブに選択できます)</li>
+                  <li className="list-empty">モデル未登録(登録するとアクティブに選択できます)</li>
                 )}
               </ul>
 
@@ -357,7 +360,7 @@ function ProvidersTab({
             </li>
           )
         })}
-        {settings.providers.length === 0 && <p>プロバイダーが未登録です。</p>}
+        {settings.providers.length === 0 && <li className="list-empty">プロバイダーが未登録です。</li>}
       </ul>
 
       <AddProviderForm onAdd={onAddProvider} />
@@ -480,7 +483,7 @@ function McpTab({
             onSetToolEnabled={(toolName, enabled) => onSetToolEnabled(server.id, toolName, enabled)}
           />
         ))}
-        {settings.mcp_servers.length === 0 && <p>サーバーが未登録です。</p>}
+        {settings.mcp_servers.length === 0 && <li className="list-empty">サーバーが未登録です。</li>}
       </ul>
 
       <AddMcpServerForm existingNames={settings.mcp_servers.map((s) => s.name)} onAdd={onAddServer} />
@@ -529,7 +532,7 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
   return (
     <li className="provider-card">
       <div className="provider-card-header">
-        <label>
+        <label className="choice">
           <input
             type="checkbox"
             checked={server.enabled}
@@ -562,9 +565,9 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
       )}
 
       {tools === null ? (
-        <p className="model-row-empty">ツール一覧は未取得です。</p>
+        <p className="list-empty">ツール一覧は未取得です。</p>
       ) : tools.length === 0 ? (
-        <p className="model-row-empty">ツールがありません。</p>
+        <p className="list-empty">ツールがありません。</p>
       ) : (
         <>
           {collapsible && (
@@ -575,7 +578,7 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
           <ul className="model-list">
             {visibleTools.map((tool) => (
               <li key={tool.name} className="model-row">
-                <label title={tool.description ?? undefined}>
+                <label className="choice" title={tool.description ?? undefined}>
                   <input
                     type="checkbox"
                     checked={server.enabled_tools.includes(tool.name)}

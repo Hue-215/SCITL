@@ -49,48 +49,51 @@ export default function Sidebar({
         </button>
       </div>
 
-      <ul className="sidebar-task-list">
-        {active.map((task) => (
-          <li key={task.id}>
+      {/* 総合行と新規タスクを常に見える位置に留めるため、スクロールするのはここだけ */}
+      <div className="sidebar-scroll">
+        <ul className="sidebar-task-list">
+          {active.map((task) => (
+            <li key={task.id}>
+              <button
+                type="button"
+                className={task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'}
+                onClick={() => onSelect(task.id)}
+              >
+                {taskLabel(task)}
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        {archived.length > 0 && (
+          <div className="sidebar-archived">
             <button
               type="button"
-              className={task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'}
-              onClick={() => onSelect(task.id)}
+              className="sidebar-archived-toggle"
+              onClick={() => setArchivedOpen((open) => !open)}
             >
-              {taskLabel(task)}
+              アーカイブ済み({archived.length}){archivedOpen ? ' ▲' : ' ▼'}
             </button>
-          </li>
-        ))}
-      </ul>
-
-      {archived.length > 0 && (
-        <div className="sidebar-archived">
-          <button
-            type="button"
-            className="sidebar-archived-toggle"
-            onClick={() => setArchivedOpen((open) => !open)}
-          >
-            アーカイブ済み({archived.length}){archivedOpen ? ' ▲' : ' ▼'}
-          </button>
-          {archivedOpen && (
-            <ul className="sidebar-task-list">
-              {archived.map((task) => (
-                <li key={task.id}>
-                  <button
-                    type="button"
-                    className={
-                      task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'
-                    }
-                    onClick={() => onSelect(task.id)}
-                  >
-                    {taskLabel(task)}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+            {archivedOpen && (
+              <ul className="sidebar-task-list">
+                {archived.map((task) => (
+                  <li key={task.id}>
+                    <button
+                      type="button"
+                      className={
+                        task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'
+                      }
+                      onClick={() => onSelect(task.id)}
+                    >
+                      {taskLabel(task)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
 
       <button type="button" className="sidebar-add" onClick={onAddTask} disabled={adding}>
         + 新規タスク

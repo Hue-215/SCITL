@@ -179,7 +179,7 @@ export default function App() {
       />
 
       <main>
-        <header>
+        <header className="chat-header">
           <h1>{task ? (task.title ?? '(無題)') : 'SCITL'}</h1>
           {task?.description && <p>{task.description}</p>}
         </header>
@@ -317,6 +317,7 @@ export default function App() {
         </ul>
 
         <form
+          className="chat-compose"
           onSubmit={(e) => {
             e.preventDefault()
             void send()
