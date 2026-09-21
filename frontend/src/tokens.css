@@ -92,9 +92,16 @@
 
   /* 複数行入力欄(textarea)が内容に応じて自動で伸びる範囲(Issue #96)。全箇所で共通の
      1組にする(欄ごとの上限は設けない。内容が長い欄ほど自然に上限まで伸びるだけで、
-     用途によって伸びられる量を変える理由が無いため)。min-heightはentry-edit-textarea
-     (発言の編集欄)の先例だった3rem(2行相当)を踏襲する。max-heightは旧システムプロンプト欄
-     (rows=6)相当の高さで頭打ちにする。 */
+     用途によって伸びられる量を変える理由が無いため)。
+
+     box-sizingがborder-boxのため、どちらもpadding(--space-2の上下で1rem)と
+     border(--border-widthの上下で約0.125rem)を含んだ値である。1行の高さは
+     --line-height-normal × --font-size-md = 1.5rem。行数に換算すると:
+       min 3rem  → 3 − 1.125 = 1.875rem = 1.25行
+       max 10rem → 10 − 1.125 = 8.875rem ≒ 6行
+     minはentry-edit-textarea(発言の編集欄)の先例だった3remを踏襲した値で、
+     行数から決めたものではない。maxは旧システムプロンプト欄(rows=6)に合わせている。
+     行数を基準に決め直す場合は、上の内訳の通りpaddingとborderの分を足すこと。 */
   --textarea-min-height: 3rem;
   --textarea-max-height: 10rem;
 }
