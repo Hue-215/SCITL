@@ -53,10 +53,12 @@ impl OpenAiCompatAdapter {
     }
 }
 
-/// 非ループバックの`http://`宛に`bearer_auth`で鍵を送らないための検証。
-/// ローカル推論サーバー向けにhttpを許す必要はあるが、その用途はループバックに限られる
-/// (principles.md 4節、architecture.md 5節)。検証本体は[`crate::net::validate_external_url`]
-/// に集約する(MCP streamable_httpのURL検証と共有。Opusレビュー指摘)。
+/// `http://`宛に`bearer_auth`で鍵を平文で送る範囲を絞るための検証。httpを許す範囲は
+/// `net::classify_host`が決める(ループバック、またはプライベートIPリテラルのLAN上の
+/// 推論サーバー。architecture.md 5節)。LAN宛の場合はAPIキーが平文で流れることを
+/// 設定画面のヒントで明示している(principles.md 4節)。検証本体は
+/// [`crate::net::validate_external_url`]に集約する(MCP streamable_httpのURL検証と
+/// 共有。Opusレビュー指摘)。
 pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
     let url = reqwest::Url::parse(base_url)
         .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
@@ -367,7 +369,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_http_non_loopback_base_url() {
+    fn accepts_http_private_ip_literal_base_url() {
+        // 境界値の網羅はnet.rs側で行い、ここではclassify_hostがLLMプロバイダー
+        // 側にも効いていることだけを確認する。
+        assert!(validate_base_url("http://192.168.1.107:11434/v1").is_ok());
+    }
+
+    #[test]
+    fn rejects_http_hostname_base_url() {
+        // ホスト名(localhost以外)は名前解決しないため常に拒否する。
+        // プライベートIPかどうかではなく「ホスト名だから」拒否される点に注意
+        // (`http://192.168.1.1/v1`はホスト名でなくIPリテラルなので許可される)。
         let err = validate_base_url("http://example.com/v1").unwrap_err();
         assert!(matches!(err, CoreError::ProviderConfig(_)));
     }
