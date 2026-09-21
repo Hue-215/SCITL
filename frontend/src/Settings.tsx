@@ -448,6 +448,10 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
       <label className="settings-field">
         <span>ベースURL</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
+        <p className="settings-hint">
+          httpsを推奨します。httpはループバックまたはプライベートIPアドレス(LAN内等)への
+          接続のみ許可され、通信は暗号化されません。APIキーも平文で流れます。
+        </p>
       </label>
       <label className="settings-field">
         <span>APIキー</span>
@@ -733,6 +737,11 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
           <label className="settings-field">
             <span>URL</span>
             <input value={url} onChange={(e) => setUrl(e.target.value)} required />
+            <p className="settings-hint">
+              httpsを推奨します。httpはループバックまたはプライベートIPアドレス(LAN内等)への
+              接続のみ許可され、通信は暗号化されません。ヘッダーの値(認証情報を含む)も
+              平文で流れます。
+            </p>
           </label>
           <label className="settings-field">
             <span>ヘッダー(1行1件、キー=値)</span>
