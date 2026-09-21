@@ -112,10 +112,26 @@ export default function App() {
   // 応答待ち中は編集・再試行・削除のすべてを不可にする(Issue #41、legacy/frontend.md 1節)。
   const disableActions = sending || taskId === null
 
+  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す(Issue #95)。
+  // バックエンドはコマンド最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
+  // ここでやっているのは「すでに起きた削除を先に見せる」ことだけ。確定後は`loadTask`が必ず
+  // DBの内容で上書きするため、これが最終的な表示になることはない(楽観表示はユーザー発言の
+  // プレースホルダと同じ扱い)。
+  //
+  // `turnId`は再試行でのみ渡す。再試行の対象はターンの最終行なので、idだけで切ると同じターンの
+  // ツール実行記録が残り、`finalEntryOf`がそれを返信の吹き出しとして描いてしまう
+  // (`thinking.ts`参照)。作り直すのはターンごとなので、ターンごと外す。
+  const hideSuperseded = (fromId: number, turnId: string | null) => {
+    setMessages((prev) =>
+      prev.filter((m) => m.id < fromId && (turnId === null || m.turn_id !== turnId)),
+    )
+  }
+
   const submitEdit = async (messageId: number) => {
     const text = editDraft.trim()
     if (!text || disableActions || taskId === null) return
     setEditingId(null)
+    hideSuperseded(messageId, null)
     setPending([
       { role: 'user', content: text },
       { role: 'pending', content: '応答待ち…' },
@@ -136,6 +152,7 @@ export default function App() {
 
   const retry = async (messageId: number) => {
     if (disableActions || taskId === null) return
+    hideSuperseded(messageId, messages.find((m) => m.id === messageId)?.turn_id ?? null)
     setPending([{ role: 'pending', content: '応答待ち…' }])
     setSending(true)
     setError(null)

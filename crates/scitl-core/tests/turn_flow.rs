@@ -701,6 +701,84 @@ async fn edit_user_message_truncates_and_regenerates() {
     assert!(deleted_at.is_some());
 }
 
+/// 編集(Issue #95): ツールを実行したターンを編集で破棄しても、編集後の発言は**元の位置**に
+/// 現れる。編集後の本文は新しい行として挿入されるが、生き残る通常発言はすべて対象より前の
+/// idなので、破棄されたターンのツール実行記録さえ会話から外れれば順序は元のままになる。
+/// 記録はDBに残す(`data-model.md`「ツール実行記録は……対象に含めない」)。
+#[tokio::test]
+async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    // 1ターン目: 編集対象より前に来る、生き残る会話。
+    run_turn(
+        db.clone(),
+        Some(&TextAdapter::one("応答A")),
+        task_id,
+        "最初の質問".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    // 2ターン目: ツールを実行するターン。これを編集で破棄する。
+    run_turn(
+        db.clone(),
+        Some(&FakeAdapter {
+            calls: AtomicUsize::new(0),
+        }),
+        task_id,
+        "タイトル決めて".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let target_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages
+            .iter()
+            .find(|m| m.content == "タイトル決めて")
+            .unwrap()
+            .id
+    };
+
+    edit_user_message(
+        db.clone(),
+        Some(&TextAdapter::one("応答B")),
+        task_id,
+        target_id,
+        "編集後の質問".to_string(),
+        &SystemPrompts::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+
+    // 編集後の発言は「応答A」の直後、つまり編集前と同じ位置。破棄されたターンの
+    // ツール実行記録が間に挟まらない(これが挟まると新規送信と見分けが付かなくなる)。
+    assert_eq!(
+        contents,
+        vec!["最初の質問", "応答A", "編集後の質問", "応答B"]
+    );
+
+    // 記録そのものはDBに残っている(表示から外すだけで、消してはいない)。
+    let tool_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages
+             WHERE kind = 'tool_execution' AND deleted_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tool_rows, 1);
+}
+
 /// 思考(reasoning)は該当する行の`reasoning`列に保存され、モデルへの再送信には
 /// 一切含まれないことを検証する(Issue #42、principles.md 3節「思考は履歴に送り返さない」)。
 #[tokio::test]

@@ -96,8 +96,14 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 }
 
 /// タスクチャンネル分の発言取得(支配的クエリ)。
-/// ターンを持つ行は`turn_id`ごとの最新試行のみに絞る
-/// (data-model.md「ターン境界」— 外部経由の記録はturn_idを持たないため常に残る)。
+/// ターンを持つ行は`turn_id`ごとの最新試行のみに絞り、さらに**通常発言が1行も生き残って
+/// いないターン(破棄されたターン)を丸ごと除く**(data-model.md「ターン境界」—
+/// 外部経由の記録はturn_idを持たないため常に残る)。
+///
+/// 後者はIssue #95。編集・再試行のカスケードは`kind='normal'`しか論理削除しないため
+/// (ツール実行記録は保全する。data-model.md)、破棄されたターンのツール実行記録だけが
+/// 残る。これを会話に並べると、直後に挿入される編集後の発言がその下に来て新規送信と
+/// 見分けが付かなくなる。記録はDBに残したまま、この支配的クエリの時点で会話から外す。
 pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
         "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, turn_id, attempt_no, created_at
@@ -106,9 +112,18 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
            AND deleted_at IS NULL
            AND (
              turn_id IS NULL
-             OR attempt_no = (
-               SELECT MAX(attempt_no) FROM messages m2
-               WHERE m2.turn_id = messages.turn_id AND m2.deleted_at IS NULL
+             OR (
+               attempt_no = (
+                 SELECT MAX(attempt_no) FROM messages m2
+                 WHERE m2.turn_id = messages.turn_id AND m2.deleted_at IS NULL
+               )
+               AND EXISTS (
+                 SELECT 1 FROM messages m3
+                 WHERE m3.turn_id = messages.turn_id
+                   AND m3.attempt_no = messages.attempt_no
+                   AND m3.kind = 'normal'
+                   AND m3.deleted_at IS NULL
+               )
              )
            )
          ORDER BY created_at ASC, id ASC",
@@ -190,12 +205,11 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
 /// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない
 /// (会話の整合性より実行記録の保全を優先する)」)。
 ///
-/// この結果、経路によって表示上の見え方が異なる点に注意。**再試行**は同一`turn_id`のまま
-/// `attempt_no`を増やすため、`list_for_task`の「`turn_id`ごとの最新`attempt_no`」絞り込みで
-/// 旧試行のツール実行記録は自動的に表示から外れる。一方**編集**は新しい`turn_id`を振って
-/// 会話を再生成するため、旧ターンの`turn_id`自体はもう他のどの行にも使われず「最新」のまま
-/// 残り続け、対応する通常発言が消えた後も旧ターンのツール実行記録だけが単独で表示に残る
-/// (`soft_delete_normal_from_cascades_but_spares_tool_execution_rows`で確認済み)。
+/// この呼び出しの後、対象のターンには通常発言が1行も残らず、ツール実行記録だけが浮く。
+/// 会話としては破棄されたターンなので、`list_for_task`が表示から外す(Issue #95。
+/// `soft_delete_normal_from_cascades_but_spares_tool_execution_rows`で、DBには残り
+/// 会話には出ないことを確認している)。**保全と表示を切り離すのがここの要点**で、
+/// 記録の側を消して辻褄を合わせてはならない。
 pub fn soft_delete_normal_from(conn: &Connection, task_id: i64, from_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
@@ -359,6 +373,80 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// 複数回再試行したターンを、さらに前方の発言の編集で丸ごと破棄した場合
+    /// (Issue #95)。旧試行の行は`MAX(attempt_no)`で、最新試行の行は「通常発言が
+    /// 生き残っていない」判定で、それぞれ別の条件で外れる。両方が同時に効くことを固定する。
+    #[test]
+    fn a_retried_turn_discarded_by_a_later_edit_disappears_from_every_attempt() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+
+        let user_id = insert_message(
+            &conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::User,
+                content: "工程を作って",
+                kind: Kind::Normal,
+                source: None,
+                turn: None,
+                error_kind: None,
+                reasoning: None,
+            },
+        )
+        .unwrap();
+
+        // 同じturn_idのまま2回試行し、どちらもツール実行記録と通常応答を残す。
+        for attempt in 1..=2 {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role: Role::Assistant,
+                    content: r#"{"tool":"add_steps"}"#,
+                    kind: Kind::ToolExecution,
+                    source: None,
+                    turn: Some(("turn-1", attempt)),
+                    error_kind: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap();
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role: Role::Assistant,
+                    content: "追加しました",
+                    kind: Kind::Normal,
+                    source: None,
+                    turn: Some(("turn-1", attempt)),
+                    error_kind: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap();
+        }
+
+        // 前方のユーザー発言を編集した場合のカスケード。通常発言は全試行分が消える。
+        soft_delete_normal_from(&conn, task_id, user_id).unwrap();
+
+        // 旧試行・最新試行のどちらのツール実行記録も会話には出ない。
+        let remaining = list_for_task(&conn, task_id).unwrap();
+        assert!(remaining.is_empty(), "unexpected remaining rows: {remaining:?}");
+
+        // 記録自体は全試行分がDBに残る(保全優先)。
+        let kept: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages
+                 WHERE kind = 'tool_execution' AND deleted_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 2);
+    }
+
     #[test]
     fn soft_delete_message_hides_it_but_keeps_the_row() {
         let conn = db::open_in_memory().unwrap();
@@ -474,16 +562,12 @@ mod tests {
         // ユーザー発言以降(自身を含む)をすべて論理削除する = 編集操作のカスケードと同じ形。
         soft_delete_normal_from(&conn, task_id, user_id).unwrap();
 
-        // kind='normal'の行(ユーザー発言・アシスタント発言)はすべて消えるが、
-        // ツール実行記録は`soft_delete_normal_from`の対象外のため`deleted_at`が立たず、
-        // `list_for_task`の「turn_idごとの最新attempt_no」判定になお該当し続ける結果、
-        // 表示にはこのツール実行記録だけが残る。これは`data-model.md`が明言する
-        // 「会話の整合性より実行記録の保全を優先する」というトレードオフの帰結であり、
-        // 見た目の孤立したツール実行行が残る点は既知の許容範囲とする(#42の折りたたみ表示で
-        // 改善されうるが、本Issueの範囲外)。
+        // kind='normal'の行(ユーザー発言・アシスタント発言)はすべて消える。ツール実行記録は
+        // `soft_delete_normal_from`の対象外なので`deleted_at`が立たないが、通常発言が1行も
+        // 残らないターンは会話としては破棄されているため、`list_for_task`は丸ごと外す
+        // (Issue #95)。保全(DBに残る)と表示(会話に出ない)を切り離すのがこのテストの要点。
         let remaining = list_for_task(&conn, task_id).unwrap();
-        assert_eq!(remaining.len(), 1, "unexpected remaining rows: {remaining:?}");
-        assert_eq!(remaining[0].kind, "tool_execution");
+        assert!(remaining.is_empty(), "unexpected remaining rows: {remaining:?}");
 
         // ツール実行記録の行自体は監査記録として物理的には残る(保全優先)。
         let tool_deleted_at: Option<String> = conn
