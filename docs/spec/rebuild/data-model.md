@@ -117,6 +117,12 @@ attempt_no  INTEGER NULL -- 同一ターン内の試行回数。再試行で増�
 | SCITLの応答生成に属する発言・ツール実行記録(`source IS NULL`) | **両方必須** |
 | 外部(MCP)経由のツール実行記録(`source IS NOT NULL`) | **両方NULL** |
 
+3つ目は**外部のLLMがMCP経由でSCITLを操作した向き**を指す。逆向き、つまりSCITL自身が
+応答生成の途中で外部のツールサーバーを呼んだ記録(Issue #44)は2つ目に当たり、`turn_id`/
+`attempt_no`を持ち`source`は付けない。`source`は「SCITLの外から操作された」ことの印であって
+「外部と通信した」ことの印ではない。ここを取り違えると、自分のターンの記録が会話から
+独立した行として現れる(表示側は`turn_id`の有無でこの2つを見分けている)。
+
 3つ目が重要: 外部のLLMがMCP経由でSCITLを操作した場合、SCITL側では応答生成を行って
 いないため、属するべきターンが存在しない。ここを「ツール実行記録なら必ずturn_idを持つ」と
 誤解して `NOT NULL` や `CHECK (role = 'user' OR turn_id IS NOT NULL)` を書くと、

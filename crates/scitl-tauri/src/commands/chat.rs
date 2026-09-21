@@ -1,28 +1,33 @@
 use tauri::State;
 
+use scitl_core::config::McpServerConfig;
 use scitl_core::llm::{LlmAdapter, ResponseEvent};
 use scitl_core::orchestration::{
-    delete_message, edit_user_message, retry_assistant_message, run_turn, SystemPrompts,
+    delete_message, edit_user_message, retry_assistant_message, run_turn, McpAccess, SystemPrompts,
 };
 
 use crate::AppState;
 
-/// 実行時のプロバイダー・システムプロンプトの取得。送信・編集・再試行いずれも
-/// 同じ組み立てを使う(`docs/spec/principles.md` 5節、判断を1箇所に閉じる)。
-/// ロックはこの複製を取るまでだけ持つ(main.rsの`AppState::runtime`のドキュメント参照)。
-fn load_runtime_prompts(
-    state: &State<'_, AppState>,
-) -> (
-    Option<std::sync::Arc<dyn LlmAdapter + Send + Sync>>,
-    Option<String>,
-    Option<String>,
-) {
+/// ターンの実行に要る設定の複製。送信・編集・再試行いずれも同じ組み立てを使う
+/// (`docs/spec/principles.md` 5節、判断を1箇所に閉じる)。ロックはこの複製を取るまでだけ
+/// 持つ(main.rsの`AppState::runtime`のドキュメント参照)。
+struct TurnInputs {
+    adapter: Option<std::sync::Arc<dyn LlmAdapter + Send + Sync>>,
+    system_prompt: Option<String>,
+    task_chat_system_prompt: Option<String>,
+    /// ターン中に使う外部ツールサーバー(Issue #44)。設定の複製を持ち、ロックを
+    /// `.await`へ持ち込まない。
+    mcp_servers: Vec<McpServerConfig>,
+}
+
+fn load_turn_inputs(state: &State<'_, AppState>) -> TurnInputs {
     let runtime = state.runtime.lock().expect("runtime mutex poisoned");
-    (
-        runtime.adapter.clone(),
-        runtime.config.general.system_prompt.clone(),
-        runtime.config.general.task_chat_system_prompt.clone(),
-    )
+    TurnInputs {
+        adapter: runtime.adapter.clone(),
+        system_prompt: runtime.config.general.system_prompt.clone(),
+        task_chat_system_prompt: runtime.config.general.task_chat_system_prompt.clone(),
+        mcp_servers: runtime.config.mcp_servers.clone(),
+    }
 }
 
 /// タスクチャットへの発言送信。`task_id`は文脈(表示中のタスク)から決まる引数であり、
@@ -38,15 +43,17 @@ pub async fn send_task_chat_message(
     task_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let (adapter, system_prompt, task_chat_system_prompt) = load_runtime_prompts(&state);
-    let adapter_ref: Option<&dyn LlmAdapter> = adapter.as_deref().map(|a| a as &dyn LlmAdapter);
+    let inputs = load_turn_inputs(&state);
+    let adapter_ref: Option<&dyn LlmAdapter> =
+        inputs.adapter.as_deref().map(|a| a as &dyn LlmAdapter);
 
     let prompts = SystemPrompts {
-        base: system_prompt.as_deref(),
-        task_chat: task_chat_system_prompt.as_deref(),
+        base: inputs.system_prompt.as_deref(),
+        task_chat: inputs.task_chat_system_prompt.as_deref(),
     };
+    let mcp = McpAccess::new(&inputs.mcp_servers, &state.mcp_tools);
 
-    run_turn(state.db.clone(), adapter_ref, task_id, text, &prompts)
+    run_turn(state.db.clone(), adapter_ref, task_id, text, &prompts, &mcp)
         .await
         .map_err(|e| e.to_string())
 }
@@ -62,17 +69,27 @@ pub async fn edit_task_chat_message(
     message_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let (adapter, system_prompt, task_chat_system_prompt) = load_runtime_prompts(&state);
-    let adapter_ref: Option<&dyn LlmAdapter> = adapter.as_deref().map(|a| a as &dyn LlmAdapter);
+    let inputs = load_turn_inputs(&state);
+    let adapter_ref: Option<&dyn LlmAdapter> =
+        inputs.adapter.as_deref().map(|a| a as &dyn LlmAdapter);
 
     let prompts = SystemPrompts {
-        base: system_prompt.as_deref(),
-        task_chat: task_chat_system_prompt.as_deref(),
+        base: inputs.system_prompt.as_deref(),
+        task_chat: inputs.task_chat_system_prompt.as_deref(),
     };
+    let mcp = McpAccess::new(&inputs.mcp_servers, &state.mcp_tools);
 
-    edit_user_message(state.db.clone(), adapter_ref, task_id, message_id, text, &prompts)
-        .await
-        .map_err(|e| e.to_string())
+    edit_user_message(
+        state.db.clone(),
+        adapter_ref,
+        task_id,
+        message_id,
+        text,
+        &prompts,
+        &mcp,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 発言の再試行(Issue #41)。アシスタント発言のみが対象で、同じターンのまま
@@ -83,17 +100,26 @@ pub async fn retry_task_chat_message(
     task_id: i64,
     message_id: i64,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let (adapter, system_prompt, task_chat_system_prompt) = load_runtime_prompts(&state);
-    let adapter_ref: Option<&dyn LlmAdapter> = adapter.as_deref().map(|a| a as &dyn LlmAdapter);
+    let inputs = load_turn_inputs(&state);
+    let adapter_ref: Option<&dyn LlmAdapter> =
+        inputs.adapter.as_deref().map(|a| a as &dyn LlmAdapter);
 
     let prompts = SystemPrompts {
-        base: system_prompt.as_deref(),
-        task_chat: task_chat_system_prompt.as_deref(),
+        base: inputs.system_prompt.as_deref(),
+        task_chat: inputs.task_chat_system_prompt.as_deref(),
     };
+    let mcp = McpAccess::new(&inputs.mcp_servers, &state.mcp_tools);
 
-    retry_assistant_message(state.db.clone(), adapter_ref, task_id, message_id, &prompts)
-        .await
-        .map_err(|e| e.to_string())
+    retry_assistant_message(
+        state.db.clone(),
+        adapter_ref,
+        task_id,
+        message_id,
+        &prompts,
+        &mcp,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 発言の削除(Issue #41)。ユーザー/アシスタント発言が対象で、確認ダイアログ無しの

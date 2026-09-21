@@ -7,10 +7,12 @@ use ulid::Ulid;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, Message, NewMessage, Role};
 use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest};
+use crate::mcp::McpSessions;
+use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::SystemPrompts;
-use crate::tools;
+use crate::tools::{self, external::ExternalToolset};
 
 const MAX_TOOL_ROUNDS: u32 = 4;
 
@@ -32,6 +34,7 @@ pub async fn run_turn(
     task_id: i64,
     user_text: String,
     prompts: &SystemPrompts<'_>,
+    mcp: &McpAccess<'_>,
 ) -> Result<Vec<ResponseEvent>> {
     db_call(db.clone(), move |conn| {
         messages::insert_message(
@@ -55,7 +58,7 @@ pub async fn run_turn(
     // 新規ターンなので1から始まる。以降の再試行は`retry_assistant_message`が
     // `next_attempt_no`で採番する。
     let attempt_no: i64 = 1;
-    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts).await
+    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp).await
 }
 
 /// 編集(ユーザー発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言をすべて
@@ -70,6 +73,7 @@ pub async fn edit_user_message(
     message_id: i64,
     new_text: String,
     prompts: &SystemPrompts<'_>,
+    mcp: &McpAccess<'_>,
 ) -> Result<Vec<ResponseEvent>> {
     db_call(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -95,7 +99,7 @@ pub async fn edit_user_message(
     .await?;
 
     let turn_id = Ulid::new().to_string();
-    generate_turn_response(db, adapter, task_id, turn_id, 1, prompts).await
+    generate_turn_response(db, adapter, task_id, turn_id, 1, prompts, mcp).await
 }
 
 /// 再試行(アシスタント発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言を
@@ -108,6 +112,7 @@ pub async fn retry_assistant_message(
     task_id: i64,
     message_id: i64,
     prompts: &SystemPrompts<'_>,
+    mcp: &McpAccess<'_>,
 ) -> Result<Vec<ResponseEvent>> {
     let (turn_id, attempt_no) = db_call(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -125,7 +130,7 @@ pub async fn retry_assistant_message(
     })
     .await?;
 
-    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts).await
+    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp).await
 }
 
 /// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
@@ -167,6 +172,10 @@ fn validate_target(target: &Message, task_id: i64, expected_role: &str) -> Resul
 /// `edit_user_message`(編集)・`retry_assistant_message`(再試行)はいずれも、対象となる
 /// ユーザー発言をDBに用意した上でこれを呼ぶ共通の末尾処理。
 ///
+/// 外部(MCP)サーバーへの接続はこのターンの間だけ生かし、結果によらずここで閉じる
+/// (legacy/backend.md 9節。ラウンドの途中で抜ける経路が複数あるため、往復の本体は
+/// [`run_tool_rounds`]に分け、切断をこの1箇所に集める)。
+///
 /// `adapter`が`None`(プロバイダー未選択)・モデル未選択・APIキー未設定・空応答・
 /// コンテキスト超過・ツール呼び出し回数の上限到達は、`Err`で上位に返さずエラー発言として
 /// 保存し`Ok`で返す(Issue #40)。DB自体への書き込みが失敗する場合のみ`Err`のまま返る。
@@ -177,6 +186,7 @@ async fn generate_turn_response(
     turn_id: String,
     attempt_no: i64,
     prompts: &SystemPrompts<'_>,
+    mcp: &McpAccess<'_>,
 ) -> Result<Vec<ResponseEvent>> {
     let Some(adapter) = adapter else {
         return fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::NoProvider).await;
@@ -185,9 +195,84 @@ async fn generate_turn_response(
         return fail_turn(db, task_id, &turn_id, attempt_no, failure).await;
     }
 
+    let mut sessions = McpSessions::new();
+    let external = prepare_external_tools(mcp, &mut sessions).await;
+    let result = run_tool_rounds(
+        db,
+        adapter,
+        task_id,
+        &turn_id,
+        attempt_no,
+        prompts,
+        mcp,
+        &external,
+        &mut sessions,
+    )
+    .await;
+    sessions.close().await;
+    result
+}
+
+/// このターンでモデルへ公開する外部ツールを決める。ツールを1つも有効化していない
+/// サーバーには接続しない(ユーザーが有効化していない以上、繋ぐ理由が無い)。
+///
+/// 一覧はキャッシュ(Issue #104)を優先し、無ければ取得してキャッシュに載せる。
+/// 接続・取得に失敗したサーバーはこのターンでは公開しない。ここでターン全体を失敗させると、
+/// 外部サーバーが1つ落ちているだけでチャットが使えなくなるため(#58と同じ考え方)。
+async fn prepare_external_tools(
+    mcp: &McpAccess<'_>,
+    sessions: &mut McpSessions,
+) -> ExternalToolset {
+    let mut fetched = Vec::new();
+    for server in mcp
+        .servers
+        .iter()
+        .filter(|s| s.enabled && !s.enabled_tools.is_empty())
+    {
+        if let Some(cached) = mcp.catalog.and_then(|c| c.get(&server.id)) {
+            fetched.push((server, cached));
+            continue;
+        }
+        match sessions.list_tools(server).await {
+            Ok(tools) => {
+                if let Some(catalog) = mcp.catalog {
+                    catalog.store(&server.id, tools.clone());
+                }
+                fetched.push((server, tools));
+            }
+            Err(e) => {
+                eprintln!(
+                    "failed to list tools from MCP server '{}': {e}",
+                    server.name
+                );
+            }
+        }
+    }
+    ExternalToolset::build(fetched, &tools::task_chat_tool_names())
+}
+
+/// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
+/// 分けてあるだけで、1ターンの流れとしては地続き。
+#[allow(clippy::too_many_arguments)]
+async fn run_tool_rounds(
+    db: SharedConnection,
+    adapter: &dyn LlmAdapter,
+    task_id: i64,
+    turn_id: &str,
+    attempt_no: i64,
+    prompts: &SystemPrompts<'_>,
+    mcp: &McpAccess<'_>,
+    external: &ExternalToolset,
+    sessions: &mut McpSessions,
+) -> Result<Vec<ResponseEvent>> {
     // 呼び出し元(`run_turn`/`edit_user_message`/`retry_assistant_message`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
     let history = db_call(db.clone(), move |conn| build_history(conn, task_id)).await?;
+
+    // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
+    // 衝突の排除は`ExternalToolset`が済ませてある。
+    let mut exposed_tools = tools::task_chat_tools();
+    exposed_tools.extend(external.schemas());
 
     let mut all_events = Vec::new();
     // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
@@ -214,17 +299,16 @@ async fn generate_turn_response(
         })
         .await?;
 
-        let mut messages_to_send =
-            Vec::with_capacity(1 + history.len() + round_trip.len());
+        let mut messages_to_send = Vec::with_capacity(1 + history.len() + round_trip.len());
         messages_to_send.push(ChatMessage::System(system_prompt_text));
         messages_to_send.extend(history.iter().cloned());
         messages_to_send.extend(round_trip.iter().cloned());
 
-        let events = match adapter.send(&messages_to_send, &tools::task_chat_tools()).await {
+        let events = match adapter.send(&messages_to_send, &exposed_tools).await {
             Ok(events) => events,
             Err(e) => {
                 let failure = turn_error::classify(&e);
-                return fail_turn(db, task_id, &turn_id, attempt_no, failure).await;
+                return fail_turn(db, task_id, turn_id, attempt_no, failure).await;
             }
         };
 
@@ -252,11 +336,11 @@ async fn generate_turn_response(
 
         if tool_calls.is_empty() {
             if text.is_empty() {
-                return fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::EmptyResponse)
+                return fail_turn(db, task_id, turn_id, attempt_no, TurnFailure::EmptyResponse)
                     .await;
             }
 
-            let turn_id = turn_id.clone();
+            let turn_id = turn_id.to_string();
             db_call(db, move |conn| {
                 messages::insert_message(
                     conn,
@@ -278,43 +362,44 @@ async fn generate_turn_response(
         }
 
         // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。
-        let turn_id_for_db = turn_id.clone();
-        let pending = tool_calls.clone();
-        let executed: Vec<(ToolCallRequest, serde_json::Value)> =
+        let mut executed: Vec<(ToolCallRequest, serde_json::Value)> =
+            Vec::with_capacity(tool_calls.len());
+        for (i, call) in tool_calls.into_iter().enumerate() {
+            let result = execute_call(db.clone(), task_id, mcp, external, sessions, &call).await?;
+
+            // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
+            // 1回だけ紐付ける(発生順に混在させて表示するため。同一ラウンドの
+            // 全呼び出しに複製すると「思考・ツール」折りたたみの件数が水増しされる)。
+            let reasoning_for_row = if i == 0 { reasoning_for_db.clone() } else { None };
+            let content = json!({
+                "tool": call.name.clone(),
+                "arguments": call.arguments.clone(),
+                "result": result.clone(),
+            })
+            .to_string();
+            let turn_id_for_db = turn_id.to_string();
             db_call(db.clone(), move |conn| {
-                let mut out = Vec::with_capacity(pending.len());
-                for (i, call) in pending.into_iter().enumerate() {
-                    let result =
-                        tools::execute_task_chat_tool(conn, task_id, &call.name, &call.arguments)?;
-
-                    // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
-                    // 1回だけ紐付ける(発生順に混在させて表示するため。同一ラウンドの
-                    // 全呼び出しに複製すると「思考・ツール」折りたたみの件数が水増しされる)。
-                    let reasoning_for_row = if i == 0 { reasoning_for_db.as_deref() } else { None };
-
-                    messages::insert_message(
-                        conn,
-                        NewMessage {
-                            task_id: Some(task_id),
-                            role: Role::Assistant,
-                            content: &json!({
-                                "tool": call.name.clone(),
-                                "arguments": call.arguments.clone(),
-                                "result": result.clone(),
-                            })
-                            .to_string(),
-                            kind: Kind::ToolExecution,
-                            source: None,
-                            turn: Some((&turn_id_for_db, attempt_no)),
-                            error_kind: None,
-                            reasoning: reasoning_for_row,
-                        },
-                    )?;
-                    out.push((call, result));
-                }
-                Ok(out)
+                messages::insert_message(
+                    conn,
+                    NewMessage {
+                        task_id: Some(task_id),
+                        role: Role::Assistant,
+                        content: &content,
+                        kind: Kind::ToolExecution,
+                        // 外部サーバーのツールを呼んだ記録もこのターンに属する。
+                        // `source`は逆向き(外部のLLMがMCP経由でSCITLを操作した)専用の
+                        // 印であり、ここでは付けない(data-model.md「ターン境界」の3分類)。
+                        source: None,
+                        turn: Some((&turn_id_for_db, attempt_no)),
+                        error_kind: None,
+                        reasoning: reasoning_for_row.as_deref(),
+                    },
+                )?;
+                Ok(())
             })
             .await?;
+            executed.push((call, result));
+        }
 
         // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
         // OpenAI互換プロトコルの標準的な表現に合わせる(architecture.md 3節)。
@@ -330,7 +415,39 @@ async fn generate_turn_response(
         }
     }
 
-    fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::ToolRoundLimit).await
+    fail_turn(db, task_id, turn_id, attempt_no, TurnFailure::ToolRoundLimit).await
+}
+
+/// ツール1件の実行。名前が外部ツールとして公開したものなら対応するサーバーへ、
+/// そうでなければ内部ツールへ振り分ける(振り分けの判断はここ1箇所)。
+///
+/// 外部ツールの失敗は結果として返し、ターンは続ける。呼び出し先はユーザーが登録した
+/// 別のプロセス・別のホストであり、落ちていることも普通に起こるため、モデルに
+/// 失敗を伝えて続けさせる方が会話として自然になる(内部ツールの失敗の扱いは#58)。
+async fn execute_call(
+    db: SharedConnection,
+    task_id: i64,
+    mcp: &McpAccess<'_>,
+    external: &ExternalToolset,
+    sessions: &mut McpSessions,
+    call: &ToolCallRequest,
+) -> Result<serde_json::Value> {
+    let Some((server_id, tool_name)) = external.route(&call.name) else {
+        let name = call.name.clone();
+        let arguments = call.arguments.clone();
+        return db_call(db, move |conn| {
+            tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
+        })
+        .await;
+    };
+
+    let Some(server) = mcp.servers.iter().find(|s| s.id == server_id) else {
+        return Ok(json!({ "error": format!("MCP server not found: {server_id}") }));
+    };
+    Ok(sessions
+        .call_tool(server, tool_name, &call.arguments)
+        .await
+        .unwrap_or_else(|e| json!({ "error": e.to_string() })))
 }
 
 /// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`

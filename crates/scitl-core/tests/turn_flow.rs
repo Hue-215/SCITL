@@ -6,8 +6,10 @@ use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolSchema};
 use scitl_core::orchestration::{
-    delete_message, edit_user_message, retry_assistant_message, run_turn, SystemPrompts,
+    delete_message, edit_user_message, retry_assistant_message, run_turn, McpAccess, SystemPrompts,
 };
+use scitl_core::config::{McpEndpoint, McpServerConfig};
+use scitl_core::mcp::ToolCatalog;
 use serde_json::json;
 
 fn system_prompt_content(message: &ChatMessage) -> &str {
@@ -331,6 +333,49 @@ fn seed_task(conn: &Connection) -> i64 {
     conn.last_insert_rowid()
 }
 
+/// 外部(MCP)サーバーに繋がらなくても、そのターンは内部ツールだけで進む(Issue #44)。
+/// 登録した1台が落ちているだけでチャットが使えなくなってはならない。
+#[tokio::test]
+async fn run_turn_continues_when_an_mcp_server_cannot_be_reached() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = FakeAdapter {
+        calls: AtomicUsize::new(0),
+    };
+    let db = Arc::new(Mutex::new(conn));
+
+    let servers = vec![McpServerConfig {
+        id: "srv".to_string(),
+        name: "broken".to_string(),
+        enabled: true,
+        endpoint: McpEndpoint::Stdio {
+            // 存在しないコマンド。接続の時点で失敗する。
+            command: "scitl-no-such-mcp-server".to_string(),
+            args: Vec::new(),
+            env_refs: Vec::new(),
+        },
+        enabled_tools: ["anything".to_string()].into_iter().collect(),
+    }];
+    let catalog = ToolCatalog::new();
+
+    let events = run_turn(
+        db.clone(),
+        Some(&adapter),
+        task_id,
+        "タイトルを「買い物」にして".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::new(&servers, &catalog),
+    )
+    .await
+    .unwrap();
+
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, ResponseEvent::TextDelta { text } if text.contains("更新しました"))));
+    // 取得できなかったサーバーはキャッシュにも載せない(次のターンでもう一度試す)。
+    assert!(catalog.get("srv").is_none());
+}
+
 #[tokio::test]
 async fn run_turn_executes_tool_then_persists_final_reply() {
     let conn = db::open_in_memory().unwrap();
@@ -346,6 +391,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
         task_id,
         "タイトルを「買い物」にして".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -396,6 +442,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
         task_id,
         "工程を追加して".to_string(),
         &prompts_config,
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -469,6 +516,7 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
         task_id,
         "工程を追加してタイトルも変えて".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -501,6 +549,7 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
         task_id,
         "こんにちは".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -527,6 +576,7 @@ async fn run_turn_persists_error_message_for_empty_response() {
         task_id,
         "こんにちは".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -550,6 +600,7 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
         task_id,
         "工程を追加して".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -574,6 +625,7 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
         task_id,
         "こんにちは".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -598,6 +650,7 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
         task_id,
         "こんにちは".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -621,6 +674,7 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
         task_id,
         "1回目".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -635,6 +689,7 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
         task_id,
         "2回目".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -664,6 +719,7 @@ async fn edit_user_message_truncates_and_regenerates() {
         task_id,
         "元の質問".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -681,6 +737,7 @@ async fn edit_user_message_truncates_and_regenerates() {
         user_message_id,
         "編集後の質問".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -718,6 +775,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
         task_id,
         "最初の質問".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -731,6 +789,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
         task_id,
         "タイトル決めて".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -752,6 +811,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
         target_id,
         "編集後の質問".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -797,6 +857,7 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         task_id,
         "工程を追加して".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -848,6 +909,7 @@ async fn edit_user_message_rejects_assistant_target() {
         task_id,
         "質問".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -865,6 +927,7 @@ async fn edit_user_message_rejects_assistant_target() {
         assistant_message_id,
         "書き換え".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await;
     assert!(result.is_err());
@@ -884,6 +947,7 @@ async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
         task_id,
         "質問".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -901,6 +965,7 @@ async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
         task_id,
         assistant_message_id,
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -927,6 +992,7 @@ async fn retry_assistant_message_rejects_user_target() {
         task_id,
         "質問".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -943,6 +1009,7 @@ async fn retry_assistant_message_rejects_user_target() {
         task_id,
         user_message_id,
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await;
     assert!(result.is_err());
@@ -961,6 +1028,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
         task_id,
         "1回目".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
@@ -970,6 +1038,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
         task_id,
         "2回目".to_string(),
         &SystemPrompts::default(),
+        &McpAccess::none(),
     )
     .await
     .unwrap();
