@@ -39,6 +39,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(30);
 /// 1回のツール呼び出しの上限。ターン全体の上限を設定可能にするのは Issue #71。
 const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+/// 切断の上限。ここに上限が無いと、graceful shutdownに応じないサーバーが1台あるだけで、
+/// 応答を保存し終えたあとのターンが切断待ちのまま返らなくなる。
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// クライアント側のMCPセッション。ハンドラを持たない(`()`)ため、サーバーからの
 /// サンプリング要求等には応答しない(公開範囲を広げないための既定。principles.md 4節)。
@@ -170,9 +173,11 @@ impl McpSessions {
     }
 
     /// 開いたセッションをすべて閉じる。ターンの終わりに必ず呼ぶ。
+    /// 切断にも上限を設ける(応じないサーバーがあっても待ち続けない)。閉じきれなかった
+    /// 接続は`RunningService`のDropが後始末する(stdioは子プロセスのkillまで含む)。
     pub async fn close(self) {
-        for (_, service) in self.by_server {
-            let _ = service.cancel().await;
+        for (_, mut service) in self.by_server {
+            let _ = service.close_with_timeout(CLOSE_TIMEOUT).await;
         }
     }
 }
