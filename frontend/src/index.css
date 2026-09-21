@@ -547,11 +547,25 @@ option {
 }
 
 /* 本文はメニューを除いた残りの領域の中で中央に置き、広い窓では--content-max-widthで
-   頭打ちにする(行が長くなりすぎると読みにくいため)。左右余白は中身側で持つ。 */
-.settings-panel {
+   頭打ちにする(行が長くなりすぎると読みにくいため)。左右余白と中央寄せは入れ物の
+   直接の子に持たせる(ui.md 3節)。役割クラス(.settings-panel)に持たせると、
+   タブ本文以外の要素(エラー行)が直接の子になったときに余白が抜ける。 */
+.settings-content > * {
   max-width: var(--content-max-width);
   margin-inline: auto;
   padding-inline: var(--space-4);
+}
+
+/* エラー行とタブ本文を1つの列に並べる入れ物。ここをflexにするのは、スクロールする
+   .settings-content自体をflexにすると、margin-inline:autoを持つ子が伸びずに
+   中身の幅まで縮むため。 */
+.settings-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.settings-panel {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);

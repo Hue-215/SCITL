@@ -45,6 +45,13 @@ export default function Settings({ onClose }: SettingsProps) {
     void reload()
   }, [])
 
+  // タブを切り替えたら、前のタブの操作で出たエラーは伏せる(残っていると、
+  // 今見ているタブの内容に対する指摘のように見えるため)。
+  const selectTab = (next: typeof tab) => {
+    setTab(next)
+    setError(null)
+  }
+
   const runOrReportError = async (action: () => Promise<SettingsView>) => {
     try {
       setSettings(await action())
@@ -74,75 +81,79 @@ export default function Settings({ onClose }: SettingsProps) {
           <button
             type="button"
             className={tab === 'general' ? 'settings-tab selected' : 'settings-tab'}
-            onClick={() => setTab('general')}
+            onClick={() => selectTab('general')}
           >
             一般
           </button>
           <button
             type="button"
             className={tab === 'providers' ? 'settings-tab selected' : 'settings-tab'}
-            onClick={() => setTab('providers')}
+            onClick={() => selectTab('providers')}
           >
             APIプロバイダー
           </button>
           <button
             type="button"
             className={tab === 'mcp' ? 'settings-tab selected' : 'settings-tab'}
-            onClick={() => setTab('mcp')}
+            onClick={() => selectTab('mcp')}
           >
             ツール/MCP
           </button>
         </nav>
 
         <div className="settings-content">
-          {error && <p className="error">{error}</p>}
+          <div className="settings-column">
+            {error && <p className="error">{error}</p>}
 
-          {settings === null ? (
-            <p>読み込み中…</p>
-          ) : tab === 'general' ? (
-            <GeneralTab
-              settings={settings}
-              onSave={(systemPrompt, taskChatSystemPrompt, timeout) =>
-                runOrReportError(() =>
-                  updateGeneralSettings({
-                    systemPrompt,
-                    taskChatSystemPrompt,
-                    responseTimeoutSecs: timeout,
-                  }),
-                )
-              }
-            />
-          ) : tab === 'providers' ? (
-            <ProvidersTab
-              settings={settings}
-              onAddProvider={(name, format, baseUrl, apiKey) =>
-                runOrReportError(() => addProvider(name, format, baseUrl, apiKey))
-              }
-              onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
-              onSetActiveProvider={(id) => runOrReportError(() => setActiveProvider(id))}
-              onAddModel={(providerId, model) =>
-                runOrReportError(() => addModel(providerId, model))
-              }
-              onRemoveModel={(providerId, model) =>
-                runOrReportError(() => removeModel(providerId, model))
-              }
-              onSetActiveModel={(providerId, model) =>
-                runOrReportError(() => setActiveModel(providerId, model))
-              }
-            />
-          ) : (
-            <McpTab
-              settings={settings}
-              onAddServer={(name, endpoint) => runOrReportError(() => addMcpServer(name, endpoint))}
-              onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
-              onSetServerEnabled={(id, enabled) =>
-                runOrReportError(() => setMcpServerEnabled(id, enabled))
-              }
-              onSetToolEnabled={(id, toolName, enabled) =>
-                runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
-              }
-            />
-          )}
+            {settings === null ? (
+              <p>読み込み中…</p>
+            ) : tab === 'general' ? (
+              <GeneralTab
+                settings={settings}
+                onSave={(systemPrompt, taskChatSystemPrompt, timeout) =>
+                  runOrReportError(() =>
+                    updateGeneralSettings({
+                      systemPrompt,
+                      taskChatSystemPrompt,
+                      responseTimeoutSecs: timeout,
+                    }),
+                  )
+                }
+              />
+            ) : tab === 'providers' ? (
+              <ProvidersTab
+                settings={settings}
+                onAddProvider={(name, format, baseUrl, apiKey) =>
+                  runOrReportError(() => addProvider(name, format, baseUrl, apiKey))
+                }
+                onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
+                onSetActiveProvider={(id) => runOrReportError(() => setActiveProvider(id))}
+                onAddModel={(providerId, model) =>
+                  runOrReportError(() => addModel(providerId, model))
+                }
+                onRemoveModel={(providerId, model) =>
+                  runOrReportError(() => removeModel(providerId, model))
+                }
+                onSetActiveModel={(providerId, model) =>
+                  runOrReportError(() => setActiveModel(providerId, model))
+                }
+              />
+            ) : (
+              <McpTab
+                settings={settings}
+                onAddServer={(name, endpoint) =>
+                  runOrReportError(() => addMcpServer(name, endpoint))
+                }
+                onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
+                onSetServerEnabled={(id, enabled) =>
+                  runOrReportError(() => setMcpServerEnabled(id, enabled))
+                }
+                onSetToolEnabled={(id, toolName, enabled) =>
+                  runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
+                }
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
