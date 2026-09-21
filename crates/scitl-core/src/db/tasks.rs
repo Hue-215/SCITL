@@ -111,6 +111,13 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
     get_task(conn, task_id)?;
 
     let now = now_iso8601();
+    // サニタイズ後に空文字列になった場合は「タイトルの指定なし」として扱い、既存の値を保つ
+    // (空文字列をtitleに書き込むと`title IS NULL`前提の判定が壊れるため)。
+    let title = update
+        .title
+        .as_deref()
+        .map(sanitize_title)
+        .filter(|t| !t.is_empty());
     let archived_at_clause = update.status.map(|status| match status {
         TaskStatus::Archived => Some(now.clone()),
         TaskStatus::Unarchived => None,
@@ -125,7 +132,7 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
             updated_at = ?6
          WHERE id = ?7",
         rusqlite::params![
-            update.title,
+            title,
             update.description,
             update.deadline,
             archived_at_clause.is_some(),
@@ -136,6 +143,22 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
     )?;
 
     get_task(conn, task_id)
+}
+
+/// タイトル文字列をタイトルとして書き込む前に無害化する(`docs/spec/principles.md` 4節
+/// 「自由入力は地の文に混ぜる前にサニタイズする」)。今後すべてのタイトルがモデルの
+/// `update_task`呼び出し由来になるため、書き込みの唯一の経路である`update_task`に集約する
+/// (docs/spec/principles.md 5節)。制御文字(改行を含む)を空白に畳み込み、前後の空白・
+/// 引用符を除き、連続空白を1つにまとめ、上限文字数で切り詰める。
+const MAX_TITLE_CHARS: usize = 40;
+
+fn sanitize_title(raw: &str) -> String {
+    let collapsed: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let trimmed = collapsed
+        .trim()
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '「' | '」' | '『' | '』'));
+    let squeezed = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    squeezed.chars().take(MAX_TITLE_CHARS).collect()
 }
 
 /// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない
@@ -177,6 +200,61 @@ mod tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn update_task_sanitizes_title_control_chars_quotes_and_truncates() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+
+        let updated = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some("\"買い物リストの作成\n\n\"".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.title.as_deref(), Some("買い物リストの作成"));
+
+        let long = "あ".repeat(MAX_TITLE_CHARS + 10);
+        let updated = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some(long),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.title.unwrap().chars().count(), MAX_TITLE_CHARS);
+    }
+
+    #[test]
+    fn update_task_ignores_title_that_is_blank_after_sanitizing() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some("買い物".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let updated = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some("   \n\"\"   ".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.title.as_deref(), Some("買い物"));
     }
 
     #[test]
