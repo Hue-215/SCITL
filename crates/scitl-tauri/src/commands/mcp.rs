@@ -2,9 +2,9 @@
 //! 外部通信手段の導入を伴うため、CLAUDE.mdの規定によりOpusレビューを経て実装した
 //! (レビュー結果はPRコメント参照)。
 //!
-//! このコマンド群が担うのは「登録・秘密情報の保存・接続してツール一覧を取得」までで、
-//! 実際のターン中のツール呼び出し(`call_tool`)は対象外(`orchestration::turn`はまだ
-//! MCPを一切知らない)。
+//! このコマンド群が担うのは「登録・秘密情報の保存・接続してツール一覧を取得」まで。
+//! 実際のターン中のツール呼び出しは`orchestration::turn`側にあり(Issue #44)、
+//! ここで取得した一覧のキャッシュ(`AppState::mcp_tools`)を共有する。
 
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -131,7 +131,7 @@ pub fn add_mcp_server(
         enabled_tools: Default::default(),
     });
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -148,8 +148,11 @@ pub fn delete_mcp_server(state: State<'_, AppState>, server_id: String) -> Resul
     // 保存済みの秘密情報も同時に削除する(legacy/frontend.md 4節「削除には確認ダイアログを
     // 挟み、保存済みの秘密情報も消える旨を警告する」)。
     delete_secret_refs(endpoint_secret_refs(&removed.endpoint));
+    // 取得済みツール一覧のキャッシュも捨てる(同じIDのサーバーを登録し直したときに、
+    // 前のサーバーの一覧が残っていてはならない。Issue #104)。
+    state.mcp_tools.forget(&removed.id);
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -167,7 +170,7 @@ pub fn set_mcp_server_enabled(
         .ok_or_else(|| format!("MCP server not found: {server_id}"))?;
     server.enabled = enabled;
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
 #[tauri::command]
@@ -190,11 +193,11 @@ pub fn set_mcp_tool_enabled(
         server.enabled_tools.remove(&tool_name);
     }
 
-    persist_and_rebuild(&state.config_path, runtime)
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }
 
-/// サーバーに接続してツール一覧を取得する。config.tomlには書き込まない
-/// (`mcp`クレートのドキュメント参照。ステートレスな都度取得)。
+/// サーバーに接続してツール一覧を取得し、キャッシュへ載せて設定画面の状態ごと返す
+/// (Issue #104)。config.tomlには書き込まない(`scitl_core::mcp`のドキュメント参照)。
 ///
 /// ロックはサーバー設定を複製するまでだけ持ち、接続の`.await`をまたがせない
 /// (`commands::chat::send_task_chat_message`と同じ規律。main.rsの`AppState`ドキュメント参照)。
@@ -204,7 +207,7 @@ pub fn set_mcp_tool_enabled(
 pub async fn fetch_mcp_tools(
     state: State<'_, AppState>,
     server_id: String,
-) -> Result<Vec<mcp::McpToolInfo>, String> {
+) -> Result<SettingsView, String> {
     {
         let mut in_flight = state.mcp_fetch_in_flight.lock().expect("mutex poisoned");
         if !in_flight.insert(server_id.clone()) {
@@ -233,5 +236,12 @@ pub async fn fetch_mcp_tools(
         .expect("mutex poisoned")
         .remove(&server_id);
 
-    result
+    let tools = result?;
+    state.mcp_tools.store(&server_id, tools);
+
+    let runtime = state.runtime.lock().expect("runtime mutex poisoned");
+    Ok(crate::commands::settings::to_view(
+        &runtime.config,
+        &state.mcp_tools,
+    ))
 }

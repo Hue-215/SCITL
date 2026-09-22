@@ -1,4 +1,4 @@
-//! stdio方式のMCPサーバー(子プロセス)への接続とツール一覧取得。
+//! stdio方式のMCPサーバー(子プロセス)への接続。
 //!
 //! stdio方式の登録は、アプリと同じ権限での任意コード実行の許可であることに注意
 //! (Opusレビュー指摘)。信頼境界は「ユーザーが明示的に登録したこと」自体に置く
@@ -25,17 +25,20 @@ use tokio::process::ChildStderr;
 use crate::config::SecretRef;
 use crate::db::error::CoreError;
 
-use super::{resolve_secrets, sanitize_tool_text, McpToolInfo};
+use super::{resolve_secrets, ClientService};
 
 /// 子プロセスの標準エラーから読み取る上限バイト数。エラー表示に使う分だけあればよく、
 /// サーバーが大量に出力してもメモリを食い潰さないようにする。
 const MAX_CAPTURED_STDERR_BYTES: usize = 4096;
 
-pub(super) async fn list_tools(
+/// 子プロセスを起動し、MCPセッションを確立する。確立に失敗した場合は、捕捉した
+/// 標準エラー出力を添えたエラーを返す(接続できない原因はたいていサーバー側の
+/// 起動失敗で、その手掛かりはstderrにしか出ないため)。
+pub(super) async fn connect(
     command: &str,
     args: &[String],
     env_refs: &[SecretRef],
-) -> Result<Vec<McpToolInfo>, CoreError> {
+) -> Result<ClientService, CoreError> {
     let mut cmd = tokio::process::Command::new(command);
     cmd.args(args);
 
@@ -65,10 +68,14 @@ pub(super) async fn list_tools(
     // 子プロセス(`child`)の後始末は`rmcp`側に委ねる: `serve`に渡した後は
     // `service.cancel()`が`Transport::close`経由で`graceful_shutdown`を呼び、
     // `serve`自体が失敗した場合も`TokioChildProcess`のDropがkillする(安全網)。
-    match run(child).await {
-        Ok(tools) => Ok(tools),
-        Err(reason) => {
+    match ().serve(child).await {
+        Ok(service) => {
+            drain_stderr(stderr);
+            Ok(service)
+        }
+        Err(e) => {
             let captured = capture_stderr(stderr).await;
+            let reason = format!("failed to connect: {e}");
             Err(CoreError::Mcp(if captured.is_empty() {
                 reason
             } else {
@@ -78,22 +85,16 @@ pub(super) async fn list_tools(
     }
 }
 
-async fn run(child: TokioChildProcess) -> Result<Vec<McpToolInfo>, String> {
-    let service = ()
-        .serve(child)
-        .await
-        .map_err(|e| format!("failed to connect: {e}"))?;
-    let result = service.list_tools(None).await;
-    let _ = service.cancel().await;
-    let result = result.map_err(|e| format!("failed to list tools: {e}"))?;
-    Ok(result
-        .tools
-        .into_iter()
-        .map(|t| McpToolInfo {
-            name: sanitize_tool_text(&t.name),
-            description: t.description.as_deref().map(sanitize_tool_text),
-        })
-        .collect())
+/// 接続後の標準エラーは読み捨てる。パイプを閉じる(handleをdropする)と、以降サーバーが
+/// stderrへ書いた時点で壊れたパイプになり、読まずに保持し続けるとパイプのバッファが
+/// 埋まった時点でサーバーが止まる。セッションはターンの間だけ生きるため、その間の
+/// 出力を捨て続ける常駐タスクを1本置く(内容は使わない。診断に使うのは接続失敗時のみ)。
+fn drain_stderr(stderr: Option<ChildStderr>) {
+    let Some(mut stderr) = stderr else { return };
+    tokio::spawn(async move {
+        let mut buf = [0u8; 1024];
+        while matches!(stderr.read(&mut buf).await, Ok(n) if n > 0) {}
+    });
 }
 
 async fn capture_stderr(stderr: Option<ChildStderr>) -> String {
@@ -105,7 +106,7 @@ async fn capture_stderr(stderr: Option<ChildStderr>) -> String {
         .take(MAX_CAPTURED_STDERR_BYTES as u64)
         .read_to_end(&mut buf)
         .await;
-    sanitize_tool_text(&String::from_utf8_lossy(&buf))
+    super::sanitize_tool_text(&String::from_utf8_lossy(&buf))
 }
 
 /// stdio子プロセスに引き継ぐ環境変数の許可リスト。OS標準の実行に必要な最小限のみ

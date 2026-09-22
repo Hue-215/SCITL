@@ -1,5 +1,6 @@
 pub mod add_steps;
 pub mod delete_step;
+pub mod external;
 pub mod get_current_task_detail;
 pub mod get_task_list;
 pub mod update_step;
@@ -14,7 +15,8 @@ use crate::llm::ToolSchema;
 
 /// ツール実行結果を毎ターンの入力履歴に残すか否かの分類(docs/spec/rebuild/tools.md 4節)。
 /// 状態系は次ターンの最新状態JSONで完全に代替できるため履歴に残さない。事実系
-/// (検索・外部MCPツール等、Issue #11)は本Issueの範囲外で、値としてはまだ登場しない。
+/// (検索・外部MCPツール等)を次ターン以降の履歴に残す仕組み自体はIssue #11の範囲で、
+/// 外部ツール(Issue #44)の結果も現時点では同一ターン内に閉じる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolKind {
     State,
@@ -65,6 +67,12 @@ pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
         ],
         Surface::General | Surface::Mcp => Vec::new(),
     }
+}
+
+/// タスクチャット面で公開する内部ツールの名前。外部ツールの名前空間化で衝突を
+/// 避けるために使う(`external::ExternalToolset::build`)。
+pub fn task_chat_tool_names() -> Vec<String> {
+    task_chat_tools().into_iter().map(|t| t.name).collect()
 }
 
 /// タスクチャット向けの公開ツール一覧(docs/spec/rebuild/tools.md 2節)。

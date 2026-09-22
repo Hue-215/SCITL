@@ -16,7 +16,13 @@ import {
   updateGeneralSettings,
   type NewMcpEndpoint,
 } from './api'
-import type { ApiFormat, McpServerView, McpToolInfo, ProviderView, SettingsView } from './types'
+import type {
+  ApiFormat,
+  McpServerView,
+  McpToolInfo,
+  ProviderView,
+  SettingsView,
+} from './types'
 import { ConfirmButton } from './Dialog'
 
 interface SettingsProps {
@@ -158,6 +164,11 @@ export default function Settings({ onClose }: SettingsProps) {
                 onSetToolEnabled={(id, toolName, enabled) =>
                   runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
                 }
+                onFetchTools={async (id) => {
+                  // 取得のエラーはカード内に出すため、ここでは握らず呼び出し元へ返す
+                  // (どのサーバーで失敗したかが分かるように。legacy/frontend.md 4節)。
+                  setSettings(await fetchMcpTools(id))
+                }}
               />
             )}
           </div>
@@ -500,6 +511,7 @@ interface McpTabProps {
   onDeleteServer: (serverId: string) => void
   onSetServerEnabled: (serverId: string, enabled: boolean) => void
   onSetToolEnabled: (serverId: string, toolName: string, enabled: boolean) => void
+  onFetchTools: (serverId: string) => Promise<void>
 }
 
 function McpTab({
@@ -508,6 +520,7 @@ function McpTab({
   onDeleteServer,
   onSetServerEnabled,
   onSetToolEnabled,
+  onFetchTools,
 }: McpTabProps) {
   return (
     <div className="settings-panel">
@@ -524,6 +537,7 @@ function McpTab({
             onDelete={() => onDeleteServer(server.id)}
             onSetEnabled={(enabled) => onSetServerEnabled(server.id, enabled)}
             onSetToolEnabled={(toolName, enabled) => onSetToolEnabled(server.id, toolName, enabled)}
+            onFetchTools={() => onFetchTools(server.id)}
           />
         ))}
         {settings.mcp_servers.length === 0 && <li className="list-empty">サーバーが未登録です。</li>}
@@ -539,12 +553,22 @@ interface McpServerCardProps {
   onDelete: () => void
   onSetEnabled: (enabled: boolean) => void
   onSetToolEnabled: (toolName: string, enabled: boolean) => void
+  onFetchTools: () => Promise<void>
 }
 
 const TOOL_COLLAPSE_THRESHOLD = 5
 
-function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: McpServerCardProps) {
-  const [tools, setTools] = useState<McpToolInfo[] | null>(null)
+// 取得済みのツール一覧は`server.tools`(Rust側のキャッシュ)から来る。カード自身では
+// 保持しない——保持すると設定画面を閉じた時点で消え、有効にしたツールを確認することも
+// 外すこともできなくなる(Issue #104)。
+function McpServerCard({
+  server,
+  onDelete,
+  onSetEnabled,
+  onSetToolEnabled,
+  onFetchTools,
+}: McpServerCardProps) {
+  const tools = server.tools
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -553,7 +577,7 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
     setLoading(true)
     setError(null)
     try {
-      setTools(await fetchMcpTools(server.id))
+      await onFetchTools()
     } catch (e) {
       setError(String(e))
     } finally {
@@ -569,8 +593,15 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
     server.endpoint.transport === 'stdio' ? server.endpoint.env_names : server.endpoint.header_names
   const secretLabel = server.endpoint.transport === 'stdio' ? '環境変数' : 'ヘッダー'
 
-  const collapsible = tools !== null && tools.length >= TOOL_COLLAPSE_THRESHOLD
-  const visibleTools = collapsible && !expanded ? [] : (tools ?? [])
+  // 一覧が未取得でも、ユーザーが有効にしたツールの名前はconfig.tomlから分かる。
+  // それを描かないと、アプリを再起動した直後は有効化済みのツールを確認することも
+  // 外すこともできない(キャッシュはアプリ起動中のみ。Issue #104)。説明文はサーバーに
+  // 聞かないと分からないので、取得するまで出ない。
+  const fetched = tools !== null
+  const displayTools: McpToolInfo[] =
+    tools ?? server.enabled_tools.map((name) => ({ name, description: null }))
+  const collapsible = displayTools.length >= TOOL_COLLAPSE_THRESHOLD
+  const visibleTools = collapsible && !expanded ? [] : displayTools
 
   return (
     <li className="provider-card">
@@ -598,15 +629,20 @@ function McpServerCard({ server, onDelete, onSetEnabled, onSetToolEnabled }: Mcp
         </p>
       )}
 
-      {tools === null ? (
-        <p className="list-empty">ツール一覧は未取得です。</p>
-      ) : tools.length === 0 ? (
-        <p className="list-empty">ツールがありません。</p>
+      {displayTools.length === 0 ? (
+        <p className="list-empty">
+          {fetched ? 'ツールがありません。' : 'ツール一覧は未取得です。'}
+        </p>
       ) : (
         <>
+          {!fetched && (
+            <p className="list-empty">
+              ツール一覧は未取得です。有効化済みのツールのみ表示しています。
+            </p>
+          )}
           {collapsible && (
             <button type="button" onClick={() => setExpanded((v) => !v)}>
-              {expanded ? '折りたたむ' : `${tools.length}件のツールを表示`}
+              {expanded ? '折りたたむ' : `${displayTools.length}件のツールを表示`}
             </button>
           )}
           <ul className="model-list">

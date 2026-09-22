@@ -1,7 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
-  McpToolInfo,
   Message,
   ResponseEvent,
   SettingsView,
@@ -123,6 +122,8 @@ export function setMcpToolEnabled(
   return invoke('set_mcp_tool_enabled', { serverId, toolName, enabled })
 }
 
-export function fetchMcpTools(serverId: string): Promise<McpToolInfo[]> {
+// 取得した一覧はRust側のキャッシュに載り、設定画面の状態ごと返ってくる(Issue #104)。
+// フロントエンド側で一覧を保持しない(画面移動で消えるのを防ぐ)。
+export function fetchMcpTools(serverId: string): Promise<SettingsView> {
   return invoke('fetch_mcp_tools', { serverId })
 }

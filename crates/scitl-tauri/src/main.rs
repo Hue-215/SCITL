@@ -39,6 +39,11 @@ pub struct AppState {
     pub db: SharedConnection,
     pub config_path: PathBuf,
     pub runtime: Mutex<Runtime>,
+    /// 取得済みのMCPツール一覧(Issue #104)。アプリ起動中だけ保持するメモリキャッシュで、
+    /// config.tomlには書かない(ツール名・説明はユーザーの設定ではなくサーバー側の持ち物で、
+    /// 永続化した写しはサーバー側の更新を検知できない)。設定画面の表示と、ターン開始時の
+    /// ツール公開(`orchestration::McpAccess`)が同じここを読む。
+    pub mcp_tools: Arc<scitl_core::mcp::ToolCatalog>,
     /// `fetch_mcp_tools`の同時実行を1サーバーにつき1本に絞るためのガード
     /// (`commands::mcp`)。ボタンの無効化(連打防止)はフロントエンド側の責務だが、
     /// それだけでは保証にならないため、Rust側にも同時実行を防ぐ手段を持つ
@@ -62,6 +67,7 @@ fn main() {
                 db: Arc::new(Mutex::new(conn)),
                 config_path,
                 runtime: Mutex::new(Runtime { config, adapter }),
+                mcp_tools: Arc::new(scitl_core::mcp::ToolCatalog::new()),
                 mcp_fetch_in_flight: Mutex::new(HashSet::new()),
             });
             Ok(())
