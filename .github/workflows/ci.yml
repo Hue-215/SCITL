@@ -1,0 +1,112 @@
+# PRチェック(Issue #122)。
+#
+# 狙いは「行の衝突を起こさない食い違い」を止めること。#115 は、並行する2つのPRが
+# それぞれ自分の側では整合していたためマージまで誰も気付けず、`develop` がコンパイル
+# できない状態になった。人の目では構造的に検出できないので、機械で毎回コンパイルする。
+name: CI
+
+on:
+  # PRはベースを問わず全部見る(feature/* → develop も release/* → main も同じ土俵)。
+  pull_request:
+  # PRチェックはその時点のベースとの合流結果を見るが、ベースが後から進んでも
+  # 自動では回り直さない。#115 はまさにその隙間で起きたので、合流後のブランチ
+  # そのものでも回して、壊れたことに気付ける状態を作る。合流を受ける側の
+  # ブランチ(Git Flowで他から取り込む4種)をすべて挙げる。
+  push:
+    branches:
+      - develop
+      - main
+      - 'release/**'
+      - 'hotfix/**'
+
+# 同じブランチに続けてpushしたときは古い実行を捨てる(privateリポジトリのため
+# 実行時間そのものが有限の資源)。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    # `ubuntu-latest` は実体が黙って上がる。webkit2gtkのパッケージ名は
+    # Ubuntuのバージョンで変わった実績があるため、明示的に固定する。
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # scitl-tauri のビルドには webkit2gtk 等のシステム依存が要る。
+      # scitl-core だけに絞れば不要だが、それでは scitl-core と scitl-tauri の
+      # 境目で起きる食い違い(#115 と同種)が素通りする。ここが一番の検出対象なので
+      # ワークスペース全体をコンパイルする。
+      #
+      # なおデバッグビルドは devUrl を読むため `frontend/dist` を必要としない。
+      # フロントのビルド成果物をこのジョブに持ち込む必要はない。
+      - name: システム依存を入れる(Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev
+
+      # ツールチェーンはランナーの既定(ピン留めしていない)ため、時間とともに上がる。
+      # rustcが変わると`target`の成果物は使えなくなるが、キーが同じだと
+      # 古いキャッシュを復元しては全部作り直すだけの状態で固定されてしまうので、
+      # バージョンをキーに混ぜる。
+      - name: ツールチェーンのバージョン
+        id: rust
+        run: echo "version=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: cargoのキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ steps.rust.outputs.version }}-
+
+      # 速い順に並べる。書式・lintで落ちるならテストの完走を待たせない。
+      # `--locked`: Cargo.lock を更新しないと通らない変更が、lockの更新漏れのまま
+      # 入るのを止める。
+      - name: 書式
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: テスト
+        run: cargo test --workspace --locked
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 依存を入れる
+        run: npm ci
+
+      # コマンドの実体は package.json に置き、手元とCIで同じものを走らせる。
+      - name: 型チェック
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
