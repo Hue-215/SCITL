@@ -56,13 +56,32 @@ pub struct TaskSummary {
     pub steps_total: i64,
 }
 
+/// サイドバーの1行。`TaskSummary`に、表示側だけで使うフォールバックを添える。
+/// `title`は未設定(null)のまま返し、書き換えない
+/// (docs/spec/rebuild/data-model.md「title は TEXT NULL」)。
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskListItem {
+    #[serde(flatten)]
+    pub summary: TaskSummary,
+    /// `title`が未設定のときに代わりに表示する、最初のユーザー発言の切り詰め。
+    /// ユーザー発言がまだ無ければ`None`(その場合の表示は画面側が決める)。
+    pub fallback_label: Option<String>,
+}
+
 /// 削除済み(deleted_at)を除く全タスクを作成日時昇順で返す。アーカイブ済みと未アーカイブの
 /// 振り分けはフロントエンド側(archived_atの有無)で行う。
-pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskSummary>> {
+pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.title, t.deadline, t.archived_at,
                 COUNT(s.id) FILTER (WHERE s.done_at IS NOT NULL) AS steps_done,
-                COUNT(s.id) AS steps_total
+                COUNT(s.id) AS steps_total,
+                (SELECT m.content FROM messages m
+                  WHERE m.task_id = t.id
+                    AND m.role = 'user'
+                    AND m.kind = 'normal'
+                    AND m.deleted_at IS NULL
+                  ORDER BY m.created_at ASC, m.id ASC
+                  LIMIT 1) AS first_user_message
          FROM tasks t
          LEFT JOIN task_steps s ON s.task_id = t.id AND s.deleted_at IS NULL
          WHERE t.deleted_at IS NULL
@@ -71,13 +90,17 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskSummary>> {
     )?;
     let rows = stmt
         .query_map([], |row| {
-            Ok(TaskSummary {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                deadline: row.get(2)?,
-                archived_at: row.get(3)?,
-                steps_done: row.get(4)?,
-                steps_total: row.get(5)?,
+            let first_user_message: Option<String> = row.get(6)?;
+            Ok(TaskListItem {
+                summary: TaskSummary {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    deadline: row.get(2)?,
+                    archived_at: row.get(3)?,
+                    steps_done: row.get(4)?,
+                    steps_total: row.get(5)?,
+                },
+                fallback_label: first_user_message.as_deref().and_then(fallback_label),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -153,12 +176,37 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
 const MAX_TITLE_CHARS: usize = 40;
 
 fn sanitize_title(raw: &str) -> String {
-    let collapsed: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let trimmed = collapsed
-        .trim()
-        .trim_matches(|c: char| matches!(c, '"' | '\'' | '「' | '」' | '『' | '』'));
-    let squeezed = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
-    squeezed.chars().take(MAX_TITLE_CHARS).collect()
+    let squeezed = collapse_whitespace(raw);
+    let trimmed =
+        squeezed.trim_matches(|c: char| matches!(c, '"' | '\'' | '「' | '」' | '『' | '』'));
+    // 引用符を剥がした内側にも空白が残りうるため、もう一度畳んでから切り詰める。
+    collapse_whitespace(trimmed).chars().take(MAX_TITLE_CHARS).collect()
+}
+
+/// 制御文字(改行を含む)を空白に畳み、連続空白を1つにまとめ、前後の空白を落とす。
+fn collapse_whitespace(raw: &str) -> String {
+    let replaced: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    replaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// サイドバーでタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を
+/// 付け、続きがあることを示す。
+const MAX_FALLBACK_LABEL_CHARS: usize = 30;
+
+/// 最初のユーザー発言から、一覧に出せる1行を作る。DBには書き戻さない表示専用の処理
+/// (Issue #61)。空白しか無い発言では`None`を返す。
+fn fallback_label(first_user_message: &str) -> Option<String> {
+    let squeezed = collapse_whitespace(first_user_message);
+    if squeezed.is_empty() {
+        return None;
+    }
+    let mut chars = squeezed.chars();
+    let head: String = chars.by_ref().take(MAX_FALLBACK_LABEL_CHARS).collect();
+    Some(if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    })
 }
 
 /// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない
@@ -380,8 +428,8 @@ mod tests {
 
         let summaries = list_tasks(&conn).unwrap();
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].steps_done, 1);
-        assert_eq!(summaries[0].steps_total, 2);
+        assert_eq!(summaries[0].summary.steps_done, 1);
+        assert_eq!(summaries[0].summary.steps_total, 2);
     }
 
     #[test]
@@ -395,6 +443,76 @@ mod tests {
         .unwrap();
 
         assert!(list_tasks(&conn).unwrap().is_empty());
+    }
+
+    fn seed_user_message(conn: &Connection, task_id: i64, content: &str) {
+        conn.execute(
+            "INSERT INTO messages (task_id, role, content, kind, created_at)
+             VALUES (?1, 'user', ?2, 'normal', ?3)",
+            rusqlite::params![task_id, content, now_iso8601()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_tasks_falls_back_to_first_user_message_without_writing_title() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, "  来週の  発表資料を\n作りたい  ");
+        seed_user_message(&conn, id, "あとで締切も決める");
+
+        let items = list_tasks(&conn).unwrap();
+        assert_eq!(
+            items[0].fallback_label.as_deref(),
+            Some("来週の 発表資料を 作りたい")
+        );
+        // 表示側だけの処理であり、`title`は未設定のまま(data-model.md)。
+        assert!(items[0].summary.title.is_none());
+        assert!(get_task(&conn, id).unwrap().title.is_none());
+    }
+
+    #[test]
+    fn list_tasks_truncates_long_fallback_label_with_ellipsis() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, &"あ".repeat(MAX_FALLBACK_LABEL_CHARS + 5));
+
+        let label = list_tasks(&conn).unwrap()[0].fallback_label.clone().unwrap();
+        assert_eq!(label.chars().count(), MAX_FALLBACK_LABEL_CHARS + 1);
+        assert!(label.ends_with('…'));
+    }
+
+    #[test]
+    fn list_tasks_has_no_fallback_label_without_user_message() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        conn.execute(
+            "INSERT INTO messages (task_id, role, content, kind, created_at)
+             VALUES (?1, 'assistant', 'どんなタスクですか?', 'normal', ?2)",
+            rusqlite::params![id, now_iso8601()],
+        )
+        .unwrap();
+        seed_user_message(&conn, id, "   ");
+
+        assert!(list_tasks(&conn).unwrap()[0].fallback_label.is_none());
+    }
+
+    #[test]
+    fn list_tasks_skips_deleted_first_user_message() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, "書き間違えた発言");
+        conn.execute(
+            "UPDATE messages SET deleted_at = ?1 WHERE task_id = ?2",
+            rusqlite::params![now_iso8601(), id],
+        )
+        .unwrap();
+        seed_user_message(&conn, id, "書き直した発言");
+
+        assert_eq!(
+            list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
+            Some("書き直した発言")
+        );
     }
 
     #[test]

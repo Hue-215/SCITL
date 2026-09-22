@@ -175,6 +175,8 @@ export default function App() {
     try {
       await deleteTaskChatMessage(taskId, messageId)
       await loadTask(taskId)
+      // 最初のユーザー発言を消すとサイドバーのフォールバック表示が変わる(Issue #61)。
+      await loadTasks()
     } catch (e) {
       setError(String(e))
     }

@@ -12,6 +12,7 @@ export interface Task {
   updated_at: string
 }
 
+// crates/scitl-core/src/db/tasks.rs の TaskListItem(TaskSummaryをフラット化したもの)。
 export interface TaskSummary {
   id: number
   title: string | null
@@ -19,6 +20,9 @@ export interface TaskSummary {
   archived_at: string | null
   steps_done: number
   steps_total: number
+  // titleが未設定のときに一覧で代わりに出す、最初のユーザー発言の切り詰め(Issue #61)。
+  // 表示専用で、tasks.titleには書き込まれない。発言がまだ無ければnull。
+  fallback_label: string | null
 }
 
 export type ResponseEvent =

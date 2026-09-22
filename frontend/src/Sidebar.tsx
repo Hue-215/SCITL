@@ -14,7 +14,10 @@ function taskLabel(task: TaskSummary): string {
   const progress =
     task.steps_total > 0 ? `${task.steps_done}/${task.steps_total}完了` : '工程なし'
   const deadline = task.deadline ?? '締切未設定'
-  return `${task.title ?? '(無題)'} · ${deadline} · ${progress}`
+  // タイトルはモデルの update_task 頼みなので、付くまでは最初のユーザー発言で代用する
+  // (Issue #61。フォールバックの中身はRust側が作る)。
+  const name = task.title ?? task.fallback_label ?? '(無題)'
+  return `${name} · ${deadline} · ${progress}`
 }
 
 // サイドバー: 総合チャット行(固定・現時点では無効)・タスク一覧・アーカイブ折りたたみ・
