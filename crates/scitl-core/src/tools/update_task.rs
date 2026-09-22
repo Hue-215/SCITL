@@ -20,7 +20,13 @@ pub fn schema() -> ToolSchema {
             "properties": {
                 "title": { "type": "string" },
                 "description": { "type": "string" },
-                "deadline": { "type": "string", "format": "date" },
+                "deadline": {
+                    "type": "string",
+                    "format": "date",
+                    // 形式を満たさない値は`db::tasks::update_task`が弾く。スキーマ側にも
+                    // 明示しておき、モデルが日時形式を渡して往復を1回無駄にするのを減らす。
+                    "description": "締切日(YYYY-MM-DD)"
+                },
                 "status": { "type": "string", "enum": ["archived", "unarchived"] }
             },
             "additionalProperties": false

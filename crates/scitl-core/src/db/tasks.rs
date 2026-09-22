@@ -133,6 +133,10 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
     // 存在確認(未削除)を先に行い、TaskNotFoundを一貫して返す。
     get_task(conn, task_id)?;
 
+    if let Some(deadline) = update.deadline.as_deref() {
+        validate_deadline(deadline)?;
+    }
+
     let now = now_iso8601();
     // サニタイズ後に空文字列になった場合は「タイトルの指定なし」として扱い、既存の値を保つ
     // (空文字列をtitleに書き込むと`title IS NULL`前提の判定が壊れるため)。
@@ -187,6 +191,48 @@ fn sanitize_title(raw: &str) -> String {
 fn collapse_whitespace(raw: &str) -> String {
     let replaced: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     replaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `deadline`として書き込める形(`YYYY-MM-DD`)かを検証する。タイトルと違い、外れた値を
+/// 丸めずエラーとして返す(`docs/spec/principles.md` 3節「暗黙の型変換をしない」)。
+/// 日時形式や自然文を受け付けると、辞書順=時系列順という前提と、タイムゾーンで締切が
+/// 前後しない性質が壊れる(`docs/spec/rebuild/data-model.md` 1節)。
+fn validate_deadline(raw: &str) -> Result<()> {
+    let invalid = || CoreError::InvalidArgument {
+        name: "deadline".to_string(),
+        reason: "expected a date in YYYY-MM-DD format".to_string(),
+    };
+
+    let bytes = raw.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return Err(invalid());
+    }
+    if bytes
+        .iter()
+        .enumerate()
+        .any(|(i, b)| i != 4 && i != 7 && !b.is_ascii_digit())
+    {
+        return Err(invalid());
+    }
+
+    let year: i32 = raw[0..4].parse().map_err(|_| invalid())?;
+    let month: u32 = raw[5..7].parse().map_err(|_| invalid())?;
+    let day: u32 = raw[8..10].parse().map_err(|_| invalid())?;
+    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// グレゴリオ暦の閏年規則。`db::now_iso8601`が使う日付計算とは向きが逆(あちらは
+/// 通算日から日付を作る)ため、共有せずここに置く。
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
 }
 
 /// サイドバーでタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を
@@ -331,6 +377,88 @@ mod tests {
         )
         .unwrap();
         assert_eq!(updated.title.as_deref(), Some("買い物"));
+    }
+
+    #[test]
+    fn update_task_rejects_deadline_that_is_not_a_plain_date() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+
+        // 日時形式・自然文・区切りや桁の違い・空文字は、丸めずエラーにする。
+        for bad in [
+            "2026-10-01T00:00:00Z",
+            "来週の金曜",
+            "2026/10/01",
+            "2026-1-1",
+            "",
+            "２０２６-10-01",
+        ] {
+            let err = update_task(
+                &conn,
+                id,
+                TaskUpdate {
+                    deadline: Some(bad.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&err, CoreError::InvalidArgument { name, .. } if name == "deadline"),
+                "expected InvalidArgument for {bad:?}, got {err:?}"
+            );
+        }
+
+        // 弾いた値は書き込まれない。
+        assert!(get_task(&conn, id).unwrap().deadline.is_none());
+    }
+
+    #[test]
+    fn update_task_rejects_dates_that_do_not_exist() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+
+        for bad in [
+            "2026-02-30",
+            "2027-02-29",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-01-00",
+            "2026-04-31",
+        ] {
+            let err = update_task(
+                &conn,
+                id,
+                TaskUpdate {
+                    deadline: Some(bad.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            // 種別まで見るのは、将来ここがDB層の別のエラーにすり替わっても気付くため。
+            assert!(
+                matches!(&err, CoreError::InvalidArgument { name, .. } if name == "deadline"),
+                "expected InvalidArgument for {bad:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn update_task_accepts_plain_dates_including_leap_day() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+
+        for good in ["2026-10-01", "2028-02-29", "2000-02-29", "2026-12-31"] {
+            let updated = update_task(
+                &conn,
+                id,
+                TaskUpdate {
+                    deadline: Some(good.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(updated.deadline.as_deref(), Some(good));
+        }
     }
 
     #[test]

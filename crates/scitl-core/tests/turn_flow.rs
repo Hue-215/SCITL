@@ -574,6 +574,7 @@ async fn history_carries_send_time_beside_the_user_text() {
             text.to_string(),
             &SystemPrompts::default(),
             &McpAccess::none(),
+            ToolLimits::default(),
         )
         .await
         .unwrap();
