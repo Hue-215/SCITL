@@ -38,6 +38,17 @@ pub fn build_system_prompt(
         sections.push(prompt.to_string());
     }
 
+    // ユーザー発言を包む予約タグの読み方(Issue #68)。囲みと`sent_at`の意味を伝えないと、
+    // モデルはタグを本文の一部と受け取り、応答にそのまま書き写す。
+    sections.push(
+        "user messages are wrapped as \
+         <scitl:user-message sent_at=\"...\">body</scitl:user-message>. \
+         sent_at is when the user sent that message (ISO8601 UTC); it is metadata, \
+         not part of what the user wrote. Use it to resolve relative dates such as \
+         \"tomorrow\". Never write these tags or timestamps in your own reply."
+            .to_string(),
+    );
+
     sections.push(format!("current datetime (ISO8601 UTC): {}", now_iso8601()));
 
     let state = json!({ "task": task, "steps": steps });

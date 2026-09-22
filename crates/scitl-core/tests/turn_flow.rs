@@ -550,6 +550,69 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     );
 }
 
+/// 送信日時はユーザー発言の`sent_at`として本文と分けて運ぶ(Issue #68)。
+/// 本文には混ぜず、アシスタント発言には付けない。
+#[tokio::test]
+async fn history_carries_send_time_beside_the_user_text() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = RecordingAdapter {
+        calls: AtomicUsize::new(0),
+        sent_messages: Mutex::new(Vec::new()),
+    };
+    let db = Arc::new(Mutex::new(conn));
+
+    for text in ["工程を追加して", "ありがとう"] {
+        run_turn(
+            db.clone(),
+            Some(&adapter),
+            task_id,
+            text.to_string(),
+            &SystemPrompts::default(),
+            &McpAccess::none(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let stored_user_times: Vec<String> = {
+        let conn = db.lock().unwrap();
+        db::messages::list_for_task(&conn, task_id)
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.role == "user")
+            .map(|m| m.created_at)
+            .collect()
+    };
+    assert_eq!(stored_user_times.len(), 2);
+
+    // 2ターン目の履歴: user(1ターン目) / assistant / user(2ターン目)。
+    let rounds = adapter.sent_messages.into_inner().unwrap();
+    let last = rounds.last().unwrap();
+    let history = &last[1..];
+    match &history[0] {
+        ChatMessage::User { text, sent_at } => {
+            assert_eq!(text, "工程を追加して");
+            assert_eq!(sent_at.as_deref(), Some(stored_user_times[0].as_str()));
+        }
+        other => panic!("expected User, got {other:?}"),
+    }
+    match &history[1] {
+        // アシスタント発言に日時は付けない(モデルが形を真似て応答に書き出すのを避ける)。
+        ChatMessage::Assistant { content, .. } => {
+            assert_eq!(content.as_deref(), Some("工程を追加しました"));
+        }
+        other => panic!("expected Assistant, got {other:?}"),
+    }
+    match &history[2] {
+        ChatMessage::User { text, sent_at } => {
+            assert_eq!(text, "ありがとう");
+            assert_eq!(sent_at.as_deref(), Some(stored_user_times[1].as_str()));
+        }
+        other => panic!("expected User, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn run_turn_executes_every_tool_call_in_a_single_response() {
     let conn = db::open_in_memory().unwrap();
@@ -800,7 +863,8 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
     let rounds = adapter.sent_messages.into_inner().unwrap();
     let first_round = &rounds[0];
     let has_error_content = first_round.iter().any(|m| match m {
-        ChatMessage::User(content) | ChatMessage::Assistant { content: Some(content), .. } => {
+        ChatMessage::User { text: content, .. }
+        | ChatMessage::Assistant { content: Some(content), .. } => {
             content.contains("APIキーが正しくない")
         }
         _ => false,
@@ -987,7 +1051,8 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
     for round in &rounds {
         for message in round {
             match message {
-                ChatMessage::User(content) | ChatMessage::Assistant { content: Some(content), .. } => {
+                ChatMessage::User { text: content, .. }
+        | ChatMessage::Assistant { content: Some(content), .. } => {
                     assert!(!content.contains("考える"));
                 }
                 ChatMessage::Tool { content, .. } => {

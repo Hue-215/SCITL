@@ -502,7 +502,11 @@ where
     .map_err(|e| CoreError::Llm(format!("db task panicked: {e}")))?
 }
 
-/// API送信用の履歴。エラー発言(`role='error'`)は除外する
+/// API送信用の履歴。送信日時は`ChatMessage::User`の`sent_at`として本文と分けて運ぶ
+/// (Issue #68。組み立ては`llm::render_user_content`)。アシスタント発言に日時を付けないのは、
+/// モデルが自分の過去の発言の形を真似て、応答の地の文に日時やタグを書き出すのを避けるため。
+///
+/// エラー発言(`role='error'`)は除外する
 /// (`legacy/backend.md` 4節手順2「エラー発言・ツール実行記録はこのAPI送信用の履歴からは
 /// 除外する」)。表示・エクスポートには`list_for_task`経由で引き続き残る。
 fn build_history(conn: &Connection, task_id: i64) -> Result<Vec<ChatMessage>> {
@@ -512,7 +516,10 @@ fn build_history(conn: &Connection, task_id: i64) -> Result<Vec<ChatMessage>> {
         .filter(|m| m.kind == "normal" && m.role != "error")
         .map(|m| {
             if m.role == "user" {
-                ChatMessage::User(m.content)
+                ChatMessage::User {
+                    text: m.content,
+                    sent_at: Some(m.created_at),
+                }
             } else {
                 ChatMessage::Assistant {
                     content: Some(m.content),
