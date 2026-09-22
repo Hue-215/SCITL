@@ -16,7 +16,13 @@ import {
   updateGeneralSettings,
   type NewMcpEndpoint,
 } from './api'
-import type { ApiFormat, McpServerView, ProviderView, SettingsView } from './types'
+import type {
+  ApiFormat,
+  McpServerView,
+  McpToolInfo,
+  ProviderView,
+  SettingsView,
+} from './types'
 import { ConfirmButton } from './Dialog'
 
 interface SettingsProps {
@@ -587,8 +593,15 @@ function McpServerCard({
     server.endpoint.transport === 'stdio' ? server.endpoint.env_names : server.endpoint.header_names
   const secretLabel = server.endpoint.transport === 'stdio' ? '環境変数' : 'ヘッダー'
 
-  const collapsible = tools !== null && tools.length >= TOOL_COLLAPSE_THRESHOLD
-  const visibleTools = collapsible && !expanded ? [] : (tools ?? [])
+  // 一覧が未取得でも、ユーザーが有効にしたツールの名前はconfig.tomlから分かる。
+  // それを描かないと、アプリを再起動した直後は有効化済みのツールを確認することも
+  // 外すこともできない(キャッシュはアプリ起動中のみ。Issue #104)。説明文はサーバーに
+  // 聞かないと分からないので、取得するまで出ない。
+  const fetched = tools !== null
+  const displayTools: McpToolInfo[] =
+    tools ?? server.enabled_tools.map((name) => ({ name, description: null }))
+  const collapsible = displayTools.length >= TOOL_COLLAPSE_THRESHOLD
+  const visibleTools = collapsible && !expanded ? [] : displayTools
 
   return (
     <li className="provider-card">
@@ -616,15 +629,20 @@ function McpServerCard({
         </p>
       )}
 
-      {tools === null ? (
-        <p className="list-empty">ツール一覧は未取得です。</p>
-      ) : tools.length === 0 ? (
-        <p className="list-empty">ツールがありません。</p>
+      {displayTools.length === 0 ? (
+        <p className="list-empty">
+          {fetched ? 'ツールがありません。' : 'ツール一覧は未取得です。'}
+        </p>
       ) : (
         <>
+          {!fetched && (
+            <p className="list-empty">
+              ツール一覧は未取得です。有効化済みのツールのみ表示しています。
+            </p>
+          )}
           {collapsible && (
             <button type="button" onClick={() => setExpanded((v) => !v)}>
-              {expanded ? '折りたたむ' : `${tools.length}件のツールを表示`}
+              {expanded ? '折りたたむ' : `${displayTools.length}件のツールを表示`}
             </button>
           )}
           <ul className="model-list">
