@@ -39,15 +39,9 @@ pub fn build_system_prompt(
     }
 
     // ユーザー発言を包む予約タグの読み方(Issue #68)。囲みと`sent_at`の意味を伝えないと、
-    // モデルはタグを本文の一部と受け取り、応答にそのまま書き写す。
-    sections.push(
-        "user messages are wrapped as \
-         <scitl:user-message sent_at=\"...\">body</scitl:user-message>. \
-         sent_at is when the user sent that message (ISO8601 UTC); it is metadata, \
-         not part of what the user wrote. Use it to resolve relative dates such as \
-         \"tomorrow\". Never write these tags or timestamps in your own reply."
-            .to_string(),
-    );
+    // モデルはタグを本文の一部と受け取り、応答にそのまま書き写す。文面は組み立て側
+    // (`llm::render_user_content`)から生成する。
+    sections.push(crate::llm::user_message_format_note());
 
     sections.push(format!("current datetime (ISO8601 UTC): {}", now_iso8601()));
 

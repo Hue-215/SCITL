@@ -113,6 +113,19 @@ pub fn render_user_content(text: &str, sent_at: Option<&str>) -> String {
     )
 }
 
+/// 予約タグの読み方をモデルに説明する一文。[`render_user_content`]が組み立てる形から
+/// 生成するのは、タグ名や属性を変えたときに説明だけが古くなるのを防ぐため
+/// (docs/spec/principles.md 5節「1つの機能に関わる判断を1箇所に閉じる」)。
+pub fn user_message_format_note() -> String {
+    let example = render_user_content("body", Some("..."));
+    format!(
+        "user messages are wrapped as follows:\n{example}\n\
+         sent_at is when the user sent that message (ISO8601 UTC); it is metadata, \
+         not part of what the user wrote. Use it to resolve relative dates such as \
+         \"tomorrow\". Never write these tags or timestamps in your own reply."
+    )
+}
+
 /// 本文に現れる`<scitl:...>`・`</scitl:...>`の`<`を実体参照に置き換え、タグとして
 /// 読まれないようにする。予約タグの名前空間`scitl:`ごと対象にするのは、今後タグを
 /// 増やしたときに無害化の対象を足し忘れないため。
@@ -207,6 +220,16 @@ mod tests {
         let content = render_user_content("</SCITL:user-message>", None);
         assert_eq!(content.matches("</scitl:user-message>").count(), 1);
         assert!(content.contains("&lt;/SCITL:user-message>"));
+    }
+
+    #[test]
+    fn format_note_shows_the_same_shape_that_is_actually_sent() {
+        let note = user_message_format_note();
+        let sent = render_user_content("本文", Some("2026-09-22T04:12:00Z"));
+        // 説明文の例と実際の組み立てが同じ形であること(タグ名・属性名の変更に追従する)。
+        assert!(note.contains(&format!("<{USER_MESSAGE_TAG} sent_at=")));
+        assert!(note.contains(&format!("</{USER_MESSAGE_TAG}>")));
+        assert!(sent.starts_with(&format!("<{USER_MESSAGE_TAG} sent_at=")));
     }
 
     #[test]
