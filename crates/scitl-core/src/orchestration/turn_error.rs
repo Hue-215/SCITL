@@ -15,6 +15,8 @@ pub enum TurnFailure {
     /// `config.rs`に上限の項目自体が無いため、#40時点では常に`false`。
     ContextExceeded { limit_configured: bool },
     ToolRoundLimit,
+    /// 1ターン内のツール実行に使える合計時間を使い切った(Issue #71)。
+    ToolTimeout,
     /// APIキー未設定・不正のどちらも実際の呼び出しがHTTP 401/403を返してここに落ちる
     /// (`Readiness`のドキュメント参照。事前チェックでは「未設定」と「認証不要」を
     /// 区別できないため、実際に呼んで判定する設計)。
@@ -39,6 +41,7 @@ impl TurnFailure {
             TurnFailure::EmptyResponse => "empty_response",
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
+            TurnFailure::ToolTimeout => "tool_timeout",
             TurnFailure::Auth => "auth",
             TurnFailure::RateLimit => "rate_limit",
             TurnFailure::ProviderConfig => "provider_config",
@@ -68,7 +71,14 @@ impl TurnFailure {
                 }
             }
             TurnFailure::ToolRoundLimit => {
-                "ツールの呼び出しが上限回数に達したため、応答の生成を打ち切りました。".to_string()
+                "ツールの呼び出しが上限回数に達したため、応答の生成を打ち切りました。\
+                 設定画面「ツール/MCP」で上限を変更できます。"
+                    .to_string()
+            }
+            TurnFailure::ToolTimeout => {
+                "ツールの実行時間が上限に達したため、応答の生成を打ち切りました。\
+                 設定画面「ツール/MCP」で上限を変更できます。"
+                    .to_string()
             }
             TurnFailure::Auth => {
                 "APIキーが未設定か正しくないか、権限がありません。設定画面でAPIキーを\
@@ -234,6 +244,19 @@ mod tests {
             }
         );
         assert!(!failure.user_message().contains("42"));
+    }
+
+    /// 上限に達したときの2種類は、どちらも「設定で変えられる」と伝える(Issue #71。
+    /// 変える手段が無いという元の不満がここに出るため)。
+    #[test]
+    fn tool_limit_failures_point_at_the_setting() {
+        for failure in [TurnFailure::ToolRoundLimit, TurnFailure::ToolTimeout] {
+            assert!(failure.user_message().contains("ツール/MCP"));
+        }
+        assert_ne!(
+            TurnFailure::ToolRoundLimit.kind(),
+            TurnFailure::ToolTimeout.kind()
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use serde_json::json;
@@ -11,10 +12,8 @@ use crate::mcp::McpSessions;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::turn_error::{self, TurnFailure};
-use crate::orchestration::SystemPrompts;
+use crate::orchestration::{SystemPrompts, ToolLimits};
 use crate::tools::{self, external::ExternalToolset};
-
-const MAX_TOOL_ROUNDS: u32 = 4;
 
 /// DBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を非同期関数の
 /// awaitをまたいで持たせられない(architecture.md 4節)。ロックは常に`spawn_blocking`の
@@ -35,6 +34,7 @@ pub async fn run_turn(
     user_text: String,
     prompts: &SystemPrompts<'_>,
     mcp: &McpAccess<'_>,
+    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
     db_call(db.clone(), move |conn| {
         messages::insert_message(
@@ -58,7 +58,7 @@ pub async fn run_turn(
     // 新規ターンなので1から始まる。以降の再試行は`retry_assistant_message`が
     // `next_attempt_no`で採番する。
     let attempt_no: i64 = 1;
-    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp).await
+    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits).await
 }
 
 /// 編集(ユーザー発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言をすべて
@@ -74,6 +74,7 @@ pub async fn edit_user_message(
     new_text: String,
     prompts: &SystemPrompts<'_>,
     mcp: &McpAccess<'_>,
+    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
     db_call(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -99,7 +100,7 @@ pub async fn edit_user_message(
     .await?;
 
     let turn_id = Ulid::new().to_string();
-    generate_turn_response(db, adapter, task_id, turn_id, 1, prompts, mcp).await
+    generate_turn_response(db, adapter, task_id, turn_id, 1, prompts, mcp, limits).await
 }
 
 /// 再試行(アシスタント発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言を
@@ -113,6 +114,7 @@ pub async fn retry_assistant_message(
     message_id: i64,
     prompts: &SystemPrompts<'_>,
     mcp: &McpAccess<'_>,
+    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
     let (turn_id, attempt_no) = db_call(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -130,7 +132,7 @@ pub async fn retry_assistant_message(
     })
     .await?;
 
-    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp).await
+    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits).await
 }
 
 /// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
@@ -179,6 +181,7 @@ fn validate_target(target: &Message, task_id: i64, expected_role: &str) -> Resul
 /// `adapter`が`None`(プロバイダー未選択)・モデル未選択・APIキー未設定・空応答・
 /// コンテキスト超過・ツール呼び出し回数の上限到達は、`Err`で上位に返さずエラー発言として
 /// 保存し`Ok`で返す(Issue #40)。DB自体への書き込みが失敗する場合のみ`Err`のまま返る。
+#[allow(clippy::too_many_arguments)]
 async fn generate_turn_response(
     db: SharedConnection,
     adapter: Option<&dyn LlmAdapter>,
@@ -187,6 +190,7 @@ async fn generate_turn_response(
     attempt_no: i64,
     prompts: &SystemPrompts<'_>,
     mcp: &McpAccess<'_>,
+    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
     let Some(adapter) = adapter else {
         return fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::NoProvider).await;
@@ -207,6 +211,7 @@ async fn generate_turn_response(
         mcp,
         &external,
         &mut sessions,
+        limits,
     )
     .await;
     sessions.close().await;
@@ -264,6 +269,7 @@ async fn run_tool_rounds(
     mcp: &McpAccess<'_>,
     external: &ExternalToolset,
     sessions: &mut McpSessions,
+    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
     // 呼び出し元(`run_turn`/`edit_user_message`/`retry_assistant_message`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
@@ -284,8 +290,13 @@ async fn run_tool_rounds(
     // このターンのリクエスト組み立てにのみ使い、DBの`messages`テーブルには書かない
     // (書くと次ターン以降の履歴に残ってしまう)。
     let mut round_trip: Vec<ChatMessage> = Vec::new();
+    // ツール実行に使った時間の合計(Issue #71)。LLMの応答待ちは数えない。そちらは
+    // アダプタ側のタイムアウト(`GeneralConfig::response_timeout_secs`)が見るもので、
+    // ここで合算すると「モデルが遅いのでツールが打ち切られた」という筋の通らない
+    // 打ち切り方になる。
+    let mut tool_time_used = Duration::ZERO;
 
-    for _round in 1..=MAX_TOOL_ROUNDS {
+    for _round in 1..=limits.max_rounds_per_turn {
         let system_prompt_text = db_call(db.clone(), {
             let base_owned = base_owned.clone();
             let task_chat_owned = task_chat_owned.clone();
@@ -365,7 +376,22 @@ async fn run_tool_rounds(
         let mut executed: Vec<(ToolCallRequest, serde_json::Value)> =
             Vec::with_capacity(tool_calls.len());
         for (i, call) in tool_calls.into_iter().enumerate() {
+            // 合計時間は呼び出しの区切りで判定する。`execute_call`自身は内部・外部
+            // それぞれの失敗を結果JSONに落としてターンを続けるが(同関数のドキュメント
+            // 参照)、合計時間の超過だけはモデルに返して続けても意味が無いため、
+            // ここでターンを打ち切る。
+            //
+            // 実行中の呼び出しを外から打ち切らないのは、内部ツールのDB書き込みが
+            // `spawn_blocking`の上で走っており、待つのをやめてもタスク自体は完走する
+            // ため(PR前レビュー指摘)。打ち切ると、書き込みだけが済んで実行記録が
+            // 残らない状態を作る。1回の呼び出しは内部ツールならDB操作、外部ツールなら
+            // `mcp`のper-callタイムアウトで有界なので、超過はその1回分に収まる。
+            if tool_time_used >= limits.total_timeout {
+                return fail_turn(db, task_id, turn_id, attempt_no, TurnFailure::ToolTimeout).await;
+            }
+            let started = Instant::now();
             let result = execute_call(db.clone(), task_id, mcp, external, sessions, &call).await?;
+            tool_time_used = tool_time_used.saturating_add(started.elapsed());
 
             // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
             // 1回だけ紐付ける(発生順に混在させて表示するため。同一ラウンドの
