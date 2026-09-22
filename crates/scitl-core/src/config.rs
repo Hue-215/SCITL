@@ -63,6 +63,21 @@ pub struct GeneralConfig {
     pub response_timeout_secs: Option<u64>,
 }
 
+/// ツール呼び出しの上限(legacy/frontend.md 4節「共通設定」)。設定画面「ツール/MCP」
+/// タブの末尾で編集する。プロバイダーではなくツールの使い方に関する設定なので、
+/// `GeneralConfig`ではなく独立した節として持つ。
+///
+/// どちらも`None`は「未設定」で、既定値の実体は[`crate::orchestration::ToolLimits`]が
+/// 1箇所だけ持つ(設定ファイル側に既定値を書き写すと、2箇所を揃える必要が生まれる)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolConfig {
+    /// 1ターンあたりのツール呼び出しラウンド数の上限。
+    pub max_rounds_per_turn: Option<u32>,
+    /// 1ターン内のツール実行に使える時間の合計(秒)。LLMの応答待ちは含まない
+    /// (そちらは`GeneralConfig::response_timeout_secs`が見る)。
+    pub total_timeout_secs: Option<u64>,
+}
+
 /// [`crate::secrets`]に保存した1つの値(環境変数またはHTTPヘッダーの値)を指す参照。
 /// `name`(環境変数名/ヘッダー名)と`key_ref`(秘密情報ストア上の不透明な参照)は別物であり、
 /// `key_ref`は`name`から機械的に導出しない(Opusレビュー指摘: `name`はユーザー入力で
@@ -140,6 +155,8 @@ pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
     #[serde(default)]
+    pub tools: ToolConfig,
+    #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -194,6 +211,10 @@ mod tests {
             }],
             active_provider_id: Some("default".to_string()),
             general: GeneralConfig::default(),
+            tools: ToolConfig {
+                max_rounds_per_turn: Some(8),
+                total_timeout_secs: Some(90),
+            },
             mcp_servers: vec![McpServerConfig {
                 id: "srv".to_string(),
                 name: "my_tools".to_string(),
@@ -223,6 +244,9 @@ mod tests {
             loaded.active_provider().unwrap().resolved_model(),
             Some("gpt-4o-mini")
         );
+
+        assert_eq!(loaded.tools.max_rounds_per_turn, Some(8));
+        assert_eq!(loaded.tools.total_timeout_secs, Some(90));
 
         assert_eq!(loaded.mcp_servers.len(), 1);
         let server = &loaded.mcp_servers[0];
@@ -296,5 +320,8 @@ active_model = "gpt-4o-mini"
         let config = load(&path).unwrap();
         assert_eq!(config.general.system_prompt.as_deref(), Some("base"));
         assert!(config.general.task_chat_system_prompt.is_none());
+        // `[tools]`節ごと無いTOMLも読める(`#[serde(default)]`)。
+        assert!(config.tools.max_rounds_per_turn.is_none());
+        assert!(config.tools.total_timeout_secs.is_none());
     }
 }

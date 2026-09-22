@@ -37,7 +37,9 @@ use crate::secrets;
 /// サーバーで設定画面やターンが固まらないようにする(architecture.md 5節と同じ考え方)。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(30);
-/// 1回のツール呼び出しの上限。ターン全体の上限を設定可能にするのは Issue #71。
+/// 1回のツール呼び出しの上限。ターン全体で使える時間の合計は設定から決まり
+/// (`orchestration::ToolLimits`)、ターン側が残り時間で待つ。ここはそれとは別に、
+/// 1回の呼び出しが単独で長居しないための上限として残す。
 const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 切断の上限。ここに上限が無いと、graceful shutdownに応じないサーバーが1台あるだけで、
 /// 応答を保存し終えたあとのターンが切断待ちのまま返らなくなる。

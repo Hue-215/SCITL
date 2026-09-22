@@ -65,6 +65,16 @@ export interface GeneralSettings {
   response_timeout_secs: number | null
 }
 
+// ツール呼び出しの上限(Issue #71)。default_*は未設定時に実際に使われる値で、
+// Rust側(orchestration::ToolLimits)が持つものをそのまま受け取る。プレースホルダに
+// 出すだけなので、ここで既定値を定義し直さない。
+export interface ToolSettings {
+  max_rounds_per_turn: number | null
+  total_timeout_secs: number | null
+  default_max_rounds_per_turn: number
+  default_total_timeout_secs: number
+}
+
 export interface ProviderView {
   id: string
   name: string
@@ -97,6 +107,7 @@ export interface McpToolInfo {
 
 export interface SettingsView {
   general: GeneralSettings
+  tools: ToolSettings
   providers: ProviderView[]
   active_provider_id: string | null
   mcp_servers: McpServerView[]

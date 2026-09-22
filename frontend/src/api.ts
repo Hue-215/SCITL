@@ -69,6 +69,15 @@ export function updateGeneralSettings(args: {
   return invoke('update_general_settings', args)
 }
 
+// ツール呼び出しの上限(Issue #71)。nullは「未設定」で、Rust側の既定値に戻る。
+// updateGeneralSettingsと同じ理由(number | nullが並ぶ)でオブジェクト引数にする。
+export function updateToolSettings(args: {
+  maxRoundsPerTurn: number | null
+  totalTimeoutSecs: number | null
+}): Promise<SettingsView> {
+  return invoke('update_tool_settings', args)
+}
+
 export function addProvider(
   name: string,
   apiFormat: ApiFormat,

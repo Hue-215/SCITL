@@ -14,6 +14,7 @@ import {
   setMcpServerEnabled,
   setMcpToolEnabled,
   updateGeneralSettings,
+  updateToolSettings,
   type NewMcpEndpoint,
 } from './api'
 import type {
@@ -154,6 +155,11 @@ export default function Settings({ onClose }: SettingsProps) {
             ) : (
               <McpTab
                 settings={settings}
+                onSaveLimits={(maxRoundsPerTurn, totalTimeoutSecs) =>
+                  runOrReportError(() =>
+                    updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }),
+                  )
+                }
                 onAddServer={(name, endpoint) =>
                   runOrReportError(() => addMcpServer(name, endpoint))
                 }
@@ -178,6 +184,61 @@ export default function Settings({ onClose }: SettingsProps) {
   )
 }
 
+interface NumberFieldProps {
+  label: string
+  // 保存済みの値。nullは未設定(既定値を使う)。
+  value: number | null
+  placeholder: string
+  hint?: string
+  onSave: (value: number | null) => void
+}
+
+// フォーカスを外すと自動保存する数値入力(legacy/frontend.md 2節・4節)。入力中は自身の
+// stateだけを更新し、blur時にのみ親へ確定した値を渡す。入力チェック(空欄は未設定、
+// それ以外は1以上の整数)をこの1箇所に閉じる。3箇所目が出た時点ではなく2箇所目で
+// 部品にしたのは、同じ検証を書き写すと片方だけ直す事故が起きるため(ui.md 1節)。
+function NumberField({ label, value, placeholder, hint, onSave }: NumberFieldProps) {
+  const [text, setText] = useState(value?.toString() ?? '')
+  const [invalid, setInvalid] = useState(false)
+
+  useEffect(() => {
+    setText(value?.toString() ?? '')
+    setInvalid(false)
+  }, [value])
+
+  const save = () => {
+    const trimmed = text.trim()
+    if (trimmed === '') {
+      setInvalid(false)
+      onSave(null)
+      return
+    }
+    const parsed = Number(trimmed)
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      setInvalid(true)
+      return
+    }
+    setInvalid(false)
+    onSave(parsed)
+  }
+
+  return (
+    <label className="settings-field">
+      <span>{label}</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={save}
+        placeholder={placeholder}
+      />
+      {hint && <p className="settings-hint">{hint}</p>}
+      {invalid && <p className="error">1以上の整数を入力してください</p>}
+    </label>
+  )
+}
+
 interface GeneralTabProps {
   settings: SettingsView
   onSave: (
@@ -194,32 +255,11 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
   const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
     settings.general.task_chat_system_prompt ?? '',
   )
-  const [timeoutText, setTimeoutText] = useState(
-    settings.general.response_timeout_secs?.toString() ?? '',
-  )
-  const [timeoutError, setTimeoutError] = useState(false)
 
   useEffect(() => {
     setSystemPrompt(settings.general.system_prompt ?? '')
     setTaskChatSystemPrompt(settings.general.task_chat_system_prompt ?? '')
-    setTimeoutText(settings.general.response_timeout_secs?.toString() ?? '')
   }, [settings])
-
-  const saveTimeout = () => {
-    const trimmed = timeoutText.trim()
-    if (trimmed === '') {
-      setTimeoutError(false)
-      onSave(systemPrompt || null, taskChatSystemPrompt || null, null)
-      return
-    }
-    const parsed = Number(trimmed)
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      setTimeoutError(true)
-      return
-    }
-    setTimeoutError(false)
-    onSave(systemPrompt || null, taskChatSystemPrompt || null, parsed)
-  }
 
   return (
     <div className="settings-panel">
@@ -238,18 +278,12 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
         />
       </label>
 
-      <label className="settings-field">
-        <span>応答タイムアウト(秒)</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          value={timeoutText}
-          onChange={(e) => setTimeoutText(e.target.value)}
-          onBlur={saveTimeout}
-          placeholder="未設定(既定値を使用)"
-        />
-        {timeoutError && <p className="error">1以上の整数を入力してください</p>}
-      </label>
+      <NumberField
+        label="応答タイムアウト(秒)"
+        value={settings.general.response_timeout_secs}
+        placeholder="未設定(既定値を使用)"
+        onSave={(secs) => onSave(systemPrompt || null, taskChatSystemPrompt || null, secs)}
+      />
 
       <details className="settings-advanced">
         <summary>高度な設定</summary>
@@ -433,7 +467,7 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
 
   return (
     <form
-      className="provider-add-form"
+      className="provider-add-form settings-section-break"
       onSubmit={(e) => {
         e.preventDefault()
         if (!name.trim() || !baseUrl.trim()) return
@@ -507,6 +541,7 @@ const MCP_NAME_PATTERN = /^[A-Za-z0-9_]{1,16}$/
 
 interface McpTabProps {
   settings: SettingsView
+  onSaveLimits: (maxRoundsPerTurn: number | null, totalTimeoutSecs: number | null) => void
   onAddServer: (name: string, endpoint: NewMcpEndpoint) => void
   onDeleteServer: (serverId: string) => void
   onSetServerEnabled: (serverId: string, enabled: boolean) => void
@@ -516,6 +551,7 @@ interface McpTabProps {
 
 function McpTab({
   settings,
+  onSaveLimits,
   onAddServer,
   onDeleteServer,
   onSetServerEnabled,
@@ -544,6 +580,27 @@ function McpTab({
       </ul>
 
       <AddMcpServerForm existingNames={settings.mcp_servers.map((s) => s.name)} onAdd={onAddServer} />
+
+      {/* ツール呼び出し全体の上限(legacy/frontend.md 4節「共通設定」)。内部ツールにも
+          効くので、MCPサーバーの一覧より後ろ、タブの末尾に置く。サーバーの追加とは
+          別の話なので、追加フォームと同じ形の仕切り線で切る。 */}
+      <section className="settings-section settings-section-break">
+        <NumberField
+          label="1ターンあたりの最大ツール呼び出し回数"
+          value={settings.tools.max_rounds_per_turn}
+          placeholder={`未設定(既定値 ${settings.tools.default_max_rounds_per_turn})`}
+          hint="モデルとの往復の回数。1回の往復でツールを複数呼ぶこともある。"
+          onSave={(rounds) => onSaveLimits(rounds, settings.tools.total_timeout_secs)}
+        />
+
+        <NumberField
+          label="ツール呼び出し全体のタイムアウト(秒)"
+          value={settings.tools.total_timeout_secs}
+          placeholder={`未設定(既定値 ${settings.tools.default_total_timeout_secs})`}
+          hint="1ターン内のツール実行に使える時間の合計。モデルの応答待ちは含まない。"
+          onSave={(secs) => onSaveLimits(settings.tools.max_rounds_per_turn, secs)}
+        />
+      </section>
     </div>
   )
 }
@@ -733,7 +790,7 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
   }
 
   return (
-    <form className="provider-add-form" onSubmit={submit}>
+    <form className="provider-add-form settings-section-break" onSubmit={submit}>
       <h2>サーバーを追加</h2>
       <label className="settings-field">
         <span>識別子(16字以内、英数字とアンダースコアのみ)</span>

@@ -14,7 +14,10 @@ use secrecy::SecretString;
 use serde::Serialize;
 use tauri::State;
 
-use scitl_core::config::{self, ApiFormat, Config, GeneralConfig, McpEndpoint, ProviderConfig};
+use scitl_core::config::{
+    self, ApiFormat, Config, GeneralConfig, McpEndpoint, ProviderConfig, ToolConfig,
+};
+use scitl_core::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
 use scitl_core::llm::providers::openai_compat::validate_base_url;
 use scitl_core::secrets;
 
@@ -65,9 +68,21 @@ pub struct McpServerView {
     pub tools: Option<Vec<McpToolView>>,
 }
 
+/// ツール呼び出しの上限(Issue #71)。設定値そのもの(未設定は`None`)に加え、未設定時に
+/// 実際に使われる既定値も渡す。画面はプレースホルダにこれを出すだけで、既定値を
+/// TS側に書き写さない(2箇所に持つと必ずどちらかが古くなる)。
+#[derive(Debug, Serialize)]
+pub struct ToolSettingsView {
+    pub max_rounds_per_turn: Option<u32>,
+    pub total_timeout_secs: Option<u64>,
+    pub default_max_rounds_per_turn: u32,
+    pub default_total_timeout_secs: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SettingsView {
     pub general: GeneralConfig,
+    pub tools: ToolSettingsView,
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
     pub mcp_servers: Vec<McpServerView>,
@@ -113,6 +128,12 @@ fn to_mcp_view(
 pub(crate) fn to_view(config: &Config, catalog: &scitl_core::mcp::ToolCatalog) -> SettingsView {
     SettingsView {
         general: config.general.clone(),
+        tools: ToolSettingsView {
+            max_rounds_per_turn: config.tools.max_rounds_per_turn,
+            total_timeout_secs: config.tools.total_timeout_secs,
+            default_max_rounds_per_turn: DEFAULT_MAX_ROUNDS_PER_TURN,
+            default_total_timeout_secs: DEFAULT_TOTAL_TIMEOUT_SECS,
+        },
         providers: config
             .providers
             .iter()
@@ -177,6 +198,32 @@ pub fn update_general_settings(
         system_prompt: system_prompt.filter(|s| !s.is_empty()),
         task_chat_system_prompt: task_chat_system_prompt.filter(|s| !s.is_empty()),
         response_timeout_secs,
+    };
+    persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
+}
+
+/// ツール呼び出しの上限(Issue #71)。画面上は「ツール/MCP」タブの末尾にあるが、扱うのは
+/// `config.tools`だけでMCPの知識を要さないため、他の設定コマンドと同じここに置く。
+///
+/// 空欄(`None`)は「未設定」として既定値に戻す。`0`は画面側でも弾くが、UIの入力チェックは
+/// セキュリティ境界ではないためここでも拒否する(`validate_mcp_server_name`と同じ方針)。
+#[tauri::command]
+pub fn update_tool_settings(
+    state: State<'_, AppState>,
+    max_rounds_per_turn: Option<u32>,
+    total_timeout_secs: Option<u64>,
+) -> Result<SettingsView, String> {
+    if max_rounds_per_turn == Some(0) {
+        return Err("max rounds per turn must be 1 or greater".to_string());
+    }
+    if total_timeout_secs == Some(0) {
+        return Err("tool timeout must be 1 second or greater".to_string());
+    }
+
+    let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
+    runtime.config.tools = ToolConfig {
+        max_rounds_per_turn,
+        total_timeout_secs,
     };
     persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)
 }

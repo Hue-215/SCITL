@@ -7,6 +7,7 @@ use scitl_core::db::error::CoreError;
 use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolSchema};
 use scitl_core::orchestration::{
     delete_message, edit_user_message, retry_assistant_message, run_turn, McpAccess, SystemPrompts,
+    ToolLimits,
 };
 use scitl_core::config::{McpEndpoint, McpServerConfig};
 use scitl_core::mcp::ToolCatalog;
@@ -414,6 +415,7 @@ async fn run_turn_continues_when_an_mcp_server_cannot_be_reached() {
         "タイトルを「買い物」にして".to_string(),
         &SystemPrompts::default(),
         &McpAccess::new(&servers, &catalog),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -441,6 +443,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
         "タイトルを「買い物」にして".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -492,6 +495,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
         "工程を追加して".to_string(),
         &prompts_config,
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -629,6 +633,7 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
         "工程を追加してタイトルも変えて".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -667,6 +672,7 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
         "1番目の工程を完了にして".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -716,6 +722,7 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
         "こんにちは".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -743,6 +750,7 @@ async fn run_turn_persists_error_message_for_empty_response() {
         "こんにちは".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -767,6 +775,7 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
         "工程を追加して".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -775,6 +784,107 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
     let messages = db::messages::list_for_task(&conn, task_id).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("tool_round_limit"));
+    // 既定値の4ラウンドぶん回ってから打ち切られる(1ラウンドにつきツール実行記録が1件)。
+    assert_eq!(tool_execution_count(&messages), 4);
+}
+
+/// 設定したラウンド数の上限がそのまま効く(Issue #71)。`turn.rs`が定数ではなく
+/// 渡された値を見ていることを、実際に回った回数で確かめる。
+#[tokio::test]
+async fn run_turn_honors_the_configured_max_tool_rounds() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&AlwaysToolCallAdapter),
+        task_id,
+        "工程を追加して".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits {
+            max_rounds_per_turn: 2,
+            ..ToolLimits::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    assert_eq!(tool_execution_count(&messages), 2);
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("tool_round_limit"));
+}
+
+/// ツール実行に使える合計時間が最初から無ければ、ラウンド数に余裕があっても1回も
+/// 呼ばずに打ち切る(Issue #71)。`ToolLimits::from_config`は0を未設定として弾くので、
+/// この値は設定からは作れない。ここで確かめたいのは「使い切ったのに呼べる」状態を
+/// 作らないことなので、上限そのものを直接渡す。
+#[tokio::test]
+async fn run_turn_persists_error_message_when_the_tool_time_budget_is_exhausted() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&AlwaysToolCallAdapter),
+        task_id,
+        "工程を追加して".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits {
+            total_timeout: std::time::Duration::ZERO,
+            ..ToolLimits::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("tool_timeout"));
+    // 最初のツールを実行しきる前に打ち切るので、実行記録は残らない。
+    assert_eq!(tool_execution_count(&messages), 0);
+}
+
+/// 使った時間が積み上がって上限に届いたら、次の呼び出しへ進まずに打ち切る(Issue #71)。
+/// 上限を1ナノ秒にすると、1回目の実行は上限に届いていないので走り、その実行時間だけで
+/// 必ず上限を超えるため、2回目の手前で打ち切られる。実時間の長さには依存しない。
+#[tokio::test]
+async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&AlwaysToolCallAdapter),
+        task_id,
+        "工程を追加して".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits {
+            total_timeout: std::time::Duration::from_nanos(1),
+            ..ToolLimits::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("tool_timeout"));
+    // 1回目は最後まで走る(途中で打ち切らないので、実行記録が必ず残る)。
+    assert_eq!(tool_execution_count(&messages), 1);
+}
+
+fn tool_execution_count(messages: &[db::messages::Message]) -> usize {
+    messages.iter().filter(|m| m.kind == "tool_execution").count()
 }
 
 /// プロバイダー未選択(`None`)はエラー発言として保存され、`send`は一切呼ばれない
@@ -792,6 +902,7 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
         "こんにちは".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -817,6 +928,7 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
         "こんにちは".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -841,6 +953,7 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
         "1回目".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -856,6 +969,7 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
         "2回目".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -887,6 +1001,7 @@ async fn edit_user_message_truncates_and_regenerates() {
         "元の質問".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -905,6 +1020,7 @@ async fn edit_user_message_truncates_and_regenerates() {
         "編集後の質問".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -943,6 +1059,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
         "最初の質問".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -957,6 +1074,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
         "タイトル決めて".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -979,6 +1097,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
         "編集後の質問".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1025,6 +1144,7 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         "工程を追加して".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1078,6 +1198,7 @@ async fn edit_user_message_rejects_assistant_target() {
         "質問".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1096,6 +1217,7 @@ async fn edit_user_message_rejects_assistant_target() {
         "書き換え".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await;
     assert!(result.is_err());
@@ -1116,6 +1238,7 @@ async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
         "質問".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1134,6 +1257,7 @@ async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
         assistant_message_id,
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1161,6 +1285,7 @@ async fn retry_assistant_message_rejects_user_target() {
         "質問".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1178,6 +1303,7 @@ async fn retry_assistant_message_rejects_user_target() {
         user_message_id,
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await;
     assert!(result.is_err());
@@ -1197,6 +1323,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
         "1回目".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1207,6 +1334,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
         "2回目".to_string(),
         &SystemPrompts::default(),
         &McpAccess::none(),
+        ToolLimits::default(),
     )
     .await
     .unwrap();

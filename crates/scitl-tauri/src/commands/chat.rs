@@ -4,6 +4,7 @@ use scitl_core::config::McpServerConfig;
 use scitl_core::llm::{LlmAdapter, ResponseEvent};
 use scitl_core::orchestration::{
     delete_message, edit_user_message, retry_assistant_message, run_turn, McpAccess, SystemPrompts,
+    ToolLimits,
 };
 
 use crate::AppState;
@@ -18,6 +19,9 @@ struct TurnInputs {
     /// ターン中に使う外部ツールサーバー(Issue #44)。設定の複製を持ち、ロックを
     /// `.await`へ持ち込まない。
     mcp_servers: Vec<McpServerConfig>,
+    /// ツール呼び出しの上限(Issue #71)。`Option`の解釈はここで済ませ、ターンには
+    /// 解決済みの値だけを渡す。
+    tool_limits: ToolLimits,
 }
 
 fn load_turn_inputs(state: &State<'_, AppState>) -> TurnInputs {
@@ -27,6 +31,7 @@ fn load_turn_inputs(state: &State<'_, AppState>) -> TurnInputs {
         system_prompt: runtime.config.general.system_prompt.clone(),
         task_chat_system_prompt: runtime.config.general.task_chat_system_prompt.clone(),
         mcp_servers: runtime.config.mcp_servers.clone(),
+        tool_limits: ToolLimits::from_config(&runtime.config.tools),
     }
 }
 
@@ -53,8 +58,16 @@ pub async fn send_task_chat_message(
     };
     let mcp = McpAccess::new(&inputs.mcp_servers, &state.mcp_tools);
 
-    run_turn(state.db.clone(), adapter_ref, task_id, text, &prompts, &mcp)
-        .await
+    run_turn(
+        state.db.clone(),
+        adapter_ref,
+        task_id,
+        text,
+        &prompts,
+        &mcp,
+        inputs.tool_limits,
+    )
+    .await
         .map_err(|e| e.to_string())
 }
 
@@ -87,6 +100,7 @@ pub async fn edit_task_chat_message(
         text,
         &prompts,
         &mcp,
+        inputs.tool_limits,
     )
     .await
     .map_err(|e| e.to_string())
@@ -117,6 +131,7 @@ pub async fn retry_task_chat_message(
         message_id,
         &prompts,
         &mcp,
+        inputs.tool_limits,
     )
     .await
     .map_err(|e| e.to_string())
