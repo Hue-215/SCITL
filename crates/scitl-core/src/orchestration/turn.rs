@@ -218,7 +218,7 @@ async fn generate_turn_response(
 ///
 /// 一覧はキャッシュ(Issue #104)を優先し、無ければ取得してキャッシュに載せる。
 /// 接続・取得に失敗したサーバーはこのターンでは公開しない。ここでターン全体を失敗させると、
-/// 外部サーバーが1つ落ちているだけでチャットが使えなくなるため(#58と同じ考え方)。
+/// 外部サーバーが1つ落ちているだけでチャットが使えなくなるため(principles.md 3節)。
 async fn prepare_external_tools(
     mcp: &McpAccess<'_>,
     sessions: &mut McpSessions,
@@ -421,9 +421,12 @@ async fn run_tool_rounds(
 /// ツール1件の実行。名前が外部ツールとして公開したものなら対応するサーバーへ、
 /// そうでなければ内部ツールへ振り分ける(振り分けの判断はここ1箇所)。
 ///
-/// 外部ツールの失敗は結果として返し、ターンは続ける。呼び出し先はユーザーが登録した
-/// 別のプロセス・別のホストであり、落ちていることも普通に起こるため、モデルに
-/// 失敗を伝えて続けさせる方が会話として自然になる(内部ツールの失敗の扱いは#58)。
+/// 内部・外部のどちらも、実行の失敗は`Err`で上に返さず`{"error": ...}`の結果JSONに
+/// 落としてターンを続ける(docs/spec/principles.md 3節「失敗しても会話を止めない」)。
+/// 引数の型違いや対象の取り違えはモデルが自分で直せる失敗であり、外部サーバーの
+/// 不達に至っては日常的に起こるため、モデルに失敗を伝えて続けさせる方が会話として
+/// 自然になる。返る`Err`はDBスレッド自体が落ちた場合だけで、それは呼び出し元が
+/// 実行記録を保存できないのと同じ状況にあたる。
 async fn execute_call(
     db: SharedConnection,
     task_id: i64,
@@ -436,7 +439,8 @@ async fn execute_call(
         let name = call.name.clone();
         let arguments = call.arguments.clone();
         return db_call(db, move |conn| {
-            tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
+            Ok(tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
+                .unwrap_or_else(|e| json!({ "error": e.to_string() })))
         })
         .await;
     };
