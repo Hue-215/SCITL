@@ -107,6 +107,55 @@ impl LlmAdapter for FakeAdapter {
     }
 }
 
+/// 1回目は失敗する内部ツール(存在しない工程を指したupdate_step)を呼び、
+/// 2回目はその結果を踏まえて言葉で答えるアダプタ。
+struct FailingToolAdapter {
+    calls: AtomicUsize,
+    tool_results: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for FailingToolAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        for message in messages {
+            if let ChatMessage::Tool { content, .. } = message {
+                self.tool_results.lock().unwrap().push(content.clone());
+            }
+        }
+
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            Ok(vec![
+                ResponseEvent::ToolCall {
+                    id: Some("call_1".to_string()),
+                    name: "update_step".to_string(),
+                    arguments: json!({ "step_id": 9999, "done": true }),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::ToolCall,
+                },
+            ])
+        } else {
+            Ok(vec![
+                ResponseEvent::TextDelta {
+                    text: "その工程は見つかりませんでした".to_string(),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                },
+            ])
+        }
+    }
+}
+
 /// 1回の応答に複数のtool_callsが載るケース(取りこぼしの回帰検知)。
 struct MultiToolCallAdapter {
     calls: AtomicUsize,
@@ -534,6 +583,60 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
         .filter(|m| m.kind == "tool_execution")
         .count();
     assert_eq!(tool_execution_count, 2);
+}
+
+/// 内部ツール1件の失敗ではターンを止めず、`{"error": ...}`の結果として記録し、
+/// モデルにも返して会話を続ける(Issue #58、docs/spec/principles.md 3節)。
+#[tokio::test]
+async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = FailingToolAdapter {
+        calls: AtomicUsize::new(0),
+        tool_results: Mutex::new(Vec::new()),
+    };
+    let db = Arc::new(Mutex::new(conn));
+
+    let events = run_turn(
+        db.clone(),
+        Some(&adapter),
+        task_id,
+        "1番目の工程を完了にして".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+    )
+    .await
+    .unwrap();
+
+    assert!(events.iter().any(
+        |e| matches!(e, ResponseEvent::TextDelta { text } if text.contains("見つかりませんでした"))
+    ));
+
+    // 失敗はモデルへのツール結果として渡る(モデルが失敗を認識して続けられる)。
+    let tool_results = adapter.tool_results.lock().unwrap();
+    assert_eq!(tool_results.len(), 1);
+    let sent: serde_json::Value = serde_json::from_str(&tool_results[0]).unwrap();
+    assert!(sent.get("error").is_some(), "got {sent}");
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let roles_kinds: Vec<_> = messages
+        .iter()
+        .map(|m| (m.role.as_str(), m.kind.as_str()))
+        .collect();
+    assert_eq!(
+        roles_kinds,
+        vec![
+            ("user", "normal"),
+            ("assistant", "tool_execution"),
+            ("assistant", "normal"),
+        ]
+    );
+
+    // 実行記録の`result`に`error`キーが立つ(画面の「エラーの有無」表示の前提、Issue #42)。
+    let record = messages.iter().find(|m| m.kind == "tool_execution").unwrap();
+    let content: serde_json::Value = serde_json::from_str(&record.content).unwrap();
+    assert!(content["result"].get("error").is_some(), "got {content}");
 }
 
 /// LLM呼び出しの失敗はErrで落とさず、エラー発言として保存される(Issue #40)。
