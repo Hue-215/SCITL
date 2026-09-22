@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::error::CoreError;
 use crate::llm::{
-    ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolCallRequest, ToolSchema,
+    render_user_content, ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent,
+    ToolCallRequest, ToolSchema,
 };
 
 // reqwestの既定はタイムアウト無制限。応答しないエンドポイント1つでターンが
@@ -171,8 +172,9 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
         ChatMessage::System(content) => RequestMessage::System {
             content: content.clone(),
         },
-        ChatMessage::User(content) => RequestMessage::User {
-            content: content.clone(),
+        ChatMessage::User { text, sent_at } => RequestMessage::User {
+            // 送信日時は本文と混ぜず、構造化した形にして送る(Issue #68)。
+            content: render_user_content(text, sent_at.as_deref()),
         },
         ChatMessage::Assistant { content, tool_calls } => RequestMessage::Assistant {
             content: content.clone(),
@@ -447,10 +449,18 @@ mod tests {
         .unwrap();
         assert_eq!(system, serde_json::json!({"role": "system", "content": "be helpful"}));
 
-        let user =
-            serde_json::to_value(to_request_message(&ChatMessage::User("hi".to_string())))
-                .unwrap();
-        assert_eq!(user, serde_json::json!({"role": "user", "content": "hi"}));
+        let user = serde_json::to_value(to_request_message(&ChatMessage::User {
+            text: "hi".to_string(),
+            sent_at: Some("2026-09-22T04:12:00Z".to_string()),
+        }))
+        .unwrap();
+        assert_eq!(
+            user,
+            serde_json::json!({
+                "role": "user",
+                "content": "<scitl:user-message sent_at=\"2026-09-22T04:12:00Z\">\nhi\n</scitl:user-message>",
+            })
+        );
 
         let assistant = serde_json::to_value(to_request_message(&ChatMessage::Assistant {
             content: Some("done".to_string()),
