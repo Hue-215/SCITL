@@ -417,18 +417,27 @@ mod tests {
         let conn = db::open_in_memory().unwrap();
         let id = seed_task(&conn);
 
-        for bad in ["2026-02-30", "2027-02-29", "2026-13-01", "2026-00-10", "2026-04-31"] {
+        for bad in [
+            "2026-02-30",
+            "2027-02-29",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-01-00",
+            "2026-04-31",
+        ] {
+            let err = update_task(
+                &conn,
+                id,
+                TaskUpdate {
+                    deadline: Some(bad.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            // 種別まで見るのは、将来ここがDB層の別のエラーにすり替わっても気付くため。
             assert!(
-                update_task(
-                    &conn,
-                    id,
-                    TaskUpdate {
-                        deadline: Some(bad.to_string()),
-                        ..Default::default()
-                    },
-                )
-                .is_err(),
-                "expected {bad:?} to be rejected"
+                matches!(&err, CoreError::InvalidArgument { name, .. } if name == "deadline"),
+                "expected InvalidArgument for {bad:?}, got {err:?}"
             );
         }
     }
