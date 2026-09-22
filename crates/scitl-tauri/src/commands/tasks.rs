@@ -24,7 +24,7 @@ pub async fn get_task_detail(
 #[tauri::command]
 pub async fn list_tasks(
     state: State<'_, AppState>,
-) -> Result<Vec<scitl_core::db::tasks::TaskSummary>, String> {
+) -> Result<Vec<scitl_core::db::tasks::TaskListItem>, String> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db.lock().expect("db mutex poisoned");

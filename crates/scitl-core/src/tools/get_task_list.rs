@@ -32,7 +32,9 @@ pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
         return Err(CoreError::UnknownArgument(key.clone()));
     }
 
-    let tasks = tasks::list_tasks(conn)?;
+    // 表示側のフォールバック(Issue #61)はモデルには渡さない。`title: null` が「未設定」を
+    // 意味する状態をそのまま見せる(docs/spec/rebuild/tools.md「変更点の詳細」)。
+    let tasks: Vec<_> = tasks::list_tasks(conn)?.into_iter().map(|t| t.summary).collect();
     Ok(serde_json::to_value(tasks).expect("TaskSummary serialization cannot fail"))
 }
 
