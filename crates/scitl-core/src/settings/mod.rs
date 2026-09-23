@@ -77,7 +77,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn turn_context(&self) -> TurnContext<'_> {
+    pub fn turn_context<'a>(&'a self, generating: &'a InFlightSet<i64>) -> TurnContext<'a> {
         TurnContext {
             adapter: self.adapter.as_deref().map(|a| a as &dyn LlmAdapter),
             prompts: SystemPrompts {
@@ -86,6 +86,7 @@ impl Snapshot {
             },
             mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
             limits: ToolLimits::from_config(&self.config.tools),
+            generating,
         }
     }
 }
@@ -578,7 +579,7 @@ mod tests {
         let view = add_local_provider(&settings, "Local");
         let id = view.providers[0].id.clone();
         assert_eq!(view.active_provider_id.as_deref(), Some(id.as_str()));
-        assert!(settings.snapshot().turn_context().adapter.is_some());
+        assert!(settings.snapshot().adapter.is_some());
 
         let view = settings.add_model(&id, " m1 ").unwrap();
         assert_eq!(view.providers[0].active_model.as_deref(), Some("m1"));
@@ -603,7 +604,7 @@ mod tests {
         assert_eq!(view.active_provider_id.as_deref(), Some(second.as_str()));
         let view = settings.delete_provider(&second).unwrap();
         assert_eq!(view.active_provider_id, None);
-        assert!(settings.snapshot().turn_context().adapter.is_none());
+        assert!(settings.snapshot().adapter.is_none());
     }
 
     #[test]

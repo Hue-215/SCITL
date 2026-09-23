@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use scitl_core::config::{McpEndpoint, McpServerConfig};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
+use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
     ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolArguments, ToolSchema,
 };
@@ -382,11 +383,24 @@ impl LlmAdapter for ReasoningAdapter {
     }
 }
 
-/// 既定のプロンプト・外部ツール無し・既定の上限で、アダプタだけを差し替えた文脈。
+/// プロバイダー未選択・既定のプロンプト・外部ツール無し・既定の上限の文脈。
+/// 生成中の集合は呼ぶたびに新しく作る(テストは並行に走り、タスクIDが重なるため)。
+/// テストの間だけ使うものなので、寿命を合わせる手間を省いてリークさせる。
+fn context_without_provider() -> TurnContext<'static> {
+    TurnContext {
+        adapter: None,
+        prompts: SystemPrompts::default(),
+        mcp: McpAccess::none(),
+        limits: ToolLimits::default(),
+        generating: Box::leak(Box::new(InFlightSet::new())),
+    }
+}
+
+/// アダプタだけを差し替えた文脈。
 fn context(adapter: &dyn LlmAdapter) -> TurnContext<'_> {
     TurnContext {
         adapter: Some(adapter),
-        ..TurnContext::default()
+        ..context_without_provider()
     }
 }
 
@@ -1059,7 +1073,7 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
 
     run_turn(
         db.clone(),
-        &TurnContext::default(),
+        &context_without_provider(),
         task_id,
         "こんにちは".to_string(),
     )
@@ -1588,3 +1602,46 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     // カスケードしないため、1回目の応答・2回目のやり取りはそのまま残る。
     assert_eq!(contents, vec!["応答1", "2回目", "応答2"]);
 }
+
+/// 同じタスクで応答を生成中なら、次のターンは何も書かずに断る(Issue #152)。
+/// 別のタスクは妨げず、ターンが終われば同じタスクでもまた始められる。
+#[tokio::test]
+async fn a_turn_is_rejected_while_the_same_task_is_generating() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let other_task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    // 断られた1回は`send`まで届かないので、成功する2回ぶんだけ返信を持たせる。
+    let adapter = TextAdapter {
+        replies: Mutex::new(vec!["応答".to_string(); 2]),
+    };
+    let generating = InFlightSet::new();
+    let ctx = TurnContext {
+        generating: &generating,
+        ..context(&adapter)
+    };
+
+    let in_progress = generating.try_begin(task_id).unwrap();
+    let result = run_turn(db.clone(), &ctx, task_id, "こんにちは".to_string()).await;
+    assert!(matches!(result, Err(CoreError::TaskBusy(id)) if id == task_id));
+    {
+        let conn = db.lock().unwrap();
+        assert!(db::messages::list_for_task(&conn, task_id)
+            .unwrap()
+            .is_empty());
+    }
+
+    run_turn(db.clone(), &ctx, other_task_id, "こんにちは".to_string())
+        .await
+        .unwrap();
+
+    drop(in_progress);
+    run_turn(db.clone(), &ctx, task_id, "こんにちは".to_string())
+        .await
+        .unwrap();
+    assert!(
+        generating.try_begin(task_id).is_some(),
+        "ターンが終われば生成中は外れる"
+    );
+}
+

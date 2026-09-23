@@ -21,9 +21,14 @@ pub async fn send_task_chat_message(
 ) -> Result<Vec<ResponseEvent>, String> {
     // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
     let snapshot = state.settings.snapshot();
-    run_turn(state.db.clone(), &snapshot.turn_context(), task_id, text)
-        .await
-        .map_err(|e| e.to_string())
+    run_turn(
+        state.db.clone(),
+        &snapshot.turn_context(&state.generating),
+        task_id,
+        text,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 発言の編集(Issue #41)。ユーザー発言のみが対象で、対象以降の発言をすべて論理削除して
@@ -40,7 +45,7 @@ pub async fn edit_task_chat_message(
     let snapshot = state.settings.snapshot();
     edit_user_message(
         state.db.clone(),
-        &snapshot.turn_context(),
+        &snapshot.turn_context(&state.generating),
         task_id,
         message_id,
         text,
@@ -60,7 +65,7 @@ pub async fn retry_task_chat_message(
     let snapshot = state.settings.snapshot();
     retry_reply(
         state.db.clone(),
-        &snapshot.turn_context(),
+        &snapshot.turn_context(&state.generating),
         task_id,
         message_id,
     )

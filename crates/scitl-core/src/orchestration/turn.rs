@@ -7,6 +7,7 @@ use ulid::Ulid;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, Message, NewMessage, Role};
 use crate::db::{in_transaction, with_conn, SharedConnection};
+use crate::in_flight::InFlight;
 use crate::llm::{
     ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments, ToolCallRequest,
 };
@@ -30,6 +31,7 @@ pub async fn run_turn(
     task_id: i64,
     user_text: String,
 ) -> Result<Vec<ResponseEvent>> {
+    let _generating = begin_generating(ctx, task_id)?;
     with_conn(db.clone(), move |conn| {
         messages::insert_message(
             conn,
@@ -63,6 +65,7 @@ pub async fn edit_user_message(
     message_id: i64,
     new_text: String,
 ) -> Result<Vec<ResponseEvent>> {
+    let _generating = begin_generating(ctx, task_id)?;
     with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
@@ -106,6 +109,7 @@ pub async fn retry_reply(
     task_id: i64,
     message_id: i64,
 ) -> Result<Vec<ResponseEvent>> {
+    let _generating = begin_generating(ctx, task_id)?;
     let attempt = with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
@@ -142,6 +146,14 @@ pub async fn delete_message(db: SharedConnection, task_id: i64, message_id: i64)
         messages::soft_delete_message(conn, message_id)
     })
     .await
+}
+
+/// ターンの行を1行も書かないうちに、同じタスクの応答生成が走っていないかを確かめる
+/// ([`TurnContext::generating`])。返ったガードを持っている間、そのタスクは生成中になる。
+fn begin_generating<'a>(ctx: &TurnContext<'a>, task_id: i64) -> Result<InFlight<'a, i64>> {
+    ctx.generating
+        .try_begin(task_id)
+        .ok_or(CoreError::TaskBusy(task_id))
 }
 
 /// `edit_user_message`/`retry_reply`共通の対象検証。役割・種別・所属タスクを
