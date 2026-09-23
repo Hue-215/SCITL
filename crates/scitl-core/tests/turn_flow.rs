@@ -6,7 +6,7 @@ use scitl_core::config::{McpEndpoint, McpServerConfig};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolSchema,
+    ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolArguments, ToolSchema,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -49,7 +49,7 @@ impl LlmAdapter for RecordingAdapter {
                 ResponseEvent::ToolCall {
                     id: Some("call_1".to_string()),
                     name: "add_steps".to_string(),
-                    arguments: json!({ "descriptions": ["買い出し"] }),
+                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
                 },
                 ResponseEvent::Done {
                     finish_reason: FinishReason::ToolCall,
@@ -91,7 +91,7 @@ impl LlmAdapter for FakeAdapter {
                 ResponseEvent::ToolCall {
                     id: Some("call_1".to_string()),
                     name: "update_task".to_string(),
-                    arguments: json!({ "title": "買い物" }),
+                    arguments: json!({ "title": "買い物" }).into(),
                 },
                 ResponseEvent::Done {
                     finish_reason: FinishReason::ToolCall,
@@ -110,11 +110,22 @@ impl LlmAdapter for FakeAdapter {
     }
 }
 
-/// 1回目は失敗する内部ツール(存在しない工程を指したupdate_step)を呼び、
-/// 2回目はその結果を踏まえて言葉で答えるアダプタ。
+/// 1回目は失敗するツール呼び出し`failing_call`を出し、2回目はその結果を踏まえて
+/// 言葉で答えるアダプタ。
 struct FailingToolAdapter {
     calls: AtomicUsize,
+    failing_call: ResponseEvent,
     tool_results: Mutex<Vec<String>>,
+}
+
+impl FailingToolAdapter {
+    fn new(failing_call: ResponseEvent) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            failing_call,
+            tool_results: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -137,11 +148,7 @@ impl LlmAdapter for FailingToolAdapter {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
             Ok(vec![
-                ResponseEvent::ToolCall {
-                    id: Some("call_1".to_string()),
-                    name: "update_step".to_string(),
-                    arguments: json!({ "step_id": 9999, "done": true }),
-                },
+                self.failing_call.clone(),
                 ResponseEvent::Done {
                     finish_reason: FinishReason::ToolCall,
                 },
@@ -181,12 +188,12 @@ impl LlmAdapter for MultiToolCallAdapter {
                 ResponseEvent::ToolCall {
                     id: Some("call_1".to_string()),
                     name: "add_steps".to_string(),
-                    arguments: json!({ "descriptions": ["買い出し"] }),
+                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
                 },
                 ResponseEvent::ToolCall {
                     id: Some("call_2".to_string()),
                     name: "update_task".to_string(),
-                    arguments: json!({ "title": "買い物" }),
+                    arguments: json!({ "title": "買い物" }).into(),
                 },
                 ResponseEvent::Done {
                     finish_reason: FinishReason::ToolCall,
@@ -261,7 +268,7 @@ impl LlmAdapter for AlwaysToolCallAdapter {
             ResponseEvent::ToolCall {
                 id: Some("call_1".to_string()),
                 name: "add_steps".to_string(),
-                arguments: json!({ "descriptions": ["買い出し"] }),
+                arguments: json!({ "descriptions": ["買い出し"] }).into(),
             },
             ResponseEvent::Done {
                 finish_reason: FinishReason::ToolCall,
@@ -353,7 +360,7 @@ impl LlmAdapter for ReasoningAdapter {
                 ResponseEvent::ToolCall {
                     id: Some("call_1".to_string()),
                     name: "add_steps".to_string(),
-                    arguments: json!({ "descriptions": ["買い出し"] }),
+                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
                 },
                 ResponseEvent::Done {
                     finish_reason: FinishReason::ToolCall,
@@ -668,10 +675,12 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
 async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
-    let adapter = FailingToolAdapter {
-        calls: AtomicUsize::new(0),
-        tool_results: Mutex::new(Vec::new()),
-    };
+    // 存在しない工程を指したupdate_step
+    let adapter = FailingToolAdapter::new(ResponseEvent::ToolCall {
+        id: Some("call_1".to_string()),
+        name: "update_step".to_string(),
+        arguments: json!({ "step_id": 9999, "done": true }).into(),
+    });
     let db = Arc::new(Mutex::new(conn));
 
     let events = run_turn(
@@ -718,6 +727,62 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
         .unwrap();
     let content: serde_json::Value = serde_json::from_str(&record.content).unwrap();
     assert!(content["result"].get("error").is_some(), "got {content}");
+}
+
+/// 引数がJSONとして読めないツール呼び出しは、実行せずに失敗としてモデルへ返し、
+/// ターンを続ける(Issue #121、docs/spec/principles.md 3節)。
+#[tokio::test]
+async fn run_turn_reports_malformed_tool_arguments_to_the_model_without_running_the_tool() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let title_before = db::tasks::get_task(&conn, task_id).unwrap().title;
+    let adapter = FailingToolAdapter::new(ResponseEvent::ToolCall {
+        id: Some("call_1".to_string()),
+        name: "update_task".to_string(),
+        arguments: ToolArguments::parse("{\"title\": ".to_string()),
+    });
+    let db = Arc::new(Mutex::new(conn));
+
+    let events = run_turn(
+        db.clone(),
+        Some(&adapter),
+        task_id,
+        "タイトルを変えて".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        ResponseEvent::Done {
+            finish_reason: FinishReason::Error
+        }
+    )));
+
+    let tool_results = adapter.tool_results.lock().unwrap();
+    assert_eq!(tool_results.len(), 1);
+    let sent: serde_json::Value = serde_json::from_str(&tool_results[0]).unwrap();
+    assert!(sent.get("error").is_some(), "got {sent}");
+
+    let conn = db.lock().unwrap();
+    assert_eq!(
+        db::tasks::get_task(&conn, task_id).unwrap().title,
+        title_before
+    );
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let record = messages
+        .iter()
+        .find(|m| m.kind == "tool_execution")
+        .unwrap();
+    let content: serde_json::Value = serde_json::from_str(&record.content).unwrap();
+    assert_eq!(content["arguments"], "{\"title\": ");
+    assert!(content["result"].get("error").is_some(), "got {content}");
+    assert!(messages
+        .iter()
+        .any(|m| m.role == "assistant" && m.kind == "normal"));
 }
 
 /// LLM呼び出しの失敗はErrで落とさず、エラー発言として保存される(Issue #40)。

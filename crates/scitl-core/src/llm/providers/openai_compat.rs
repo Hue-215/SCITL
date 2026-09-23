@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::error::CoreError;
 use crate::llm::{
     render_user_content, ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent,
-    ToolCallRequest, ToolSchema,
+    ToolArguments, ToolCallRequest, ToolSchema,
 };
 
 // reqwestの既定はタイムアウト無制限。応答しないエンドポイント1つでターンが
@@ -201,9 +201,7 @@ fn to_request_tool_call(call: &ToolCallRequest) -> RequestToolCall {
         kind: "function",
         function: RequestToolCallFunction {
             name: call.name.clone(),
-            // モデルへ返す際は受け取った引数をそのまま再直列化する
-            // (往復であり、こちらで内容を作り変えない)。
-            arguments: call.arguments.to_string(),
+            arguments: call.arguments.to_wire_string(),
         },
     }
 }
@@ -333,17 +331,10 @@ impl LlmAdapter for OpenAiCompatAdapter {
             }
         }
         for call in choice.message.tool_calls {
-            // 引数の型が期待と違う場合は変換を試みず、エラーとして返す(principles.md 3節)。
-            // 空オブジェクトへのフォールバックは、引数を伴うツールを引数無しで
-            // 発火させてしまうため避ける。
-            let arguments: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .map_err(|e| {
-                    CoreError::Llm(format!("invalid tool call arguments from provider: {e}"))
-                })?;
             events.push(ResponseEvent::ToolCall {
                 id: call.id,
                 name: call.function.name,
-                arguments,
+                arguments: ToolArguments::parse(call.function.arguments),
             });
         }
 
@@ -366,9 +357,12 @@ mod tests {
 
     use super::*;
 
-    /// 1回だけ接続を受け、最小のコンプリーション応答を返す。受け取ったリクエストの
+    const MINIMAL_COMPLETION: &str =
+        r#"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#;
+
+    /// 1回だけ接続を受け、`body`をコンプリーション応答として返す。受け取ったリクエストの
     /// ヘッダー部を返す。
-    fn spawn_capturing() -> (String, std::thread::JoinHandle<String>) {
+    fn spawn_capturing(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
@@ -382,7 +376,6 @@ mod tests {
                 }
                 received.extend_from_slice(&buf[..n]);
             }
-            let body = r#"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
@@ -398,7 +391,7 @@ mod tests {
     }
 
     async fn send_with_key(api_key: &str) -> String {
-        let (base_url, handle) = spawn_capturing();
+        let (base_url, handle) = spawn_capturing(MINIMAL_COMPLETION);
         let adapter =
             OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", None).unwrap();
         adapter.send(&[], &[]).await.unwrap();
@@ -415,6 +408,23 @@ mod tests {
     async fn api_key_is_sent_as_bearer() {
         let headers = send_with_key("sk-test").await;
         assert!(headers.contains("authorization: bearer sk-test"));
+    }
+
+    #[tokio::test]
+    async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
+        let (base_url, handle) = spawn_capturing(
+            r#"{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"update_task","arguments":"{\"title\": "}}]},"finish_reason":"tool_calls"}]}"#,
+        );
+        let adapter =
+            OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", None).unwrap();
+        let events = adapter.send(&[], &[]).await.unwrap();
+        handle.join().unwrap();
+
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ResponseEvent::ToolCall { name, arguments: ToolArguments::Malformed { raw, .. }, .. }
+                if name == "update_task" && raw == "{\"title\": "
+        )));
     }
 
     #[test]
@@ -546,7 +556,7 @@ mod tests {
             tool_calls: vec![ToolCallRequest {
                 id: Some("call_1".to_string()),
                 name: "add_steps".to_string(),
-                arguments: serde_json::json!({ "descriptions": ["買い出し"] }),
+                arguments: serde_json::json!({ "descriptions": ["買い出し"] }).into(),
             }],
         }))
         .unwrap();
@@ -565,6 +575,24 @@ mod tests {
                     }
                 }]
             })
+        );
+    }
+
+    #[test]
+    fn echoes_malformed_tool_arguments_back_verbatim() {
+        let assistant = serde_json::to_value(to_request_message(&ChatMessage::Assistant {
+            content: None,
+            tool_calls: vec![ToolCallRequest {
+                id: Some("call_1".to_string()),
+                name: "update_task".to_string(),
+                arguments: ToolArguments::parse("{\"title\": ".to_string()),
+            }],
+        }))
+        .unwrap();
+
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["arguments"],
+            "{\"title\": "
         );
     }
 

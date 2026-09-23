@@ -25,7 +25,7 @@ pub enum ResponseEvent {
         /// 結果と対応付けるために保持する。払い出さないプロバイダもあるためOption。
         id: Option<String>,
         name: String,
-        arguments: serde_json::Value,
+        arguments: ToolArguments,
     },
     Done {
         finish_reason: FinishReason,
@@ -81,7 +81,48 @@ pub enum ChatMessage {
 pub struct ToolCallRequest {
     pub id: Option<String>,
     pub name: String,
-    pub arguments: serde_json::Value,
+    pub arguments: ToolArguments,
+}
+
+/// ツール呼び出しの引数。JSONとして読めなかった場合もアダプタで`Err`にせず、生の文字列の
+/// まま上位へ運ぶ。読めない引数は性能の低いモデルでは日常的に起こり、ターンごと止めると
+/// principles.md 3節「失敗しても会話を止めない」を割るため。かといって空オブジェクト等へ
+/// 置き換えると同節「暗黙の型変換をしない」を割る(引数を伴うツールを引数無しで発火させる)。
+/// 実行せずに失敗をモデルへ返す判断は`orchestration::turn`が持つ。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ToolArguments {
+    Valid { value: serde_json::Value },
+    Malformed { raw: String, error: String },
+}
+
+impl ToolArguments {
+    /// プロバイダーが文字列で返した引数を読む。JSONとして読める値であれば型は問わない
+    /// (オブジェクトかどうかの検証は各ツールの引数検証に任せる)。
+    pub fn parse(raw: String) -> Self {
+        match serde_json::from_str(&raw) {
+            Ok(value) => Self::Valid { value },
+            Err(e) => Self::Malformed {
+                raw,
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// モデルへ送り返す文字列。往復であり、こちらで内容を作り変えないため、読めなかった
+    /// 引数は受け取った文字列をそのまま返す。
+    pub fn to_wire_string(&self) -> String {
+        match self {
+            Self::Valid { value } => value.to_string(),
+            Self::Malformed { raw, .. } => raw.clone(),
+        }
+    }
+}
+
+impl From<serde_json::Value> for ToolArguments {
+    fn from(value: serde_json::Value) -> Self {
+        Self::Valid { value }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,6 +271,23 @@ mod tests {
         assert!(note.contains(&format!("<{USER_MESSAGE_TAG} sent_at=")));
         assert!(note.contains(&format!("</{USER_MESSAGE_TAG}>")));
         assert!(sent.starts_with(&format!("<{USER_MESSAGE_TAG} sent_at=")));
+    }
+
+    #[test]
+    fn keeps_malformed_arguments_as_the_raw_string() {
+        let args = ToolArguments::parse("{\"title\": ".to_string());
+        assert!(matches!(&args, ToolArguments::Malformed { raw, .. } if raw == "{\"title\": "));
+        assert_eq!(args.to_wire_string(), "{\"title\": ");
+    }
+
+    #[test]
+    fn parses_valid_arguments() {
+        let args = ToolArguments::parse("{\"title\":\"a\"}".to_string());
+        assert_eq!(
+            args,
+            ToolArguments::from(serde_json::json!({ "title": "a" }))
+        );
+        assert_eq!(args.to_wire_string(), "{\"title\":\"a\"}");
     }
 
     #[test]
