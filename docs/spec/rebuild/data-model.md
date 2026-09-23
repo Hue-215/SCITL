@@ -194,6 +194,11 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 - `busy_timeout` を設定し、書き込みトランザクションは `BEGIN IMMEDIATE` で開始する
   (複数プロセスからの同時書き込みを直列化する排他制御の実体)
 
+**この節の排他制御は未確定**(Issue #74)。現状の実装はWALと`busy_timeout`の設定までで、
+`BEGIN IMMEDIATE`はまだ使っていない。プロセス内の直列化は接続を包む`Mutex`が担っており、
+プロセスを跨いだ「読んで判断してから書く」操作の直列化は保証されていない。方式と、
+トランザクションの境界をどこに引くかは#74で決め、決まったらこの節を書き直す。
+
 ## 5. マイグレーション
 
 `rusqlite_migration` を用い、`migrations/0001_init.sql` から番号順で管理する

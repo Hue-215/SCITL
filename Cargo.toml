@@ -26,7 +26,7 @@ keyring = "3"
 toml = "0.8"
 # MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
 # 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
-# (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため。Opusレビュー指摘)。
+# (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため)。
 # `client`(素朴なクライアント)・`transport-child-process`(stdio)・
 # `transport-streamable-http-client-reqwest`(streamable_http、内部でreqwestを使う)のみ。
 rmcp = { version = "=3.4.0", default-features = false, features = [
@@ -35,7 +35,7 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
     "transport-streamable-http-client-reqwest",
 ] }
 # rmcpのstdioトランスポートは子プロセスを`kill()`しても、子がさらに生んだ孫プロセス
-# (`npx`が起動する`node`等)までは殺さない(Opusレビュー指摘)。プロセスグループごと
+# (`npx`が起動する`node`等)までは殺さない。プロセスグループごと
 # kill(Unix)/ジョブオブジェクト(Windows)するために明示的に利用する
 process-wrap = { version = "10.0", default-features = false, features = [
     "tokio1",

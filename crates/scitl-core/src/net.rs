@@ -1,7 +1,7 @@
 //! 複数の外部通信経路(LLMプロバイダー、MCP streamable_http)に共通するURL検証と
 //! HTTPクライアントのハードニング。architecture.md 5節を単一の正とし、全経路が
 //! ここを1箇所として通る(LLMアダプタとMCPクライアントは同じreqwestバージョンを
-//! 使っており、`reqwest::Client`という型そのものを共有できる。Opusレビュー指摘)。
+//! 使っており、`reqwest::Client`という型そのものを共有できる)。
 
 use std::time::Duration;
 
@@ -31,14 +31,13 @@ pub enum HostClass {
 /// (DNSリバインディング対策): プライベートIPかどうかをホスト名の名前解決結果で
 /// 判定すると、検証時と接続時で解決結果が変わりうる(検証だけ通してから接続先を
 /// すり替える攻撃が成立する)。IPアドレスとして直接書かれたリテラルだけを見れば、
-/// 検証した対象と実際に接続する対象が一致することが構造的に保証される
-/// (Opusレビュー指摘)。
+/// 検証した対象と実際に接続する対象が一致することが構造的に保証される。
 ///
 /// IPv4のリンクローカル(169.254.0.0/16)は`PrivateLiteral`に含めない。
 /// 169.254.169.254はAWS/GCP/Azureのメタデータエンドポイント(IMDS)であり、
 /// 平文httpしか話さない代表的なSSRF標的のため、緩和の対象から明示的に外す
 /// (IPv6側もfe80::/10は`url`crateがパースできず対象外であり、IPv4だけ
-/// リンクローカルを許すと軸が揃わない。Opusレビュー指摘)。
+/// リンクローカルを許すと軸が揃わない)。
 pub fn classify_host(url: &Url) -> HostClass {
     match url.host() {
         Some(url::Host::Ipv4(ip)) if ip.is_loopback() => HostClass::Loopback,
@@ -57,7 +56,7 @@ pub fn classify_host(url: &Url) -> HostClass {
 ///
 /// query/fragment/userinfoを拒否する理由: エンドポイントは`Url::join`で組み立てるため、
 /// これらが混ざっているとリクエストパスや認証情報の置き場所として悪用されかねない
-/// (Opusレビュー指摘: 「クエリに鍵を置く構成」を入口で消す)。
+/// (「クエリに鍵を置く構成」を入口で消す)。
 pub fn validate_external_url(url: &Url) -> Result<(), String> {
     if url.query().is_some()
         || url.fragment().is_some()
@@ -84,7 +83,7 @@ pub fn validate_external_url(url: &Url) -> Result<(), String> {
 
 /// URLを検証してから、ハードニング済み`reqwest::Client`を組み立てる。LLMプロバイダー
 /// (`llm/providers/openai_compat.rs`)とMCP streamable_http(`mcp/http.rs`)の両方が
-/// これを呼ぶ(Opusレビュー指摘: 同じ設定を2箇所に書くと片方だけ直される未来が来る)。
+/// これを呼ぶ(同じ設定を2箇所に書くと片方だけ直される未来が来る)。
 pub fn hardened_client(url: &str, request_timeout: Duration) -> Result<reqwest::Client, CoreError> {
     let parsed =
         Url::parse(url).map_err(|e| CoreError::Config(format!("url is not a valid URL: {e}")))?;
@@ -96,7 +95,7 @@ pub fn hardened_client(url: &str, request_timeout: Duration) -> Result<reqwest::
         // コンプリーションAPI・MCPサーバーいずれも正当な理由でリダイレクトを返すことは
         // 想定していないため、同一ホスト内も含めて一律拒否する方が単純で安全。
         // 平文httpをプライベートIPまで許すため、ここを緩めると登録先のLANサーバーが
-        // 公開ホストへ302を返すだけで通信先が広がる(Opusレビュー指摘)。
+        // 公開ホストへ302を返すだけで通信先が広がる。
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(request_timeout)
@@ -161,7 +160,7 @@ mod tests {
     #[test]
     fn rejects_http_for_ipv4_link_local() {
         // 169.254.169.254はクラウド各社のメタデータエンドポイント(IMDS)。SSRF対策として
-        // リンクローカル全体を対象から外す(Opusレビュー指摘)。
+        // リンクローカル全体を対象から外す。
         assert!(validate_external_url(&Url::parse("http://169.254.169.254/").unwrap()).is_err());
         assert!(validate_external_url(&Url::parse("http://169.254.1.1/").unwrap()).is_err());
     }
@@ -185,7 +184,7 @@ mod tests {
     // 以下は、`hardened_client`が実際に組み立てる`reqwest::Client`が全経路
     // (LLMアダプタ・MCPクライアント双方)で共有される前提で、トランスポートの外側からは
     // 検証できない「実際にリダイレクトを追わないか」「プロキシ環境変数を無視するか」を
-    // クライアント単体に対して確認する(Opusレビュー指摘: ドキュメントではなくテストで
+    // クライアント単体に対して確認する(ドキュメントではなくテストで
     // 担保する)。
 
     /// 1回だけ接続を受け、`response`をそのまま書いて閉じる最小限のHTTPサーバー。

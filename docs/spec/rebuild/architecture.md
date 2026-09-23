@@ -17,20 +17,22 @@ SCITL-2.0/
 ├── crates/
 │   ├── scitl-core/                 # UI非依存のコアライブラリ
 │   │   └── src/
-│   │       ├── db/                 # migrations, tasks/steps/messages/attachments repository
+│   │       ├── db/                 # tasks/steps/messages(/attachments)のrepository
 │   │       ├── llm/                # types(イベント列), adapter trait, providers/
-│   │       ├── tools/               # registry(面別スキーマ生成), args検証, task_ops
-│   │       ├── orchestration/       # turn.rs(1ターンの処理フロー)
+│   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
+│   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), state_prompt.rs(最新状態)
+│   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
+│   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(5節)
 │   │       ├── secrets.rs          # keyringへの唯一の入口
 │   │       ├── config.rs           # 参照のみを持つ設定(TOML)
-│   │       ├── sanitize.rs
-│   │       └── i18n.rs
-│   ├── scitl-cli/                  # 旧debug_cli.py相当。scitl-coreのみに依存
+│   │       ├── sanitize.rs         # (未作成。#67)
+│   │       └── i18n.rs             # (未作成。#80)
+│   ├── scitl-cli/                  # 旧debug_cli.py相当。scitl-coreのみに依存(未作成。#23)
 │   └── scitl-tauri/                # 薄いIPCシェル
 │       ├── tauri.conf.json         # CSP・devCsp(変更のたびにOpusレビュー対象)
 │       └── src/commands/
 ├── frontend/                       # React + TypeScript + Vite
-├── lang/                           # en.json / ja.json(core・frontend共有)
+├── lang/                           # en.json / ja.json(core・frontend共有。未作成。#80)
 └── migrations/0001_init.sql
 ```
 
@@ -195,7 +197,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 - `default-src 'self'` / `img-src 'self' data:`(外部画像を読み込ませない。
   本文中の画像記法をリンクへ変換する自前処理と合わせた多層防御。片方が破れても止まる)/
   `script-src 'self'`(CDN・inline eval不可)
-- `connect-src` はまず `'none'` を試す。全通信はRust側で行う設計なので、WebViewからの
+- `connect-src 'none'`。全通信はRust側で行う設計なので、WebViewからの
   外部接続は本来ゼロのはず。将来広げる必要が出たら「Rustが全通信を担う」境界が破れた合図
 - 開発時のVite HMRはWebSocketを使うため、Tauri 2の `devCsp` を本番CSPと分離して設定する
   (開発と本番で同じCSPにしようとして本番を緩めるのが典型的な失敗)

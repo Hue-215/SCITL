@@ -1,6 +1,4 @@
-//! 設定「ツール/MCP」タブ向けIPCコマンド(Issue #28)。MCPクライアントという新しい
-//! 外部通信手段の導入を伴うため、CLAUDE.mdの規定によりOpusレビューを経て実装した
-//! (レビュー結果はPRコメント参照)。
+//! 設定「ツール/MCP」タブ向けIPCコマンド(Issue #28)。
 //!
 //! このコマンド群が担うのは「登録・秘密情報の保存・接続してツール一覧を取得」まで。
 //! 実際のターン中のツール呼び出しは`orchestration::turn`側にあり(Issue #44)、
@@ -38,7 +36,7 @@ pub enum NewMcpEndpoint {
 }
 
 /// 秘密情報の値を`secrets.rs`へ保存し、`(name, key_ref)`の組に変換する。途中で失敗したら
-/// それまでに保存した分を削除してからエラーを返す(孤児を残さない。Opusレビュー指摘)。
+/// それまでに保存した分を削除してからエラーを返す(孤児を残さない)。
 fn store_secret_refs(pairs: Vec<(String, String)>) -> Result<Vec<SecretRef>, String> {
     let mut refs = Vec::with_capacity(pairs.len());
     for (name, value) in pairs {
@@ -55,7 +53,7 @@ fn store_secret_refs(pairs: Vec<(String, String)>) -> Result<Vec<SecretRef>, Str
 }
 
 /// `refs`が指す秘密情報をすべて削除する。1件が失敗しても残りは試す(複数件あり得るため、
-/// `delete_provider`のような早期returnはしない。Opusレビュー指摘)。
+/// `delete_provider`のような早期returnはしない)。
 fn delete_secret_refs(refs: &[SecretRef]) {
     for r in refs {
         if let Err(e) = secrets::delete(&r.key_ref) {
@@ -85,7 +83,7 @@ pub fn add_mcp_server(
 
     // 重複チェックはkeyringへのI/Oより先に行う(安価なチェックを先に。ここで弾ければ
     // 秘密情報を1件も保存せずに済む)。ただしロックを持ったままI/Oを跨がせないため、
-    // 保存後にもう一度同じチェックをやり直す(Opusレビュー指摘: 重複登録で孤児を残さない)。
+    // 保存後にもう一度同じチェックをやり直す(重複登録で孤児を残さない)。
     {
         let runtime = state.runtime.lock().expect("runtime mutex poisoned");
         if runtime.config.mcp_servers.iter().any(|s| s.name == name) {

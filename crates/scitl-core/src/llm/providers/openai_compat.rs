@@ -43,7 +43,7 @@ impl OpenAiCompatAdapter {
         validate_base_url(&base_url)?;
 
         // ハードニング済みクライアントの組み立ては`net::hardened_client`に集約する
-        // (MCP streamable_httpと共有。Opusレビュー指摘)。
+        // (MCP streamable_httpと共有)。
         let client =
             crate::net::hardened_client(&base_url, request_timeout.unwrap_or(REQUEST_TIMEOUT))?;
         Ok(Self {
@@ -60,7 +60,7 @@ impl OpenAiCompatAdapter {
 /// 推論サーバー。architecture.md 5節)。LAN宛の場合はAPIキーが平文で流れることを
 /// 設定画面のヒントで明示している(principles.md 4節)。検証本体は
 /// [`crate::net::validate_external_url`]に集約する(MCP streamable_httpのURL検証と
-/// 共有。Opusレビュー指摘)。
+/// 共有)。
 pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
     let url = reqwest::Url::parse(base_url)
         .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
@@ -90,10 +90,9 @@ fn provider_error(e: reqwest::Error) -> CoreError {
 /// なる。本文はプロバイダ側の失敗理由を知るために残すが、長さを制限し制御文字を潰し、
 /// 送信した鍵そのものが含まれていれば伏せ字にしてから載せる(principles.md 4節)。
 /// ゲートウェイがリクエストヘッダをエコーバックする構成だと`Authorization`ヘッダの
-/// 値がそのまま本文に現れうるため、512文字というサイズ制限だけでは防げない
-/// (Opusレビュー指摘)。
+/// 値がそのまま本文に現れうるため、512文字というサイズ制限だけでは防げない。
 /// `turn_error::classify`が`"http {status}: ..."`の数値部分を再パースして
-/// auth/rate_limit等を分類する(Opusレビュー指摘)。`StatusCode`のDisplayは
+/// auth/rate_limit等を分類する。`StatusCode`のDisplayは
 /// `"401 Unauthorized"`のように理由句を含み再パースできないため、必ず`as_u16()`で
 /// 数値のみを埋め込む。HTTPリクエストから切り離してテストできるよう関数として独立させる。
 fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> CoreError {
@@ -430,7 +429,7 @@ mod tests {
         };
         // `turn_error::classify`が期待する形式(`orchestration/turn_error.rs`の
         // `parse_http_status`参照)。理由句(" Unauthorized"等)を含めてしまうと
-        // 再パースに失敗し、全HTTPエラーがUnexpectedに落ちる(Opusレビューで検出)。
+        // 再パースに失敗し、全HTTPエラーがUnexpectedに落ちる。
         assert_eq!(message, "http 401: invalid key");
     }
 
