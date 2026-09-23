@@ -188,7 +188,8 @@ interface NumberFieldProps {
   label: string
   // 保存済みの値。nullは未設定(既定値を使う)。
   value: number | null
-  placeholder: string
+  // 未設定のときに使われる値。プレースホルダに出す。
+  defaultValue: number
   hint?: string
   onSave: (value: number | null) => void
 }
@@ -197,7 +198,7 @@ interface NumberFieldProps {
 // stateだけを更新し、blur時にのみ親へ確定した値を渡す。入力チェック(空欄は未設定、
 // それ以外は1以上の整数)をこの1箇所に閉じる。3箇所目が出た時点ではなく2箇所目で
 // 部品にしたのは、同じ検証を書き写すと片方だけ直す事故が起きるため(ui.md 1節)。
-function NumberField({ label, value, placeholder, hint, onSave }: NumberFieldProps) {
+function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldProps) {
   const [text, setText] = useState(value?.toString() ?? '')
   const [invalid, setInvalid] = useState(false)
 
@@ -231,7 +232,7 @@ function NumberField({ label, value, placeholder, hint, onSave }: NumberFieldPro
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={save}
-        placeholder={placeholder}
+        placeholder={`未設定(既定値 ${defaultValue})`}
       />
       {hint && <p className="settings-hint">{hint}</p>}
       {invalid && <p className="error">1以上の整数を入力してください</p>}
@@ -281,7 +282,7 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
       <NumberField
         label="応答タイムアウト(秒)"
         value={settings.general.response_timeout_secs}
-        placeholder="未設定(既定値を使用)"
+        defaultValue={settings.general.default_response_timeout_secs}
         onSave={(secs) => onSave(systemPrompt || null, taskChatSystemPrompt || null, secs)}
       />
 
@@ -588,7 +589,7 @@ function McpTab({
         <NumberField
           label="1ターンあたりの最大ツール呼び出し回数"
           value={settings.tools.max_rounds_per_turn}
-          placeholder={`未設定(既定値 ${settings.tools.default_max_rounds_per_turn})`}
+          defaultValue={settings.tools.default_max_rounds_per_turn}
           hint="ツールを実行するモデルとの往復の回数。1回の往復でツールを複数呼ぶこともある。使い切ったら、ツールを使わずに返信させるため、もう一度だけモデルを呼ぶ。"
           onSave={(rounds) => onSaveLimits(rounds, settings.tools.total_timeout_secs)}
         />
@@ -596,7 +597,7 @@ function McpTab({
         <NumberField
           label="ツール呼び出し全体のタイムアウト(秒)"
           value={settings.tools.total_timeout_secs}
-          placeholder={`未設定(既定値 ${settings.tools.default_total_timeout_secs})`}
+          defaultValue={settings.tools.default_total_timeout_secs}
           hint="1ターン内のツール実行に使える時間の合計。モデルの応答待ちは含まない。"
           onSave={(secs) => onSaveLimits(settings.tools.max_rounds_per_turn, secs)}
         />

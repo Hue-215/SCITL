@@ -439,7 +439,7 @@ impl Draft<'_> {
 }
 
 /// アダプタの組み立てに使う設定値。`providers::build_active_adapter`が読むものと揃える。
-fn adapter_inputs(config: &Config) -> (Option<&ProviderConfig>, Option<std::time::Duration>) {
+fn adapter_inputs(config: &Config) -> (Option<&ProviderConfig>, std::time::Duration) {
     (config.active_provider(), config.general.response_timeout())
 }
 

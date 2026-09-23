@@ -74,6 +74,8 @@ export interface GeneralSettings {
   system_prompt: string | null
   task_chat_system_prompt: string | null
   response_timeout_secs: number | null
+  // 未設定時に実際に使われる値(ToolSettingsのdefault_*と同じ扱い)。
+  default_response_timeout_secs: number
 }
 
 // ツール呼び出しの上限(Issue #71)。default_*は未設定時に実際に使われる値で、

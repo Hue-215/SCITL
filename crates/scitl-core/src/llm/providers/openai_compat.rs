@@ -9,10 +9,6 @@ use crate::llm::{
     ToolArguments, ToolCallRequest, ToolSchema,
 };
 
-// reqwestの既定はタイムアウト無制限。応答しないエンドポイント1つでターンが
-// 永久に固まるのを避ける(生成が長い非ストリーミング応答も想定し余裕を持たせる)。
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-
 /// HTTPエラー時にエラー文へ載せるプロバイダ応答本文の上限。
 const MAX_ERROR_BODY_CHARS: usize = 512;
 
@@ -31,23 +27,20 @@ impl OpenAiCompatAdapter {
     /// このアダプタ自身はkeyringに触れない(architecture.md 6節)。`SecretString`を
     /// 引数の型にすることで、呼び出し元が平文`String`を経由する経路を作れないようにする。
     ///
-    /// `request_timeout`は設定画面(Issue #22)の「応答タイムアウト」。未設定(`None`)なら
-    /// [`REQUEST_TIMEOUT`]を既定値として使う。
+    /// `request_timeout`は設定画面(Issue #22)の「応答タイムアウト」を解決した値
+    /// (`config::GeneralConfig::response_timeout`)。
     pub fn new(
         base_url: impl Into<String>,
         api_key: SecretString,
         model: impl Into<String>,
-        request_timeout: Option<Duration>,
+        request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = base_url.into();
         validate_base_url(&base_url)?;
 
         // ハードニング済みクライアントの組み立ては`net::hardened_client`に集約する
         // (MCP streamable_httpと共有)。
-        let client = crate::net::hardened_client(
-            &base_url,
-            Some(request_timeout.unwrap_or(REQUEST_TIMEOUT)),
-        )?;
+        let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
         Ok(Self {
             client,
             base_url,
@@ -357,6 +350,8 @@ mod tests {
 
     use super::*;
 
+    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
     const MINIMAL_COMPLETION: &str =
         r#"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#;
 
@@ -393,7 +388,8 @@ mod tests {
     async fn send_with_key(api_key: &str) -> String {
         let (base_url, handle) = spawn_capturing(MINIMAL_COMPLETION);
         let adapter =
-            OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", None).unwrap();
+            OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", TEST_TIMEOUT)
+                .unwrap();
         adapter.send(&[], &[]).await.unwrap();
         handle.join().unwrap()
     }
@@ -416,7 +412,8 @@ mod tests {
             r#"{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"update_task","arguments":"{\"title\": "}}]},"finish_reason":"tool_calls"}]}"#,
         );
         let adapter =
-            OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", None).unwrap();
+            OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT)
+                .unwrap();
         let events = adapter.send(&[], &[]).await.unwrap();
         handle.join().unwrap();
 

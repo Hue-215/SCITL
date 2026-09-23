@@ -6,7 +6,9 @@
 
 use serde::Serialize;
 
-use crate::config::{ApiFormat, Config, GeneralConfig, McpEndpoint, McpServerConfig};
+use crate::config::{
+    ApiFormat, Config, McpEndpoint, McpServerConfig, DEFAULT_RESPONSE_TIMEOUT_SECS,
+};
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
 
@@ -55,6 +57,16 @@ pub struct McpServerView {
     pub tools: Option<Vec<McpToolView>>,
 }
 
+/// 一般設定。応答タイムアウトは`ToolSettingsView`と同じく、設定値(未設定は`None`)と
+/// 未設定時に実際に使われる既定値の両方を渡す(既定値をTS側に書き写さない理由も同じ)。
+#[derive(Debug, Serialize)]
+pub struct GeneralSettingsView {
+    pub system_prompt: Option<String>,
+    pub task_chat_system_prompt: Option<String>,
+    pub response_timeout_secs: Option<u64>,
+    pub default_response_timeout_secs: u64,
+}
+
 /// ツール呼び出しの上限(Issue #71)。設定値そのもの(未設定は`None`)に加え、未設定時に
 /// 実際に使われる既定値も渡す。画面はプレースホルダにこれを出すだけで、既定値を
 /// TS側に書き写さない(2箇所に持つと必ずどちらかが古くなる)。
@@ -68,7 +80,7 @@ pub struct ToolSettingsView {
 
 #[derive(Debug, Serialize)]
 pub struct SettingsView {
-    pub general: GeneralConfig,
+    pub general: GeneralSettingsView,
     pub tools: ToolSettingsView,
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
@@ -77,7 +89,12 @@ pub struct SettingsView {
 
 pub(super) fn build(config: &Config, catalog: &ToolCatalog) -> SettingsView {
     SettingsView {
-        general: config.general.clone(),
+        general: GeneralSettingsView {
+            system_prompt: config.general.system_prompt.clone(),
+            task_chat_system_prompt: config.general.task_chat_system_prompt.clone(),
+            response_timeout_secs: config.general.response_timeout_secs,
+            default_response_timeout_secs: DEFAULT_RESPONSE_TIMEOUT_SECS,
+        },
         tools: ToolSettingsView {
             max_rounds_per_turn: config.tools.max_rounds_per_turn,
             total_timeout_secs: config.tools.total_timeout_secs,
