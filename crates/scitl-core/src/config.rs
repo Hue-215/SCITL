@@ -80,7 +80,7 @@ pub struct ToolConfig {
 
 /// [`crate::secrets`]に保存した1つの値(環境変数またはHTTPヘッダーの値)を指す参照。
 /// `name`(環境変数名/ヘッダー名)と`key_ref`(秘密情報ストア上の不透明な参照)は別物であり、
-/// `key_ref`は`name`から機械的に導出しない(Opusレビュー指摘: `name`はユーザー入力で
+/// `key_ref`は`name`から機械的に導出しない(`name`はユーザー入力で
 /// `:`等を含みうるため、そこから`key_ref`を組み立てると衝突・曖昧さの元になる。
 /// `provider:{ULID}`と同様、`key_ref`はULIDで払い出す)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,8 +125,7 @@ pub struct McpServerConfig {
     /// 有効なツール名の集合(opt-in)。ここに無い名前は無効として扱う。取得したツール
     /// 一覧に無い名前が残っていても実害はない(実行時に積集合を取るだけ)。逆に、
     /// サーバー側が後からツールを追加しても、ユーザーが明示的に有効化するまで
-    /// 使われない(`HashMap<String, bool>`による「既定で有効」の読み方を型で排除する。
-    /// Opusレビュー指摘)。
+    /// 使われない(`HashMap<String, bool>`による「既定で有効」の読み方を型で排除する)。
     #[serde(default)]
     pub enabled_tools: BTreeSet<String>,
 }

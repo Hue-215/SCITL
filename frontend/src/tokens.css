@@ -32,7 +32,7 @@
   --font-family-mono: ui-monospace, monospace;
 
   /* 文字サイズ: 3段階(補助文 / 本文 / 見出し)。sm/md/lgの差が視認できない刻みは
-     置かない(Opusレビュー、Issue #79)。xlはMarkdown見出し(#39)用の予約枠で、
+     置かない(Issue #79)。xlはMarkdown見出し(#39)用の予約枠で、
      現時点ではどこからも参照しない。 */
   --font-size-sm: 0.85rem;
   --font-size-md: 1rem;

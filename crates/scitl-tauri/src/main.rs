@@ -46,8 +46,7 @@ pub struct AppState {
     pub mcp_tools: Arc<scitl_core::mcp::ToolCatalog>,
     /// `fetch_mcp_tools`の同時実行を1サーバーにつき1本に絞るためのガード
     /// (`commands::mcp`)。ボタンの無効化(連打防止)はフロントエンド側の責務だが、
-    /// それだけでは保証にならないため、Rust側にも同時実行を防ぐ手段を持つ
-    /// (Opusレビュー指摘)。
+    /// それだけでは保証にならないため、Rust側にも同時実行を防ぐ手段を持つ。
     pub mcp_fetch_in_flight: Mutex<HashSet<String>>,
 }
 

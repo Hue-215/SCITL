@@ -13,7 +13,7 @@
 //! `rmcp`(公式Rust SDK)を使う。有効化するfeatureは`client`・`transport-child-process`・
 //! `transport-streamable-http-client-reqwest`のみで、OAuth/認可系(`auth`)は有効化しない
 //! (`.well-known`ディスカバリ等でユーザーが登録していない先への通信が発生し得るため。
-//! principles.md 1節、Opusレビュー指摘)。
+//! principles.md 1節)。
 
 mod http;
 mod stdio;
@@ -294,7 +294,7 @@ fn truncate_result_text(text: &str) -> String {
 
 /// streamable_http方式のURLを検証する(実際に接続する前、サーバー登録時のIPC層から呼ぶ)。
 /// 検証本体は[`crate::net::validate_external_url`]に集約する(LLMプロバイダーのbase_url
-/// 検証と共有。Opusレビュー指摘)。
+/// 検証と共有)。
 pub fn validate_streamable_http_url(url: &str) -> Result<(), CoreError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| CoreError::Mcp(format!("url is not a valid URL: {e}")))?;
@@ -303,7 +303,7 @@ pub fn validate_streamable_http_url(url: &str) -> Result<(), CoreError> {
 
 /// リクエストの構造やMCPプロトコル自体が管理するヘッダー名。ユーザーが登録した
 /// カスタムヘッダーで上書きされてはならない(`authorization`はMCPサーバーの認証に
-/// 使う主用途のため許可する。Opusレビュー指摘)。
+/// 使う主用途のため許可する)。
 const RESERVED_HEADER_NAMES: &[&str] = &[
     "host",
     "content-length",
@@ -345,7 +345,7 @@ pub fn validate_header_value(value: &str) -> Result<(), CoreError> {
 
 /// `refs`が指す秘密情報をまとめて解決する。`secrets::load`(keyring呼び出し)は同期I/Oで
 /// あり、architecture.md 4節の規律(同期処理は`spawn_blocking`から呼ぶ)に従って
-/// 非同期タスク上で直接呼ばない(Opusレビュー指摘)。
+/// 非同期タスク上で直接呼ばない。
 async fn resolve_secrets(refs: &[SecretRef]) -> Result<Vec<(String, SecretString)>, CoreError> {
     let refs = refs.to_vec();
     tokio::task::spawn_blocking(move || {
