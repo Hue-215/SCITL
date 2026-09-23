@@ -27,6 +27,9 @@ pub enum CoreError {
     Secrets(String),
     #[error("config file error: {0}")]
     Config(String),
+    /// 設定・登録の操作が規則に反する(空の名前、未登録のID、重複、範囲外の値)。
+    #[error("invalid settings: {0}")]
+    InvalidSettings(String),
     #[error("MCP server error: {0}")]
     Mcp(String),
     /// 実行基盤側の失敗(ブロッキング処理のタスクがパニックした等)。

@@ -25,6 +25,8 @@ SCITL-2.0/
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(5節)
 │   │       ├── secrets.rs          # keyringへの唯一の入口
 │   │       ├── config.rs           # 参照のみを持つ設定(TOML)
+│   │       ├── settings/           # 設定・登録の操作(規則・検証・秘密情報の出し入れ・保存)
+│   │       ├── blocking.rs         # 非同期層からブロッキング処理を呼ぶ入口(4節)
 │   │       ├── sanitize.rs         # (未作成。#67)
 │   │       └── i18n.rs             # (未作成。#80)
 │   ├── scitl-cli/                  # 旧debug_cli.py相当。scitl-coreのみに依存(未作成。#23)

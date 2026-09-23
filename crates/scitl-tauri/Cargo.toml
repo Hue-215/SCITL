@@ -10,11 +10,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 scitl-core = { path = "../scitl-core" }
 tauri = { version = "2", features = [] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
 secrecy = { workspace = true }
-ulid = { workspace = true }
 
 [[bin]]
 name = "scitl-tauri"
