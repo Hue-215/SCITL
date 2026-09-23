@@ -1,9 +1,11 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::{CoreError, Result};
+use crate::db::error::Result;
 use crate::db::tasks::{self, TaskStatus, TaskUpdate};
 use crate::llm::ToolSchema;
+
+use super::args::Args;
 
 pub const NAME: &str = "update_task";
 
@@ -34,26 +36,14 @@ pub fn schema() -> ToolSchema {
     }
 }
 
-/// 引数の型が期待と違う場合は変換を試みず、エラーとして返す
-/// (docs/spec/principles.md 3節)。未知の引数は拒否する(docs/spec/rebuild/tools.md 3節)。
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "arguments".to_string(),
-            reason: "expected a JSON object".to_string(),
-        })?;
+    let args = Args::parse(arguments, KNOWN_ARGS)?;
 
-    for key in object.keys() {
-        if !KNOWN_ARGS.contains(&key.as_str()) {
-            return Err(CoreError::UnknownArgument(key.clone()));
-        }
-    }
-
-    let title = extract_string(object, "title")?;
-    let description = extract_string(object, "description")?;
-    let deadline = extract_string(object, "deadline")?;
-    let status = extract_string(object, "status")?
+    let title = args.optional_string("title")?;
+    let description = args.optional_string("description")?;
+    let deadline = args.optional_string("deadline")?;
+    let status = args
+        .optional_string("status")?
         .map(|s| TaskStatus::parse(&s))
         .transpose()?;
 
@@ -71,21 +61,11 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
     Ok(serde_json::to_value(updated).expect("Task serialization cannot fail"))
 }
 
-fn extract_string(object: &serde_json::Map<String, Value>, name: &str) -> Result<Option<String>> {
-    match object.get(name) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        Some(_) => Err(CoreError::InvalidArgument {
-            name: name.to_string(),
-            reason: "expected a string".to_string(),
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::error::CoreError;
 
     fn seed_task(conn: &Connection) -> i64 {
         let now = db::now_iso8601();

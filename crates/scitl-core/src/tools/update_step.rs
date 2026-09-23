@@ -1,10 +1,11 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::{CoreError, Result};
+use crate::db::error::Result;
 use crate::db::task_steps;
 use crate::llm::ToolSchema;
 
+use super::args::Args;
 use super::get_current_task_detail::task_detail;
 
 pub const NAME: &str = "update_step";
@@ -31,68 +32,23 @@ pub fn schema() -> ToolSchema {
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "arguments".to_string(),
-            reason: "expected a JSON object".to_string(),
-        })?;
+    let args = Args::parse(arguments, KNOWN_ARGS)?;
 
-    for key in object.keys() {
-        if !KNOWN_ARGS.contains(&key.as_str()) {
-            return Err(CoreError::UnknownArgument(key.clone()));
-        }
-    }
-
-    let step_id = extract_step_id(object)?;
+    let step_id = args.required_i64("step_id")?;
     super::require_step_in_task(conn, task_id, step_id)?;
 
-    let description = extract_string(object, "description")?;
-    let done = extract_bool(object, "done")?;
+    let description = args.optional_string("description")?;
+    let done = args.optional_bool("done")?;
 
     task_steps::update_step(conn, step_id, description, done)?;
     task_detail(conn, task_id)
-}
-
-fn extract_step_id(object: &serde_json::Map<String, Value>) -> Result<i64> {
-    let value = object
-        .get("step_id")
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "step_id".to_string(),
-            reason: "required".to_string(),
-        })?;
-    value.as_i64().ok_or_else(|| CoreError::InvalidArgument {
-        name: "step_id".to_string(),
-        reason: "expected an integer".to_string(),
-    })
-}
-
-fn extract_string(object: &serde_json::Map<String, Value>, name: &str) -> Result<Option<String>> {
-    match object.get(name) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        Some(_) => Err(CoreError::InvalidArgument {
-            name: name.to_string(),
-            reason: "expected a string".to_string(),
-        }),
-    }
-}
-
-fn extract_bool(object: &serde_json::Map<String, Value>, name: &str) -> Result<Option<bool>> {
-    match object.get(name) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(_) => Err(CoreError::InvalidArgument {
-            name: name.to_string(),
-            reason: "expected a boolean".to_string(),
-        }),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::error::CoreError;
 
     fn seed_task_with_step(conn: &Connection) -> (i64, i64) {
         let task_id = db::tasks::create_task(conn).unwrap().id;

@@ -4,8 +4,7 @@ use serde_json::json;
 use crate::db::error::Result;
 use crate::db::{now_iso8601, task_steps, tasks};
 
-/// システムプロンプト3種のうち今回扱う2種(docs/spec/legacy/data-model.md 3節)。
-/// タイトル生成用プロンプトはIssue #46の担当。総合チャットとタスクチャットでは
+/// ユーザーが設定するシステムプロンプト。総合チャットとタスクチャットでは
 /// 公開ツールが異なるため(docs/spec/rebuild/tools.md 5節)、`base`と`task_chat`を
 /// 分けて持つ。`Option<&str>`を2つ並べて渡すと取り違えの余地が生まれるため
 /// (tools.md 1節が修正した「対象タスクの取り違え」と同種の事故)、名前で縛る。

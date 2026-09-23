@@ -3,15 +3,35 @@ pub mod messages;
 pub mod task_steps;
 pub mod tasks;
 
-use rusqlite::Connection;
+pub use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 pub use error::{CoreError, Result};
 
 const INIT_SQL: &str = include_str!("../../../../migrations/0001_init.sql");
+
+/// 非同期層から使うDBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を
+/// 非同期関数のawaitをまたいで持たせられない(architecture.md 4節)。触るときは[`with_conn`]を通す。
+pub type SharedConnection = Arc<Mutex<Connection>>;
+
+/// 非同期層からリポジトリ層(同期の`fn`)を呼ぶ唯一の入口。ロックの取得からドロップまでを
+/// `spawn_blocking`のクロージャ内に閉じ込め、ロックガードがawaitをまたがないようにする
+/// (architecture.md 4節)。
+pub async fn with_conn<F, T>(db: SharedConnection, f: F) -> Result<T>
+where
+    F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let conn = db.lock().expect("db mutex poisoned");
+        f(&conn)
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("db task panicked: {e}")))?
+}
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::new(vec![M::up(INIT_SQL)]));

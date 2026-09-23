@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use scitl_core::config::{self, Config, ProviderConfig};
 use scitl_core::db::error::CoreError;
+use scitl_core::db::SharedConnection;
 use scitl_core::llm::providers::openai_compat::OpenAiCompatAdapter;
 use scitl_core::llm::LlmAdapter;
-use scitl_core::orchestration::SharedConnection;
 use scitl_core::secrets;
 use secrecy::SecretString;
 use tauri::Manager;
@@ -28,7 +28,7 @@ pub struct Runtime {
 }
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。DB接続はロック内でのみ触り、
-/// asyncのawaitをまたいで保持しない(architecture.md 4節、orchestration::turn参照)。
+/// asyncのawaitをまたいで保持しない(architecture.md 4節、`db::with_conn`)。
 ///
 /// `runtime`のロックはアダプタの読み書きだけに使い、`.send().await`のような非同期呼び出しを
 /// ロックを持ったまままたがせない(`Arc`を複製してからロックを外す。architecture.md 4節と

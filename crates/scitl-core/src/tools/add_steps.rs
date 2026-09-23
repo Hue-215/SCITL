@@ -1,10 +1,11 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::{CoreError, Result};
+use crate::db::error::Result;
 use crate::db::task_steps;
 use crate::llm::ToolSchema;
 
+use super::args::Args;
 use super::get_current_task_detail::task_detail;
 
 pub const NAME: &str = "add_steps";
@@ -34,60 +35,19 @@ pub fn schema() -> ToolSchema {
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "arguments".to_string(),
-            reason: "expected a JSON object".to_string(),
-        })?;
+    let args = Args::parse(arguments, KNOWN_ARGS)?;
 
-    for key in object.keys() {
-        if !KNOWN_ARGS.contains(&key.as_str()) {
-            return Err(CoreError::UnknownArgument(key.clone()));
-        }
-    }
-
-    let descriptions = extract_descriptions(object)?;
+    let descriptions = args.required_string_array("descriptions")?;
 
     task_steps::add_steps(conn, task_id, &descriptions)?;
     task_detail(conn, task_id)
-}
-
-fn extract_descriptions(object: &serde_json::Map<String, Value>) -> Result<Vec<String>> {
-    let value = object
-        .get("descriptions")
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "descriptions".to_string(),
-            reason: "required".to_string(),
-        })?;
-    let array = value.as_array().ok_or_else(|| CoreError::InvalidArgument {
-        name: "descriptions".to_string(),
-        reason: "expected an array of strings".to_string(),
-    })?;
-    if array.is_empty() {
-        return Err(CoreError::InvalidArgument {
-            name: "descriptions".to_string(),
-            reason: "must not be empty".to_string(),
-        });
-    }
-
-    array
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::to_string)
-                .ok_or_else(|| CoreError::InvalidArgument {
-                    name: "descriptions".to_string(),
-                    reason: "expected an array of strings".to_string(),
-                })
-        })
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::error::CoreError;
 
     fn seed_task(conn: &Connection) -> i64 {
         db::tasks::create_task(conn).unwrap().id

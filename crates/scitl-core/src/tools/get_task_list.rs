@@ -1,9 +1,11 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::{CoreError, Result};
+use crate::db::error::Result;
 use crate::db::tasks;
 use crate::llm::ToolSchema;
+
+use super::args::Args;
 
 pub const NAME: &str = "get_task_list";
 
@@ -22,15 +24,7 @@ pub fn schema() -> ToolSchema {
 }
 
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "arguments".to_string(),
-            reason: "expected a JSON object".to_string(),
-        })?;
-    if let Some(key) = object.keys().next() {
-        return Err(CoreError::UnknownArgument(key.clone()));
-    }
+    Args::parse(arguments, &[])?;
 
     // 表示側のフォールバック(Issue #61)はモデルには渡さない。`title: null` が「未設定」を
     // 意味する状態をそのまま見せる(docs/spec/rebuild/tools.md「変更点の詳細」)。
@@ -45,6 +39,7 @@ pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::error::CoreError;
 
     #[test]
     fn rejects_unknown_argument() {
