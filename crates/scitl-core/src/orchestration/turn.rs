@@ -69,6 +69,10 @@ pub async fn run_turn(
 /// 応答を生成し直す。ツール実行記録は対象外(`db::messages::soft_delete_normal_from`
 /// 参照)。添付ファイルは現時点で未実装(Issue #21)のため引き継ぎ処理自体が無いが、
 /// 実装され次第ここに「新しい発言へコピーする」処理を追加する必要がある。
+// turn層の入口はどれも「db・adapter・task_id・prompts・mcp・limits」という同じ文脈を
+// 受け取る。まとめるべきかはIssue #119(引数の定型の共通化)で決めるので、CIを入れる
+// ついでにここで形を変えることはしない。
+#[allow(clippy::too_many_arguments)]
 pub async fn edit_user_message(
     db: SharedConnection,
     adapter: Option<&dyn LlmAdapter>,
