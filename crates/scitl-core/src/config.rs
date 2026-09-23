@@ -167,7 +167,7 @@ impl Config {
 }
 
 /// 設定ファイルを読み込む。ファイルが存在しない場合は初回起動として空の設定を返す
-/// (設定画面(Issue #22)がまだ無いため、これが有効な初期状態)。
+/// (プロバイダー未登録のまま起動し、設定画面で登録する)。
 pub fn load(path: &Path) -> Result<Config, CoreError> {
     match std::fs::read_to_string(path) {
         Ok(text) => toml::from_str(&text).map_err(|e| CoreError::Config(e.to_string())),
