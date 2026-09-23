@@ -1181,6 +1181,51 @@ async fn edit_user_message_truncates_and_regenerates() {
     assert!(deleted_at.is_some());
 }
 
+/// 編集の削除と挿入は1つの単位(Issue #151)。挿入が失敗したら、削除も残らない。
+#[tokio::test]
+async fn failed_edit_leaves_the_conversation_untouched() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("応答A")),
+        task_id,
+        "元の質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        // 編集後の本文の挿入だけを失敗させる。
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_edit_insert BEFORE INSERT ON messages
+             WHEN NEW.content = '編集後の質問'
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "user").unwrap().id
+    };
+
+    let result = edit_user_message(
+        db.clone(),
+        &context(&TextAdapter::one("応答B")),
+        task_id,
+        user_message_id,
+        "編集後の質問".to_string(),
+    )
+    .await;
+    assert!(result.is_err());
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, vec!["元の質問", "応答A"]);
+}
+
 /// 編集(Issue #95): ツールを実行したターンを編集で破棄しても、編集後の発言は**元の位置**に
 /// 現れる。編集後の本文は新しい行として挿入されるが、生き残る通常発言はすべて対象より前の
 /// idなので、破棄されたターンのツール実行記録さえ会話から外れれば順序は元のままになる。

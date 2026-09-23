@@ -6,7 +6,7 @@ use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, Message, NewMessage, Role};
-use crate::db::{with_conn, SharedConnection};
+use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::llm::{
     ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments, ToolCallRequest,
 };
@@ -68,21 +68,24 @@ pub async fn edit_user_message(
             .ok_or(CoreError::MessageNotFound(message_id))?;
         validate_target(&target, task_id, &["user"])?;
 
-        messages::soft_delete_normal_from(conn, task_id, message_id)?;
-        messages::insert_message(
-            conn,
-            NewMessage {
-                task_id: Some(task_id),
-                role: Role::User,
-                content: &new_text,
-                kind: Kind::Normal,
-                source: None,
-                turn: None,
-                error_kind: None,
-                reasoning: None,
-            },
-        )?;
-        Ok(())
+        // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
+        in_transaction(conn, |conn| {
+            messages::soft_delete_normal_from(conn, task_id, message_id)?;
+            messages::insert_message(
+                conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role: Role::User,
+                    content: &new_text,
+                    kind: Kind::Normal,
+                    source: None,
+                    turn: None,
+                    error_kind: None,
+                    reasoning: None,
+                },
+            )?;
+            Ok(())
+        })
     })
     .await?;
 
