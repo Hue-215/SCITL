@@ -11,9 +11,10 @@ import {
 } from './api'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
+import { taskName } from './taskName'
 import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
 import { finalEntryOf, groupMessages } from './thinking'
-import type { Message, PendingEntry, Task, TaskSummary } from './types'
+import type { Message, PendingEntry, TaskDetail, TaskSummary } from './types'
 
 function formatTime(createdAt: string): string {
   return new Date(createdAt).toLocaleString()
@@ -23,7 +24,7 @@ export default function App() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [taskId, setTaskId] = useState<number | null>(null)
   const [adding, setAdding] = useState(false)
-  const [task, setTask] = useState<Task | null>(null)
+  const [task, setTask] = useState<TaskDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [pending, setPending] = useState<PendingEntry[]>([])
   const [draft, setDraft] = useState('')
@@ -175,7 +176,8 @@ export default function App() {
     try {
       await deleteTaskChatMessage(taskId, messageId)
       await loadTask(taskId)
-      // 最初のユーザー発言を消すとサイドバーのフォールバック表示が変わる(Issue #61)。
+      // 最初のユーザー発言を消すとフォールバック表示が変わる(Issue #61)。ヘッダー側は
+      // 直前の`loadTask`で引き直し済み。
       await loadTasks()
     } catch (e) {
       setError(String(e))
@@ -199,7 +201,7 @@ export default function App() {
 
       <main>
         <header className="chat-header">
-          <h1>{task ? (task.title ?? '(無題)') : 'SCITL'}</h1>
+          <h1>{task ? taskName(task) : 'SCITL'}</h1>
           {task?.description && <p>{task.description}</p>}
         </header>
 
@@ -223,9 +225,8 @@ export default function App() {
               // 編集・削除(Issue #41)。対象はツール実行記録を除く通常発言のみ
               // (data-model.md「ツール実行記録は通常発言の編集・削除・再試行の対象に
               // 含めない」)。`plain`項目は常にユーザー発言のため、編集はここでのみ
-              // 起こりうる(legacy/frontend.md 1節)。
-              const canEdit = message.role === 'user'
-              const canDelete = message.role === 'user'
+              // 起こりうる(legacy/frontend.md 1節)。編集と削除は対象が同じ。
+              const canEditOrDelete = message.role === 'user'
 
               if (editingId === message.id) {
                 return (
@@ -260,29 +261,25 @@ export default function App() {
                 <li key={message.id} className={`entry entry-${message.role}`}>
                   <span className="entry-content">{message.content}</span>
                   <time className="entry-time">{formatTime(message.created_at)}</time>
-                  {(canEdit || canDelete) && (
+                  {canEditOrDelete && (
                     <div className="entry-actions">
-                      {canEdit && (
-                        <button
-                          type="button"
-                          disabled={disableActions}
-                          onClick={() => {
-                            setEditingId(message.id)
-                            setEditDraft(message.content)
-                          }}
-                        >
-                          編集
-                        </button>
-                      )}
-                      {canDelete && (
-                        <button
-                          type="button"
-                          disabled={disableActions}
-                          onClick={() => void remove(message.id)}
-                        >
-                          削除
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        disabled={disableActions}
+                        onClick={() => {
+                          setEditingId(message.id)
+                          setEditDraft(message.content)
+                        }}
+                      >
+                        編集
+                      </button>
+                      <button
+                        type="button"
+                        disabled={disableActions}
+                        onClick={() => void remove(message.id)}
+                      >
+                        削除
+                      </button>
                     </div>
                   )}
                 </li>
@@ -292,36 +289,32 @@ export default function App() {
             // SCITL自身の応答生成1ターン分。思考・内部ツール呼び出しを発生順の折りたたみで
             // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する(Issue #42)。
             // 再試行・削除(Issue #41)の対象は、この最終行の通常発言のみ
-            // (data-model.md「ツール実行記録は…対象に含めない」)。
+            // (data-model.md「ツール実行記録は…対象に含めない」)。再試行と削除は対象が同じ。
             const finalMessage = finalEntryOf(item.entries)
-            const canRetry = finalMessage.kind === 'normal' && finalMessage.role === 'assistant'
-            const canDelete = finalMessage.kind === 'normal' && finalMessage.role === 'assistant'
+            const canRetryOrDelete =
+              finalMessage.kind === 'normal' && finalMessage.role === 'assistant'
             return (
               <li key={`turn-${item.turnId}`} className="turn-group">
                 <ThinkingTools entries={item.entries} />
                 <div className={`entry entry-${finalMessage.role}`}>
                   <span className="entry-content">{finalMessage.content}</span>
                   <time className="entry-time">{formatTime(finalMessage.created_at)}</time>
-                  {(canRetry || canDelete) && (
+                  {canRetryOrDelete && (
                     <div className="entry-actions">
-                      {canRetry && (
-                        <button
-                          type="button"
-                          disabled={disableActions}
-                          onClick={() => void retry(finalMessage.id)}
-                        >
-                          再試行
-                        </button>
-                      )}
-                      {canDelete && (
-                        <button
-                          type="button"
-                          disabled={disableActions}
-                          onClick={() => void remove(finalMessage.id)}
-                        >
-                          削除
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        disabled={disableActions}
+                        onClick={() => void retry(finalMessage.id)}
+                      >
+                        再試行
+                      </button>
+                      <button
+                        type="button"
+                        disabled={disableActions}
+                        onClick={() => void remove(finalMessage.id)}
+                      >
+                        削除
+                      </button>
                     </div>
                   )}
                 </div>

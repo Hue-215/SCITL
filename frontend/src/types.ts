@@ -12,6 +12,12 @@ export interface Task {
   updated_at: string
 }
 
+// crates/scitl-core/src/db/tasks.rs の TaskDetailView(Taskをフラット化したもの)。
+// ヘッダー向け。fallback_labelの意味はTaskSummaryと同じ。
+export interface TaskDetail extends Task {
+  fallback_label: string | null
+}
+
 // crates/scitl-core/src/db/tasks.rs の TaskListItem(TaskSummaryをフラット化したもの)。
 export interface TaskSummary {
   id: number
