@@ -1552,7 +1552,7 @@ async fn delete_message_removes_an_error_reply() {
         messages.iter().find(|m| m.role == "error").unwrap().id
     };
 
-    delete_message(db.clone(), task_id, error_message_id)
+    delete_message(db.clone(), &InFlightSet::new(), task_id, error_message_id)
         .await
         .unwrap();
 
@@ -1592,7 +1592,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
-    delete_message(db.clone(), task_id, first_user_id)
+    delete_message(db.clone(), &InFlightSet::new(), task_id, first_user_id)
         .await
         .unwrap();
 
@@ -1642,6 +1642,39 @@ async fn a_turn_is_rejected_while_the_same_task_is_generating() {
     assert!(
         generating.try_begin(task_id).is_some(),
         "ターンが終われば生成中は外れる"
+    );
+}
+
+/// 生成中のタスクでは発言を削除できない(Issue #152)。生成中のターンが読んだ履歴と
+/// DBの発言が食い違うため。
+#[tokio::test]
+async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("応答")),
+        task_id,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "user").unwrap().id
+    };
+
+    let generating = InFlightSet::new();
+    let _in_progress = generating.try_begin(task_id).unwrap();
+    let result = delete_message(db.clone(), &generating, task_id, user_message_id).await;
+
+    assert!(matches!(result, Err(CoreError::TaskBusy(id)) if id == task_id));
+    let conn = db.lock().unwrap();
+    assert_eq!(
+        db::messages::list_for_task(&conn, task_id).unwrap().len(),
+        2
     );
 }
 

@@ -81,7 +81,7 @@ pub async fn delete_task_chat_message(
     task_id: i64,
     message_id: i64,
 ) -> Result<(), String> {
-    delete_message(state.db.clone(), task_id, message_id)
+    delete_message(state.db.clone(), &state.generating, task_id, message_id)
         .await
         .map_err(|e| e.to_string())
 }

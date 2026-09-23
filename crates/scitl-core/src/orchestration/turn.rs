@@ -7,7 +7,7 @@ use ulid::Ulid;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, Message, NewMessage, Role};
 use crate::db::{in_transaction, with_conn, SharedConnection};
-use crate::in_flight::InFlight;
+use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
     ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments, ToolCallRequest,
 };
@@ -31,7 +31,7 @@ pub async fn run_turn(
     task_id: i64,
     user_text: String,
 ) -> Result<Vec<ResponseEvent>> {
-    let _generating = begin_generating(ctx, task_id)?;
+    let _generating = begin_generating(ctx.generating, task_id)?;
     with_conn(db.clone(), move |conn| {
         messages::insert_message(
             conn,
@@ -65,7 +65,7 @@ pub async fn edit_user_message(
     message_id: i64,
     new_text: String,
 ) -> Result<Vec<ResponseEvent>> {
-    let _generating = begin_generating(ctx, task_id)?;
+    let _generating = begin_generating(ctx.generating, task_id)?;
     with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
@@ -109,7 +109,7 @@ pub async fn retry_reply(
     task_id: i64,
     message_id: i64,
 ) -> Result<Vec<ResponseEvent>> {
-    let _generating = begin_generating(ctx, task_id)?;
+    let _generating = begin_generating(ctx.generating, task_id)?;
     let attempt = with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
@@ -134,7 +134,14 @@ pub async fn retry_reply(
 /// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
 /// カスケードはしない(対象の1件だけを消す。編集・再試行のカスケード削除とは別の操作)。
 /// 対象はユーザー発言とターンの返信(`db::messages::soft_delete_message`が検証する)。
-pub async fn delete_message(db: SharedConnection, task_id: i64, message_id: i64) -> Result<()> {
+/// 生成中のタスクでは断る。生成中のターンが読んだ履歴と、DBの発言が食い違うため。
+pub async fn delete_message(
+    db: SharedConnection,
+    generating: &InFlightSet<i64>,
+    task_id: i64,
+    message_id: i64,
+) -> Result<()> {
+    let _generating = begin_generating(generating, task_id)?;
     with_conn(db, move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
@@ -148,10 +155,10 @@ pub async fn delete_message(db: SharedConnection, task_id: i64, message_id: i64)
     .await
 }
 
-/// ターンの行を1行も書かないうちに、同じタスクの応答生成が走っていないかを確かめる
+/// 会話の行を1行も書かないうちに、同じタスクの応答生成が走っていないかを確かめる
 /// ([`TurnContext::generating`])。返ったガードを持っている間、そのタスクは生成中になる。
-fn begin_generating<'a>(ctx: &TurnContext<'a>, task_id: i64) -> Result<InFlight<'a, i64>> {
-    ctx.generating
+fn begin_generating(generating: &InFlightSet<i64>, task_id: i64) -> Result<InFlight<'_, i64>> {
+    generating
         .try_begin(task_id)
         .ok_or(CoreError::TaskBusy(task_id))
 }
