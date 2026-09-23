@@ -239,9 +239,7 @@ struct ResponseMessage {
     /// 思考(reasoning)専用の本文(Issue #42)。標準のOpenAI Chat Completions APIには
     /// 無いフィールドだが、`reasoning_content`はOpenAI互換を名乗るプロバイダ・ゲートウェイ
     /// (DeepSeek、vLLMのreasoning parser経由の出力等)で広く使われている拡張のため対応する。
-    /// フィールド自体が無いプロバイダでは`None`のまま(`#[serde(default)]`)。新しい通信先を
-    /// 追加するものではなく既存エンドポイントの応答を追加で読むだけなので、Opusを呼ぶ条件
-    /// 「外部通信」には該当しないと判断した(PR本文に記載)。
+    /// フィールド自体が無いプロバイダでは`None`のまま(`#[serde(default)]`)。
     #[serde(default)]
     reasoning_content: Option<String>,
 }

@@ -100,7 +100,7 @@ pub fn execute_task_chat_tool(
         add_steps::NAME => add_steps::execute(conn, task_id, arguments),
         update_step::NAME => update_step::execute(conn, task_id, arguments),
         delete_step::NAME => delete_step::execute(conn, task_id, arguments),
-        other => Err(CoreError::UnknownArgument(format!("unknown tool: {other}"))),
+        other => Err(CoreError::UnknownTool(other.to_string())),
     }
 }
 
@@ -115,5 +115,21 @@ fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result
         Ok(())
     } else {
         Err(CoreError::TaskStepNotFound(step_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    #[test]
+    fn unknown_tool_is_reported_as_unknown_tool() {
+        // モデルに返る文言が「未知の引数」にならないこと(ツール名の誤りだと伝える)。
+        let conn = db::open_in_memory().unwrap();
+        let task_id = db::tasks::create_task(&conn).unwrap().id;
+        let err = execute_task_chat_tool(&conn, task_id, "no_such_tool", &serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(&err, CoreError::UnknownTool(name) if name == "no_such_tool"));
     }
 }

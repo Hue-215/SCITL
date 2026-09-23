@@ -29,9 +29,11 @@ pub enum TurnFailure {
     ProviderConfig,
     /// 上記のいずれにも分類できないプロバイダー呼び出しの失敗。
     Provider,
-    /// `classify`のmatchはCoreErrorの全バリアントを網羅するため、ここへ落ちるのは
-    /// `CoreError::Llm`の中身が既知パターンに当たらなかった場合のみ。detailは
-    /// sanitize済みの文字列に限る(`sanitize_error_body`を通ったもの)。
+    /// `CoreError::Llm`の中身が既知パターンに当たらなかった場合と、内部エラー。
+    /// detailに載るのは、内部エラーならバリアント相当の短い識別子、`Llm`なら
+    /// HTTP応答を伴わない失敗の文言(接続失敗・応答の解釈失敗等。`openai_compat.rs`が
+    /// URLを剥がしてから作る)。HTTPエラーは状態コードで分類されるためここへは来ず、
+    /// プロバイダ応答の本文は載らない。
     Unexpected {
         detail: String,
     },
@@ -120,9 +122,9 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Secrets(_) | CoreError::ProviderConfig(_) | CoreError::Config(_) => {
             TurnFailure::ProviderConfig
         }
-        // MCP呼び出しは現時点でtask_chat_toolsに含まれず、run_turn内では発生しない想定だが、
-        // 発生した場合もプロバイダー起因の失敗として扱う(詳細はMCPサーバーのURL等を
-        // 含みうるため出さない)。
+        // MCPのツール呼び出しの失敗は`turn::execute_call`が結果JSONに落とすため、通常は
+        // ここへ来ない。来た場合もプロバイダー起因の失敗として扱う(詳細はMCPサーバーの
+        // URL等を含みうるため出さない)。
         CoreError::Mcp(_) => TurnFailure::Provider,
         // 内部エラー。ユーザーに見せて意味のある文言が作れないため`unexpected`に寄せるが、
         // detailにはバリアント名相当の短い識別子のみを載せ、生の`to_string()`は使わない。
@@ -133,6 +135,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::MessageNotFound(_) => unexpected("message_not_found"),
         CoreError::InvalidMessageOperation(_) => unexpected("invalid_message_operation"),
         CoreError::UnknownArgument(_) => unexpected("unknown_argument"),
+        CoreError::UnknownTool(_) => unexpected("unknown_tool"),
+        CoreError::Internal(_) => unexpected("internal"),
         CoreError::InvalidArgument { .. } => unexpected("invalid_argument"),
     }
 }
