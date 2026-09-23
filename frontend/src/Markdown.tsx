@@ -3,8 +3,10 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markd
 import remarkGfm from 'remark-gfm'
 import LinkDialog from './LinkDialog'
 import remarkInertHtml from './remarkInertHtml'
+import remarkSoftBreaks from './remarkSoftBreaks'
 
-const REMARK_PLUGINS = [remarkGfm, remarkInertHtml]
+// remarkSoftBreaksは、remarkInertHtmlが`<br>`から作った改行を見て二重の改行を避けるため後に置く
+const REMARK_PLUGINS = [remarkGfm, remarkInertHtml, remarkSoftBreaks]
 
 // 発言本文のMarkdown描画(Issue #39)。react-markdownはHTML文字列を経由せずReactの
 // 要素を直接組み立てるため、innerHTMLへの注入経路を持たない。生のHTML・画像は
