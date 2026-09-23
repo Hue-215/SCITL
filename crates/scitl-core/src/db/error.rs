@@ -14,6 +14,9 @@ pub enum CoreError {
     InvalidMessageOperation(String),
     #[error("unknown argument: {0}")]
     UnknownArgument(String),
+    /// モデルが公開していないツール名を呼んだ。
+    #[error("unknown tool: {0}")]
+    UnknownTool(String),
     #[error("invalid argument {name}: {reason}")]
     InvalidArgument { name: String, reason: String },
     #[error("llm provider error: {0}")]
@@ -26,6 +29,9 @@ pub enum CoreError {
     Config(String),
     #[error("MCP server error: {0}")]
     Mcp(String),
+    /// 実行基盤側の失敗(ブロッキング処理のタスクがパニックした等)。
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

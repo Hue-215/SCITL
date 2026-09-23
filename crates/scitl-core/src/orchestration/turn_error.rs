@@ -135,6 +135,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::MessageNotFound(_) => unexpected("message_not_found"),
         CoreError::InvalidMessageOperation(_) => unexpected("invalid_message_operation"),
         CoreError::UnknownArgument(_) => unexpected("unknown_argument"),
+        CoreError::UnknownTool(_) => unexpected("unknown_tool"),
+        CoreError::Internal(_) => unexpected("internal"),
         CoreError::InvalidArgument { .. } => unexpected("invalid_argument"),
     }
 }

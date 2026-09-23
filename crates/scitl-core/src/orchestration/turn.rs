@@ -551,7 +551,7 @@ where
         f(&conn)
     })
     .await
-    .map_err(|e| CoreError::Llm(format!("db task panicked: {e}")))?
+    .map_err(|e| CoreError::Internal(format!("db task panicked: {e}")))?
 }
 
 /// API送信用の履歴。送信日時は`ChatMessage::User`の`sent_at`として本文と分けて運ぶ
