@@ -44,8 +44,10 @@ impl OpenAiCompatAdapter {
 
         // ハードニング済みクライアントの組み立ては`net::hardened_client`に集約する
         // (MCP streamable_httpと共有)。
-        let client =
-            crate::net::hardened_client(&base_url, request_timeout.unwrap_or(REQUEST_TIMEOUT))?;
+        let client = crate::net::hardened_client(
+            &base_url,
+            Some(request_timeout.unwrap_or(REQUEST_TIMEOUT)),
+        )?;
         Ok(Self {
             client,
             base_url,
@@ -294,14 +296,13 @@ impl LlmAdapter for OpenAiCompatAdapter {
         };
 
         let endpoint = completions_endpoint(&self.base_url)?;
-        let response = self
-            .client
-            .post(endpoint)
-            .bearer_auth(self.api_key.expose_secret())
-            .json(&body)
-            .send()
-            .await
-            .map_err(provider_error)?;
+        let mut request = self.client.post(endpoint);
+        // 認証不要のローカル推論サーバー向けに、鍵が空なら`Authorization`ヘッダーごと付けない
+        // (`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
+        if !self.api_key.expose_secret().is_empty() {
+            request = request.bearer_auth(self.api_key.expose_secret());
+        }
+        let response = request.json(&body).send().await.map_err(provider_error)?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -360,7 +361,61 @@ impl LlmAdapter for OpenAiCompatAdapter {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
     use super::*;
+
+    /// 1回だけ接続を受け、最小のコンプリーション応答を返す。受け取ったリクエストの
+    /// ヘッダー部を返す。
+    fn spawn_capturing() -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut received = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !received.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                received.extend_from_slice(&buf[..n]);
+            }
+            let body = r#"{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let text = String::from_utf8_lossy(&received).to_string();
+            text.split("\r\n\r\n")
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        });
+        (format!("http://{addr}/v1"), handle)
+    }
+
+    async fn send_with_key(api_key: &str) -> String {
+        let (base_url, handle) = spawn_capturing();
+        let adapter =
+            OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", None).unwrap();
+        adapter.send(&[], &[]).await.unwrap();
+        handle.join().unwrap()
+    }
+
+    #[tokio::test]
+    async fn empty_api_key_sends_no_authorization_header() {
+        let headers = send_with_key("").await;
+        assert!(!headers.contains("authorization:"));
+    }
+
+    #[tokio::test]
+    async fn api_key_is_sent_as_bearer() {
+        let headers = send_with_key("sk-test").await;
+        assert!(headers.contains("authorization: bearer sk-test"));
+    }
 
     #[test]
     fn accepts_https_base_url() {
