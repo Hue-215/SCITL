@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   createTask,
   deleteTaskChatMessage,
@@ -15,6 +15,7 @@ import { taskName } from './taskName'
 import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
 import { finalEntryOf, groupMessages } from './thinking'
 import type { Message, TaskDetail, TaskSummary } from './types'
+import { useStickToBottom } from './useStickToBottom'
 import { useTaskRequests } from './useTaskRequests'
 
 function formatTime(createdAt: string): string {
@@ -39,6 +40,12 @@ export default function App() {
   // 選択中のタスク。非同期の処理が終わった時点で見比べるため、stateとは別にrefでも持つ
   // (処理を始めたときのstateは古いままなので、比べても切り替えに気付けない)。
   const selectedRef = useRef<number | null>(null)
+  const {
+    ref: logRef,
+    onScroll: onLogScroll,
+    stick,
+    follow,
+  } = useStickToBottom<HTMLUListElement>()
 
   const loadTasks = useCallback(async () => {
     try {
@@ -55,12 +62,13 @@ export default function App() {
   const selectTask = useCallback((id: number) => {
     if (selectedRef.current === id) return
     selectedRef.current = id
+    stick()
     setTaskId(id)
     // 読み込みが終わるまで前のタスクの内容を出しておくと、それを見ながら新しいタスクへ
     // 操作できてしまう。
     setTask(null)
     setMessages([])
-  }, [])
+  }, [stick])
 
   useEffect(() => {
     void loadTasks().then((summaries) => {
@@ -123,6 +131,7 @@ export default function App() {
     if (!text || disableActions || taskId === null) return
     const id = taskId
     setDraft('')
+    stick()
     // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
     // DBから引き直す(docs/spec/principles.md 3節「保存するのは組み立て終わった応答」)。
     await requests.run(
@@ -156,6 +165,7 @@ export default function App() {
     if (!text || disableActions || taskId === null) return
     const id = taskId
     setEditingId(null)
+    stick()
     hideSuperseded(messageId, null)
     await requests.run(
       id,
@@ -171,6 +181,7 @@ export default function App() {
   const retry = async (messageId: number) => {
     if (disableActions || taskId === null) return
     const id = taskId
+    stick()
     hideSuperseded(messageId, messages.find((m) => m.id === messageId)?.turn_id ?? null)
     await requests.run(
       id,
@@ -192,8 +203,19 @@ export default function App() {
   const pending = taskId === null ? [] : requests.pendingOf(taskId)
   const failure = taskId === null ? null : requests.failureOf(taskId)
 
+  // 会話欄の中身が変わるのは、発言の引き直し・楽観表示の出し入れ・失敗の表示のとき。
+  // 設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
+  useLayoutEffect(follow, [follow, messages, pending.length, failure, settingsOpen])
+
   if (settingsOpen) {
-    return <Settings onClose={() => setSettingsOpen(false)} />
+    return (
+      <Settings
+        onClose={() => {
+          stick()
+          setSettingsOpen(false)
+        }}
+      />
+    )
   }
 
   return (
@@ -215,7 +237,7 @@ export default function App() {
 
         {error && <p className="error">{error}</p>}
 
-        <ul className="chat-log">
+        <ul className="chat-log" ref={logRef} onScroll={onLogScroll}>
           {groupMessages(messages).map((item) => {
             if (item.kind === 'plain') {
               const message = item.message
