@@ -29,46 +29,70 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<TaskStep>> {
     Ok(rows)
 }
 
+/// 工程の説明の正規化。前後の空白を落とし(落とさないと重複排除が効かない)、空なら
+/// エラーにする。追加と更新で同じ規則を通す。
+fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::InvalidArgument {
+            name: arg_name.to_string(),
+            reason: "must not be empty".to_string(),
+        });
+    }
+    Ok(trimmed.to_string())
+}
+
 /// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は
 /// 除外する(docs/spec/legacy/backend.md 5節の棚卸しを踏まえた確定方針)。
+/// 空の説明が1つでもあれば、1件も追加せずにエラーを返す。
 /// `order_index`は連番で既存の最大値の続きから振る。戻り値は新規に追加された工程のみ。
 pub fn add_steps(
     conn: &Connection,
     task_id: i64,
     descriptions: &[String],
 ) -> Result<Vec<TaskStep>> {
-    tasks::get_task(conn, task_id)?;
+    super::in_transaction(conn, |conn| {
+        tasks::get_task(conn, task_id)?;
+        let descriptions = descriptions
+            .iter()
+            .map(|d| normalize_description(d, "descriptions"))
+            .collect::<Result<Vec<_>>>()?;
 
-    let mut stmt = conn
-        .prepare("SELECT description FROM task_steps WHERE task_id = ?1 AND deleted_at IS NULL")?;
-    let existing: HashSet<String> = stmt
-        .query_map([task_id], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<HashSet<_>>>()?;
-    drop(stmt);
-
-    let mut next_order_index: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM task_steps WHERE task_id = ?1",
-        [task_id],
-        |row| row.get(0),
-    )?;
-
-    let mut seen = existing;
-    let mut created = Vec::new();
-    let now = now_iso8601();
-    for description in descriptions {
-        if !seen.insert(description.clone()) {
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO task_steps (task_id, description, order_index, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![task_id, description, next_order_index, now],
+        let mut stmt = conn.prepare(
+            "SELECT description FROM task_steps WHERE task_id = ?1 AND deleted_at IS NULL",
         )?;
-        created.push(get_step(conn, conn.last_insert_rowid())?);
-        next_order_index += 1;
-    }
+        let existing: HashSet<String> = stmt
+            .query_map([task_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<HashSet<_>>>()?;
+        drop(stmt);
 
-    Ok(created)
+        let mut next_order_index: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM task_steps WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )?;
+
+        let mut seen = existing;
+        let mut created = Vec::new();
+        let now = now_iso8601();
+        for description in &descriptions {
+            if !seen.insert(description.clone()) {
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO task_steps (task_id, description, order_index, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![task_id, description, next_order_index, now],
+            )?;
+            created.push(get_step(conn, conn.last_insert_rowid())?);
+            next_order_index += 1;
+        }
+
+        if !created.is_empty() {
+            tasks::touch(conn, task_id)?;
+        }
+        Ok(created)
+    })
 }
 
 /// `description`・`done`はどちらも省略可(渡された分だけ更新する)。
@@ -80,30 +104,38 @@ pub fn update_step(
     description: Option<String>,
     done: Option<bool>,
 ) -> Result<TaskStep> {
-    let current = get_step(conn, step_id)?;
+    super::in_transaction(conn, |conn| {
+        let current = get_step(conn, step_id)?;
+        let description = description
+            .map(|d| normalize_description(&d, "description"))
+            .transpose()?;
 
-    let done_at = match done {
-        Some(true) => Some(current.done_at.clone().unwrap_or_else(now_iso8601)),
-        Some(false) => None,
-        None => current.done_at.clone(),
-    };
+        let done_at = match done {
+            Some(true) => Some(current.done_at.clone().unwrap_or_else(now_iso8601)),
+            Some(false) => None,
+            None => current.done_at.clone(),
+        };
 
-    conn.execute(
-        "UPDATE task_steps SET description = COALESCE(?1, description), done_at = ?2
+        conn.execute(
+            "UPDATE task_steps SET description = COALESCE(?1, description), done_at = ?2
          WHERE id = ?3",
-        rusqlite::params![description, done_at, step_id],
-    )?;
+            rusqlite::params![description, done_at, step_id],
+        )?;
+        tasks::touch(conn, current.task_id)?;
 
-    get_step(conn, step_id)
+        get_step(conn, step_id)
+    })
 }
 
 pub fn delete_step(conn: &Connection, step_id: i64) -> Result<()> {
-    get_step(conn, step_id)?;
-    conn.execute(
-        "UPDATE task_steps SET deleted_at = ?1 WHERE id = ?2",
-        rusqlite::params![now_iso8601(), step_id],
-    )?;
-    Ok(())
+    super::in_transaction(conn, |conn| {
+        let step = get_step(conn, step_id)?;
+        conn.execute(
+            "UPDATE task_steps SET deleted_at = ?1 WHERE id = ?2",
+            rusqlite::params![now_iso8601(), step_id],
+        )?;
+        tasks::touch(conn, step.task_id)
+    })
 }
 
 fn get_step(conn: &Connection, step_id: i64) -> Result<TaskStep> {
@@ -193,6 +225,64 @@ mod tests {
 
         let undone = update_step(&conn, step.id, None, Some(false)).unwrap();
         assert!(undone.done_at.is_none());
+    }
+
+    #[test]
+    fn add_steps_trims_before_deduping_and_rejects_blank_without_adding_any() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let created = add_steps(
+            &conn,
+            task_id,
+            &[" 買い出し".to_string(), "買い出し ".to_string()],
+        )
+        .unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].description, "買い出し");
+
+        let err = add_steps(&conn, task_id, &["調理".to_string(), "  ".to_string()]).unwrap_err();
+        assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "descriptions"));
+        assert_eq!(list_for_task(&conn, task_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn update_step_rejects_blank_description() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let step = add_steps(&conn, task_id, &["買い出し".to_string()])
+            .unwrap()
+            .remove(0);
+        assert!(update_step(&conn, step.id, Some(" ".to_string()), None).is_err());
+        let updated = update_step(&conn, step.id, Some(" 調理 ".to_string()), None).unwrap();
+        assert_eq!(updated.description, "調理");
+    }
+
+    #[test]
+    fn step_changes_update_the_task_updated_at() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let reset = || {
+            conn.execute(
+                "UPDATE tasks SET updated_at = '2000-01-01T00:00:00Z' WHERE id = ?1",
+                [task_id],
+            )
+            .unwrap();
+        };
+        let updated_at = || db::tasks::get_task(&conn, task_id).unwrap().updated_at;
+
+        reset();
+        let step = add_steps(&conn, task_id, &["買い出し".to_string()])
+            .unwrap()
+            .remove(0);
+        assert_ne!(updated_at(), "2000-01-01T00:00:00Z");
+
+        reset();
+        update_step(&conn, step.id, None, Some(true)).unwrap();
+        assert_ne!(updated_at(), "2000-01-01T00:00:00Z");
+
+        reset();
+        delete_step(&conn, step.id).unwrap();
+        assert_ne!(updated_at(), "2000-01-01T00:00:00Z");
     }
 
     #[test]

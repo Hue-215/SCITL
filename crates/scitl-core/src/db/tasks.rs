@@ -17,12 +17,34 @@ pub struct Task {
 
 /// `update_task`ツールが受け付ける引数。`status`は列挙のみを許す
 /// (docs/spec/rebuild/tools.md「変更点の詳細」— 削除操作をここから漏らさない)。
+/// タイトルは消せない(未設定に戻す操作を持たない)ので`Option`のまま。
 #[derive(Debug, Default)]
 pub struct TaskUpdate {
     pub title: Option<String>,
-    pub description: Option<String>,
-    pub deadline: Option<String>,
+    pub description: FieldChange,
+    pub deadline: FieldChange,
     pub status: Option<TaskStatus>,
+}
+
+/// 消せる項目の変更。「指定なし」と「消す」を別の値にする。`null`を「消す」の意味にすると、
+/// 型に緩いモデルが変えないつもりの項目にも`null`を入れて値が消える
+/// (docs/spec/rebuild/tools.md 2節)。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum FieldChange {
+    #[default]
+    Keep,
+    Set(String),
+    Clear,
+}
+
+impl FieldChange {
+    fn apply(self, current: Option<String>) -> Option<String> {
+        match self {
+            Self::Keep => current,
+            Self::Set(value) => Some(value),
+            Self::Clear => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,46 +152,67 @@ pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
 }
 
 pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Result<Task> {
-    // 存在確認(未削除)を先に行い、TaskNotFoundを一貫して返す。
-    get_task(conn, task_id)?;
+    super::in_transaction(conn, |conn| {
+        // 存在確認(未削除)を先に行い、TaskNotFoundを一貫して返す。
+        let current = get_task(conn, task_id)?;
 
-    if let Some(deadline) = update.deadline.as_deref() {
-        validate_deadline(deadline)?;
-    }
+        if let FieldChange::Set(deadline) = &update.deadline {
+            validate_deadline(deadline)?;
+        }
+        // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので(principles.md 2節)、
+        // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない(同3節)。
+        if let FieldChange::Set(description) = &update.description {
+            if description.trim().is_empty() {
+                return Err(CoreError::InvalidArgument {
+                    name: "description".to_string(),
+                    reason: "must not be empty (to remove the description, use clear)".to_string(),
+                });
+            }
+        }
 
-    let now = now_iso8601();
-    // サニタイズ後に空文字列になった場合は「タイトルの指定なし」として扱い、既存の値を保つ
-    // (空文字列をtitleに書き込むと`title IS NULL`前提の判定が壊れるため)。
-    let title = update
-        .title
-        .as_deref()
-        .map(sanitize_title)
-        .filter(|t| !t.is_empty());
-    let archived_at_clause = update.status.map(|status| match status {
-        TaskStatus::Archived => Some(now.clone()),
-        TaskStatus::Unarchived => None,
-    });
+        let now = now_iso8601();
+        // サニタイズ後に空文字列になった場合は「タイトルの指定なし」として扱い、既存の値を保つ
+        // (空文字列をtitleに書き込むと`title IS NULL`前提の判定が壊れるため)。
+        let title = update
+            .title
+            .as_deref()
+            .map(sanitize_title)
+            .filter(|t| !t.is_empty())
+            .or(current.title);
+        // 既にアーカイブ済みなら元の日時を保つ(`task_steps::update_step`の`done_at`と同じ)。
+        // 状態の列は現在の状態だけを表し、いつ何をしたかは会話ログのツール実行記録が持つ。
+        let archived_at = match update.status {
+            Some(TaskStatus::Archived) => current.archived_at.or_else(|| Some(now.clone())),
+            Some(TaskStatus::Unarchived) => None,
+            None => current.archived_at,
+        };
 
+        conn.execute(
+            "UPDATE tasks SET title = ?1, description = ?2, deadline = ?3, archived_at = ?4,
+                          updated_at = ?5
+         WHERE id = ?6",
+            rusqlite::params![
+                title,
+                update.description.apply(current.description),
+                update.deadline.apply(current.deadline),
+                archived_at,
+                now,
+                task_id,
+            ],
+        )?;
+
+        get_task(conn, task_id)
+    })
+}
+
+/// 工程の変更をタスクの更新として記録する。工程はタスクの一部なので、`updated_at`は
+/// 「タスクが最後に変わった日時」として工程の変更も含める。
+pub(super) fn touch(conn: &Connection, task_id: i64) -> Result<()> {
     conn.execute(
-        "UPDATE tasks SET
-            title = COALESCE(?1, title),
-            description = COALESCE(?2, description),
-            deadline = COALESCE(?3, deadline),
-            archived_at = CASE WHEN ?4 THEN ?5 ELSE archived_at END,
-            updated_at = ?6
-         WHERE id = ?7",
-        rusqlite::params![
-            title,
-            update.description,
-            update.deadline,
-            archived_at_clause.is_some(),
-            archived_at_clause.flatten(),
-            now,
-            task_id,
-        ],
+        "UPDATE tasks SET updated_at = ?1 WHERE id = ?2",
+        rusqlite::params![now_iso8601(), task_id],
     )?;
-
-    get_task(conn, task_id)
+    Ok(())
 }
 
 /// タイトル文字列をタイトルとして書き込む前に無害化する(`docs/spec/principles.md` 4節
@@ -403,7 +446,7 @@ mod tests {
                 &conn,
                 id,
                 TaskUpdate {
-                    deadline: Some(bad.to_string()),
+                    deadline: FieldChange::Set(bad.to_string()),
                     ..Default::default()
                 },
             )
@@ -435,7 +478,7 @@ mod tests {
                 &conn,
                 id,
                 TaskUpdate {
-                    deadline: Some(bad.to_string()),
+                    deadline: FieldChange::Set(bad.to_string()),
                     ..Default::default()
                 },
             )
@@ -458,7 +501,7 @@ mod tests {
                 &conn,
                 id,
                 TaskUpdate {
-                    deadline: Some(good.to_string()),
+                    deadline: FieldChange::Set(good.to_string()),
                     ..Default::default()
                 },
             )
@@ -513,6 +556,87 @@ mod tests {
         )
         .unwrap();
         assert!(unarchived.archived_at.is_none());
+    }
+
+    #[test]
+    fn archiving_again_keeps_the_original_archived_at() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        let archive = || TaskUpdate {
+            status: Some(TaskStatus::Archived),
+            ..Default::default()
+        };
+        conn.execute(
+            "UPDATE tasks SET archived_at = '2020-01-01T00:00:00Z' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+        let updated = update_task(&conn, id, archive()).unwrap();
+        assert_eq!(updated.archived_at.as_deref(), Some("2020-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn clear_removes_deadline_and_description_and_keep_leaves_them() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                description: FieldChange::Set("牛乳と卵".to_string()),
+                deadline: FieldChange::Set("2026-10-01".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let kept = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some("買い物".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kept.description.as_deref(), Some("牛乳と卵"));
+        assert_eq!(kept.deadline.as_deref(), Some("2026-10-01"));
+
+        let cleared = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                description: FieldChange::Clear,
+                deadline: FieldChange::Clear,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(cleared.description.is_none());
+        assert!(cleared.deadline.is_none());
+        assert_eq!(cleared.title.as_deref(), Some("買い物"));
+    }
+
+    #[test]
+    fn empty_description_is_rejected_not_written() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        for blank in ["", "  \n "] {
+            let err = update_task(
+                &conn,
+                id,
+                TaskUpdate {
+                    description: FieldChange::Set(blank.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&err, CoreError::InvalidArgument { name, .. } if name == "description")
+            );
+        }
+        assert!(get_task(&conn, id).unwrap().description.is_none());
     }
 
     #[test]

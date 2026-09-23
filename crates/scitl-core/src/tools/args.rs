@@ -47,21 +47,19 @@ impl<'a> Args<'a> {
 
     /// 空の配列は拒否する。
     pub fn required_string_array(&self, name: &str) -> Result<Vec<String>> {
-        let array = self
-            .required(name)?
-            .as_array()
-            .ok_or_else(|| invalid(name, "expected an array of strings"))?;
-        if array.is_empty() {
+        let items = string_array(self.required(name)?, name)?;
+        if items.is_empty() {
             return Err(invalid(name, "must not be empty"));
         }
-        array
-            .iter()
-            .map(|item| {
-                item.as_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| invalid(name, "expected an array of strings"))
-            })
-            .collect()
+        Ok(items)
+    }
+
+    /// 省略と`null`はどちらも`None`。空の配列はそのまま受ける。
+    pub fn optional_string_array(&self, name: &str) -> Result<Option<Vec<String>>> {
+        match self.object.get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => string_array(value, name).map(Some),
+        }
     }
 
     fn required(&self, name: &str) -> Result<&'a Value> {
@@ -69,6 +67,16 @@ impl<'a> Args<'a> {
             .get(name)
             .ok_or_else(|| invalid(name, "required"))
     }
+}
+
+fn string_array(value: &Value, name: &str) -> Result<Vec<String>> {
+    let expected = || invalid(name, "expected an array of strings");
+    value
+        .as_array()
+        .ok_or_else(expected)?
+        .iter()
+        .map(|item| item.as_str().map(str::to_string).ok_or_else(expected))
+        .collect()
 }
 
 fn invalid(name: &str, reason: &str) -> CoreError {
@@ -120,6 +128,18 @@ mod tests {
         let args = Args::parse(&value, &["i"]).unwrap();
         let err = args.required_i64("i").unwrap_err();
         assert!(matches!(err, CoreError::InvalidArgument { reason, .. } if reason == "required"));
+    }
+
+    #[test]
+    fn optional_string_array_accepts_empty_and_absent() {
+        let value = json!({ "a": [], "n": null });
+        let args = Args::parse(&value, &["a", "n", "m"]).unwrap();
+        assert_eq!(args.optional_string_array("a").unwrap(), Some(Vec::new()));
+        assert_eq!(args.optional_string_array("n").unwrap(), None);
+        assert_eq!(args.optional_string_array("m").unwrap(), None);
+        let value = json!({ "a": "deadline" });
+        let args = Args::parse(&value, &["a"]).unwrap();
+        assert!(args.optional_string_array("a").is_err());
     }
 
     #[test]

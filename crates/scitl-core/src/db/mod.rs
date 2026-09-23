@@ -32,6 +32,26 @@ where
     .await
 }
 
+/// 複数文にわたる書き込みを1つの単位にする。途中の文が失敗すれば何も残さない
+/// (工程を一部だけ追加したのにツールは失敗を返す、といった食い違いを作らない)。
+/// 読んでから書く操作の直列化は、今はプロセス内で接続を包む`Mutex`が担っている。
+/// 複数プロセスを跨いだ排他の方式(`BEGIN IMMEDIATE`等)はIssue #74で決める(data-model.md 4節)。
+///
+/// 既にトランザクションの中で呼ばれたら、新しく始めずにその中で実行する(SQLiteは入れ子の
+/// `BEGIN`を受け付けない)。確定と巻き戻しは外側に任せる。
+pub(crate) fn in_transaction<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    if !conn.is_autocommit() {
+        return f(conn);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let out = f(&tx)?;
+    tx.commit()?;
+    Ok(out)
+}
+
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::new(vec![M::up(INIT_SQL)]));
 
@@ -80,4 +100,27 @@ pub fn open_in_memory() -> Result<Connection> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     MIGRATIONS.to_latest(&mut conn)?;
     Ok(conn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_transaction_leaves_nothing_when_a_later_statement_fails() {
+        let conn = open_in_memory().unwrap();
+        let task_id = tasks::create_task(&conn).unwrap().id;
+
+        let result: Result<()> = in_transaction(&conn, |conn| {
+            task_steps::add_steps(conn, task_id, &["買い出し".to_string()])?;
+            Err(CoreError::Internal(
+                "fail after the first write".to_string(),
+            ))
+        });
+
+        assert!(matches!(result, Err(CoreError::Internal(_))), "{result:?}");
+        assert!(task_steps::list_for_task(&conn, task_id)
+            .unwrap()
+            .is_empty());
+    }
 }
