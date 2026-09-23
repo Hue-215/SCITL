@@ -10,8 +10,7 @@ use scitl_core::llm::{
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
-    delete_message, edit_user_message, retry_assistant_message, run_turn, McpAccess, SystemPrompts,
-    ToolLimits,
+    delete_message, edit_user_message, retry_reply, run_turn, McpAccess, SystemPrompts, ToolLimits,
 };
 use serde_json::json;
 
@@ -1416,7 +1415,7 @@ async fn edit_user_message_rejects_assistant_target() {
 /// 再試行(Issue #41): 同じ`turn_id`のまま`attempt_no`が増え、旧アシスタント応答は
 /// 表示から外れて新しい応答に置き換わる。対応するユーザー発言はそのまま残る。
 #[tokio::test]
-async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
+async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
@@ -1440,7 +1439,7 @@ async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
         (m.id, m.turn_id.clone().unwrap())
     };
 
-    retry_assistant_message(
+    retry_reply(
         db.clone(),
         Some(&TextAdapter::one("応答B")),
         task_id,
@@ -1464,9 +1463,9 @@ async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
     assert_eq!(messages[1].attempt_no, Some(2));
 }
 
-/// 再試行の対象はアシスタント発言のみ。ユーザー発言を再試行しようとするとエラーになる。
+/// 再試行の対象はターンの返信のみ。ユーザー発言を再試行しようとするとエラーになる。
 #[tokio::test]
-async fn retry_assistant_message_rejects_user_target() {
+async fn retry_reply_rejects_user_target() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
@@ -1489,7 +1488,7 @@ async fn retry_assistant_message_rejects_user_target() {
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
-    let result = retry_assistant_message(
+    let result = retry_reply(
         db.clone(),
         Some(&TextAdapter::one("応答B")),
         task_id,
@@ -1500,6 +1499,93 @@ async fn retry_assistant_message_rejects_user_target() {
     )
     .await;
     assert!(result.is_err());
+}
+
+/// エラーで終わったターンも再試行できる(Issue #130)。エラー発言は同じ`turn_id`の
+/// 次の試行に置き換わり、編集で打ち直したときのような新しいターンにはならない。
+#[tokio::test]
+async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&EmptyResponseAdapter),
+        task_id,
+        "質問".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits::default(),
+    )
+    .await
+    .unwrap();
+
+    let (error_message_id, original_turn_id) = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let m = messages.iter().find(|m| m.role == "error").unwrap();
+        (m.id, m.turn_id.clone().unwrap())
+    };
+
+    retry_reply(
+        db.clone(),
+        Some(&TextAdapter::one("応答B")),
+        task_id,
+        error_message_id,
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits::default(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(roles, vec!["user", "assistant"]);
+    assert_eq!(messages[1].content, "応答B");
+    assert_eq!(
+        messages[1].turn_id.as_deref(),
+        Some(original_turn_id.as_str())
+    );
+    assert_eq!(messages[1].attempt_no, Some(2));
+}
+
+/// エラー発言も削除できる(Issue #130)。返信を失ったターンは会話から外れ、
+/// ユーザー発言だけが残る。
+#[tokio::test]
+async fn delete_message_removes_an_error_reply() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        Some(&EmptyResponseAdapter),
+        task_id,
+        "質問".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits::default(),
+    )
+    .await
+    .unwrap();
+
+    let error_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "error").unwrap().id
+    };
+
+    delete_message(db.clone(), task_id, error_message_id)
+        .await
+        .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, vec!["質問"]);
 }
 
 /// 削除(Issue #41): カスケードしない単発の論理削除。対象以外の発言はそのまま残る。

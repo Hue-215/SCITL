@@ -1,9 +1,7 @@
 use tauri::State;
 
 use scitl_core::llm::ResponseEvent;
-use scitl_core::orchestration::{
-    delete_message, edit_user_message, retry_assistant_message, run_turn,
-};
+use scitl_core::orchestration::{delete_message, edit_user_message, retry_reply, run_turn};
 
 use super::with_db;
 use crate::AppState;
@@ -67,8 +65,8 @@ pub async fn edit_task_chat_message(
     .map_err(|e| e.to_string())
 }
 
-/// 発言の再試行(Issue #41)。アシスタント発言のみが対象で、同じターンのまま
-/// `attempt_no`を増やして応答を作り直す。
+/// 発言の再試行(Issue #41・#130)。ターンの返信(アシスタント発言・エラー発言)が対象で、
+/// 同じターンのまま`attempt_no`を増やして応答を作り直す。
 #[tauri::command]
 pub async fn retry_task_chat_message(
     state: State<'_, AppState>,
@@ -79,7 +77,7 @@ pub async fn retry_task_chat_message(
     let turn = state.settings.snapshot();
     let mcp = turn.mcp();
 
-    retry_assistant_message(
+    retry_reply(
         state.db.clone(),
         turn.adapter(),
         task_id,
@@ -92,7 +90,7 @@ pub async fn retry_task_chat_message(
     .map_err(|e| e.to_string())
 }
 
-/// 発言の削除(Issue #41)。ユーザー/アシスタント発言が対象で、確認ダイアログ無しの
+/// 発言の削除(Issue #41)。ユーザー発言とターンの返信が対象で、確認ダイアログ無しの
 /// 即座に取り消し可能な論理削除。カスケードはしない(対象の1件だけを消す)。
 #[tauri::command]
 pub async fn delete_task_chat_message(

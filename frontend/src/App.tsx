@@ -290,9 +290,11 @@ export default function App() {
             // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する(Issue #42)。
             // 再試行・削除(Issue #41)の対象は、この最終行の通常発言のみ
             // (data-model.md「ツール実行記録は…対象に含めない」)。再試行と削除は対象が同じ。
+            // 失敗したターンの返信(エラー発言)も含める(Issue #130)。
             const finalMessage = finalEntryOf(item.entries)
             const canRetryOrDelete =
-              finalMessage.kind === 'normal' && finalMessage.role === 'assistant'
+              finalMessage.kind === 'normal' &&
+              (finalMessage.role === 'assistant' || finalMessage.role === 'error')
             return (
               <li key={`turn-${item.turnId}`} className="turn-group">
                 <ThinkingTools entries={item.entries} />
