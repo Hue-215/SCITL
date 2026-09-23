@@ -1,9 +1,11 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::{CoreError, Result};
+use crate::db::error::Result;
 use crate::db::{task_steps, tasks};
 use crate::llm::ToolSchema;
+
+use super::args::Args;
 
 pub const NAME: &str = "get_current_task_detail";
 
@@ -22,15 +24,7 @@ pub fn schema() -> ToolSchema {
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "arguments".to_string(),
-            reason: "expected a JSON object".to_string(),
-        })?;
-    if let Some(key) = object.keys().next() {
-        return Err(CoreError::UnknownArgument(key.clone()));
-    }
+    Args::parse(arguments, &[])?;
 
     task_detail(conn, task_id)
 }
@@ -47,6 +41,7 @@ pub fn task_detail(conn: &Connection, task_id: i64) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::error::CoreError;
 
     fn seed_task(conn: &Connection) -> i64 {
         db::tasks::create_task(conn).unwrap().id

@@ -1,10 +1,11 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::{CoreError, Result};
+use crate::db::error::Result;
 use crate::db::task_steps;
 use crate::llm::ToolSchema;
 
+use super::args::Args;
 use super::get_current_task_detail::task_detail;
 
 pub const NAME: &str = "delete_step";
@@ -29,29 +30,8 @@ pub fn schema() -> ToolSchema {
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "arguments".to_string(),
-            reason: "expected a JSON object".to_string(),
-        })?;
-
-    for key in object.keys() {
-        if !KNOWN_ARGS.contains(&key.as_str()) {
-            return Err(CoreError::UnknownArgument(key.clone()));
-        }
-    }
-
-    let value = object
-        .get("step_id")
-        .ok_or_else(|| CoreError::InvalidArgument {
-            name: "step_id".to_string(),
-            reason: "required".to_string(),
-        })?;
-    let step_id = value.as_i64().ok_or_else(|| CoreError::InvalidArgument {
-        name: "step_id".to_string(),
-        reason: "expected an integer".to_string(),
-    })?;
+    let args = Args::parse(arguments, KNOWN_ARGS)?;
+    let step_id = args.required_i64("step_id")?;
 
     super::require_step_in_task(conn, task_id, step_id)?;
     task_steps::delete_step(conn, step_id)?;
@@ -62,6 +42,7 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
 mod tests {
     use super::*;
     use crate::db;
+    use crate::db::error::CoreError;
 
     fn seed_task_with_step(conn: &Connection) -> (i64, i64) {
         let task_id = db::tasks::create_task(conn).unwrap().id;
