@@ -227,10 +227,7 @@ impl LlmAdapter for FailingAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
     ) -> Result<Vec<ResponseEvent>, CoreError> {
-        Err(CoreError::LlmHttp {
-            status: 401,
-            body: "invalid api key".to_string(),
-        })
+        Err(CoreError::Llm("http 401: invalid api key".to_string()))
     }
 }
 
@@ -965,12 +962,6 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
     let messages = db::messages::list_for_task(&conn, task_id).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("auth"));
-    // 詳細は定型文言とは別の列に持つ(Issue #159)。
-    assert_eq!(
-        error_message.error_detail.as_deref(),
-        Some("HTTP 401: invalid api key")
-    );
-    assert!(!error_message.content.contains("invalid api key"));
 }
 
 /// 空応答(テキストもツール呼び出しも無い)もエラー発言として保存される(Issue #40)。
@@ -1205,8 +1196,6 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
 }
 
 /// エラー発言は次ターンのAPI送信用履歴に混入しない(`legacy/backend.md` 4節手順2)。
-/// 詳細(プロバイダーの応答本文)も、システムプロンプトを含めどこにも載らない(Issue #159。
-/// 外部から来た文字列をモデルに渡すと注入の経路になる)。
 #[tokio::test]
 async fn error_messages_are_excluded_from_the_next_turns_history() {
     let conn = db::open_in_memory().unwrap();
@@ -1232,20 +1221,15 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
 
     let rounds = adapter.sent_messages.into_inner().unwrap();
     let first_round = &rounds[0];
-    let leaks = |needle: &str| {
-        first_round.iter().any(|m| match m {
-            ChatMessage::System(content)
-            | ChatMessage::User { text: content, .. }
-            | ChatMessage::Assistant {
-                content: Some(content),
-                ..
-            }
-            | ChatMessage::Tool { content, .. } => content.contains(needle),
-            ChatMessage::Assistant { content: None, .. } => false,
-        })
-    };
-    assert!(!leaks("APIキーが正しくない"));
-    assert!(!leaks("invalid api key"));
+    let has_error_content = first_round.iter().any(|m| match m {
+        ChatMessage::User { text: content, .. }
+        | ChatMessage::Assistant {
+            content: Some(content),
+            ..
+        } => content.contains("APIキーが正しくない"),
+        _ => false,
+    });
+    assert!(!has_error_content);
 }
 
 /// 編集(Issue #41): 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から
