@@ -18,19 +18,18 @@ const INIT_SQL: &str = include_str!("../../../../migrations/0001_init.sql");
 pub type SharedConnection = Arc<Mutex<Connection>>;
 
 /// 非同期層からリポジトリ層(同期の`fn`)を呼ぶ唯一の入口。ロックの取得からドロップまでを
-/// `spawn_blocking`のクロージャ内に閉じ込め、ロックガードがawaitをまたがないようにする
+/// [`crate::blocking::run`]のクロージャ内に閉じ込め、ロックガードがawaitをまたがないようにする
 /// (architecture.md 4節)。
 pub async fn with_conn<F, T>(db: SharedConnection, f: F) -> Result<T>
 where
     F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(move || {
+    crate::blocking::run(move || {
         let conn = db.lock().expect("db mutex poisoned");
         f(&conn)
     })
     .await
-    .map_err(|e| CoreError::Internal(format!("db task panicked: {e}")))?
 }
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =

@@ -3,7 +3,9 @@
 //! 型として存在させない。実際の鍵の出し入れは[`crate::secrets`]の責務。
 
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +21,7 @@ pub enum ApiFormat {
 
 /// 1つのLLMプロバイダー設定。秘密情報を含まないため、そのままログに出しても
 /// TOMLファイルとして保存してもよい。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: String,
     /// 画面表示用の名前(idはユーザーに見せない内部識別子)。
@@ -59,8 +61,21 @@ pub struct GeneralConfig {
     /// 工程ツールの使い分けのようなタスクチャット固有の指示は`system_prompt`とは
     /// 別に持つ(docs/spec/legacy/data-model.md 3節「システムプロンプト3種」)。
     pub task_chat_system_prompt: Option<String>,
-    /// 応答タイムアウト(秒)。未設定はアダプタ側の既定値を使う。
+    /// 応答タイムアウト(秒)。未設定はアダプタ側の既定値を使う。値の解釈は
+    /// [`Self::response_timeout`]に閉じる。
     pub response_timeout_secs: Option<u64>,
+}
+
+impl GeneralConfig {
+    /// 未設定(`None`)と、保存済みの設定に紛れ込んだ`0`はどちらも`None`(アダプタの既定値)。
+    /// `0`は「即タイムアウト」ではなく設定の不備として扱う。更新時にも弾くが、手で編集した
+    /// `config.toml`が同じ経路を通るため、ここでも受け止める
+    /// (`orchestration::ToolLimits::from_config`と同じ扱い)。
+    pub fn response_timeout(&self) -> Option<Duration> {
+        self.response_timeout_secs
+            .filter(|s| *s > 0)
+            .map(Duration::from_secs)
+    }
 }
 
 /// ツール呼び出しの上限(legacy/frontend.md 4節「共通設定」)。設定画面「ツール/MCP」
@@ -176,11 +191,44 @@ pub fn load(path: &Path) -> Result<Config, CoreError> {
     }
 }
 
-/// 設定ファイルを保存する。呼び出し元(Tauriコマンド層)が親ディレクトリの存在を保証する。
+/// 設定ファイルを保存する。呼び出し元が親ディレクトリの存在を保証する。
+///
+/// 同じディレクトリの一時ファイルに書き切ってから置き換える。直接上書きすると、書き込み
+/// 途中で落ちたときに`config.toml`が壊れ、起動時の読み込みエラーは設定画面から直せない。
 pub fn save(path: &Path, config: &Config) -> Result<(), CoreError> {
     let text = toml::to_string_pretty(config).map_err(|e| CoreError::Config(e.to_string()))?;
-    std::fs::write(path, text).map_err(|e| CoreError::Config(e.to_string()))
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp_path = path.with_file_name(tmp_name);
+
+    let written = std::fs::File::create(&tmp_path).and_then(|mut file| {
+        file.write_all(text.as_bytes())?;
+        file.sync_all()
+    });
+    let replaced = written.and_then(|()| std::fs::rename(&tmp_path, path));
+    if let Err(e) = replaced {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(CoreError::Config(e.to_string()));
+    }
+    sync_parent_dir(path);
+    Ok(())
 }
+
+/// 置き換え自体を永続化する。呼び出し元は保存の直後に、古い設定だけが参照していた
+/// 秘密情報を消すため、置き換えが電源断で巻き戻ると設定が消えた鍵を指して残る。
+/// 失敗しても保存は済んでいるので、エラーにはしない。
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+            eprintln!("failed to sync config directory: {e}");
+        }
+    }
+}
+
+/// Windowsではディレクトリを開いてfsyncできない(`MoveFileEx`の置き換えに任せる)。
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -259,6 +307,42 @@ mod tests {
             }
             McpEndpoint::StreamableHttp { .. } => panic!("expected stdio endpoint"),
         }
+    }
+
+    #[test]
+    fn save_overwrites_existing_file_without_leaving_temp_file() {
+        let dir = tempdir();
+        let path = dir.join("config.toml");
+        save(&path, &Config::default()).unwrap();
+        let config = Config {
+            active_provider_id: Some("p".to_string()),
+            ..Config::default()
+        };
+        save(&path, &config).unwrap();
+
+        assert_eq!(
+            load(&path).unwrap().active_provider_id.as_deref(),
+            Some("p")
+        );
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("config.toml")]);
+    }
+
+    #[test]
+    fn zero_response_timeout_is_treated_as_unset() {
+        let general = GeneralConfig {
+            response_timeout_secs: Some(0),
+            ..GeneralConfig::default()
+        };
+        assert_eq!(general.response_timeout(), None);
+        let general = GeneralConfig {
+            response_timeout_secs: Some(30),
+            ..GeneralConfig::default()
+        };
+        assert_eq!(general.response_timeout(), Some(Duration::from_secs(30)));
     }
 
     #[test]

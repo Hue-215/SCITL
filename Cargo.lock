@@ -3160,12 +3160,8 @@ version = "0.1.0"
 dependencies = [
  "scitl-core",
  "secrecy",
- "serde",
- "serde_json",
  "tauri",
  "tauri-build",
- "tokio",
- "ulid",
 ]
 
 [[package]]

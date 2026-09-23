@@ -137,6 +137,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::UnknownArgument(_) => unexpected("unknown_argument"),
         CoreError::UnknownTool(_) => unexpected("unknown_tool"),
         CoreError::Internal(_) => unexpected("internal"),
+        // 設定操作でだけ起きる。ターンの経路には来ない。
+        CoreError::InvalidSettings(_) => unexpected("invalid_settings"),
         CoreError::InvalidArgument { .. } => unexpected("invalid_argument"),
     }
 }
