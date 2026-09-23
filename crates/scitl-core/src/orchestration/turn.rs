@@ -22,9 +22,9 @@ use crate::tools::{self, external::ExternalToolset};
 /// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
 /// までを1つの関数に閉じる(docs/spec/principles.md 5節)。
 ///
-/// `adapter`が`None`(プロバイダー未選択)・モデル未選択・APIキー未設定・空応答・
-/// コンテキスト超過・ツール呼び出し回数の上限到達は、`Err`で上位に返さずエラー発言として
-/// 保存し`Ok`で返す(Issue #40)。DB自体への書き込みが失敗する場合のみ`Err`のまま返る。
+/// ユーザー発言を保存したあとの失敗は、`Err`で上位に返さずエラー発言として保存し
+/// `Ok`で返す([`generate_turn_response`])。`Err`になるのは、そのタスクが既に応答を
+/// 生成中のときと、発言やエラー発言自体を書けないときだけ。
 pub async fn run_turn(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -183,9 +183,12 @@ fn validate_target(target: &Message, task_id: i64, expected_roles: &[&str]) -> R
 /// (legacy/backend.md 9節。ラウンドの途中で抜ける経路が複数あるため、往復の本体は
 /// [`run_tool_rounds`]に分け、切断をこの1箇所に集める)。
 ///
-/// `adapter`が`None`(プロバイダー未選択)・モデル未選択・APIキー未設定・空応答・
-/// コンテキスト超過・ツール呼び出し回数の上限到達は、`Err`で上位に返さずエラー発言として
-/// 保存し`Ok`で返す(Issue #40)。DB自体への書き込みが失敗する場合のみ`Err`のまま返る。
+/// 失敗はどれも`Err`で上位に返さず、この試行のエラー発言として保存して`Ok`で返す
+/// (Issue #40)。プロバイダー未選択・空応答・上限到達のような想定内の失敗に加え、途中の
+/// `Err`も`turn_error::classify`で種別を決めて残す。再試行の失敗も1回目と同じ形で残り、
+/// もう一度再試行できるようにするため(再試行は返信を消してから作り直すので、何も
+/// 書かずに抜けるとターンごと会話から消える)。`Err`が返るのはエラー発言自体を書けない
+/// ときだけ。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -200,9 +203,13 @@ async fn generate_turn_response(
 
     let mut sessions = McpSessions::new();
     let external = prepare_external_tools(&ctx.mcp, &mut sessions).await;
-    let result = run_tool_rounds(db, adapter, ctx, &attempt, &external, &mut sessions).await;
+    let result =
+        run_tool_rounds(db.clone(), adapter, ctx, &attempt, &external, &mut sessions).await;
     sessions.close().await;
-    result
+    match result {
+        Err(e) => fail_turn(db, &attempt, turn_error::classify(&e)).await,
+        done => done,
+    }
 }
 
 /// 応答生成の1試行(data-model.md「ターン境界」)。この試行で書く行は、すべてこの組を

@@ -1645,3 +1645,51 @@ async fn a_turn_is_rejected_while_the_same_task_is_generating() {
     );
 }
 
+/// 再試行が途中で失敗しても、1回目の失敗と同じくエラー発言が同じターンに残る
+/// (Issue #152)。何も残さずに抜けると、返信を消したターンごと会話から消える。
+#[tokio::test]
+async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("応答A")),
+        task_id,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (reply_id, turn_id) = {
+        let conn = db.lock().unwrap();
+        // 再試行の返信の保存だけを失敗させる(エラー発言の保存は通す)。
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_reply_insert BEFORE INSERT ON messages
+             WHEN NEW.role = 'assistant'
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let reply = messages.iter().find(|m| m.role == "assistant").unwrap();
+        (reply.id, reply.turn_id.clone().unwrap())
+    };
+
+    retry_reply(
+        db.clone(),
+        &context(&TextAdapter::one("応答B")),
+        task_id,
+        reply_id,
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(roles, vec!["user", "error"]);
+    assert_eq!(messages[1].turn_id.as_deref(), Some(turn_id.as_str()));
+    assert_eq!(messages[1].attempt_no, Some(2));
+    assert_eq!(messages[1].error_kind.as_deref(), Some("unexpected"));
+}
