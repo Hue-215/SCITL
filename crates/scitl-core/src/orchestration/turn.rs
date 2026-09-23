@@ -301,6 +301,9 @@ async fn run_tool_rounds(
     // ここで合算すると「モデルが遅いのでツールが打ち切られた」という筋の通らない
     // 打ち切り方になる。
     let mut tool_time_used = Duration::ZERO;
+    // ツールを呼んだラウンドにモデルが添えた本文も、このターンの返信の一部として最終行に
+    // まとめて保存する(docs/spec/rebuild/data-model.md「1ターン内の往復で保存するもの」)。
+    let mut reply_parts: Vec<String> = Vec::new();
 
     for _round in 1..=limits.max_rounds_per_turn {
         let system_prompt_text = with_conn(db.clone(), {
@@ -356,7 +359,11 @@ async fn run_tool_rounds(
         let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
 
         if tool_calls.is_empty() {
-            if text.is_empty() {
+            if !text.is_empty() {
+                reply_parts.push(text);
+            }
+            let reply = reply_parts.join("\n\n");
+            if reply.is_empty() {
                 return fail_turn(db, task_id, turn_id, attempt_no, TurnFailure::EmptyResponse)
                     .await;
             }
@@ -368,7 +375,7 @@ async fn run_tool_rounds(
                     NewMessage {
                         task_id: Some(task_id),
                         role: Role::Assistant,
-                        content: &text,
+                        content: &reply,
                         kind: Kind::Normal,
                         source: None,
                         turn: Some((&turn_id, attempt_no)),
@@ -448,6 +455,9 @@ async fn run_tool_rounds(
 
         // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
         // OpenAI互換プロトコルの標準的な表現に合わせる(architecture.md 3節)。
+        if !text.is_empty() {
+            reply_parts.push(text.clone());
+        }
         round_trip.push(ChatMessage::Assistant {
             content: if text.is_empty() { None } else { Some(text) },
             tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),

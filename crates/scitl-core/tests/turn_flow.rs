@@ -785,6 +785,103 @@ async fn run_turn_reports_malformed_tool_arguments_to_the_model_without_running_
         .any(|m| m.role == "assistant" && m.kind == "normal"));
 }
 
+/// ツールを呼ぶラウンドで本文も添え、次のラウンドで`final_text`を返すアダプタ。
+struct NarratingToolAdapter {
+    calls: AtomicUsize,
+    final_text: Option<&'static str>,
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for NarratingToolAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(vec![
+                ResponseEvent::TextDelta {
+                    text: "工程を追加しますね".to_string(),
+                },
+                ResponseEvent::ToolCall {
+                    id: Some("call_1".to_string()),
+                    name: "add_steps".to_string(),
+                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::ToolCall,
+                },
+            ]);
+        }
+        let mut events: Vec<_> = self
+            .final_text
+            .map(|text| ResponseEvent::TextDelta {
+                text: text.to_string(),
+            })
+            .into_iter()
+            .collect();
+        events.push(ResponseEvent::Done {
+            finish_reason: FinishReason::Stop,
+        });
+        Ok(events)
+    }
+}
+
+async fn run_narrating_turn(final_text: Option<&'static str>) -> Vec<db::messages::Message> {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = NarratingToolAdapter {
+        calls: AtomicUsize::new(0),
+        final_text,
+    };
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        Some(&adapter),
+        task_id,
+        "工程を追加して".to_string(),
+        &SystemPrompts::default(),
+        &McpAccess::none(),
+        ToolLimits::default(),
+    )
+    .await
+    .unwrap();
+    let conn = db.lock().unwrap();
+    db::messages::list_for_task(&conn, task_id).unwrap()
+}
+
+/// ツールを呼んだラウンドの本文は捨てず、ターンの返信の一部として最終行に残る(Issue #131)。
+#[tokio::test]
+async fn text_written_alongside_tool_calls_is_kept_in_the_reply() {
+    let messages = run_narrating_turn(Some("追加しました")).await;
+    let rows: Vec<_> = messages
+        .iter()
+        .map(|m| (m.role.as_str(), m.kind.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("user", "normal"),
+            ("tool", "tool_execution"),
+            ("assistant", "normal"),
+        ]
+    );
+    assert_eq!(messages[2].content, "工程を追加しますね\n\n追加しました");
+}
+
+/// 最後のラウンドが本文を返さなくても、それまでに書いた本文があれば空応答ではない。
+#[tokio::test]
+async fn earlier_text_counts_as_the_reply_when_the_last_round_is_empty() {
+    let messages = run_narrating_turn(None).await;
+    let last = messages.last().unwrap();
+    assert_eq!(last.role, "assistant");
+    assert_eq!(last.content, "工程を追加しますね");
+}
+
 /// LLM呼び出しの失敗はErrで落とさず、エラー発言として保存される(Issue #40)。
 #[tokio::test]
 async fn run_turn_persists_error_message_instead_of_returning_err() {
