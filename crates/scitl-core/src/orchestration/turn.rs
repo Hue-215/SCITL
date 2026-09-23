@@ -14,7 +14,7 @@ use crate::mcp::McpSessions;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::turn_error::{self, TurnFailure};
-use crate::orchestration::{SystemPrompts, ToolLimits};
+use crate::orchestration::{SystemPrompts, TurnContext};
 use crate::tools::{self, external::ExternalToolset};
 
 /// 1ターンの処理フロー(architecture.md 1節)。ユーザー発言の保存 → LLM呼び出し →
@@ -26,12 +26,9 @@ use crate::tools::{self, external::ExternalToolset};
 /// 保存し`Ok`で返す(Issue #40)。DB自体への書き込みが失敗する場合のみ`Err`のまま返る。
 pub async fn run_turn(
     db: SharedConnection,
-    adapter: Option<&dyn LlmAdapter>,
+    ctx: &TurnContext<'_>,
     task_id: i64,
     user_text: String,
-    prompts: &SystemPrompts<'_>,
-    mcp: &McpAccess<'_>,
-    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
     with_conn(db.clone(), move |conn| {
         messages::insert_message(
@@ -51,14 +48,7 @@ pub async fn run_turn(
     })
     .await?;
 
-    let turn_id = Ulid::new().to_string();
-    // 新規ターンなので1から始まる。以降の再試行は`retry_reply`が
-    // `next_attempt_no`で採番する。
-    let attempt_no: i64 = 1;
-    generate_turn_response(
-        db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits,
-    )
-    .await
+    generate_turn_response(db, ctx, Attempt::first(task_id)).await
 }
 
 /// 編集(ユーザー発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言をすべて
@@ -66,18 +56,12 @@ pub async fn run_turn(
 /// 応答を生成し直す。ツール実行記録は対象外(`db::messages::soft_delete_normal_from`
 /// 参照)。添付ファイルは現時点で未実装(Issue #21)のため引き継ぎ処理自体が無いが、
 /// 実装され次第ここに「新しい発言へコピーする」処理を追加する必要がある。
-// turn層の入口はどれも「db・adapter・task_id・prompts・mcp・limits」という同じ文脈を
-// 受け取る。まとめ方はIssue #119(引数の定型の共通化)で決める。
-#[allow(clippy::too_many_arguments)]
 pub async fn edit_user_message(
     db: SharedConnection,
-    adapter: Option<&dyn LlmAdapter>,
+    ctx: &TurnContext<'_>,
     task_id: i64,
     message_id: i64,
     new_text: String,
-    prompts: &SystemPrompts<'_>,
-    mcp: &McpAccess<'_>,
-    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
     with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -102,8 +86,7 @@ pub async fn edit_user_message(
     })
     .await?;
 
-    let turn_id = Ulid::new().to_string();
-    generate_turn_response(db, adapter, task_id, turn_id, 1, prompts, mcp, limits).await
+    generate_turn_response(db, ctx, Attempt::first(task_id)).await
 }
 
 /// 再試行(ターンの返信のみ、Issue #41・#130)。対象の発言以降(自身を含む)の通常発言を
@@ -116,14 +99,11 @@ pub async fn edit_user_message(
 /// 変わらない。
 pub async fn retry_reply(
     db: SharedConnection,
-    adapter: Option<&dyn LlmAdapter>,
+    ctx: &TurnContext<'_>,
     task_id: i64,
     message_id: i64,
-    prompts: &SystemPrompts<'_>,
-    mcp: &McpAccess<'_>,
-    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
-    let (turn_id, attempt_no) = with_conn(db.clone(), move |conn| {
+    let attempt = with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
         validate_target(&target, task_id, &["assistant", "error"])?;
@@ -133,14 +113,15 @@ pub async fn retry_reply(
 
         messages::soft_delete_normal_from(conn, task_id, message_id)?;
         let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
-        Ok((turn_id, attempt_no))
+        Ok(Attempt {
+            task_id,
+            turn_id,
+            attempt_no,
+        })
     })
     .await?;
 
-    generate_turn_response(
-        db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits,
-    )
-    .await
+    generate_turn_response(db, ctx, attempt).await
 }
 
 /// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
@@ -190,41 +171,72 @@ fn validate_target(target: &Message, task_id: i64, expected_roles: &[&str]) -> R
 /// `adapter`が`None`(プロバイダー未選択)・モデル未選択・APIキー未設定・空応答・
 /// コンテキスト超過・ツール呼び出し回数の上限到達は、`Err`で上位に返さずエラー発言として
 /// 保存し`Ok`で返す(Issue #40)。DB自体への書き込みが失敗する場合のみ`Err`のまま返る。
-#[allow(clippy::too_many_arguments)]
 async fn generate_turn_response(
     db: SharedConnection,
-    adapter: Option<&dyn LlmAdapter>,
-    task_id: i64,
-    turn_id: String,
-    attempt_no: i64,
-    prompts: &SystemPrompts<'_>,
-    mcp: &McpAccess<'_>,
-    limits: ToolLimits,
+    ctx: &TurnContext<'_>,
+    attempt: Attempt,
 ) -> Result<Vec<ResponseEvent>> {
-    let Some(adapter) = adapter else {
-        return fail_turn(db, task_id, &turn_id, attempt_no, TurnFailure::NoProvider).await;
+    let Some(adapter) = ctx.adapter else {
+        return fail_turn(db, &attempt, TurnFailure::NoProvider).await;
     };
     if let Some(failure) = turn_error::from_readiness(adapter.readiness()) {
-        return fail_turn(db, task_id, &turn_id, attempt_no, failure).await;
+        return fail_turn(db, &attempt, failure).await;
     }
 
     let mut sessions = McpSessions::new();
-    let external = prepare_external_tools(mcp, &mut sessions).await;
-    let result = run_tool_rounds(
-        db,
-        adapter,
-        task_id,
-        &turn_id,
-        attempt_no,
-        prompts,
-        mcp,
-        &external,
-        &mut sessions,
-        limits,
-    )
-    .await;
+    let external = prepare_external_tools(&ctx.mcp, &mut sessions).await;
+    let result = run_tool_rounds(db, adapter, ctx, &attempt, &external, &mut sessions).await;
     sessions.close().await;
     result
+}
+
+/// 応答生成の1試行(data-model.md「ターン境界」)。この試行で書く行は、すべてこの組を
+/// そのまま持つ。
+#[derive(Clone)]
+struct Attempt {
+    task_id: i64,
+    turn_id: String,
+    attempt_no: i64,
+}
+
+impl Attempt {
+    /// 新しいターンの最初の試行。以降の再試行は`retry_reply`が`next_attempt_no`で採番する。
+    fn first(task_id: i64) -> Self {
+        Self {
+            task_id,
+            turn_id: Ulid::new().to_string(),
+            attempt_no: 1,
+        }
+    }
+
+    /// この試行に属する行を書く。
+    fn insert(
+        &self,
+        conn: &Connection,
+        role: Role,
+        content: &str,
+        kind: Kind,
+        error_kind: Option<&str>,
+        reasoning: Option<&str>,
+    ) -> Result<()> {
+        messages::insert_message(
+            conn,
+            NewMessage {
+                task_id: Some(self.task_id),
+                role,
+                content,
+                kind,
+                // 外部サーバーのツールを呼んだ記録もこのターンに属する。`source`は逆向き
+                // (外部のLLMがMCP経由でSCITLを操作した)専用の印であり、ここでは付けない
+                // (data-model.md「ターン境界」の3分類)。
+                source: None,
+                turn: Some((&self.turn_id, self.attempt_no)),
+                error_kind,
+                reasoning,
+            },
+        )?;
+        Ok(())
+    }
 }
 
 /// このターンでモデルへ公開する外部ツールを決める。ツールを1つも有効化していない
@@ -267,19 +279,15 @@ async fn prepare_external_tools(
 
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
 /// 分けてあるだけで、1ターンの流れとしては地続き。
-#[allow(clippy::too_many_arguments)]
 async fn run_tool_rounds(
     db: SharedConnection,
     adapter: &dyn LlmAdapter,
-    task_id: i64,
-    turn_id: &str,
-    attempt_no: i64,
-    prompts: &SystemPrompts<'_>,
-    mcp: &McpAccess<'_>,
+    ctx: &TurnContext<'_>,
+    attempt: &Attempt,
     external: &ExternalToolset,
     sessions: &mut McpSessions,
-    limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
+    let task_id = attempt.task_id;
     // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
     let history = with_conn(db.clone(), move |conn| build_history(conn, task_id)).await?;
@@ -292,8 +300,8 @@ async fn run_tool_rounds(
     let mut all_events = Vec::new();
     // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
     // 変換しておく(`SystemPrompts`自体はDBスレッドとやり取りするラウンドごとに組み直す)。
-    let base_owned = prompts.base.map(str::to_string);
-    let task_chat_owned = prompts.task_chat.map(str::to_string);
+    let base_owned = ctx.prompts.base.map(str::to_string);
+    let task_chat_owned = ctx.prompts.task_chat.map(str::to_string);
     // 同一ターン内のツール呼び出し往復。分類(状態系/事実系)によらずモデルに返す
     // (docs/spec/rebuild/tools.md 4節「同一ターン内では分類によらず結果を返す」)。
     // このターンのリクエスト組み立てにのみ使い、DBの`messages`テーブルには書かない
@@ -308,7 +316,7 @@ async fn run_tool_rounds(
     // まとめて保存する(docs/spec/rebuild/data-model.md「1ターン内の往復で保存するもの」)。
     let mut reply_parts: Vec<String> = Vec::new();
 
-    for _round in 1..=limits.max_rounds_per_turn {
+    for _round in 1..=ctx.limits.max_rounds_per_turn {
         let system_prompt_text = with_conn(db.clone(), {
             let base_owned = base_owned.clone();
             let task_chat_owned = task_chat_owned.clone();
@@ -330,8 +338,7 @@ async fn run_tool_rounds(
         let events = match adapter.send(&messages_to_send, &exposed_tools).await {
             Ok(events) => events,
             Err(e) => {
-                let failure = turn_error::classify(&e);
-                return fail_turn(db, task_id, turn_id, attempt_no, failure).await;
+                return fail_turn(db, attempt, turn_error::classify(&e)).await;
             }
         };
 
@@ -367,26 +374,19 @@ async fn run_tool_rounds(
             }
             let reply = reply_parts.join("\n\n");
             if reply.is_empty() {
-                return fail_turn(db, task_id, turn_id, attempt_no, TurnFailure::EmptyResponse)
-                    .await;
+                return fail_turn(db, attempt, TurnFailure::EmptyResponse).await;
             }
 
-            let turn_id = turn_id.to_string();
+            let attempt = attempt.clone();
             with_conn(db, move |conn| {
-                messages::insert_message(
+                attempt.insert(
                     conn,
-                    NewMessage {
-                        task_id: Some(task_id),
-                        role: Role::Assistant,
-                        content: &reply,
-                        kind: Kind::Normal,
-                        source: None,
-                        turn: Some((&turn_id, attempt_no)),
-                        error_kind: None,
-                        reasoning: reasoning_for_db.as_deref(),
-                    },
-                )?;
-                Ok(())
+                    Role::Assistant,
+                    &reply,
+                    Kind::Normal,
+                    None,
+                    reasoning_for_db.as_deref(),
+                )
             })
             .await?;
             return Ok(all_events);
@@ -406,11 +406,12 @@ async fn run_tool_rounds(
             // ため。打ち切ると、書き込みだけが済んで実行記録が
             // 残らない状態を作る。1回の呼び出しは内部ツールならDB操作、外部ツールなら
             // `mcp`のper-callタイムアウトで有界なので、超過はその1回分に収まる。
-            if tool_time_used >= limits.total_timeout {
-                return fail_turn(db, task_id, turn_id, attempt_no, TurnFailure::ToolTimeout).await;
+            if tool_time_used >= ctx.limits.total_timeout {
+                return fail_turn(db, attempt, TurnFailure::ToolTimeout).await;
             }
             let started = Instant::now();
-            let result = execute_call(db.clone(), task_id, mcp, external, sessions, &call).await?;
+            let result =
+                execute_call(db.clone(), task_id, &ctx.mcp, external, sessions, &call).await?;
             tool_time_used = tool_time_used.saturating_add(started.elapsed());
 
             // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
@@ -432,25 +433,16 @@ async fn run_tool_rounds(
                 "result": result.clone(),
             })
             .to_string();
-            let turn_id_for_db = turn_id.to_string();
+            let attempt_for_db = attempt.clone();
             with_conn(db.clone(), move |conn| {
-                messages::insert_message(
+                attempt_for_db.insert(
                     conn,
-                    NewMessage {
-                        task_id: Some(task_id),
-                        role: Role::Tool,
-                        content: &content,
-                        kind: Kind::ToolExecution,
-                        // 外部サーバーのツールを呼んだ記録もこのターンに属する。
-                        // `source`は逆向き(外部のLLMがMCP経由でSCITLを操作した)専用の
-                        // 印であり、ここでは付けない(data-model.md「ターン境界」の3分類)。
-                        source: None,
-                        turn: Some((&turn_id_for_db, attempt_no)),
-                        error_kind: None,
-                        reasoning: reasoning_for_row.as_deref(),
-                    },
-                )?;
-                Ok(())
+                    Role::Tool,
+                    &content,
+                    Kind::ToolExecution,
+                    None,
+                    reasoning_for_row.as_deref(),
+                )
             })
             .await?;
             executed.push((call, result));
@@ -473,14 +465,7 @@ async fn run_tool_rounds(
         }
     }
 
-    fail_turn(
-        db,
-        task_id,
-        turn_id,
-        attempt_no,
-        TurnFailure::ToolRoundLimit,
-    )
-    .await
+    fail_turn(db, attempt, TurnFailure::ToolRoundLimit).await
 }
 
 /// ツール1件の実行。名前が外部ツールとして公開したものなら対応するサーバーへ、
@@ -539,29 +524,21 @@ async fn execute_call(
 /// (定型文言、`Unexpected`の場合のみsanitize済みの詳細を含む)。
 async fn fail_turn(
     db: SharedConnection,
-    task_id: i64,
-    turn_id: &str,
-    attempt_no: i64,
+    attempt: &Attempt,
     failure: TurnFailure,
 ) -> Result<Vec<ResponseEvent>> {
-    let turn_id = turn_id.to_string();
+    let attempt = attempt.clone();
     let content = failure.user_message();
     let error_kind = failure.kind();
     with_conn(db, move |conn| {
-        messages::insert_message(
+        attempt.insert(
             conn,
-            NewMessage {
-                task_id: Some(task_id),
-                role: Role::Error,
-                content: &content,
-                kind: Kind::Normal,
-                source: None,
-                turn: Some((&turn_id, attempt_no)),
-                error_kind: Some(error_kind),
-                reasoning: None,
-            },
-        )?;
-        Ok(())
+            Role::Error,
+            &content,
+            Kind::Normal,
+            Some(error_kind),
+            None,
+        )
     })
     .await?;
     Ok(vec![ResponseEvent::Done {

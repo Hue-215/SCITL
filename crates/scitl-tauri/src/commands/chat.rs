@@ -20,20 +20,10 @@ pub async fn send_task_chat_message(
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
     // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
-    let turn = state.settings.snapshot();
-    let mcp = turn.mcp();
-
-    run_turn(
-        state.db.clone(),
-        turn.adapter(),
-        task_id,
-        text,
-        &turn.prompts(),
-        &mcp,
-        turn.tool_limits(),
-    )
-    .await
-    .map_err(|e| e.to_string())
+    let snapshot = state.settings.snapshot();
+    run_turn(state.db.clone(), &snapshot.turn_context(), task_id, text)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 発言の編集(Issue #41)。ユーザー発言のみが対象で、対象以降の発言をすべて論理削除して
@@ -47,19 +37,13 @@ pub async fn edit_task_chat_message(
     message_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
-    let turn = state.settings.snapshot();
-    let mcp = turn.mcp();
-
+    let snapshot = state.settings.snapshot();
     edit_user_message(
         state.db.clone(),
-        turn.adapter(),
+        &snapshot.turn_context(),
         task_id,
         message_id,
         text,
-        &turn.prompts(),
-        &mcp,
-        turn.tool_limits(),
     )
     .await
     .map_err(|e| e.to_string())
@@ -73,18 +57,12 @@ pub async fn retry_task_chat_message(
     task_id: i64,
     message_id: i64,
 ) -> Result<Vec<ResponseEvent>, String> {
-    // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
-    let turn = state.settings.snapshot();
-    let mcp = turn.mcp();
-
+    let snapshot = state.settings.snapshot();
     retry_reply(
         state.db.clone(),
-        turn.adapter(),
+        &snapshot.turn_context(),
         task_id,
         message_id,
-        &turn.prompts(),
-        &mcp,
-        turn.tool_limits(),
     )
     .await
     .map_err(|e| e.to_string())
