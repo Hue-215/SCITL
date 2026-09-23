@@ -51,45 +51,48 @@ pub fn add_steps(
     task_id: i64,
     descriptions: &[String],
 ) -> Result<Vec<TaskStep>> {
-    tasks::get_task(conn, task_id)?;
-    let descriptions = descriptions
-        .iter()
-        .map(|d| normalize_description(d, "descriptions"))
-        .collect::<Result<Vec<_>>>()?;
+    super::in_transaction(conn, |conn| {
+        tasks::get_task(conn, task_id)?;
+        let descriptions = descriptions
+            .iter()
+            .map(|d| normalize_description(d, "descriptions"))
+            .collect::<Result<Vec<_>>>()?;
 
-    let mut stmt = conn
-        .prepare("SELECT description FROM task_steps WHERE task_id = ?1 AND deleted_at IS NULL")?;
-    let existing: HashSet<String> = stmt
-        .query_map([task_id], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<HashSet<_>>>()?;
-    drop(stmt);
-
-    let mut next_order_index: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM task_steps WHERE task_id = ?1",
-        [task_id],
-        |row| row.get(0),
-    )?;
-
-    let mut seen = existing;
-    let mut created = Vec::new();
-    let now = now_iso8601();
-    for description in &descriptions {
-        if !seen.insert(description.clone()) {
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO task_steps (task_id, description, order_index, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![task_id, description, next_order_index, now],
+        let mut stmt = conn.prepare(
+            "SELECT description FROM task_steps WHERE task_id = ?1 AND deleted_at IS NULL",
         )?;
-        created.push(get_step(conn, conn.last_insert_rowid())?);
-        next_order_index += 1;
-    }
+        let existing: HashSet<String> = stmt
+            .query_map([task_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<HashSet<_>>>()?;
+        drop(stmt);
 
-    if !created.is_empty() {
-        tasks::touch(conn, task_id)?;
-    }
-    Ok(created)
+        let mut next_order_index: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM task_steps WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )?;
+
+        let mut seen = existing;
+        let mut created = Vec::new();
+        let now = now_iso8601();
+        for description in &descriptions {
+            if !seen.insert(description.clone()) {
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO task_steps (task_id, description, order_index, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![task_id, description, next_order_index, now],
+            )?;
+            created.push(get_step(conn, conn.last_insert_rowid())?);
+            next_order_index += 1;
+        }
+
+        if !created.is_empty() {
+            tasks::touch(conn, task_id)?;
+        }
+        Ok(created)
+    })
 }
 
 /// `description`・`done`はどちらも省略可(渡された分だけ更新する)。
@@ -101,34 +104,38 @@ pub fn update_step(
     description: Option<String>,
     done: Option<bool>,
 ) -> Result<TaskStep> {
-    let current = get_step(conn, step_id)?;
-    let description = description
-        .map(|d| normalize_description(&d, "description"))
-        .transpose()?;
+    super::in_transaction(conn, |conn| {
+        let current = get_step(conn, step_id)?;
+        let description = description
+            .map(|d| normalize_description(&d, "description"))
+            .transpose()?;
 
-    let done_at = match done {
-        Some(true) => Some(current.done_at.clone().unwrap_or_else(now_iso8601)),
-        Some(false) => None,
-        None => current.done_at.clone(),
-    };
+        let done_at = match done {
+            Some(true) => Some(current.done_at.clone().unwrap_or_else(now_iso8601)),
+            Some(false) => None,
+            None => current.done_at.clone(),
+        };
 
-    conn.execute(
-        "UPDATE task_steps SET description = COALESCE(?1, description), done_at = ?2
+        conn.execute(
+            "UPDATE task_steps SET description = COALESCE(?1, description), done_at = ?2
          WHERE id = ?3",
-        rusqlite::params![description, done_at, step_id],
-    )?;
-    tasks::touch(conn, current.task_id)?;
+            rusqlite::params![description, done_at, step_id],
+        )?;
+        tasks::touch(conn, current.task_id)?;
 
-    get_step(conn, step_id)
+        get_step(conn, step_id)
+    })
 }
 
 pub fn delete_step(conn: &Connection, step_id: i64) -> Result<()> {
-    let step = get_step(conn, step_id)?;
-    conn.execute(
-        "UPDATE task_steps SET deleted_at = ?1 WHERE id = ?2",
-        rusqlite::params![now_iso8601(), step_id],
-    )?;
-    tasks::touch(conn, step.task_id)
+    super::in_transaction(conn, |conn| {
+        let step = get_step(conn, step_id)?;
+        conn.execute(
+            "UPDATE task_steps SET deleted_at = ?1 WHERE id = ?2",
+            rusqlite::params![now_iso8601(), step_id],
+        )?;
+        tasks::touch(conn, step.task_id)
+    })
 }
 
 fn get_step(conn: &Connection, step_id: i64) -> Result<TaskStep> {

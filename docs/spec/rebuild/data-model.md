@@ -30,17 +30,18 @@
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
 | title | TEXT | NULL可。NULL=未設定(表示側でフォールバック) |
-| description | TEXT | NULL可 |
+| description | TEXT | NULL可。NULL=未設定。空文字列は書かない |
 | deadline | TEXT | `YYYY-MM-DD`。NULL可 |
-| archived_at | TEXT | ISO8601。NULL=未アーカイブ |
+| archived_at | TEXT | ISO8601。NULL=未アーカイブ。再度アーカイブしても上書きしない |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
 | created_at | TEXT | ISO8601。NOT NULL |
-| updated_at | TEXT | ISO8601。NOT NULL。配下の工程の追加・更新・削除でも更新する |
+| updated_at | TEXT | ISO8601。NOT NULL。配下の工程への更新操作でも更新する |
 
 優先度カラムは持たない(`../principles.md` 2節)。
 
-`updated_at` は「タスクが最後に変わった日時」で、工程の変更も含める(工程はタスクの一部で、
-画面上もタスクの中に見える)。工程側には `updated_at` 列を持たない。
+`updated_at` は「タスクが最後に更新操作を受けた日時」で、工程への操作も含める(工程は
+タスクの一部で、画面上もタスクの中に見える)。値が実際に変わったかは比べない(同じ値での
+更新でも進む)。工程側には `updated_at` 列を持たない。
 
 ### task_steps
 
@@ -48,7 +49,7 @@
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
 | task_id | INTEGER | NOT NULL, `REFERENCES tasks(id)` |
-| description | TEXT | NOT NULL |
+| description | TEXT | NOT NULL。前後の空白を落として保存し、空は書かない |
 | done_at | TEXT | ISO8601。NULL=未完了 |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
 | order_index | INTEGER | NOT NULL |

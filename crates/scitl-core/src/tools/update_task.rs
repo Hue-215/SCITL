@@ -54,10 +54,17 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
     let args = Args::parse(arguments, KNOWN_ARGS)?;
 
     let clear = args.optional_string_array("clear")?.unwrap_or_default();
-    if let Some(unknown) = clear.iter().find(|c| !CLEARABLE.contains(&c.as_str())) {
+    for (i, field) in clear.iter().enumerate() {
+        let reason = if !CLEARABLE.contains(&field.as_str()) {
+            format!("cannot clear: {field}")
+        } else if clear[..i].contains(field) {
+            format!("duplicate item: {field}")
+        } else {
+            continue;
+        };
         return Err(CoreError::InvalidArgument {
             name: "clear".to_string(),
-            reason: format!("cannot clear: {unknown}"),
+            reason,
         });
     }
     let change = |name: &str| -> Result<FieldChange> {
@@ -161,11 +168,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_clearing_title_or_unknown_field() {
+    fn rejects_clearing_title_unknown_or_duplicate_field() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
-        for field in ["title", "status"] {
-            let err = execute(&conn, task_id, &json!({ "clear": [field] })).unwrap_err();
+        for clear in [
+            json!(["title"]),
+            json!(["status"]),
+            json!(["deadline", "deadline"]),
+        ] {
+            let err = execute(&conn, task_id, &json!({ "clear": clear })).unwrap_err();
             assert!(matches!(err, CoreError::InvalidArgument { .. }));
         }
     }

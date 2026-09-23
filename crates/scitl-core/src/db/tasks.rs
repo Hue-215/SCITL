@@ -152,55 +152,57 @@ pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
 }
 
 pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Result<Task> {
-    // 存在確認(未削除)を先に行い、TaskNotFoundを一貫して返す。
-    let current = get_task(conn, task_id)?;
+    super::in_transaction(conn, |conn| {
+        // 存在確認(未削除)を先に行い、TaskNotFoundを一貫して返す。
+        let current = get_task(conn, task_id)?;
 
-    if let FieldChange::Set(deadline) = &update.deadline {
-        validate_deadline(deadline)?;
-    }
-    // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので(principles.md 2節)、
-    // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない(同3節)。
-    if let FieldChange::Set(description) = &update.description {
-        if description.trim().is_empty() {
-            return Err(CoreError::InvalidArgument {
-                name: "description".to_string(),
-                reason: "must not be empty (to remove the description, use clear)".to_string(),
-            });
+        if let FieldChange::Set(deadline) = &update.deadline {
+            validate_deadline(deadline)?;
         }
-    }
+        // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので(principles.md 2節)、
+        // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない(同3節)。
+        if let FieldChange::Set(description) = &update.description {
+            if description.trim().is_empty() {
+                return Err(CoreError::InvalidArgument {
+                    name: "description".to_string(),
+                    reason: "must not be empty (to remove the description, use clear)".to_string(),
+                });
+            }
+        }
 
-    let now = now_iso8601();
-    // サニタイズ後に空文字列になった場合は「タイトルの指定なし」として扱い、既存の値を保つ
-    // (空文字列をtitleに書き込むと`title IS NULL`前提の判定が壊れるため)。
-    let title = update
-        .title
-        .as_deref()
-        .map(sanitize_title)
-        .filter(|t| !t.is_empty())
-        .or(current.title);
-    // 既にアーカイブ済みなら元の日時を保つ(`task_steps::update_step`の`done_at`と同じ)。
-    // 状態の列は現在の状態だけを表し、いつ何をしたかは会話ログのツール実行記録が持つ。
-    let archived_at = match update.status {
-        Some(TaskStatus::Archived) => current.archived_at.or_else(|| Some(now.clone())),
-        Some(TaskStatus::Unarchived) => None,
-        None => current.archived_at,
-    };
+        let now = now_iso8601();
+        // サニタイズ後に空文字列になった場合は「タイトルの指定なし」として扱い、既存の値を保つ
+        // (空文字列をtitleに書き込むと`title IS NULL`前提の判定が壊れるため)。
+        let title = update
+            .title
+            .as_deref()
+            .map(sanitize_title)
+            .filter(|t| !t.is_empty())
+            .or(current.title);
+        // 既にアーカイブ済みなら元の日時を保つ(`task_steps::update_step`の`done_at`と同じ)。
+        // 状態の列は現在の状態だけを表し、いつ何をしたかは会話ログのツール実行記録が持つ。
+        let archived_at = match update.status {
+            Some(TaskStatus::Archived) => current.archived_at.or_else(|| Some(now.clone())),
+            Some(TaskStatus::Unarchived) => None,
+            None => current.archived_at,
+        };
 
-    conn.execute(
-        "UPDATE tasks SET title = ?1, description = ?2, deadline = ?3, archived_at = ?4,
+        conn.execute(
+            "UPDATE tasks SET title = ?1, description = ?2, deadline = ?3, archived_at = ?4,
                           updated_at = ?5
          WHERE id = ?6",
-        rusqlite::params![
-            title,
-            update.description.apply(current.description),
-            update.deadline.apply(current.deadline),
-            archived_at,
-            now,
-            task_id,
-        ],
-    )?;
+            rusqlite::params![
+                title,
+                update.description.apply(current.description),
+                update.deadline.apply(current.deadline),
+                archived_at,
+                now,
+                task_id,
+            ],
+        )?;
 
-    get_task(conn, task_id)
+        get_task(conn, task_id)
+    })
 }
 
 /// 工程の変更をタスクの更新として記録する。工程はタスクの一部なので、`updated_at`は
