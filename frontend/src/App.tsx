@@ -308,6 +308,14 @@ export default function App() {
                 <ThinkingTools entries={item.entries} />
                 <div className={`entry entry-${finalMessage.role}`}>
                   <span className="entry-content">{finalMessage.content}</span>
+                  {/* プロバイダーが書いた文字列のため、Markdown描画(#39)の対象にせず
+                      プレーンテキストのまま出す(Issue #159) */}
+                  {finalMessage.error_detail && (
+                    <details className="entry-error-detail">
+                      <summary>詳細を表示</summary>
+                      <pre>{finalMessage.error_detail}</pre>
+                    </details>
+                  )}
                   <time className="entry-time">{formatTime(finalMessage.created_at)}</time>
                   {canRetryOrDelete && (
                     <div className="entry-actions">

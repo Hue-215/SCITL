@@ -81,21 +81,19 @@ fn provider_error(e: reqwest::Error) -> CoreError {
     CoreError::Llm(e.without_url().to_string())
 }
 
-/// プロバイダ制御下の応答本文をそのままエラーに載せると、表示側でのサニタイズが前提に
-/// なる。本文はプロバイダ側の失敗理由を知るために残すが、長さを制限し制御文字を潰し、
-/// 送信した鍵そのものが含まれていれば伏せ字にしてから載せる(principles.md 4節)。
-/// ゲートウェイがリクエストヘッダをエコーバックする構成だと`Authorization`ヘッダの
-/// 値がそのまま本文に現れうるため、512文字というサイズ制限だけでは防げない。
-/// `turn_error::classify`が`"http {status}: ..."`の数値部分を再パースして
-/// auth/rate_limit等を分類する。`StatusCode`のDisplayは
-/// `"401 Unauthorized"`のように理由句を含み再パースできないため、必ず`as_u16()`で
-/// 数値のみを埋め込む。HTTPリクエストから切り離してテストできるよう関数として独立させる。
+/// プロバイダ制御下の応答本文は、エラー発言の詳細としてDBに残り画面にも出る
+/// (Issue #159。`data-model.md` messages「error_detail」)。長さを制限し、制御文字と
+/// 表示を惑わす不可視の書式文字を潰し、送信した鍵そのものが含まれていれば伏せ字にして
+/// から載せる(principles.md 4節)。ゲートウェイがリクエストヘッダをエコーバックする
+/// 構成だと`Authorization`ヘッダの値がそのまま本文に現れうるため、サイズ制限だけでは
+/// 防げない。鍵をURLに置く構成は`validate_base_url`がクエリ・userinfoを拒否して塞いで
+/// いるため、伏せ字の対象は鍵1つで足りる。HTTPリクエストから切り離してテストできるよう
+/// 関数として独立させる。
 fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> CoreError {
-    CoreError::Llm(format!(
-        "http {}: {}",
-        status.as_u16(),
-        sanitize_error_body(body, api_key)
-    ))
+    CoreError::LlmHttp {
+        status: status.as_u16(),
+        body: sanitize_error_body(body, api_key),
+    }
 }
 
 fn sanitize_error_body(body: &str, api_key: &str) -> String {
@@ -106,13 +104,36 @@ fn sanitize_error_body(body: &str, api_key: &str) -> String {
     };
     let mut sanitized: String = redacted
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || is_invisible_format_char(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .take(MAX_ERROR_BODY_CHARS)
         .collect();
     if redacted.chars().nth(MAX_ERROR_BODY_CHARS).is_some() {
         sanitized.push('…');
     }
     sanitized
+}
+
+/// `char::is_control`(Cc)が拾わない書式文字(Cf)のうち、表示の順序を入れ替える
+/// 双方向制御文字と、見えないまま文字列に紛れるゼロ幅文字。標準ライブラリに一般カテゴリの
+/// 判定が無いため、該当する範囲を列挙する。
+fn is_invisible_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
 }
 
 #[derive(Serialize)]
@@ -482,15 +503,17 @@ mod tests {
     }
 
     #[test]
-    fn http_error_embeds_numeric_status_code_only() {
-        let err = http_error(reqwest::StatusCode::UNAUTHORIZED, "invalid key", "");
-        let CoreError::Llm(message) = err else {
-            panic!("expected CoreError::Llm");
+    fn http_error_carries_status_and_sanitized_body() {
+        let err = http_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            "bad token sk-secret\n",
+            "sk-secret",
+        );
+        let CoreError::LlmHttp { status, body } = err else {
+            panic!("expected CoreError::LlmHttp");
         };
-        // `turn_error::classify`が期待する形式(`orchestration/turn_error.rs`の
-        // `parse_http_status`参照)。理由句(" Unauthorized"等)を含めてしまうと
-        // 再パースに失敗し、全HTTPエラーがUnexpectedに落ちる。
-        assert_eq!(message, "http 401: invalid key");
+        assert_eq!(status, 401);
+        assert_eq!(body, "bad token [redacted] ");
     }
 
     #[test]
@@ -501,6 +524,12 @@ mod tests {
         assert!(!sanitized.contains('\x07'));
         assert!(sanitized.ends_with('…'));
         assert!(sanitized.chars().count() <= MAX_ERROR_BODY_CHARS + 1);
+    }
+
+    #[test]
+    fn sanitize_error_body_blanks_bidi_and_zero_width_chars() {
+        let body = "a\u{202E}b\u{2066}c\u{200B}d\u{FEFF}e";
+        assert_eq!(sanitize_error_body(body, ""), "a b c d e");
     }
 
     #[test]

@@ -406,6 +406,14 @@ option {
   color: var(--color-on-danger-container);
 }
 
+.entry-error-detail {
+  font-size: var(--font-size-sm);
+}
+
+.entry-error-detail pre {
+  margin-top: var(--space-1);
+}
+
 /* 入力欄が複数行化(#77)しても、保存済みの改行入り本文を空白に潰さず描画する。
    本命はMarkdown描画(#39)で、入ればこの行は段落描画に置き換わる。 */
 .entry-content {
@@ -480,7 +488,8 @@ option {
 }
 
 .tool-call-detail pre,
-.external-tool-line pre {
+.external-tool-line pre,
+.entry-error-detail pre {
   padding: var(--space-2);
   background: var(--color-surface-alt);
   color: var(--color-text);
