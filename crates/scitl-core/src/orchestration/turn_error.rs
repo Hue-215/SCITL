@@ -5,7 +5,11 @@ use crate::db::error::CoreError;
 use crate::llm::Readiness;
 
 /// エラー発言としてDBに保存する1件分。`kind()`が`messages.error_kind`、
-/// `user_message()`が`messages.content`に入る。
+/// `user_message()`が`messages.content`、`detail()`が`messages.error_detail`に入る。
+///
+/// 詳細を持つかどうかはバリアントの形で決まる(Issue #159)。持てるのは、プロバイダーの
+/// 応答(アダプタがサニタイズ済み)と、秘密情報を含まない識別子だけ。鍵ストア・設定ファイル・
+/// MCPサーバー由来の失敗は、鍵名・パス・URLを含みうるため詳細を持たない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnFailure {
     NoProvider,
@@ -17,6 +21,7 @@ pub enum TurnFailure {
     /// `config.rs`に上限の項目自体が無いため、#40時点では常に`false`。
     ContextExceeded {
         limit_configured: bool,
+        detail: String,
     },
     ToolRoundLimit,
     /// 1ターン内のツール実行に使える合計時間を使い切った(Issue #71)。
@@ -24,18 +29,22 @@ pub enum TurnFailure {
     /// APIキー未設定・不正のどちらも実際の呼び出しがHTTP 401/403を返してここに落ちる
     /// (`Readiness`のドキュメント参照。事前チェックでは「未設定」と「認証不要」を
     /// 区別できないため、実際に呼んで判定する設計)。
-    Auth,
-    RateLimit,
+    Auth {
+        detail: String,
+    },
+    RateLimit {
+        detail: String,
+    },
     /// 設定不備(鍵ストア・プロバイダー設定・設定ファイル)。鍵名やパスを含みうるため
     /// 詳細は出さない。
     ProviderConfig,
-    /// 上記のいずれにも分類できないプロバイダー呼び出しの失敗。
-    Provider,
-    /// `CoreError::Llm`の中身が既知パターンに当たらなかった場合と、内部エラー。
-    /// detailに載るのは、内部エラーならバリアント相当の短い識別子、`Llm`なら
-    /// HTTP応答を伴わない失敗の文言(接続失敗・応答の解釈失敗等。`openai_compat.rs`が
-    /// URLを剥がしてから作る)。HTTPエラーは状態コードで分類されるためここへは来ず、
-    /// プロバイダ応答の本文は載らない。
+    /// 上記のいずれにも分類できないプロバイダー呼び出しの失敗。MCP由来は詳細を持たない。
+    Provider {
+        detail: Option<String>,
+    },
+    /// HTTP応答を伴わないプロバイダー呼び出しの失敗と、内部エラー。detailに載るのは、
+    /// 内部エラーならバリアント相当の短い識別子、`Llm`なら接続失敗・応答の解釈失敗等の
+    /// 文言(`openai_compat.rs`がURLを剥がしてから作る)。
     Unexpected {
         detail: String,
     },
@@ -51,10 +60,10 @@ impl TurnFailure {
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
             TurnFailure::ToolTimeout => "tool_timeout",
-            TurnFailure::Auth => "auth",
-            TurnFailure::RateLimit => "rate_limit",
+            TurnFailure::Auth { .. } => "auth",
+            TurnFailure::RateLimit { .. } => "rate_limit",
             TurnFailure::ProviderConfig => "provider_config",
-            TurnFailure::Provider => "provider",
+            TurnFailure::Provider { .. } => "provider",
             TurnFailure::Unexpected { .. } => "unexpected",
         }
     }
@@ -73,7 +82,9 @@ impl TurnFailure {
             TurnFailure::EmptyResponse => {
                 "モデルからの応答が空でした。もう一度お試しください。".to_string()
             }
-            TurnFailure::ContextExceeded { limit_configured } => {
+            TurnFailure::ContextExceeded {
+                limit_configured, ..
+            } => {
                 if *limit_configured {
                     "会話がコンテキストの上限を超えました。".to_string()
                 } else {
@@ -92,21 +103,37 @@ impl TurnFailure {
                  設定画面「ツール/MCP」で上限を変更できます。"
                     .to_string()
             }
-            TurnFailure::Auth => {
+            TurnFailure::Auth { .. } => {
                 "APIキーが未設定か正しくないか、権限がありません。設定画面でAPIキーを\
                  確認してください。"
                     .to_string()
             }
-            TurnFailure::RateLimit => {
+            TurnFailure::RateLimit { .. } => {
                 "APIの利用制限に達しました。しばらく待ってから再度お試しください。".to_string()
             }
             TurnFailure::ProviderConfig => {
                 "プロバイダーの設定に問題があります。設定画面を確認してください。".to_string()
             }
-            TurnFailure::Provider => "LLMプロバイダーとの通信に失敗しました。".to_string(),
-            TurnFailure::Unexpected { detail } => {
-                format!("予期しないエラーが発生しました: {detail}")
-            }
+            TurnFailure::Provider { .. } => "LLMプロバイダーとの通信に失敗しました。".to_string(),
+            TurnFailure::Unexpected { .. } => "予期しないエラーが発生しました。".to_string(),
+        }
+    }
+
+    /// 画面の「詳細を表示」専用。`content`(定型文言)には混ぜない。
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            TurnFailure::ContextExceeded { detail, .. }
+            | TurnFailure::Auth { detail }
+            | TurnFailure::RateLimit { detail }
+            | TurnFailure::Unexpected { detail } => Some(detail),
+            TurnFailure::Provider { detail } => detail.as_deref(),
+            TurnFailure::NoProvider
+            | TurnFailure::SettingsUnreadable
+            | TurnFailure::NoModel
+            | TurnFailure::EmptyResponse
+            | TurnFailure::ToolRoundLimit
+            | TurnFailure::ToolTimeout
+            | TurnFailure::ProviderConfig => None,
         }
     }
 }
@@ -124,14 +151,17 @@ pub fn from_readiness(readiness: Readiness) -> Option<TurnFailure> {
 /// (`principles.md` 1節「症状ではなく原因を直す」)。
 pub fn classify(err: &CoreError) -> TurnFailure {
     match err {
-        CoreError::Llm(detail) => classify_llm_error(detail),
+        CoreError::LlmHttp { status, body } => classify_http_error(*status, body),
+        // 空の`choices`はアダプタが固定文字列で返す。
+        CoreError::Llm(detail) if detail == "empty choices" => TurnFailure::EmptyResponse,
+        CoreError::Llm(detail) => unexpected(detail),
         CoreError::Secrets(_) | CoreError::ProviderConfig(_) | CoreError::Config(_) => {
             TurnFailure::ProviderConfig
         }
         // MCPのツール呼び出しの失敗は`turn::execute_call`が結果JSONに落とすため、通常は
         // ここへ来ない。来た場合もプロバイダー起因の失敗として扱う(詳細はMCPサーバーの
         // URL等を含みうるため出さない)。
-        CoreError::Mcp(_) => TurnFailure::Provider,
+        CoreError::Mcp(_) => TurnFailure::Provider { detail: None },
         // 内部エラー。ユーザーに見せて意味のある文言が作れないため`unexpected`に寄せるが、
         // detailにはバリアント名相当の短い識別子のみを載せ、生の`to_string()`は使わない。
         CoreError::Db(_) => unexpected("db"),
@@ -157,33 +187,21 @@ fn unexpected(detail: &str) -> TurnFailure {
     }
 }
 
-/// `CoreError::Llm`の中身を判定する。判定材料は`openai_compat.rs`が組み立てる
-/// `"http {status}: {body}"`とそれ以外の固定文字列(`"empty choices"`等)のみで、
-/// プロバイダ実装依存のため必ず外れるケースが残る。外れたものは`Unexpected`に落ちる。
-fn classify_llm_error(detail: &str) -> TurnFailure {
-    if detail == "empty choices" {
-        return TurnFailure::EmptyResponse;
+/// 状態コードと本文から分類する。本文による判定はプロバイダ実装依存のため必ず外れる
+/// ケースが残り、外れたものは`Provider`に落ちる。
+fn classify_http_error(status: u16, body: &str) -> TurnFailure {
+    let detail = format!("HTTP {status}: {body}");
+    match status {
+        401 | 403 => TurnFailure::Auth { detail },
+        429 => TurnFailure::RateLimit { detail },
+        _ if looks_like_context_exceeded(body) => TurnFailure::ContextExceeded {
+            limit_configured: false,
+            detail,
+        },
+        _ => TurnFailure::Provider {
+            detail: Some(detail),
+        },
     }
-
-    if let Some((status, body)) = parse_http_status(detail) {
-        return match status {
-            401 | 403 => TurnFailure::Auth,
-            429 => TurnFailure::RateLimit,
-            _ if looks_like_context_exceeded(body) => TurnFailure::ContextExceeded {
-                limit_configured: false,
-            },
-            _ => TurnFailure::Provider,
-        };
-    }
-
-    unexpected(detail)
-}
-
-fn parse_http_status(detail: &str) -> Option<(u16, &str)> {
-    let rest = detail.strip_prefix("http ")?;
-    let (status_str, body) = rest.split_once(':')?;
-    let status = status_str.trim().parse().ok()?;
-    Some((status, body))
 }
 
 fn looks_like_context_exceeded(body: &str) -> bool {
@@ -191,11 +209,21 @@ fn looks_like_context_exceeded(body: &str) -> bool {
     lower.contains("context_length_exceeded")
         || lower.contains("maximum context length")
         || lower.contains("context length")
+        // llama.cpp(llama-server)
+        || lower.contains("exceed_context_size")
+        || lower.contains("context size")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn http(status: u16, body: &str) -> CoreError {
+        CoreError::LlmHttp {
+            status,
+            body: body.to_string(),
+        }
+    }
 
     #[test]
     fn classify_maps_known_llm_errors() {
@@ -203,38 +231,54 @@ mod tests {
             classify(&CoreError::Llm("empty choices".to_string())),
             TurnFailure::EmptyResponse
         );
+        assert_eq!(classify(&http(401, "unauthorized")).kind(), "auth");
+        assert_eq!(classify(&http(429, "rate limited")).kind(), "rate_limit");
         assert_eq!(
-            classify(&CoreError::Llm("http 401: unauthorized".to_string())),
-            TurnFailure::Auth
+            classify(&http(
+                400,
+                "This model's maximum context length is 8192 tokens"
+            ))
+            .kind(),
+            "context_exceeded"
         );
-        assert_eq!(
-            classify(&CoreError::Llm("http 429: rate limited".to_string())),
-            TurnFailure::RateLimit
-        );
-        assert_eq!(
-            classify(&CoreError::Llm(
-                "http 400: This model's maximum context length is 8192 tokens".to_string()
-            )),
-            TurnFailure::ContextExceeded {
-                limit_configured: false
-            }
-        );
-        assert_eq!(
-            classify(&CoreError::Llm("http 500: internal error".to_string())),
-            TurnFailure::Provider
-        );
+        assert_eq!(classify(&http(500, "internal error")).kind(), "provider");
+    }
+
+    /// llama.cpp(llama-server)がコンテキスト超過時に返す本文。以前は`provider`に落ちていた。
+    #[test]
+    fn classify_recognizes_llama_cpp_context_exceeded() {
+        let body = r#"{"error":{"code":400,"message":"the request exceeds the available context size, try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9000,"n_ctx":8192}}"#;
+        assert_eq!(classify(&http(400, body)).kind(), "context_exceeded");
+    }
+
+    /// HTTPエラーは状態コードと本文を詳細に持ち、定型文言には混ぜない(Issue #159)。
+    #[test]
+    fn http_failures_keep_status_and_body_as_detail_only() {
+        for status in [401, 429, 500] {
+            let failure = classify(&http(status, "upstream overloaded"));
+            assert_eq!(
+                failure.detail(),
+                Some(format!("HTTP {status}: upstream overloaded").as_str())
+            );
+            assert!(!failure.user_message().contains("upstream overloaded"));
+        }
     }
 
     #[test]
     fn classify_falls_back_to_unexpected_with_detail_for_unknown_llm_errors() {
         let failure = classify(&CoreError::Llm("connection reset by peer".to_string()));
-        assert_eq!(
-            failure,
-            TurnFailure::Unexpected {
-                detail: "connection reset by peer".to_string()
-            }
-        );
-        assert!(failure.user_message().contains("connection reset by peer"));
+        assert_eq!(failure.kind(), "unexpected");
+        assert_eq!(failure.detail(), Some("connection reset by peer"));
+        assert!(!failure.user_message().contains("connection reset by peer"));
+    }
+
+    /// MCP由来の失敗はURL等を含みうるため、`provider`に寄せて詳細を持たせない。
+    #[test]
+    fn classify_drops_mcp_details() {
+        let failure = classify(&CoreError::Mcp(
+            "http://192.168.1.2:9000/mcp refused".to_string(),
+        ));
+        assert_eq!(failure, TurnFailure::Provider { detail: None });
     }
 
     #[test]
@@ -247,6 +291,7 @@ mod tests {
         for err in cases {
             let failure = classify(&err);
             assert_eq!(failure, TurnFailure::ProviderConfig);
+            assert_eq!(failure.detail(), None);
             assert!(!failure.user_message().contains("keyring"));
             assert!(!failure.user_message().contains("secret"));
         }
@@ -291,10 +336,8 @@ mod tests {
         // APIキー未設定・不正のどちらも、実際の呼び出しが401/403を返すことで初めて
         // 判明する(事前チェックでは「未設定」と「ローカルプロバイダーの認証不要」を
         // 区別できないため)。
-        let failure = classify(&CoreError::Llm(
-            "http 401: missing bearer token".to_string(),
-        ));
-        assert_eq!(failure, TurnFailure::Auth);
+        let failure = classify(&http(401, "missing bearer token"));
+        assert_eq!(failure.kind(), "auth");
         assert!(failure.user_message().contains("未設定"));
     }
 }

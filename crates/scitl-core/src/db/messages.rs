@@ -50,6 +50,9 @@ pub struct NewMessage<'a> {
     pub turn: Option<(&'a str, i64)>,
     /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
     pub error_kind: Option<&'a str>,
+    /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
+    /// モデル入力・エクスポートには使わない(data-model.md messages「error_detail」)。
+    pub error_detail: Option<&'a str>,
     /// モデルの思考(reasoning)。表示・エクスポート専用で、APIへの入力には使わない
     /// (`docs/spec/rebuild/data-model.md` messagesテーブル、Issue #42)。
     pub reasoning: Option<&'a str>,
@@ -65,6 +68,7 @@ pub struct Message {
     pub source: Option<String>,
     pub reasoning: Option<String>,
     pub error_kind: Option<String>,
+    pub error_detail: Option<String>,
     pub turn_id: Option<String>,
     pub attempt_no: Option<i64>,
     pub created_at: String,
@@ -77,8 +81,8 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     };
     conn.execute(
         "INSERT INTO messages
-            (task_id, role, content, kind, source, reasoning, error_kind, turn_id, attempt_no, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             msg.task_id,
             msg.role.as_str(),
@@ -87,6 +91,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
             msg.source,
             msg.reasoning,
             msg.error_kind,
+            msg.error_detail,
             turn_id,
             attempt_no,
             now_iso8601(),
@@ -106,7 +111,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// 見分けが付かなくなる。記録はDBに残したまま、この支配的クエリの時点で会話から外す。
 pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
-        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, turn_id, attempt_no, created_at
+        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
          FROM messages
          WHERE task_id = ?1
            AND deleted_at IS NULL
@@ -129,21 +134,7 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
          ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt
-        .query_map([task_id], |row| {
-            Ok(Message {
-                id: row.get(0)?,
-                task_id: row.get(1)?,
-                role: row.get(2)?,
-                content: row.get(3)?,
-                kind: row.get(4)?,
-                source: row.get(5)?,
-                reasoning: row.get(6)?,
-                error_kind: row.get(7)?,
-                turn_id: row.get(8)?,
-                attempt_no: row.get(9)?,
-                created_at: row.get(10)?,
-            })
-        })?
+        .query_map([task_id], message_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -152,28 +143,32 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
 /// 現在の役割・種別を確認するためにまずこれを通る。
 pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     conn.query_row(
-        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, turn_id, attempt_no, created_at
+        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
          FROM messages
          WHERE id = ?1 AND deleted_at IS NULL",
         [id],
-        |row| {
-            Ok(Message {
-                id: row.get(0)?,
-                task_id: row.get(1)?,
-                role: row.get(2)?,
-                content: row.get(3)?,
-                kind: row.get(4)?,
-                source: row.get(5)?,
-                reasoning: row.get(6)?,
-                error_kind: row.get(7)?,
-                turn_id: row.get(8)?,
-                attempt_no: row.get(9)?,
-                created_at: row.get(10)?,
-            })
-        },
+        message_from_row,
     )
     .optional()
     .map_err(Into::into)
+}
+
+/// `SELECT`の列の並びは`list_for_task`・`find_message`で共通。
+fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
+    Ok(Message {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        role: row.get(2)?,
+        content: row.get(3)?,
+        kind: row.get(4)?,
+        source: row.get(5)?,
+        reasoning: row.get(6)?,
+        error_kind: row.get(7)?,
+        error_detail: row.get(8)?,
+        turn_id: row.get(9)?,
+        attempt_no: row.get(10)?,
+        created_at: row.get(11)?,
+    })
 }
 
 /// 削除(共通)の唯一の入口。対象はユーザー発言とターンの返信(アシスタント発言・
@@ -263,6 +258,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -278,6 +274,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: Some("empty_response"),
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -293,6 +290,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 2)),
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -318,6 +316,7 @@ mod tests {
                 source: Some("mcp:external-client"),
                 turn: None,
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -343,6 +342,7 @@ mod tests {
                     source: None,
                     turn: Some(("turn-1", 1)),
                     error_kind: None,
+                    error_detail: None,
                     reasoning: None,
                 },
             )
@@ -371,6 +371,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: Some("no_api_key"),
+                error_detail: Some("HTTP 401: invalid key"),
                 reasoning: None,
             },
         )
@@ -380,6 +381,72 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "error");
         assert_eq!(messages[0].error_kind.as_deref(), Some("no_api_key"));
+        assert_eq!(
+            messages[0].error_detail.as_deref(),
+            Some("HTTP 401: invalid key")
+        );
+    }
+
+    /// 詳細を持てるのはエラー発言だけで、空文字は未設定(NULL)と区別させない
+    /// (`0003_error_detail.sql`のトリガー)。
+    #[test]
+    fn error_detail_is_rejected_outside_error_messages_and_when_empty() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+
+        let on_user = insert_message(
+            &conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::User,
+                content: "こんにちは",
+                kind: Kind::Normal,
+                source: None,
+                turn: None,
+                error_kind: None,
+                error_detail: Some("HTTP 500: boom"),
+                reasoning: None,
+            },
+        );
+        assert!(on_user.is_err());
+
+        let empty = insert_message(
+            &conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::Error,
+                content: "LLMプロバイダーとの通信に失敗しました。",
+                kind: Kind::Normal,
+                source: None,
+                turn: None,
+                error_kind: Some("provider"),
+                error_detail: Some(""),
+                reasoning: None,
+            },
+        );
+        assert!(empty.is_err());
+
+        let id = insert_message(
+            &conn,
+            NewMessage {
+                task_id: Some(task_id),
+                role: Role::Error,
+                content: "LLMプロバイダーとの通信に失敗しました。",
+                kind: Kind::Normal,
+                source: None,
+                turn: None,
+                error_kind: Some("provider"),
+                error_detail: Some("HTTP 500: boom"),
+                reasoning: None,
+            },
+        )
+        .unwrap();
+        assert!(conn
+            .execute(
+                "UPDATE messages SET role = 'assistant', error_kind = NULL WHERE id = ?1",
+                [id]
+            )
+            .is_err());
     }
 
     #[test]
@@ -397,6 +464,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         );
@@ -421,6 +489,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -438,6 +507,7 @@ mod tests {
                     source: None,
                     turn: Some(("turn-1", attempt)),
                     error_kind: None,
+                    error_detail: None,
                     reasoning: None,
                 },
             )
@@ -452,6 +522,7 @@ mod tests {
                     source: None,
                     turn: Some(("turn-1", attempt)),
                     error_kind: None,
+                    error_detail: None,
                     reasoning: None,
                 },
             )
@@ -494,6 +565,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -525,6 +597,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -556,6 +629,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -571,6 +645,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -586,6 +661,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -641,6 +717,7 @@ mod tests {
                 source: None,
                 turn: Some(("turn-1", 1)),
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
@@ -667,6 +744,7 @@ mod tests {
                 source: None,
                 turn: None,
                 error_kind: None,
+                error_detail: None,
                 reasoning: None,
             },
         )
