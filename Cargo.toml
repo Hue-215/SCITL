@@ -22,7 +22,11 @@ secrecy = "0.10"
 url = "2"
 ulid = "1"
 async-trait = "0.1"
-keyring = "3"
+# 秘密情報の保存先(OSの資格情報ストア)。本体と、secrets.rsが設定するOSごとの保存先。
+# 選んだ保存先と理由はarchitecture.md 6節。
+keyring-core = "1"
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+windows-native-keyring-store = "1"
 toml = "0.8"
 # MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
 # 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
