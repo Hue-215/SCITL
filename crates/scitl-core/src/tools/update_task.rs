@@ -1,15 +1,18 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::Result;
-use crate::db::tasks::{self, TaskStatus, TaskUpdate};
+use crate::db::error::{CoreError, Result};
+use crate::db::tasks::{self, FieldChange, TaskStatus, TaskUpdate};
 use crate::llm::ToolSchema;
 
 use super::args::Args;
 
 pub const NAME: &str = "update_task";
 
-const KNOWN_ARGS: &[&str] = &["title", "description", "deadline", "status"];
+const KNOWN_ARGS: &[&str] = &["title", "description", "deadline", "status", "clear"];
+
+/// `clear`で消せる項目。タイトルは未設定に戻す操作を持たないので含めない。
+const CLEARABLE: &[&str] = &["deadline", "description"];
 
 /// タスクチャット版のスキーマ。`task_id`を引数に含めない
 /// (docs/spec/rebuild/tools.md 1節「確定方針」)。
@@ -21,7 +24,10 @@ pub fn schema() -> ToolSchema {
             "type": "object",
             "properties": {
                 "title": { "type": "string" },
-                "description": { "type": "string" },
+                "description": {
+                    "type": "string",
+                    "description": "本文。空にはできない(消すときはclearを使う)"
+                },
                 "deadline": {
                     "type": "string",
                     "format": "date",
@@ -29,7 +35,15 @@ pub fn schema() -> ToolSchema {
                     // 明示しておき、モデルが日時形式を渡して往復を1回無駄にするのを減らす。
                     "description": "締切日(YYYY-MM-DD)"
                 },
-                "status": { "type": "string", "enum": ["archived", "unarchived"] }
+                "status": { "type": "string", "enum": ["archived", "unarchived"] },
+                "clear": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": CLEARABLE },
+                    "uniqueItems": true,
+                    // 省略・nullは「変えない」。値を消すのはこの引数だけにする(nullを消去の
+                    // 意味にすると、型に緩いモデルが変えないつもりの項目を消してしまう)。
+                    "description": "消す項目。同じ項目を同時に設定することはできない"
+                }
             },
             "additionalProperties": false
         }),
@@ -39,9 +53,30 @@ pub fn schema() -> ToolSchema {
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
     let args = Args::parse(arguments, KNOWN_ARGS)?;
 
+    let clear = args.optional_string_array("clear")?.unwrap_or_default();
+    if let Some(unknown) = clear.iter().find(|c| !CLEARABLE.contains(&c.as_str())) {
+        return Err(CoreError::InvalidArgument {
+            name: "clear".to_string(),
+            reason: format!("cannot clear: {unknown}"),
+        });
+    }
+    let change = |name: &str| -> Result<FieldChange> {
+        let value = args.optional_string(name)?;
+        let cleared = clear.iter().any(|c| c == name);
+        match (value, cleared) {
+            (Some(_), true) => Err(CoreError::InvalidArgument {
+                name: name.to_string(),
+                reason: "cannot both set and clear the same field".to_string(),
+            }),
+            (Some(value), false) => Ok(FieldChange::Set(value)),
+            (None, true) => Ok(FieldChange::Clear),
+            (None, false) => Ok(FieldChange::Keep),
+        }
+    };
+
     let title = args.optional_string("title")?;
-    let description = args.optional_string("description")?;
-    let deadline = args.optional_string("deadline")?;
+    let description = change("description")?;
+    let deadline = change("deadline")?;
     let status = args
         .optional_string("status")?
         .map(|s| TaskStatus::parse(&s))
@@ -65,7 +100,6 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
 mod tests {
     use super::*;
     use crate::db;
-    use crate::db::error::CoreError;
 
     fn seed_task(conn: &Connection) -> i64 {
         let now = db::now_iso8601();
@@ -91,6 +125,49 @@ mod tests {
         let task_id = seed_task(&conn);
         let err = execute(&conn, task_id, &json!({ "title": 123 })).unwrap_err();
         assert!(matches!(err, CoreError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn clear_removes_listed_fields() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        execute(
+            &conn,
+            task_id,
+            &json!({ "deadline": "2026-10-01", "description": "牛乳" }),
+        )
+        .unwrap();
+
+        // nullは「変えない」。
+        let result = execute(&conn, task_id, &json!({ "deadline": null })).unwrap();
+        assert_eq!(result["deadline"], "2026-10-01");
+
+        let result = execute(&conn, task_id, &json!({ "clear": ["deadline"] })).unwrap();
+        assert!(result["deadline"].is_null());
+        assert_eq!(result["description"], "牛乳");
+    }
+
+    #[test]
+    fn rejects_setting_and_clearing_the_same_field() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let err = execute(
+            &conn,
+            task_id,
+            &json!({ "deadline": "2026-10-01", "clear": ["deadline"] }),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rejects_clearing_title_or_unknown_field() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        for field in ["title", "status"] {
+            let err = execute(&conn, task_id, &json!({ "clear": [field] })).unwrap_err();
+            assert!(matches!(err, CoreError::InvalidArgument { .. }));
+        }
     }
 
     #[test]
