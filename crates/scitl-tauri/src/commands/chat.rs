@@ -7,6 +7,7 @@ use scitl_core::orchestration::{
     ToolLimits,
 };
 
+use super::with_db;
 use crate::AppState;
 
 /// ターンの実行に要る設定の複製。送信・編集・再試行いずれも同じ組み立てを使う
@@ -24,14 +25,31 @@ struct TurnInputs {
     tool_limits: ToolLimits,
 }
 
-fn load_turn_inputs(state: &State<'_, AppState>) -> TurnInputs {
-    let runtime = state.runtime.lock().expect("runtime mutex poisoned");
-    TurnInputs {
-        adapter: runtime.adapter.clone(),
-        system_prompt: runtime.config.general.system_prompt.clone(),
-        task_chat_system_prompt: runtime.config.general.task_chat_system_prompt.clone(),
-        mcp_servers: runtime.config.mcp_servers.clone(),
-        tool_limits: ToolLimits::from_config(&runtime.config.tools),
+impl TurnInputs {
+    fn load(state: &State<'_, AppState>) -> Self {
+        let runtime = state.runtime.lock().expect("runtime mutex poisoned");
+        Self {
+            adapter: runtime.adapter.clone(),
+            system_prompt: runtime.config.general.system_prompt.clone(),
+            task_chat_system_prompt: runtime.config.general.task_chat_system_prompt.clone(),
+            mcp_servers: runtime.config.mcp_servers.clone(),
+            tool_limits: ToolLimits::from_config(&runtime.config.tools),
+        }
+    }
+
+    fn adapter(&self) -> Option<&dyn LlmAdapter> {
+        self.adapter.as_deref().map(|a| a as &dyn LlmAdapter)
+    }
+
+    fn prompts(&self) -> SystemPrompts<'_> {
+        SystemPrompts {
+            base: self.system_prompt.as_deref(),
+            task_chat: self.task_chat_system_prompt.as_deref(),
+        }
+    }
+
+    fn mcp<'a>(&'a self, state: &'a State<'_, AppState>) -> McpAccess<'a> {
+        McpAccess::new(&self.mcp_servers, &state.mcp_tools)
     }
 }
 
@@ -48,22 +66,15 @@ pub async fn send_task_chat_message(
     task_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let inputs = load_turn_inputs(&state);
-    let adapter_ref: Option<&dyn LlmAdapter> =
-        inputs.adapter.as_deref().map(|a| a as &dyn LlmAdapter);
-
-    let prompts = SystemPrompts {
-        base: inputs.system_prompt.as_deref(),
-        task_chat: inputs.task_chat_system_prompt.as_deref(),
-    };
-    let mcp = McpAccess::new(&inputs.mcp_servers, &state.mcp_tools);
+    let inputs = TurnInputs::load(&state);
+    let mcp = inputs.mcp(&state);
 
     run_turn(
         state.db.clone(),
-        adapter_ref,
+        inputs.adapter(),
         task_id,
         text,
-        &prompts,
+        &inputs.prompts(),
         &mcp,
         inputs.tool_limits,
     )
@@ -82,23 +93,16 @@ pub async fn edit_task_chat_message(
     message_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let inputs = load_turn_inputs(&state);
-    let adapter_ref: Option<&dyn LlmAdapter> =
-        inputs.adapter.as_deref().map(|a| a as &dyn LlmAdapter);
-
-    let prompts = SystemPrompts {
-        base: inputs.system_prompt.as_deref(),
-        task_chat: inputs.task_chat_system_prompt.as_deref(),
-    };
-    let mcp = McpAccess::new(&inputs.mcp_servers, &state.mcp_tools);
+    let inputs = TurnInputs::load(&state);
+    let mcp = inputs.mcp(&state);
 
     edit_user_message(
         state.db.clone(),
-        adapter_ref,
+        inputs.adapter(),
         task_id,
         message_id,
         text,
-        &prompts,
+        &inputs.prompts(),
         &mcp,
         inputs.tool_limits,
     )
@@ -114,22 +118,15 @@ pub async fn retry_task_chat_message(
     task_id: i64,
     message_id: i64,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let inputs = load_turn_inputs(&state);
-    let adapter_ref: Option<&dyn LlmAdapter> =
-        inputs.adapter.as_deref().map(|a| a as &dyn LlmAdapter);
-
-    let prompts = SystemPrompts {
-        base: inputs.system_prompt.as_deref(),
-        task_chat: inputs.task_chat_system_prompt.as_deref(),
-    };
-    let mcp = McpAccess::new(&inputs.mcp_servers, &state.mcp_tools);
+    let inputs = TurnInputs::load(&state);
+    let mcp = inputs.mcp(&state);
 
     retry_assistant_message(
         state.db.clone(),
-        adapter_ref,
+        inputs.adapter(),
         task_id,
         message_id,
-        &prompts,
+        &inputs.prompts(),
         &mcp,
         inputs.tool_limits,
     )
@@ -150,19 +147,14 @@ pub async fn delete_task_chat_message(
         .map_err(|e| e.to_string())
 }
 
-/// タスクチャンネルの発言履歴取得(#37)。`commands::tasks`と同じ
-/// `spawn_blocking` + ロックの型を踏襲する。
+/// タスクチャンネルの発言履歴取得(#37)。
 #[tauri::command]
 pub async fn list_task_messages(
     state: State<'_, AppState>,
     task_id: i64,
 ) -> Result<Vec<scitl_core::db::messages::Message>, String> {
-    let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = db.lock().expect("db mutex poisoned");
-        scitl_core::db::messages::list_for_task(&conn, task_id)
+    with_db(&state, move |conn| {
+        scitl_core::db::messages::list_for_task(conn, task_id)
     })
     .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())
 }

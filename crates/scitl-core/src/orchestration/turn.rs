@@ -1,4 +1,3 @@
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -7,6 +6,7 @@ use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, Message, NewMessage, Role};
+use crate::db::{with_conn, SharedConnection};
 use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest};
 use crate::mcp::McpSessions;
 use crate::orchestration::mcp_access::McpAccess;
@@ -14,11 +14,6 @@ use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::{SystemPrompts, ToolLimits};
 use crate::tools::{self, external::ExternalToolset};
-
-/// DBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を非同期関数の
-/// awaitをまたいで持たせられない(architecture.md 4節)。ロックは常に`spawn_blocking`の
-/// クロージャ内で取得・解放し、ロックガードが await をまたがないようにする。
-pub type SharedConnection = Arc<Mutex<Connection>>;
 
 /// 1ターンの処理フロー(architecture.md 1節)。ユーザー発言の保存 → LLM呼び出し →
 /// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
@@ -36,7 +31,7 @@ pub async fn run_turn(
     mcp: &McpAccess<'_>,
     limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
-    db_call(db.clone(), move |conn| {
+    with_conn(db.clone(), move |conn| {
         messages::insert_message(
             conn,
             NewMessage {
@@ -82,7 +77,7 @@ pub async fn edit_user_message(
     mcp: &McpAccess<'_>,
     limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
-    db_call(db.clone(), move |conn| {
+    with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
         validate_target(&target, task_id, "user")?;
@@ -122,7 +117,7 @@ pub async fn retry_assistant_message(
     mcp: &McpAccess<'_>,
     limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
-    let (turn_id, attempt_no) = db_call(db.clone(), move |conn| {
+    let (turn_id, attempt_no) = with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
         validate_target(&target, task_id, "assistant")?;
@@ -148,7 +143,7 @@ pub async fn retry_assistant_message(
 /// カスケードはしない(対象の1件だけを消す。編集・再試行のカスケード削除とは別の操作)。
 /// 対象はユーザー/アシスタントの通常発言のみ(`db::messages::soft_delete_message`が検証する)。
 pub async fn delete_message(db: SharedConnection, task_id: i64, message_id: i64) -> Result<()> {
-    db_call(db, move |conn| {
+    with_conn(db, move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
         if target.task_id != Some(task_id) {
@@ -282,7 +277,7 @@ async fn run_tool_rounds(
 ) -> Result<Vec<ResponseEvent>> {
     // 呼び出し元(`run_turn`/`edit_user_message`/`retry_assistant_message`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
-    let history = db_call(db.clone(), move |conn| build_history(conn, task_id)).await?;
+    let history = with_conn(db.clone(), move |conn| build_history(conn, task_id)).await?;
 
     // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
     // 衝突の排除は`ExternalToolset`が済ませてある。
@@ -306,7 +301,7 @@ async fn run_tool_rounds(
     let mut tool_time_used = Duration::ZERO;
 
     for _round in 1..=limits.max_rounds_per_turn {
-        let system_prompt_text = db_call(db.clone(), {
+        let system_prompt_text = with_conn(db.clone(), {
             let base_owned = base_owned.clone();
             let task_chat_owned = task_chat_owned.clone();
             move |conn| {
@@ -365,7 +360,7 @@ async fn run_tool_rounds(
             }
 
             let turn_id = turn_id.to_string();
-            db_call(db, move |conn| {
+            with_conn(db, move |conn| {
                 messages::insert_message(
                     conn,
                     NewMessage {
@@ -421,7 +416,7 @@ async fn run_tool_rounds(
             })
             .to_string();
             let turn_id_for_db = turn_id.to_string();
-            db_call(db.clone(), move |conn| {
+            with_conn(db.clone(), move |conn| {
                 messages::insert_message(
                     conn,
                     NewMessage {
@@ -488,7 +483,7 @@ async fn execute_call(
     let Some((server_id, tool_name)) = external.route(&call.name) else {
         let name = call.name.clone();
         let arguments = call.arguments.clone();
-        return db_call(db, move |conn| {
+        return with_conn(db, move |conn| {
             Ok(
                 tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
                     .unwrap_or_else(|e| json!({ "error": e.to_string() })),
@@ -518,7 +513,7 @@ async fn fail_turn(
     let turn_id = turn_id.to_string();
     let content = failure.user_message();
     let error_kind = failure.kind();
-    db_call(db, move |conn| {
+    with_conn(db, move |conn| {
         messages::insert_message(
             conn,
             NewMessage {
@@ -538,20 +533,6 @@ async fn fail_turn(
     Ok(vec![ResponseEvent::Done {
         finish_reason: FinishReason::Error,
     }])
-}
-
-/// ロックの取得からドロップまでを`spawn_blocking`のクロージャ内に閉じ込める唯一の入口。
-async fn db_call<F, T>(db: SharedConnection, f: F) -> Result<T>
-where
-    F: FnOnce(&Connection) -> Result<T> + Send + 'static,
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(move || {
-        let conn = db.lock().expect("db mutex poisoned");
-        f(&conn)
-    })
-    .await
-    .map_err(|e| CoreError::Internal(format!("db task panicked: {e}")))?
 }
 
 /// API送信用の履歴。送信日時は`ChatMessage::User`の`sent_at`として本文と分けて運ぶ
