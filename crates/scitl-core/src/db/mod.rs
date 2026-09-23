@@ -14,6 +14,7 @@ pub use error::{CoreError, Result};
 const INIT_SQL: &str = include_str!("../../../../migrations/0001_init.sql");
 const TOOL_EXECUTION_ROLE_SQL: &str =
     include_str!("../../../../migrations/0002_tool_execution_role.sql");
+const ERROR_DETAIL_SQL: &str = include_str!("../../../../migrations/0003_error_detail.sql");
 
 /// 非同期層から使うDBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を
 /// 非同期関数のawaitをまたいで持たせられない(architecture.md 4節)。触るときは[`with_conn`]を通す。
@@ -54,8 +55,13 @@ pub(crate) fn in_transaction<T>(
     Ok(out)
 }
 
-static MIGRATIONS: LazyLock<Migrations<'static>> =
-    LazyLock::new(|| Migrations::new(vec![M::up(INIT_SQL), M::up(TOOL_EXECUTION_ROLE_SQL)]));
+static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
+    Migrations::new(vec![
+        M::up(INIT_SQL),
+        M::up(TOOL_EXECUTION_ROLE_SQL),
+        M::up(ERROR_DETAIL_SQL),
+    ])
+});
 
 /// ISO8601 UTC(`YYYY-MM-DDTHH:MM:SSZ`)。生成箇所をここに集約する
 /// (docs/spec/rebuild/data-model.md 1節)。
