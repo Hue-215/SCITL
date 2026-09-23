@@ -13,7 +13,9 @@ pub enum TurnFailure {
     EmptyResponse,
     /// 上限が未設定なら設定を促すヒントを文言に加える(`legacy/backend.md` 4節手順6)。
     /// `config.rs`に上限の項目自体が無いため、#40時点では常に`false`。
-    ContextExceeded { limit_configured: bool },
+    ContextExceeded {
+        limit_configured: bool,
+    },
     ToolRoundLimit,
     /// 1ターン内のツール実行に使える合計時間を使い切った(Issue #71)。
     ToolTimeout,
@@ -30,7 +32,9 @@ pub enum TurnFailure {
     /// `classify`のmatchはCoreErrorの全バリアントを網羅するため、ここへ落ちるのは
     /// `CoreError::Llm`の中身が既知パターンに当たらなかった場合のみ。detailは
     /// sanitize済みの文字列に限る(`sanitize_error_body`を通ったもの)。
-    Unexpected { detail: String },
+    Unexpected {
+        detail: String,
+    },
 }
 
 impl TurnFailure {
@@ -91,9 +95,7 @@ impl TurnFailure {
             TurnFailure::ProviderConfig => {
                 "プロバイダーの設定に問題があります。設定画面を確認してください。".to_string()
             }
-            TurnFailure::Provider => {
-                "LLMプロバイダーとの通信に失敗しました。".to_string()
-            }
+            TurnFailure::Provider => "LLMプロバイダーとの通信に失敗しました。".to_string(),
             TurnFailure::Unexpected { detail } => {
                 format!("予期しないエラーが発生しました: {detail}")
             }
@@ -153,9 +155,9 @@ fn classify_llm_error(detail: &str) -> TurnFailure {
         return match status {
             401 | 403 => TurnFailure::Auth,
             429 => TurnFailure::RateLimit,
-            _ if looks_like_context_exceeded(body) => {
-                TurnFailure::ContextExceeded { limit_configured: false }
-            }
+            _ if looks_like_context_exceeded(body) => TurnFailure::ContextExceeded {
+                limit_configured: false,
+            },
             _ => TurnFailure::Provider,
         };
     }
@@ -199,7 +201,9 @@ mod tests {
             classify(&CoreError::Llm(
                 "http 400: This model's maximum context length is 8192 tokens".to_string()
             )),
-            TurnFailure::ContextExceeded { limit_configured: false }
+            TurnFailure::ContextExceeded {
+                limit_configured: false
+            }
         );
         assert_eq!(
             classify(&CoreError::Llm("http 500: internal error".to_string())),
@@ -262,7 +266,10 @@ mod tests {
     #[test]
     fn from_readiness_maps_unready_states() {
         assert_eq!(from_readiness(Readiness::Ready), None);
-        assert_eq!(from_readiness(Readiness::NoModel), Some(TurnFailure::NoModel));
+        assert_eq!(
+            from_readiness(Readiness::NoModel),
+            Some(TurnFailure::NoModel)
+        );
     }
 
     #[test]
@@ -270,7 +277,9 @@ mod tests {
         // APIキー未設定・不正のどちらも、実際の呼び出しが401/403を返すことで初めて
         // 判明する(事前チェックでは「未設定」と「ローカルプロバイダーの認証不要」を
         // 区別できないため)。
-        let failure = classify(&CoreError::Llm("http 401: missing bearer token".to_string()));
+        let failure = classify(&CoreError::Llm(
+            "http 401: missing bearer token".to_string(),
+        ));
         assert_eq!(failure, TurnFailure::Auth);
         assert!(failure.user_message().contains("未設定"));
     }

@@ -63,7 +63,10 @@ mod tests {
 
     #[test]
     fn unset_config_falls_back_to_defaults() {
-        assert_eq!(ToolLimits::from_config(&ToolConfig::default()), ToolLimits::default());
+        assert_eq!(
+            ToolLimits::from_config(&ToolConfig::default()),
+            ToolLimits::default()
+        );
     }
 
     #[test]

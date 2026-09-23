@@ -55,10 +55,12 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
 }
 
 fn extract_step_id(object: &serde_json::Map<String, Value>) -> Result<i64> {
-    let value = object.get("step_id").ok_or_else(|| CoreError::InvalidArgument {
-        name: "step_id".to_string(),
-        reason: "required".to_string(),
-    })?;
+    let value = object
+        .get("step_id")
+        .ok_or_else(|| CoreError::InvalidArgument {
+            name: "step_id".to_string(),
+            reason: "required".to_string(),
+        })?;
     value.as_i64().ok_or_else(|| CoreError::InvalidArgument {
         name: "step_id".to_string(),
         reason: "expected an integer".to_string(),

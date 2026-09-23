@@ -44,7 +44,8 @@ impl OpenAiCompatAdapter {
 
         // ハードニング済みクライアントの組み立ては`net::hardened_client`に集約する
         // (MCP streamable_httpと共有。Opusレビュー指摘)。
-        let client = crate::net::hardened_client(&base_url, request_timeout.unwrap_or(REQUEST_TIMEOUT))?;
+        let client =
+            crate::net::hardened_client(&base_url, request_timeout.unwrap_or(REQUEST_TIMEOUT))?;
         Ok(Self {
             client,
             base_url,
@@ -176,11 +177,17 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
             // 送信日時は本文と混ぜず、構造化した形にして送る(Issue #68)。
             content: render_user_content(text, sent_at.as_deref()),
         },
-        ChatMessage::Assistant { content, tool_calls } => RequestMessage::Assistant {
+        ChatMessage::Assistant {
+            content,
+            tool_calls,
+        } => RequestMessage::Assistant {
             content: content.clone(),
             tool_calls: tool_calls.iter().map(to_request_tool_call).collect(),
         },
-        ChatMessage::Tool { tool_call_id, content } => RequestMessage::Tool {
+        ChatMessage::Tool {
+            tool_call_id,
+            content,
+        } => RequestMessage::Tool {
             tool_call_id: tool_call_id.clone(),
             content: content.clone(),
         },
@@ -402,11 +409,15 @@ mod tests {
     #[test]
     fn completions_endpoint_joins_regardless_of_trailing_slash() {
         assert_eq!(
-            completions_endpoint("https://api.openai.com/v1").unwrap().as_str(),
+            completions_endpoint("https://api.openai.com/v1")
+                .unwrap()
+                .as_str(),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            completions_endpoint("https://api.openai.com/v1/").unwrap().as_str(),
+            completions_endpoint("https://api.openai.com/v1/")
+                .unwrap()
+                .as_str(),
             "https://api.openai.com/v1/chat/completions"
         );
     }
@@ -447,7 +458,10 @@ mod tests {
             "be helpful".to_string(),
         )))
         .unwrap();
-        assert_eq!(system, serde_json::json!({"role": "system", "content": "be helpful"}));
+        assert_eq!(
+            system,
+            serde_json::json!({"role": "system", "content": "be helpful"})
+        );
 
         let user = serde_json::to_value(to_request_message(&ChatMessage::User {
             text: "hi".to_string(),
@@ -541,6 +555,9 @@ mod tests {
             content: "{}".to_string(),
         }))
         .unwrap();
-        assert_eq!(without_id, serde_json::json!({"role": "tool", "content": "{}"}));
+        assert_eq!(
+            without_id,
+            serde_json::json!({"role": "tool", "content": "{}"})
+        );
     }
 }

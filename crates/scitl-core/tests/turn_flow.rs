@@ -2,15 +2,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
+use scitl_core::config::{McpEndpoint, McpServerConfig};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
-use scitl_core::llm::{ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolSchema};
+use scitl_core::llm::{
+    ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolSchema,
+};
+use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     delete_message, edit_user_message, retry_assistant_message, run_turn, McpAccess, SystemPrompts,
     ToolLimits,
 };
-use scitl_core::config::{McpEndpoint, McpServerConfig};
-use scitl_core::mcp::ToolCatalog;
 use serde_json::json;
 
 fn system_prompt_content(message: &ChatMessage) -> &str {
@@ -520,7 +522,10 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     // (Issue #38で実機確認された不具合)。
     let round2_tail = &rounds[1][rounds[1].len() - 2..];
     match &round2_tail[0] {
-        ChatMessage::Assistant { content, tool_calls } => {
+        ChatMessage::Assistant {
+            content,
+            tool_calls,
+        } => {
             assert_eq!(tool_calls.len(), 1);
             assert_eq!(tool_calls[0].name, "add_steps");
             assert_eq!(tool_calls[0].id.as_deref(), Some("call_1"));
@@ -529,7 +534,10 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
         other => panic!("expected Assistant with tool_calls, got {other:?}"),
     }
     match &round2_tail[1] {
-        ChatMessage::Tool { tool_call_id, content } => {
+        ChatMessage::Tool {
+            tool_call_id,
+            content,
+        } => {
             assert_eq!(tool_call_id.as_deref(), Some("call_1"));
             assert!(content.contains("買い出し"));
         }
@@ -703,7 +711,10 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     );
 
     // 実行記録の`result`に`error`キーが立つ(画面の「エラーの有無」表示の前提、Issue #42)。
-    let record = messages.iter().find(|m| m.kind == "tool_execution").unwrap();
+    let record = messages
+        .iter()
+        .find(|m| m.kind == "tool_execution")
+        .unwrap();
     let content: serde_json::Value = serde_json::from_str(&record.content).unwrap();
     assert!(content["result"].get("error").is_some(), "got {content}");
 }
@@ -726,9 +737,12 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
     )
     .await
     .unwrap();
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, ResponseEvent::Done { finish_reason: FinishReason::Error })));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        ResponseEvent::Done {
+            finish_reason: FinishReason::Error
+        }
+    )));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_task(&conn, task_id).unwrap();
@@ -783,7 +797,10 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_task(&conn, task_id).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
-    assert_eq!(error_message.error_kind.as_deref(), Some("tool_round_limit"));
+    assert_eq!(
+        error_message.error_kind.as_deref(),
+        Some("tool_round_limit")
+    );
     // 既定値の4ラウンドぶん回ってから打ち切られる(1ラウンドにつきツール実行記録が1件)。
     assert_eq!(tool_execution_count(&messages), 4);
 }
@@ -815,7 +832,10 @@ async fn run_turn_honors_the_configured_max_tool_rounds() {
     let messages = db::messages::list_for_task(&conn, task_id).unwrap();
     assert_eq!(tool_execution_count(&messages), 2);
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
-    assert_eq!(error_message.error_kind.as_deref(), Some("tool_round_limit"));
+    assert_eq!(
+        error_message.error_kind.as_deref(),
+        Some("tool_round_limit")
+    );
 }
 
 /// ツール実行に使える合計時間が最初から無ければ、ラウンド数に余裕があっても1回も
@@ -884,7 +904,10 @@ async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
 }
 
 fn tool_execution_count(messages: &[db::messages::Message]) -> usize {
-    messages.iter().filter(|m| m.kind == "tool_execution").count()
+    messages
+        .iter()
+        .filter(|m| m.kind == "tool_execution")
+        .count()
 }
 
 /// プロバイダー未選択(`None`)はエラー発言として保存され、`send`は一切呼ばれない
@@ -978,9 +1001,10 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
     let first_round = &rounds[0];
     let has_error_content = first_round.iter().any(|m| match m {
         ChatMessage::User { text: content, .. }
-        | ChatMessage::Assistant { content: Some(content), .. } => {
-            content.contains("APIキーが正しくない")
-        }
+        | ChatMessage::Assistant {
+            content: Some(content),
+            ..
+        } => content.contains("APIキーが正しくない"),
         _ => false,
     });
     assert!(!has_error_content);
@@ -1159,7 +1183,11 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         by_kind,
         vec![
             ("user", "normal", None),
-            ("assistant", "tool_execution", Some("工程を追加すべきか考える")),
+            (
+                "assistant",
+                "tool_execution",
+                Some("工程を追加すべきか考える")
+            ),
             ("assistant", "normal", Some("結果を報告する文面を考える")),
         ]
     );
@@ -1172,7 +1200,10 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         for message in round {
             match message {
                 ChatMessage::User { text: content, .. }
-        | ChatMessage::Assistant { content: Some(content), .. } => {
+                | ChatMessage::Assistant {
+                    content: Some(content),
+                    ..
+                } => {
                     assert!(!content.contains("考える"));
                 }
                 ChatMessage::Tool { content, .. } => {
@@ -1267,7 +1298,10 @@ async fn retry_assistant_message_keeps_turn_id_and_increments_attempt_no() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, "user");
     assert_eq!(messages[1].content, "応答B");
-    assert_eq!(messages[1].turn_id.as_deref(), Some(original_turn_id.as_str()));
+    assert_eq!(
+        messages[1].turn_id.as_deref(),
+        Some(original_turn_id.as_str())
+    );
     assert_eq!(messages[1].attempt_no, Some(2));
 }
 
@@ -1345,7 +1379,9 @@ async fn delete_message_removes_only_the_target_without_cascade() {
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
-    delete_message(db.clone(), task_id, first_user_id).await.unwrap();
+    delete_message(db.clone(), task_id, first_user_id)
+        .await
+        .unwrap();
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_task(&conn, task_id).unwrap();

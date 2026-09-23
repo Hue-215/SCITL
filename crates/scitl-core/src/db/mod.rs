@@ -42,10 +42,7 @@ fn format_unix_utc(secs: u64) -> String {
     let m_num = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m_num <= 2 { y + 1 } else { y };
 
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y, m_num, d, h, m, s
-    )
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m_num, d, h, m, s)
 }
 
 /// 接続を開き、PRAGMAとマイグレーションを適用する

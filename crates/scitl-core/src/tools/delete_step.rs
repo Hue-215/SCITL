@@ -42,10 +42,12 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
         }
     }
 
-    let value = object.get("step_id").ok_or_else(|| CoreError::InvalidArgument {
-        name: "step_id".to_string(),
-        reason: "required".to_string(),
-    })?;
+    let value = object
+        .get("step_id")
+        .ok_or_else(|| CoreError::InvalidArgument {
+            name: "step_id".to_string(),
+            reason: "required".to_string(),
+        })?;
     let step_id = value.as_i64().ok_or_else(|| CoreError::InvalidArgument {
         name: "step_id".to_string(),
         reason: "expected an integer".to_string(),

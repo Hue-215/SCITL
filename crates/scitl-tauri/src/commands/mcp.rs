@@ -59,7 +59,10 @@ fn store_secret_refs(pairs: Vec<(String, String)>) -> Result<Vec<SecretRef>, Str
 fn delete_secret_refs(refs: &[SecretRef]) {
     for r in refs {
         if let Err(e) = secrets::delete(&r.key_ref) {
-            eprintln!("failed to delete MCP secret '{}' from secret store: {e}", r.name);
+            eprintln!(
+                "failed to delete MCP secret '{}' from secret store: {e}",
+                r.name
+            );
         }
     }
 }
@@ -135,7 +138,10 @@ pub fn add_mcp_server(
 }
 
 #[tauri::command]
-pub fn delete_mcp_server(state: State<'_, AppState>, server_id: String) -> Result<SettingsView, String> {
+pub fn delete_mcp_server(
+    state: State<'_, AppState>,
+    server_id: String,
+) -> Result<SettingsView, String> {
     let mut runtime = state.runtime.lock().expect("runtime mutex poisoned");
     let index = runtime
         .config

@@ -92,7 +92,10 @@ impl ExternalToolset {
 
     #[cfg(test)]
     fn exposed_names(&self) -> Vec<&str> {
-        self.entries.iter().map(|e| e.schema.name.as_str()).collect()
+        self.entries
+            .iter()
+            .map(|e| e.schema.name.as_str())
+            .collect()
     }
 }
 
@@ -132,7 +135,10 @@ mod tests {
                 args: Vec::new(),
                 env_refs: Vec::new(),
             },
-            enabled_tools: enabled_tools.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>(),
+            enabled_tools: enabled_tools
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<BTreeSet<_>>(),
         }
     }
 
@@ -157,10 +163,8 @@ mod tests {
     fn skips_names_that_cannot_be_exposed() {
         // 呼び出し先APIの命名規則に収まらない名前(記号入り・長すぎる)は公開しない。
         let s = server("id1", "files", &["read file", &"x".repeat(80)]);
-        let toolset = ExternalToolset::build(
-            [(&s, vec![tool("read file"), tool(&"x".repeat(80))])],
-            &[],
-        );
+        let toolset =
+            ExternalToolset::build([(&s, vec![tool("read file"), tool(&"x".repeat(80))])], &[]);
         assert!(toolset.is_empty());
     }
 
@@ -169,7 +173,8 @@ mod tests {
         // 名前が衝突した場合は公開しない(どちらが呼ばれたか判別できないため)。
         let a = server("id1", "a__b", &["c"]);
         let b = server("id2", "a", &["b__c"]);
-        let toolset = ExternalToolset::build([(&a, vec![tool("c")]), (&b, vec![tool("b__c")])], &[]);
+        let toolset =
+            ExternalToolset::build([(&a, vec![tool("c")]), (&b, vec![tool("b__c")])], &[]);
         assert_eq!(toolset.exposed_names(), vec!["a__b__c"]);
         assert_eq!(toolset.route("a__b__c"), Some(("id1", "c")));
 
