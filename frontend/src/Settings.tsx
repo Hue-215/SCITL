@@ -117,6 +117,13 @@ export default function Settings({ onClose }: SettingsProps) {
 
         <div className="settings-content">
           <div className="settings-column">
+            {settings?.config_error && (
+              <p className="error">
+                {'設定ファイルを読み込めなかったため、空の設定で起動しています。'}
+                {'ファイルを直してアプリを再起動するまで、設定は保存されません。'}
+                {`(${settings.config_error})`}
+              </p>
+            )}
             {error && <p className="error">{error}</p>}
 
             {settings === null ? (
@@ -412,6 +419,12 @@ function ProviderCard({
       <p className="provider-card-meta">
         {provider.base_url} · {provider.has_api_key ? 'APIキー設定済み' : 'APIキー未設定'}
       </p>
+      {provider.error && (
+        <p className="error">
+          {'このプロバイダーは使えません。削除するか、別のプロバイダーに切り替えてください。'}
+          {`(${provider.error})`}
+        </p>
+      )}
 
       <ul className="model-list">
         {provider.models.map((model) => (

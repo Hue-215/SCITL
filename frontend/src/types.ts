@@ -96,6 +96,8 @@ export interface ProviderView {
   models: string[]
   active_model: string | null
   has_api_key: boolean
+  // このプロバイダーをアクティブにしているが、組み立てられない理由。
+  error: string | null
 }
 
 export type McpEndpointView =
@@ -119,6 +121,8 @@ export interface McpToolInfo {
 }
 
 export interface SettingsView {
+  // 起動時に設定ファイルを読めなかった理由。あれば設定は保存されない。
+  config_error: string | null
   general: GeneralSettings
   tools: ToolSettings
   providers: ProviderView[]
