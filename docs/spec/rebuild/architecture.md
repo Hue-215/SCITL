@@ -23,7 +23,7 @@ SCITL-2.0/
 │   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), state_prompt.rs(最新状態)
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(5節)
-│   │       ├── secrets.rs          # keyringへの唯一の入口
+│   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
 │   │       ├── config.rs           # 参照のみを持つ設定(TOML)
 │   │       ├── settings/           # 設定・登録の操作(規則・検証・秘密情報の出し入れ・保存)
 │   │       ├── blocking.rs         # 非同期層からブロッキング処理を呼ぶ入口(4節)
@@ -57,7 +57,7 @@ SCITL-2.0/
 | フロントエンド | React + TypeScript + Vite | 普及度が高く(月間DL数でReactは代替候補の約40倍)、エコシステムが厚い。WebViewが信頼できないモデル出力を描画する境界であることは他フレームワークでも変わらないため、Markdownサニタイズ・多言語化の枯れた部品が揃うJS側を選ぶ |
 | SQLiteドライバ | `rusqlite` | 同期API。単一プロセス内は明示的な排他制御で足り、非同期ランタイムへの結合を避ける(4節参照) |
 | マイグレーション | `rusqlite_migration` | rusqlite専用の薄いラッパー。1.0を超えてAPIが安定。`../legacy/data-model.md` §7が要求する「バージョン番号で管理する通常のマイグレーション」を最小の依存で満たす |
-| 秘密情報ストア | `keyring` | 事実上の標準。クロスプラットフォームでOS資格情報ストアにアクセスする |
+| 秘密情報ストア | `keyring-core` + OSごとの保存先クレート | keyringの現行の構成。保存先は6節 |
 | Tauriバージョン | Tauri 2.x | 権限・CSPの設定機構がこのバージョン系列を前提にしている |
 | LLMプロバイダ第一弾 | OpenAI互換チャットコンプリーションAPI | クラウド本家に加え、ローカル推論サーバー(llama.cpp/LM Studio/Ollama等)の多くが対応。「クラウド/ローカル同一UX」の原則(`../principles.md` 1節)を安く検証できる |
 | 設定ファイル形式 | TOML | 秘密情報は含まず参照のみを持つ(3節) |
@@ -172,13 +172,30 @@ HTTPクライアント(`reqwest`)は既定のままだと以下が「意図し�
 
 ## 6. 秘密情報
 
-`secrets.rs` を `keyring` 呼び出しの唯一の入口とする。他のどのモジュール(LLMアダプタ・
-Tauriコマンド・CLI)も `keyring` に直接触れない。設定ファイルには `key_ref` のような
+`secrets.rs` をOS資格情報ストア呼び出しの唯一の入口とする。他のどのモジュール(LLMアダプタ・
+Tauriコマンド・CLI)も `keyring_core` に直接触れない。設定ファイルには `key_ref` のような
 不透明な参照文字列のみを持ち、**平文の鍵を持つフィールドを型として存在させない**。
 IPC経由でフロントエンドに秘密情報が渡る経路を構造的に作らない。
 
 MCPサーバーの秘密情報(環境変数・ヘッダーの値)も同じ `secrets.rs` を経由する
 (プロバイダーのAPIキーと別の仕組みを作らない。`../principles.md` 5節)。
+
+### 保存先の選び方(Issue #156)
+
+`keyring-core` は保存先を持たず、`secrets.rs` が最初に使うときにOSごとの保存先を組み立てて
+既定にする。**設定しないまま使うとエラーになり、メモリ上の仮の保存先に落ちない**。
+旧来の `keyring` 3系は、保存先のfeatureを選び忘れると黙って仮の保存先で動き、秘密情報が
+保存されないまま気付けなかった(Issue #156)。今の構成では、保存先を選び忘れても黙って動くことはない。
+
+| OS | 保存先 | クレート | 選んだ理由 |
+|---|---|---|---|
+| Linux | freedesktopのSecret Service(KWallet・GNOME Keyring) | `dbus-secret-service-keyring-store`(`crypto-rust`) | デスクトップの標準の窓口で、再起動しても残る。D-Bus(`dbus`/libdbus)はTauriが既に使っている。`crypto-rust` でD-Bus上のやり取りを暗号化し、OpenSSLに依存しない。カーネルのキーリング(keyutils)は再起動で消えるため使わない |
+| Windows | 資格情報マネージャー | `windows-native-keyring-store` | 標準の保存先。依存の `windows-sys` は既存の版と同じ |
+| macOS | なし | - | 対応しない。保存先が無いことをエラーとして返す |
+
+Linuxの保存先は組み立てる時点でSecret Serviceに接続する。接続できない環境(サービスが
+動いていない等)では秘密情報の操作がエラーになり、既存の扱い(鍵無しで起動し、実際の呼び出しで
+認証エラーとして表面化させる)に乗る。組み立ての失敗は覚えず、次に使うときに組み立て直す。
 
 ## 7. IPCコマンドの設計
 

@@ -16,10 +16,16 @@ url = { workspace = true }
 ulid = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
-keyring = { workspace = true }
+keyring-core = { workspace = true }
 toml = { workspace = true }
 rmcp = { workspace = true }
 process-wrap = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service-keyring-store = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "test-util"] }
