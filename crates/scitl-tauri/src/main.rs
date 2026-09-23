@@ -3,11 +3,11 @@
 mod commands;
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use scitl_core::config::{self, ApiFormat, Config, ProviderConfig};
+use scitl_core::config::{self, Config, ProviderConfig};
 use scitl_core::db::error::CoreError;
 use scitl_core::llm::providers::openai_compat::OpenAiCompatAdapter;
 use scitl_core::llm::LlmAdapter;
@@ -16,16 +16,14 @@ use scitl_core::secrets;
 use secrecy::SecretString;
 use tauri::Manager;
 
-const DEFAULT_PROVIDER_ID: &str = "default";
-
 /// 現在有効なプロバイダーから作った実行時アダプタと、それを作った元の設定。
 /// 設定画面(Issue #22)でプロバイダーを切り替えたら[`build_active_adapter`]で丸ごと作り直す
 /// (差分更新はせず、常に「設定→アダプタ」を1方向に保つ。呼び出し元は
 /// `commands/settings.rs`の`persist_and_rebuild`)。
 pub struct Runtime {
     pub config: Config,
-    /// アクティブなプロバイダーが無い(全プロバイダーを削除した等)場合は`None`。
-    /// この場合チャット送信コマンドがエラーを返す(main.rs下部`send_task_chat_message`)。
+    /// アクティブなプロバイダーが無い(未登録・全プロバイダーを削除した等)場合は`None`。
+    /// この場合、チャット送信はエラー発言(`no_provider`)として保存される。
     pub adapter: Option<Arc<dyn LlmAdapter + Send + Sync>>,
 }
 
@@ -58,7 +56,9 @@ fn main() {
             let conn = scitl_core::db::open(app_data_dir.join("scitl.sqlite3"))?;
 
             let config_path = app_data_dir.join("config.toml");
-            let config = load_or_seed_config(&config_path)?;
+            // プロバイダー0件も有効な状態として起動する。既定の通信先を補わないのは、
+            // 通信先をユーザーが登録したものに限るため(principles.md 1節)。
+            let config = config::load(&config_path)?;
             let adapter = build_active_adapter(&config)
                 .map_err(|e| format!("invalid LLM provider configuration: {e}"))?;
 
@@ -138,51 +138,4 @@ fn build_adapter_for(
 
     let adapter = OpenAiCompatAdapter::new(provider.base_url.clone(), api_key, model, timeout)?;
     Ok(Arc::new(adapter))
-}
-
-/// `config.toml`を読み込む。初回起動でファイルが無い場合は環境変数から1回だけ設定を作り、
-/// APIキーがあれば`secrets.rs`(keyring)へ保存してから`config.toml`に書き出す。設定画面
-/// (Issue #22)が入った以降は、この移行経路を通るのは初回起動時だけになる(Issue #19)。
-fn load_or_seed_config(config_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
-    let mut cfg = config::load(config_path)?;
-
-    // 「初回起動か」の判定は`active_provider_id`ではなく`providers`が空かどうかで行う。
-    // 前者だと、有効なプロバイダーが既にあるのに`active_provider_id`だけが欠けている
-    // (将来のバグ・手動編集ミス等)場合に、同じidのプロバイダーを2重に作り、
-    // 固定`key_ref`で既存の秘密情報を上書きしてしまう。
-    if !cfg.providers.is_empty() {
-        if cfg.active_provider().is_none() {
-            return Err("config.toml has providers but no valid active_provider_id".into());
-        }
-        return Ok(cfg);
-    }
-
-    let base_url = std::env::var("SCITL_LLM_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-    let model = std::env::var("SCITL_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    let api_key = std::env::var("SCITL_LLM_API_KEY").unwrap_or_default();
-
-    let key_ref = if api_key.is_empty() {
-        None
-    } else {
-        let key_ref = format!("provider:{}", ulid::Ulid::new());
-        secrets::store(&key_ref, &SecretString::from(api_key))?;
-        Some(key_ref)
-    };
-
-    let provider = ProviderConfig {
-        id: DEFAULT_PROVIDER_ID.to_string(),
-        name: "Default".to_string(),
-        api_format: ApiFormat::OpenAiCompat,
-        base_url,
-        models: vec![model.clone()],
-        active_model: Some(model),
-        key_ref,
-    };
-
-    cfg.providers.push(provider);
-    cfg.active_provider_id = Some(DEFAULT_PROVIDER_ID.to_string());
-    config::save(config_path, &cfg)?;
-
-    Ok(cfg)
 }
