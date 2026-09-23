@@ -173,8 +173,8 @@ pub enum Readiness {
 /// プロバイダ固有の癖は各実装内に閉じ込める(architecture.md 3節)。
 #[async_trait::async_trait]
 pub trait LlmAdapter: Send + Sync {
-    /// モデル未選択・APIキー未設定を、実際にAPIを呼ぶ前に判定する。プロバイダごとに
-    /// 判定材料(保持しているモデル名・鍵)が異なるため各実装に委ねる。
+    /// 実際にAPIを呼ぶ前に分かる構成不足(モデル未選択)を判定する。APIキーは判定しない
+    /// (理由は[`Readiness`]のドキュメント)。判定材料はプロバイダごとに異なるため各実装に委ねる。
     fn readiness(&self) -> Readiness;
 
     async fn send(

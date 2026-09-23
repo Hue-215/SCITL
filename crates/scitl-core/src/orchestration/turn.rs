@@ -70,8 +70,7 @@ pub async fn run_turn(
 /// 参照)。添付ファイルは現時点で未実装(Issue #21)のため引き継ぎ処理自体が無いが、
 /// 実装され次第ここに「新しい発言へコピーする」処理を追加する必要がある。
 // turn層の入口はどれも「db・adapter・task_id・prompts・mcp・limits」という同じ文脈を
-// 受け取る。まとめるべきかはIssue #119(引数の定型の共通化)で決めるので、CIを入れる
-// ついでにここで形を変えることはしない。
+// 受け取る。まとめ方はIssue #119(引数の定型の共通化)で決める。
 #[allow(clippy::too_many_arguments)]
 pub async fn edit_user_message(
     db: SharedConnection,
@@ -397,7 +396,7 @@ async fn run_tool_rounds(
             //
             // 実行中の呼び出しを外から打ち切らないのは、内部ツールのDB書き込みが
             // `spawn_blocking`の上で走っており、待つのをやめてもタスク自体は完走する
-            // ため(PR前レビュー指摘)。打ち切ると、書き込みだけが済んで実行記録が
+            // ため。打ち切ると、書き込みだけが済んで実行記録が
             // 残らない状態を作る。1回の呼び出しは内部ツールならDB操作、外部ツールなら
             // `mcp`のper-callタイムアウトで有界なので、超過はその1回分に収まる。
             if tool_time_used >= limits.total_timeout {

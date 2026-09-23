@@ -112,9 +112,9 @@ pub enum McpEndpoint {
 }
 
 /// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない(architecture.md 6節)。
-/// ツール一覧そのもの(名前・説明)はここに永続化しない。旧実装と同じく画面側で
-/// 都度取得する(legacy/frontend.md 4節「未取得時は案内文を表示する」)。永続化すると、
-/// 起動のたびに古い一覧と実サーバーの食い違いを気にする必要が生まれるため
+/// ツール一覧そのもの(名前・説明)はここに永続化せず、アプリ起動中だけ
+/// [`crate::mcp::ToolCatalog`]に持つ。永続化すると、起動のたびに古い一覧と実サーバーの
+/// 食い違いを気にする必要が生まれるため
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub id: String,
