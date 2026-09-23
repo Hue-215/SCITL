@@ -177,6 +177,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Internal(_) => unexpected("internal"),
         // 設定操作でだけ起きる。ターンの経路には来ない。
         CoreError::InvalidSettings(_) => unexpected("invalid_settings"),
+        // リンクを開く操作でだけ起きる。ターンの経路には来ない。
+        CoreError::Link(_) => unexpected("link"),
         CoreError::InvalidArgument { .. } => unexpected("invalid_argument"),
     }
 }

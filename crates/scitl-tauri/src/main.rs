@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod navigation;
 
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +21,7 @@ pub struct AppState {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(navigation::guard())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
@@ -57,6 +59,8 @@ fn main() {
             commands::mcp::set_mcp_server_enabled,
             commands::mcp::set_mcp_tool_enabled,
             commands::mcp::fetch_mcp_tools,
+            commands::link::inspect_link,
+            commands::link::open_confirmed_link,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

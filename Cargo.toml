@@ -28,6 +28,9 @@ keyring-core = "1"
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 windows-native-keyring-store = "1"
 toml = "0.8"
+# チャット本文中のリンクをOSの既定アプリで開く(`scitl-core/src/link.rs`)。Windowsでは
+# `cmd /c start`を経由させず、URLがシェルに解釈されないようShellExecuteWを使う
+open = { version = "5", features = ["shellexecute-on-windows"] }
 # MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
 # 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
 # (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため)。

@@ -38,12 +38,16 @@ body {
 }
 
 /* 見出し: 文字サイズは3段階しかないため、画面名(h1)だけを1段大きくし、節の見出し
-   (h2以下)は本文サイズ+太字で段を作る(--font-size-xlはMarkdown描画(#39)用の
-   予約枠なのでここでは使わない)。要素間の余白は入れ物側のgapで一律に決めているので、
-   UA既定のmarginは二重になる分を落とす。 */
+   (h2以下)は本文サイズ+太字で段を作る(--font-size-xlはMarkdown本文の見出し
+   (.markdown)専用なのでここでは使わない)。h4以下は画面では使わず、Markdown本文にだけ
+   現れる。要素間の余白は入れ物側のgapで一律に決めているので、UA既定のmarginは
+   二重になる分を落とす。 */
 h1,
 h2,
-h3 {
+h3,
+h4,
+h5,
+h6 {
   margin: 0;
   font-size: var(--font-size-md);
   font-weight: 700;
@@ -73,6 +77,50 @@ pre {
   margin: 0;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
+}
+
+code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+/* <pre>の中の<code>はpre側の指定を引き継ぐ(二重にsmを掛けない) */
+pre code {
+  font-size: inherit;
+}
+
+/* リンクはクリックしても遷移せず、確認ダイアログを開くだけ(Markdown.tsx)。
+   hrefを持たせないため、UAの既定ではリンクの見た目にならない。 */
+a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  vertical-align: top;
+}
+
+blockquote {
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: var(--border-width) solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+hr {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: var(--border-width) solid var(--color-border);
 }
 
 summary {
@@ -414,11 +462,57 @@ option {
   margin-top: var(--space-1);
 }
 
-/* 入力欄が複数行化(#77)しても、保存済みの改行入り本文を空白に潰さず描画する。
-   本命はMarkdown描画(#39)で、入ればこの行は段落描画に置き換わる。 */
+/* Markdownとして描画しない本文(エラー発言・応答待ち)。改行入りの文言を空白に潰さない。 */
 .entry-content {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 発言本文のMarkdown描画(Markdown.tsx)。段落・リスト・表などブロックどうしの間隔は
+   入れ物のgapで一律に決める(ui.md 3節)。 */
+.markdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 吹き出しの中の見出しは、画面の見出し(基盤層)より段を1つずつ上げて本文と区別する。 */
+.markdown h1 {
+  font-size: var(--font-size-xl);
+}
+
+.markdown h2 {
+  font-size: var(--font-size-lg);
+}
+
+/* 基盤層のul/olは画面の一覧用に記号を消しているため、本文のリストでだけ戻す。 */
+.markdown ul,
+.markdown ol {
+  padding-left: var(--space-5);
+}
+
+.markdown ul {
+  list-style: disc;
+}
+
+.markdown ol {
+  list-style: decimal;
+}
+
+.markdown pre {
+  padding: var(--space-2);
+  background: var(--color-bg);
+  color: var(--color-text);
+  overflow-x: auto;
+}
+
+/* 列の多い表は吹き出しを押し広げず、表の中だけで横にスクロールさせる。 */
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .entry-time {
@@ -760,4 +854,17 @@ button.danger {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* URLは記号の途中でも折り返す(長いURLでダイアログが横に広がらないように)。 */
+.link-dialog-url {
+  word-break: break-all;
+  user-select: text;
+}
+
+.link-dialog-warning {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-danger);
 }

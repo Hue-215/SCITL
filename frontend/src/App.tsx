@@ -9,6 +9,7 @@ import {
   retryTaskChatMessage,
   sendTaskChatMessage,
 } from './api'
+import Markdown from './Markdown'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import { taskName } from './taskName'
@@ -20,6 +21,13 @@ import { useTaskRequests } from './useTaskRequests'
 
 function formatTime(createdAt: string): string {
   return new Date(createdAt).toLocaleString()
+}
+
+// Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
+// 表示はSCITL自身の文言(とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
+function EntryBody({ role, content }: { role: string; content: string }) {
+  if (role === 'user' || role === 'assistant') return <Markdown text={content} />
+  return <span className="entry-content">{content}</span>
 }
 
 export default function App() {
@@ -289,7 +297,7 @@ export default function App() {
 
               return (
                 <li key={message.id} className={`entry entry-${message.role}`}>
-                  <span className="entry-content">{message.content}</span>
+                  <EntryBody role={message.role} content={message.content} />
                   <time className="entry-time">{formatTime(message.created_at)}</time>
                   {canEditOrDelete && (
                     <div className="entry-actions">
@@ -329,7 +337,7 @@ export default function App() {
               <li key={`turn-${item.turnId}`} className="turn-group">
                 <ThinkingTools entries={item.entries} />
                 <div className={`entry entry-${finalMessage.role}`}>
-                  <span className="entry-content">{finalMessage.content}</span>
+                  <EntryBody role={finalMessage.role} content={finalMessage.content} />
                   {/* プロバイダーが書いた文字列のため、Markdown描画(#39)の対象にせず
                       プレーンテキストのまま出す(Issue #159) */}
                   {finalMessage.error_detail && (
@@ -363,7 +371,7 @@ export default function App() {
           })}
           {pending.map((entry, i) => (
             <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
-              <span className="entry-content">{entry.content}</span>
+              <EntryBody role={entry.role} content={entry.content} />
             </li>
           ))}
           {/* コマンド自体の失敗。保存されたエラー発言と同じ見た目にする(Issue #152) */}
