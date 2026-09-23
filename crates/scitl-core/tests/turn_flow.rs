@@ -278,6 +278,61 @@ impl LlmAdapter for AlwaysToolCallAdapter {
     }
 }
 
+/// ツールを渡されている間はツールを呼び続け、渡されなくなったら返信するケース(Issue #153)。
+/// 各呼び出しで渡されたツールの数とシステムプロンプトを記録する。
+struct ToolsWhileOfferedAdapter {
+    offered: Mutex<Vec<usize>>,
+    system_prompts: Mutex<Vec<String>>,
+}
+
+impl ToolsWhileOfferedAdapter {
+    fn new() -> Self {
+        Self {
+            offered: Mutex::new(Vec::new()),
+            system_prompts: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for ToolsWhileOfferedAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSchema],
+    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        self.offered.lock().unwrap().push(tools.len());
+        self.system_prompts
+            .lock()
+            .unwrap()
+            .push(system_prompt_content(&messages[0]).to_string());
+        if tools.is_empty() {
+            return Ok(vec![
+                ResponseEvent::TextDelta {
+                    text: "ここまでの結果でお答えします".to_string(),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                },
+            ]);
+        }
+        Ok(vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_1".to_string()),
+                name: "add_steps".to_string(),
+                arguments: json!({ "descriptions": ["買い出し"] }).into(),
+            },
+            ResponseEvent::Done {
+                finish_reason: FinishReason::ToolCall,
+            },
+        ])
+    }
+}
+
 /// モデル未選択・APIキー未設定を模すケース(Issue #40)。
 struct UnreadyAdapter(Readiness);
 
@@ -931,7 +986,8 @@ async fn run_turn_persists_error_message_for_empty_response() {
     assert_eq!(error_message.error_kind.as_deref(), Some("empty_response"));
 }
 
-/// ツール呼び出しの上限到達もエラー発言として保存される(Issue #40)。
+/// 上限のあとの最後の呼び出し(ツールを渡さない)でもツールを呼んできたら、実行せずに
+/// 上限到達のエラー発言として保存する(Issue #40・#153)。
 #[tokio::test]
 async fn run_turn_persists_error_message_for_tool_round_limit() {
     let conn = db::open_in_memory().unwrap();
@@ -954,7 +1010,8 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
         error_message.error_kind.as_deref(),
         Some("tool_round_limit")
     );
-    // 既定値の4ラウンドぶん回ってから打ち切られる(1ラウンドにつきツール実行記録が1件)。
+    // 既定値の4ラウンドぶん実行してから打ち切られる(1ラウンドにつきツール実行記録が1件)。
+    // 最後の呼び出しのツール呼び出しは実行しないので、5件目は無い。
     assert_eq!(tool_execution_count(&messages), 4);
 }
 
@@ -1725,4 +1782,44 @@ async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
     assert_eq!(messages[1].turn_id.as_deref(), Some(turn_id.as_str()));
     assert_eq!(messages[1].attempt_no, Some(2));
     assert_eq!(messages[1].error_kind.as_deref(), Some("unexpected"));
+}
+
+/// 往復の上限を使い切ったら、ツールを渡さずにもう一度だけ呼び、返信させる(Issue #153)。
+/// 上限のラウンドで実行したツールの結果を、モデルが受け取ったうえで返信する。
+#[tokio::test]
+async fn after_the_last_tool_round_the_model_replies_without_tools() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ToolsWhileOfferedAdapter::new();
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            limits: ToolLimits {
+                max_rounds_per_turn: 2,
+                ..ToolLimits::default()
+            },
+            ..context(&adapter)
+        },
+        task_id,
+        "工程を追加して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let offered = adapter.offered.into_inner().unwrap();
+    assert_eq!(offered.len(), 3, "2ラウンド + 最後の1回");
+    assert!(offered[..2].iter().all(|n| *n > 0));
+    assert_eq!(offered[2], 0, "最後の呼び出しにはツールを渡さない");
+    let prompts = adapter.system_prompts.into_inner().unwrap();
+    assert!(!prompts[1].contains("tool call limit"));
+    assert!(prompts[2].contains("tool call limit"));
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    assert_eq!(tool_execution_count(&messages), 2);
+    let reply = messages.last().unwrap();
+    assert_eq!(reply.role, "assistant");
+    assert_eq!(reply.content, "ここまでの結果でお答えします");
 }

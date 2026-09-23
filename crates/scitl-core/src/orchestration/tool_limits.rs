@@ -20,7 +20,8 @@ pub const DEFAULT_TOTAL_TIMEOUT_SECS: u64 = 300;
 /// 解決済みの上限。ターンはこの型だけを見て、`Option`の解釈はしない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolLimits {
-    /// 1ターンあたりのツール呼び出しラウンド数の上限。
+    /// 1ターンでツールを実行するラウンドの上限。使い切ったら、ツールを渡さずにもう一度だけ
+    /// モデルを呼んで返信させる(`turn`)。
     pub max_rounds_per_turn: u32,
     /// 1ターン内のツール実行に使える時間の合計。LLMの応答待ちは含まない
     /// (そちらはアダプタ側のタイムアウトが見る)。判定はツール呼び出しの区切りで

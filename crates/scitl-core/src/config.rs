@@ -86,7 +86,8 @@ impl GeneralConfig {
 /// 1箇所だけ持つ(設定ファイル側に既定値を書き写すと、2箇所を揃える必要が生まれる)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
-    /// 1ターンあたりのツール呼び出しラウンド数の上限。
+    /// 1ターンでツールを実行するラウンドの上限。使い切ったら、ツールを渡さずにもう一度だけ
+    /// モデルを呼んで返信させる(`orchestration::turn`)。
     pub max_rounds_per_turn: Option<u32>,
     /// 1ターン内のツール実行に使える時間の合計(秒)。LLMの応答待ちは含まない
     /// (そちらは`GeneralConfig::response_timeout_secs`が見る)。

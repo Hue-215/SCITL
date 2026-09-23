@@ -589,7 +589,7 @@ function McpTab({
           label="1ターンあたりの最大ツール呼び出し回数"
           value={settings.tools.max_rounds_per_turn}
           placeholder={`未設定(既定値 ${settings.tools.default_max_rounds_per_turn})`}
-          hint="モデルとの往復の回数。1回の往復でツールを複数呼ぶこともある。"
+          hint="ツールを実行するモデルとの往復の回数。1回の往復でツールを複数呼ぶこともある。使い切ったら、ツールを使わずに返信させるため、もう一度だけモデルを呼ぶ。"
           onSave={(rounds) => onSaveLimits(rounds, settings.tools.total_timeout_secs)}
         />
 
