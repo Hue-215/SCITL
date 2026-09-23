@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
+  LinkInspection,
   Message,
   ResponseEvent,
   SettingsView,
@@ -136,4 +137,14 @@ export function setMcpToolEnabled(
 // フロントエンド側で一覧を保持しない(画面移動で消えるのを防ぐ)。
 export function fetchMcpTools(serverId: string): Promise<SettingsView> {
   return invoke('fetch_mcp_tools', { serverId })
+}
+
+// 本文中のリンク(Issue #39)。開く側でもRustが判定し直すため、確認ダイアログを経ずに
+// openConfirmedLinkを呼んでも許可されないURLは開かない(architecture.md 8節)。
+export function inspectLink(url: string): Promise<LinkInspection> {
+  return invoke('inspect_link', { url })
+}
+
+export function openConfirmedLink(url: string): Promise<void> {
+  return invoke('open_confirmed_link', { url })
 }

@@ -131,3 +131,17 @@ export interface SettingsView {
   active_provider_id: string | null
   mcp_servers: McpServerView[]
 }
+
+// crates/scitl-core/src/link.rs の LinkVerdict / LinkInspection。
+export type LinkVerdict =
+  | { kind: 'web' }
+  | { kind: 'mail' }
+  | { kind: 'unreadable' }
+  | { kind: 'scheme_blocked'; scheme: string }
+
+export interface LinkInspection {
+  url: string
+  verdict: LinkVerdict
+  real_url: string | null
+  userinfo_host: string | null
+}
