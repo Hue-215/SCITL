@@ -32,12 +32,15 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<TaskStep>> {
 /// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は
 /// 除外する(docs/spec/legacy/backend.md 5節の棚卸しを踏まえた確定方針)。
 /// `order_index`は連番で既存の最大値の続きから振る。戻り値は新規に追加された工程のみ。
-pub fn add_steps(conn: &Connection, task_id: i64, descriptions: &[String]) -> Result<Vec<TaskStep>> {
+pub fn add_steps(
+    conn: &Connection,
+    task_id: i64,
+    descriptions: &[String],
+) -> Result<Vec<TaskStep>> {
     tasks::get_task(conn, task_id)?;
 
-    let mut stmt = conn.prepare(
-        "SELECT description FROM task_steps WHERE task_id = ?1 AND deleted_at IS NULL",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT description FROM task_steps WHERE task_id = ?1 AND deleted_at IS NULL")?;
     let existing: HashSet<String> = stmt
         .query_map([task_id], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<HashSet<_>>>()?;

@@ -116,8 +116,7 @@ mod tests {
         assert!(validate_external_url(&Url::parse("https://example.com/?a=b").unwrap()).is_err());
         assert!(validate_external_url(&Url::parse("https://example.com/#f").unwrap()).is_err());
         assert!(
-            validate_external_url(&Url::parse("https://user:pass@example.com/").unwrap())
-                .is_err()
+            validate_external_url(&Url::parse("https://user:pass@example.com/").unwrap()).is_err()
         );
     }
 

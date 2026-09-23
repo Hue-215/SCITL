@@ -184,12 +184,18 @@ fn sanitize_title(raw: &str) -> String {
     let trimmed =
         squeezed.trim_matches(|c: char| matches!(c, '"' | '\'' | '「' | '」' | '『' | '』'));
     // 引用符を剥がした内側にも空白が残りうるため、もう一度畳んでから切り詰める。
-    collapse_whitespace(trimmed).chars().take(MAX_TITLE_CHARS).collect()
+    collapse_whitespace(trimmed)
+        .chars()
+        .take(MAX_TITLE_CHARS)
+        .collect()
 }
 
 /// 制御文字(改行を含む)を空白に畳み、連続空白を1つにまとめ、前後の空白を落とす。
 fn collapse_whitespace(raw: &str) -> String {
-    let replaced: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let replaced: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
     replaced.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -605,7 +611,10 @@ mod tests {
         let id = seed_task(&conn);
         seed_user_message(&conn, id, &"あ".repeat(MAX_FALLBACK_LABEL_CHARS + 5));
 
-        let label = list_tasks(&conn).unwrap()[0].fallback_label.clone().unwrap();
+        let label = list_tasks(&conn).unwrap()[0]
+            .fallback_label
+            .clone()
+            .unwrap();
         assert_eq!(label.chars().count(), MAX_FALLBACK_LABEL_CHARS + 1);
         assert!(label.ends_with('…'));
     }

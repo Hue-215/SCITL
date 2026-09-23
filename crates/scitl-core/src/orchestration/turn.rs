@@ -58,7 +58,10 @@ pub async fn run_turn(
     // 新規ターンなので1から始まる。以降の再試行は`retry_assistant_message`が
     // `next_attempt_no`で採番する。
     let attempt_no: i64 = 1;
-    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits).await
+    generate_turn_response(
+        db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits,
+    )
+    .await
 }
 
 /// 編集(ユーザー発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言をすべて
@@ -66,6 +69,10 @@ pub async fn run_turn(
 /// 応答を生成し直す。ツール実行記録は対象外(`db::messages::soft_delete_normal_from`
 /// 参照)。添付ファイルは現時点で未実装(Issue #21)のため引き継ぎ処理自体が無いが、
 /// 実装され次第ここに「新しい発言へコピーする」処理を追加する必要がある。
+// turn層の入口はどれも「db・adapter・task_id・prompts・mcp・limits」という同じ文脈を
+// 受け取る。まとめるべきかはIssue #119(引数の定型の共通化)で決めるので、CIを入れる
+// ついでにここで形を変えることはしない。
+#[allow(clippy::too_many_arguments)]
 pub async fn edit_user_message(
     db: SharedConnection,
     adapter: Option<&dyn LlmAdapter>,
@@ -132,7 +139,10 @@ pub async fn retry_assistant_message(
     })
     .await?;
 
-    generate_turn_response(db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits).await
+    generate_turn_response(
+        db, adapter, task_id, turn_id, attempt_no, prompts, mcp, limits,
+    )
+    .await
 }
 
 /// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
@@ -332,7 +342,11 @@ async fn run_tool_rounds(
             match event {
                 ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
                 ResponseEvent::ReasoningDelta { text: delta } => reasoning.push_str(delta),
-                ResponseEvent::ToolCall { id, name, arguments } => {
+                ResponseEvent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => {
                     tool_calls.push(ToolCallRequest {
                         id: id.clone(),
                         name: name.clone(),
@@ -396,7 +410,11 @@ async fn run_tool_rounds(
             // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
             // 1回だけ紐付ける(発生順に混在させて表示するため。同一ラウンドの
             // 全呼び出しに複製すると「思考・ツール」折りたたみの件数が水増しされる)。
-            let reasoning_for_row = if i == 0 { reasoning_for_db.clone() } else { None };
+            let reasoning_for_row = if i == 0 {
+                reasoning_for_db.clone()
+            } else {
+                None
+            };
             let content = json!({
                 "tool": call.name.clone(),
                 "arguments": call.arguments.clone(),
@@ -441,7 +459,14 @@ async fn run_tool_rounds(
         }
     }
 
-    fail_turn(db, task_id, turn_id, attempt_no, TurnFailure::ToolRoundLimit).await
+    fail_turn(
+        db,
+        task_id,
+        turn_id,
+        attempt_no,
+        TurnFailure::ToolRoundLimit,
+    )
+    .await
 }
 
 /// ツール1件の実行。名前が外部ツールとして公開したものなら対応するサーバーへ、
@@ -465,8 +490,10 @@ async fn execute_call(
         let name = call.name.clone();
         let arguments = call.arguments.clone();
         return db_call(db, move |conn| {
-            Ok(tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
-                .unwrap_or_else(|e| json!({ "error": e.to_string() })))
+            Ok(
+                tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
+                    .unwrap_or_else(|e| json!({ "error": e.to_string() })),
+            )
         })
         .await;
     };

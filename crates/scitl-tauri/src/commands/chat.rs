@@ -68,7 +68,7 @@ pub async fn send_task_chat_message(
         inputs.tool_limits,
     )
     .await
-        .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())
 }
 
 /// 発言の編集(Issue #41)。ユーザー発言のみが対象で、対象以降の発言をすべて論理削除して

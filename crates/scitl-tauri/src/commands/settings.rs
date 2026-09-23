@@ -17,8 +17,8 @@ use tauri::State;
 use scitl_core::config::{
     self, ApiFormat, Config, GeneralConfig, McpEndpoint, ProviderConfig, ToolConfig,
 };
-use scitl_core::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
 use scitl_core::llm::providers::openai_compat::validate_base_url;
+use scitl_core::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
 use scitl_core::secrets;
 
 use crate::{build_active_adapter, AppState, Runtime};
@@ -295,8 +295,7 @@ pub fn delete_provider(
     }
 
     if runtime.config.active_provider_id.as_deref() == Some(provider_id.as_str()) {
-        runtime.config.active_provider_id =
-            runtime.config.providers.first().map(|p| p.id.clone());
+        runtime.config.active_provider_id = runtime.config.providers.first().map(|p| p.id.clone());
     }
 
     persist_and_rebuild(&state.config_path, runtime, &state.mcp_tools)

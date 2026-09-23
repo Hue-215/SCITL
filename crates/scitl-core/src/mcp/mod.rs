@@ -260,10 +260,7 @@ fn to_result_value(result: CallToolResult) -> Value {
         value.insert("text".to_string(), json!(truncate_result_text(&text)));
     }
     if omitted > 0 {
-        value.insert(
-            "omitted_non_text_blocks".to_string(),
-            json!(omitted),
-        );
+        value.insert("omitted_non_text_blocks".to_string(), json!(omitted));
     }
     if result.is_error.unwrap_or(false) {
         // 実行記録の表示(`ExternalToolLine`/「思考・ツール」折りたたみ)は`result.error`の
@@ -288,8 +285,10 @@ fn truncate_result_text(text: &str) -> String {
         return text.to_string();
     }
     let mut out: String = text.chars().take(MAX_RESULT_CHARS).collect();
-    out.push_str("
-…(結果が長いため以降を省略しました)");
+    out.push_str(
+        "
+…(結果が長いため以降を省略しました)",
+    );
     out
 }
 

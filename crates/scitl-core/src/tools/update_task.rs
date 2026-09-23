@@ -71,10 +71,7 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
     Ok(serde_json::to_value(updated).expect("Task serialization cannot fail"))
 }
 
-fn extract_string(
-    object: &serde_json::Map<String, Value>,
-    name: &str,
-) -> Result<Option<String>> {
+fn extract_string(object: &serde_json::Map<String, Value>, name: &str) -> Result<Option<String>> {
     match object.get(name) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),

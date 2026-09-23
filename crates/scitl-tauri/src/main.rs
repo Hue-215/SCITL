@@ -132,7 +132,10 @@ fn build_adapter_for(
         None => SecretString::from(String::new()),
     };
     let model = provider.resolved_model().unwrap_or_default();
-    let timeout = config.general.response_timeout_secs.map(Duration::from_secs);
+    let timeout = config
+        .general
+        .response_timeout_secs
+        .map(Duration::from_secs);
 
     let adapter = OpenAiCompatAdapter::new(provider.base_url.clone(), api_key, model, timeout)?;
     Ok(Arc::new(adapter))

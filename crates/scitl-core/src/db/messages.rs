@@ -433,7 +433,10 @@ mod tests {
 
         // 旧試行・最新試行のどちらのツール実行記録も会話には出ない。
         let remaining = list_for_task(&conn, task_id).unwrap();
-        assert!(remaining.is_empty(), "unexpected remaining rows: {remaining:?}");
+        assert!(
+            remaining.is_empty(),
+            "unexpected remaining rows: {remaining:?}"
+        );
 
         // 記録自体は全試行分がDBに残る(保全優先)。
         let kept: i64 = conn
@@ -471,7 +474,9 @@ mod tests {
         assert!(list_for_task(&conn, task_id).unwrap().is_empty());
         // 物理削除ではないことを確認する(deleted_atを無視すれば行は残っている)。
         let deleted_at: Option<String> = conn
-            .query_row("SELECT deleted_at FROM messages WHERE id = ?1", [id], |r| r.get(0))
+            .query_row("SELECT deleted_at FROM messages WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(deleted_at.is_some());
     }
@@ -496,10 +501,7 @@ mod tests {
         .unwrap();
 
         let result = soft_delete_message(&conn, id);
-        assert!(matches!(
-            result,
-            Err(CoreError::InvalidMessageOperation(_))
-        ));
+        assert!(matches!(result, Err(CoreError::InvalidMessageOperation(_))));
     }
 
     #[test]
@@ -567,7 +569,10 @@ mod tests {
         // 残らないターンは会話としては破棄されているため、`list_for_task`は丸ごと外す
         // (Issue #95)。保全(DBに残る)と表示(会話に出ない)を切り離すのがこのテストの要点。
         let remaining = list_for_task(&conn, task_id).unwrap();
-        assert!(remaining.is_empty(), "unexpected remaining rows: {remaining:?}");
+        assert!(
+            remaining.is_empty(),
+            "unexpected remaining rows: {remaining:?}"
+        );
 
         // ツール実行記録の行自体は監査記録として物理的には残る(保全優先)。
         let tool_deleted_at: Option<String> = conn
