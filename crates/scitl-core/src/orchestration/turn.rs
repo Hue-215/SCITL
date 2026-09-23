@@ -351,10 +351,11 @@ async fn run_tool_rounds(
     // まとめて保存する(docs/spec/rebuild/data-model.md「1ターン内の往復で保存するもの」)。
     let mut reply_parts: Vec<String> = Vec::new();
 
-    // 上限のラウンドまでツールを実行したら、ツールを渡さずにもう一度だけ呼ぶ。実行した
-    // ツールの結果をモデルが受け取らないまま終わると、実行が無駄になるため。
-    let tool_rounds = ctx.limits.max_rounds_per_turn;
-    for round in 1..=tool_rounds.saturating_add(1) {
+    // 上限のラウンドまでツールを実行したら、ツールを渡さずにもう一度だけ呼ぶ
+    // (docs/spec/rebuild/tools.md 4節)。`u64`で数えるのは、上限が`u32::MAX`でも
+    // 最後の1回を数えられるようにするため。
+    let tool_rounds = u64::from(ctx.limits.max_rounds_per_turn);
+    for round in 1..=tool_rounds + 1 {
         let final_call = round > tool_rounds;
         let mut system_prompt_text = with_conn(db.clone(), {
             let base_owned = base_owned.clone();
