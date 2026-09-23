@@ -17,8 +17,10 @@ pub(super) async fn connect(
     url: &str,
     header_refs: &[SecretRef],
 ) -> Result<ClientService, CoreError> {
-    let client = crate::net::hardened_client(url, CONNECT_TIMEOUT)
-        .map_err(|e| CoreError::Mcp(e.to_string()))?;
+    // リクエスト全体の上限は掛けない(`net::hardened_client`参照)。各段の上限は
+    // 呼び出し側(`mod.rs`)の`tokio::time::timeout`が持つ。
+    let client =
+        crate::net::hardened_client(url, None).map_err(|e| CoreError::Mcp(e.to_string()))?;
 
     let resolved = resolve_secrets(header_refs).await?;
     let mut headers = HashMap::with_capacity(resolved.len());

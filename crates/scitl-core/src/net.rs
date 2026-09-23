@@ -84,12 +84,19 @@ pub fn validate_external_url(url: &Url) -> Result<(), String> {
 /// URLを検証してから、ハードニング済み`reqwest::Client`を組み立てる。LLMプロバイダー
 /// (`llm/providers/openai_compat.rs`)とMCP streamable_http(`mcp/http.rs`)の両方が
 /// これを呼ぶ(同じ設定を2箇所に書くと片方だけ直される未来が来る)。
-pub fn hardened_client(url: &str, request_timeout: Duration) -> Result<reqwest::Client, CoreError> {
+///
+/// `request_timeout`はリクエスト全体(応答本文の読み切りまで)の上限。MCPは接続・一覧取得・
+/// 呼び出し・切断をそれぞれ`tokio::time::timeout`で囲んでおり、長寿命のSSEストリームも
+/// 使うため`None`を渡す。接続確立の上限([`CONNECT_TIMEOUT`])はどちらにも掛かる。
+pub fn hardened_client(
+    url: &str,
+    request_timeout: Option<Duration>,
+) -> Result<reqwest::Client, CoreError> {
     let parsed =
         Url::parse(url).map_err(|e| CoreError::Config(format!("url is not a valid URL: {e}")))?;
     validate_external_url(&parsed).map_err(CoreError::Config)?;
 
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .no_proxy()
         // architecture.md 5節: クロスホストのリダイレクトは拒否する。チャット
         // コンプリーションAPI・MCPサーバーいずれも正当な理由でリダイレクトを返すことは
@@ -97,8 +104,11 @@ pub fn hardened_client(url: &str, request_timeout: Duration) -> Result<reqwest::
         // 平文httpをプライベートIPまで許すため、ここを緩めると登録先のLANサーバーが
         // 公開ホストへ302を返すだけで通信先が広がる。
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(request_timeout)
+        .connect_timeout(CONNECT_TIMEOUT);
+    if let Some(timeout) = request_timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder
         .build()
         .map_err(|e| CoreError::Config(format!("failed to build HTTP client: {e}")))
 }
@@ -201,12 +211,47 @@ mod tests {
         format!("http://{addr}/")
     }
 
+    /// `spawn_once`と同じだが、応答を返す前に`delay`だけ待つ。
+    fn spawn_once_delayed(response: &'static str, delay: Duration) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                std::thread::sleep(delay);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    const NO_CONTENT: &str = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n";
+
+    #[tokio::test]
+    async fn request_timeout_applies_when_given() {
+        let url = spawn_once_delayed(NO_CONTENT, Duration::from_millis(500));
+        let client = hardened_client(&url, Some(Duration::from_millis(100))).unwrap();
+        let err = client.get(&url).send().await.unwrap_err();
+        assert!(err.is_timeout());
+    }
+
+    #[tokio::test]
+    async fn no_request_timeout_when_none() {
+        // MCPは`None`を渡し、各段の上限を呼び出し側の`tokio::time::timeout`に任せる。
+        // reqwest側に全体の上限が残っていると、呼び出し側の上限より先に切れる。
+        let url = spawn_once_delayed(NO_CONTENT, Duration::from_millis(500));
+        let client = hardened_client(&url, None).unwrap();
+        let response = client.get(&url).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 204);
+    }
+
     #[tokio::test]
     async fn cross_host_redirect_is_not_followed() {
         let url = spawn_once(
             "HTTP/1.1 302 Found\r\nLocation: http://example.invalid/elsewhere\r\nContent-Length: 0\r\n\r\n",
         );
-        let client = hardened_client(&url, Duration::from_secs(5)).unwrap();
+        let client = hardened_client(&url, Some(Duration::from_secs(5))).unwrap();
         // リダイレクトを追っていれば別ホストへの接続を試みて失敗するはずが、
         // ここでは追わずに302がそのまま返ってくることを確認する
         let response = client.get(&url).send().await.unwrap();
@@ -222,7 +267,7 @@ mod tests {
         // unsafeとされているが、このテストバイナリ内で環境変数を操作する他のテストは
         // 無く、競合は起きない。
         unsafe { std::env::set_var("http_proxy", "http://127.0.0.1:1") };
-        let client = hardened_client(&url, Duration::from_secs(5)).unwrap();
+        let client = hardened_client(&url, Some(Duration::from_secs(5))).unwrap();
         let result = client.get(&url).send().await;
         unsafe { std::env::remove_var("http_proxy") };
         // プロキシ(存在しない127.0.0.1:1)を経由していれば失敗するはずが、成功する
