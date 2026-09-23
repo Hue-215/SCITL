@@ -35,7 +35,7 @@ SCITL-2.0/
 │       └── src/commands/
 ├── frontend/                       # React + TypeScript + Vite
 ├── lang/                           # en.json / ja.json(core・frontend共有。未作成。#80)
-└── migrations/0001_init.sql
+└── migrations/                     # 0001_init.sql から番号順(data-model.md 5節)
 ```
 
 - **コア** (`scitl-core`): `../principles.md` 5節が「1箇所に閉じる」ことを求める判断
