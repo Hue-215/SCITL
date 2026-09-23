@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod link;
 pub mod mcp;
 pub mod settings;
 pub mod tasks;
