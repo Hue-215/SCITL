@@ -1143,6 +1143,35 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
     assert_eq!(error_message.error_kind.as_deref(), Some("no_provider"));
 }
 
+/// アダプタを使えない理由(設定ファイルを読めない等)は、その理由のエラー発言になる
+/// (Issue #155)。
+#[tokio::test]
+async fn run_turn_persists_the_reason_the_adapter_cannot_be_used() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            adapter: Err(TurnFailure::SettingsUnreadable),
+            ..context_without_provider()
+        },
+        task_id,
+        "こんにちは".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(
+        error_message.error_kind.as_deref(),
+        Some("settings_unreadable")
+    );
+}
+
 /// モデル未選択・APIキー未設定は`send`を呼ぶ前に検知され、エラー発言として保存される
 /// (Issue #40)。
 #[tokio::test]
