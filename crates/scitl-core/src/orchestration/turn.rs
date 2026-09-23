@@ -7,7 +7,9 @@ use ulid::Ulid;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, Message, NewMessage, Role};
 use crate::db::{with_conn, SharedConnection};
-use crate::llm::{ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolCallRequest};
+use crate::llm::{
+    ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments, ToolCallRequest,
+};
 use crate::mcp::McpSessions;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
@@ -409,9 +411,14 @@ async fn run_tool_rounds(
             } else {
                 None
             };
+            // 読めなかった引数は、モデルが実際に何を出したかが分かるよう生の文字列で残す。
+            let recorded_arguments = match &call.arguments {
+                ToolArguments::Valid { value } => value.clone(),
+                ToolArguments::Malformed { raw, .. } => serde_json::Value::String(raw.clone()),
+            };
             let content = json!({
                 "tool": call.name.clone(),
-                "arguments": call.arguments.clone(),
+                "arguments": recorded_arguments,
                 "result": result.clone(),
             })
             .to_string();
@@ -472,6 +479,9 @@ async fn run_tool_rounds(
 /// 不達に至っては日常的に起こるため、モデルに失敗を伝えて続けさせる方が会話として
 /// 自然になる。返る`Err`はDBスレッド自体が落ちた場合だけで、それは呼び出し元が
 /// 実行記録を保存できないのと同じ状況にあたる。
+///
+/// 引数がJSONとして読めなかった呼び出し(`ToolArguments::Malformed`)は、どのツールも
+/// 実行せずに失敗を返し、出し直させる。
 async fn execute_call(
     db: SharedConnection,
     task_id: i64,
@@ -480,9 +490,20 @@ async fn execute_call(
     sessions: &mut McpSessions,
     call: &ToolCallRequest,
 ) -> Result<serde_json::Value> {
+    let arguments = match &call.arguments {
+        ToolArguments::Valid { value } => value,
+        ToolArguments::Malformed { error, .. } => {
+            return Ok(json!({
+                "error": format!(
+                    "the arguments were not valid JSON ({error}); \
+                     the tool was not run. Call it again with valid JSON arguments."
+                )
+            }));
+        }
+    };
     let Some((server_id, tool_name)) = external.route(&call.name) else {
         let name = call.name.clone();
-        let arguments = call.arguments.clone();
+        let arguments = arguments.clone();
         return with_conn(db, move |conn| {
             Ok(
                 tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
@@ -496,7 +517,7 @@ async fn execute_call(
         return Ok(json!({ "error": format!("MCP server not found: {server_id}") }));
     };
     Ok(sessions
-        .call_tool(server, tool_name, &call.arguments)
+        .call_tool(server, tool_name, arguments)
         .await
         .unwrap_or_else(|e| json!({ "error": e.to_string() })))
 }

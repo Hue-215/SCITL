@@ -31,12 +31,17 @@ export interface TaskSummary {
   fallback_label: string | null
 }
 
+// crates/scitl-core/src/llm/mod.rs の ToolArguments と一致させる。
+export type ToolArguments =
+  | { status: 'valid'; value: unknown }
+  | { status: 'malformed'; raw: string; error: string }
+
 export type ResponseEvent =
   | { type: 'text_delta'; text: string }
   // モデルの思考(reasoning)の断片(Issue #42)。表示・保存専用で、APIへの再送信には
   // 使わない(docs/spec/principles.md 3節)。
   | { type: 'reasoning_delta'; text: string }
-  | { type: 'tool_call'; id: string | null; name: string; arguments: unknown }
+  | { type: 'tool_call'; id: string | null; name: string; arguments: ToolArguments }
   | { type: 'done'; finish_reason: 'stop' | 'tool_call' | 'length' | 'error' }
 
 // crates/scitl-core/src/db/messages.rs の Message と一致させる。
