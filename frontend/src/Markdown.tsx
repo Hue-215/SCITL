@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
+import { useRef, useState } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import LinkDialog from './LinkDialog'
 import remarkInertHtml from './remarkInertHtml'
@@ -13,27 +13,35 @@ const REMARK_PLUGINS = [remarkGfm, remarkInertHtml, remarkSoftBreaks]
 // remarkInertHtmlが構文木の段階で無害化する。
 export default function Markdown({ text }: { text: string }) {
   const [linkUrl, setLinkUrl] = useState<string | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
 
   const components: Components = {
     // リンクはWebView内で遷移させず、必ず確認ダイアログを経てOSのブラウザで開く
-    // (principles.md 4節)。確認には書かれたURLをそのまま渡し、許可されない通信方式でも
-    // 理由を表示できるようにする。一方href属性には既定の無害化(javascript:等を空にする)を
-    // 通した値だけを置き、クリック処理が漏れた場合にも危険なURLが実行されないようにする。
+    // (principles.md 4節)。<a>にhrefを持たせないことで、クリック処理以外の経路
+    // (中クリック・ドラッグ・右クリックメニュー・エンジンによるDNS先読み)をまとめて無くす。
+    // 確認には書かれたURLをそのまま渡し、許可されない通信方式でも理由を表示できるようにする。
     a: ({ href, children }) => {
-      const open = () => setLinkUrl(href ?? '')
+      const activate = () => {
+        if (href === undefined) return
+        // 脚注などページ内への参照は、同じ発言の中の該当箇所へ移るだけにする
+        // (idは発言ごとに重複しうるため、文書全体ではなくこの発言の中から探す)
+        if (href.startsWith('#')) {
+          const id = decodeURIComponent(href.slice(1))
+          rootRef.current?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' })
+          return
+        }
+        setLinkUrl(href)
+      }
       return (
         <a
-          href={defaultUrlTransform(href ?? '') || undefined}
+          role="link"
           tabIndex={0}
-          onClick={(e) => {
-            e.preventDefault()
-            open()
-          }}
-          onAuxClick={(e) => e.preventDefault()}
+          title={href}
+          onClick={activate}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
-              open()
+              activate()
             }
           }}
         >
@@ -44,13 +52,14 @@ export default function Markdown({ text }: { text: string }) {
   }
 
   return (
-    <div className="markdown">
+    <div className="markdown" ref={rootRef}>
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
         // 無害化の対象から漏れたHTML・画像が万一残っても描画しない
         skipHtml
         disallowedElements={['img']}
-        // hrefの無害化は上のaで行う(確認ダイアログに元のURLを渡すため、ここでは素通しにする)
+        // URLはhref属性に置かず、確認ダイアログにだけ渡す(上のa)。既定の無害化は
+        // javascript:等を空にしてしまい、開けない理由を表示できなくなるため素通しにする
         urlTransform={(url) => url}
         components={components}
       >

@@ -90,7 +90,7 @@ pre code {
 }
 
 /* リンクはクリックしても遷移せず、確認ダイアログを開くだけ(Markdown.tsx)。
-   UA既定の青はテーマ色と無関係なので描き直す。 */
+   hrefを持たせないため、UAの既定ではリンクの見た目にならない。 */
 a {
   color: var(--color-primary);
   text-decoration: underline;

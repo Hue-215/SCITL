@@ -142,6 +142,7 @@ export type LinkVerdict =
 export interface LinkInspection {
   url: string
   verdict: LinkVerdict
+  can_open: boolean
   real_url: string | null
   userinfo_host: string | null
 }

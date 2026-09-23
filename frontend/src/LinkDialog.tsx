@@ -38,7 +38,6 @@ export default function LinkDialog({ url, onClose }: LinkDialogProps) {
   }
 
   const verdict = inspection?.verdict
-  const canOpen = verdict?.kind === 'web' || verdict?.kind === 'mail'
   const hasWarning = !!inspection?.real_url || !!inspection?.userinfo_host
 
   return (
@@ -75,7 +74,7 @@ export default function LinkDialog({ url, onClose }: LinkDialogProps) {
         <button type="button" onClick={onClose}>
           キャンセル
         </button>
-        {canOpen && (
+        {inspection?.can_open && (
           <button type="button" onClick={() => void open()}>
             開く
           </button>
