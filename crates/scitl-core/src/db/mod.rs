@@ -12,6 +12,8 @@ use std::time::Duration;
 pub use error::{CoreError, Result};
 
 const INIT_SQL: &str = include_str!("../../../../migrations/0001_init.sql");
+const TOOL_EXECUTION_ROLE_SQL: &str =
+    include_str!("../../../../migrations/0002_tool_execution_role.sql");
 
 /// 非同期層から使うDBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を
 /// 非同期関数のawaitをまたいで持たせられない(architecture.md 4節)。触るときは[`with_conn`]を通す。
@@ -53,7 +55,7 @@ pub(crate) fn in_transaction<T>(
 }
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
-    LazyLock::new(|| Migrations::new(vec![M::up(INIT_SQL)]));
+    LazyLock::new(|| Migrations::new(vec![M::up(INIT_SQL), M::up(TOOL_EXECUTION_ROLE_SQL)]));
 
 /// ISO8601 UTC(`YYYY-MM-DDTHH:MM:SSZ`)。生成箇所をここに集約する
 /// (docs/spec/rebuild/data-model.md 1節)。
@@ -105,6 +107,30 @@ pub fn open_in_memory() -> Result<Connection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrations_are_valid() {
+        MIGRATIONS.validate().unwrap();
+    }
+
+    #[test]
+    fn existing_tool_execution_records_move_to_the_tool_role() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        MIGRATIONS.to_version(&mut conn, 1).unwrap();
+        conn.execute(
+            "INSERT INTO messages (role, content, kind, turn_id, attempt_no, created_at)
+             VALUES ('assistant', '{}', 'tool_execution', 't', 1, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        MIGRATIONS.to_latest(&mut conn).unwrap();
+
+        let role: String = conn
+            .query_row("SELECT role FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(role, "tool");
+    }
 
     #[test]
     fn in_transaction_leaves_nothing_when_a_later_statement_fails() {

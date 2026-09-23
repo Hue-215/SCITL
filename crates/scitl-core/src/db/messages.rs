@@ -327,6 +327,34 @@ mod tests {
     }
 
     #[test]
+    fn tool_role_is_reserved_for_tool_execution_records() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let insert = |role, kind, content| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role,
+                    content,
+                    kind,
+                    source: None,
+                    turn: Some(("turn-1", 1)),
+                    error_kind: None,
+                    reasoning: None,
+                },
+            )
+        };
+
+        assert!(insert(Role::Assistant, Kind::ToolExecution, "{}").is_err());
+        assert!(insert(Role::Tool, Kind::Normal, "結果").is_err());
+        let id = insert(Role::Tool, Kind::ToolExecution, "{}").unwrap();
+        assert!(conn
+            .execute("UPDATE messages SET kind = 'normal' WHERE id = ?1", [id])
+            .is_err());
+    }
+
+    #[test]
     fn error_role_round_trips_with_error_kind() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
@@ -402,7 +430,7 @@ mod tests {
                 &conn,
                 NewMessage {
                     task_id: Some(task_id),
-                    role: Role::Assistant,
+                    role: Role::Tool,
                     content: r#"{"tool":"add_steps"}"#,
                     kind: Kind::ToolExecution,
                     source: None,
@@ -489,7 +517,7 @@ mod tests {
             &conn,
             NewMessage {
                 task_id: Some(task_id),
-                role: Role::Assistant,
+                role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
                 source: None,
@@ -535,7 +563,7 @@ mod tests {
             &conn,
             NewMessage {
                 task_id: Some(task_id),
-                role: Role::Assistant,
+                role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
                 source: None,
