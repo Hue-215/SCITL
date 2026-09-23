@@ -74,7 +74,6 @@
 | source | TEXT | NULL=内部。外部(MCP)経由には印を付ける |
 | reasoning | TEXT | NULL可。表示・エクスポート専用、APIには送らない |
 | error_kind | TEXT | NULL可。`role='error'`のときのみ非NULLで、安定した種別コードを持つ(例: `no_model`, `context_exceeded`) |
-| error_detail | TEXT | NULL可。`role='error'`の行だけが持てる失敗の詳細(下記「エラー発言の詳細」)。空文字は不可 |
 | turn_id | TEXT | NULL可(下記「ターン境界」参照) |
 | attempt_no | INTEGER | NULL可 |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
@@ -89,22 +88,9 @@
 (閉じた集合の`role`・`kind`と異なり種別は今後増えるため、SQL側にも列挙を置くと同じ判断が
 2箇所に散る)。
 
-**エラー発言の`content`**: ユーザー向けの定型文言だけを入れる(`content`はNOT NULL、
-エクスポートにもそのまま乗る)。APIから返る生の詳細は種別によらず`content`に混ぜない。
-
-**エラー発言の詳細(`error_detail`)**(Issue #159): 失敗の原因を後から追うための情報。
-HTTPエラーなら状態コードとプロバイダーの応答本文、HTTP応答を伴わない失敗なら接続失敗等の
-文言、内部エラーならその種類を表す短い識別子を持つ。
-
-- 載せてよいのは、アダプタがサニタイズした本文(送信した鍵の伏せ字・制御文字と不可視の
-  書式文字の除去・長さの上限)と、秘密情報を含まない識別子だけ。鍵ストア・設定ファイル・
-  MCPサーバー由来の失敗は、鍵名・パス・URLを含みうるため詳細を持たない。どの種別が詳細を
-  持つかは`orchestration::TurnFailure`のバリアントの形で決め、分類の1箇所に閉じる
-- **画面の「詳細を表示」専用**。外部から来た文字列なので、モデルへの入力(履歴・
-  システムプロンプト・ツール結果)とエクスポートには含めない。画面ではMarkdownとして
-  解釈せず、プレーンテキストのまま描く
-- `error_detail IS NULL OR (role = 'error' AND error_detail <> '')` を
-  `0003_error_detail.sql` のトリガーで強制する
+**エラー発言の`content`**: ユーザー向けの定型文言を入れる(`content`はNOT NULL、
+エクスポートにもそのまま乗る)。APIから返る生の詳細(HTTPボディ等)をそのまま載せるのは、
+既知の種別に分類できずAPIキー等の秘密情報混入の恐れが無い場合(sanitize済みの場合)に限る。
 
 **`role='tool'` はツール実行記録専用**(Issue #131): `kind='tool_execution'` の行は、
 SCITL自身のターンの記録か外部(MCP)経由の記録かによらず `role='tool'` とし、それ以外の

@@ -44,7 +44,6 @@ pub async fn run_turn(
                 source: None,
                 turn: None,
                 error_kind: None,
-                error_detail: None,
                 reasoning: None,
             },
         )?;
@@ -86,7 +85,6 @@ pub async fn edit_user_message(
                     source: None,
                     turn: None,
                     error_kind: None,
-                    error_detail: None,
                     reasoning: None,
                 },
             )?;
@@ -249,7 +247,7 @@ impl Attempt {
         role: Role,
         content: &str,
         kind: Kind,
-        error: Option<(&str, Option<&str>)>,
+        error_kind: Option<&str>,
         reasoning: Option<&str>,
     ) -> Result<()> {
         messages::insert_message(
@@ -264,8 +262,7 @@ impl Attempt {
                 // (data-model.md「ターン境界」の3分類)。
                 source: None,
                 turn: Some((&self.turn_id, self.attempt_no)),
-                error_kind: error.map(|(kind, _)| kind),
-                error_detail: error.and_then(|(_, detail)| detail),
+                error_kind,
                 reasoning,
             },
         )?;
@@ -574,7 +571,7 @@ async fn execute_call(
 }
 
 /// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
-/// の定型文言、`error_detail`は`failure.detail()`(Issue #159)。
+/// (定型文言、`Unexpected`の場合のみsanitize済みの詳細を含む)。
 async fn fail_turn(
     db: SharedConnection,
     attempt: &Attempt,
@@ -582,13 +579,14 @@ async fn fail_turn(
 ) -> Result<Vec<ResponseEvent>> {
     let attempt = attempt.clone();
     let content = failure.user_message();
+    let error_kind = failure.kind();
     with_conn(db, move |conn| {
         attempt.insert(
             conn,
             Role::Error,
             &content,
             Kind::Normal,
-            Some((failure.kind(), failure.detail())),
+            Some(error_kind),
             None,
         )
     })

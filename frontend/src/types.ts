@@ -55,8 +55,6 @@ export interface Message {
   // 表示・エクスポート専用。APIへは送らない(data-model.md messagesテーブル)。
   reasoning: string | null
   error_kind: string | null
-  // 画面の「詳細を表示」専用。プロバイダーの応答本文を含みうる(data-model.md messages)。
-  error_detail: string | null
   turn_id: string | null
   attempt_no: number | null
   created_at: string
