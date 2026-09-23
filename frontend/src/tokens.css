@@ -4,7 +4,7 @@
  *
  * theme.ts はロール名(camelCase)を roleNameToCssVar() で --color-kebab-case に
  * 変換して発行するため、変数名で theme.ts 内を検索しても定義に辿り着けない。
- * 発行される色トークンの一覧(2025-09時点、theme.ts のROLES/DANGER_ROLESと対応):
+ * 発行される色トークンの一覧(theme.ts のROLES/DANGER_ROLESと対応):
  *   --color-bg, --color-surface, --color-surface-alt, --color-border,
  *   --color-text, --color-text-secondary,
  *   --color-primary, --color-on-primary,
