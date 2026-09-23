@@ -428,7 +428,7 @@ async fn run_tool_rounds(
                     conn,
                     NewMessage {
                         task_id: Some(task_id),
-                        role: Role::Assistant,
+                        role: Role::Tool,
                         content: &content,
                         kind: Kind::ToolExecution,
                         // 外部サーバーのツールを呼んだ記録もこのターンに属する。

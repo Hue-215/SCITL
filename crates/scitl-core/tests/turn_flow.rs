@@ -477,7 +477,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
         roles_kinds,
         vec![
             ("user", "normal"),
-            ("assistant", "tool_execution"),
+            ("tool", "tool_execution"),
             ("assistant", "normal"),
         ]
     );
@@ -563,7 +563,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
         roles_kinds,
         vec![
             ("user", "normal"),
-            ("assistant", "tool_execution"),
+            ("tool", "tool_execution"),
             ("assistant", "normal"),
         ]
     );
@@ -715,7 +715,7 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
         roles_kinds,
         vec![
             ("user", "normal"),
-            ("assistant", "tool_execution"),
+            ("tool", "tool_execution"),
             ("assistant", "normal"),
         ]
     );
@@ -1249,11 +1249,7 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         by_kind,
         vec![
             ("user", "normal", None),
-            (
-                "assistant",
-                "tool_execution",
-                Some("工程を追加すべきか考える")
-            ),
+            ("tool", "tool_execution", Some("工程を追加すべきか考える")),
             ("assistant", "normal", Some("結果を報告する文面を考える")),
         ]
     );
