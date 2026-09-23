@@ -67,7 +67,7 @@ export interface PendingEntry {
   content: string
 }
 
-// crates/scitl-tauri/src/commands/settings.rs の型と一致させる。
+// crates/scitl-core/src/settings/view.rs の型と一致させる。
 export type ApiFormat = 'open_ai_compat'
 
 export interface GeneralSettings {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createTask,
   deleteTaskChatMessage,
@@ -14,7 +14,8 @@ import Sidebar from './Sidebar'
 import { taskName } from './taskName'
 import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
 import { finalEntryOf, groupMessages } from './thinking'
-import type { Message, PendingEntry, TaskDetail, TaskSummary } from './types'
+import type { Message, TaskDetail, TaskSummary } from './types'
+import { useTaskRequests } from './useTaskRequests'
 
 function formatTime(createdAt: string): string {
   return new Date(createdAt).toLocaleString()
@@ -26,15 +27,18 @@ export default function App() {
   const [adding, setAdding] = useState(false)
   const [task, setTask] = useState<TaskDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [pending, setPending] = useState<PendingEntry[]>([])
   const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
+  // タスクに属さない操作(一覧・作成・読み込み)の失敗。タスクへのコマンドの失敗は
+  // `requests`がタスクごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // 編集モード(Issue #41)。ユーザー発言のみが対象。応答待ち中は開始できない
   // (`disableActions`参照)。
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
+  // 選択中のタスク。非同期の処理が終わった時点で見比べるため、stateとは別にrefでも持つ
+  // (処理を始めたときのstateは古いままなので、比べても切り替えに気付けない)。
+  const selectedRef = useRef<number | null>(null)
 
   const loadTasks = useCallback(async () => {
     try {
@@ -48,24 +52,48 @@ export default function App() {
     }
   }, [])
 
+  const selectTask = useCallback((id: number) => {
+    if (selectedRef.current === id) return
+    selectedRef.current = id
+    setTaskId(id)
+    // 読み込みが終わるまで前のタスクの内容を出しておくと、それを見ながら新しいタスクへ
+    // 操作できてしまう。
+    setTask(null)
+    setMessages([])
+  }, [])
+
   useEffect(() => {
     void loadTasks().then((summaries) => {
-      if (summaries.length > 0) setTaskId(summaries[0].id)
+      if (summaries.length > 0) selectTask(summaries[0].id)
     })
-  }, [loadTasks])
+  }, [loadTasks, selectTask])
 
-  const loadTask = useCallback(async (id: number) => {
-    try {
-      const [detail, history] = await Promise.all([getTaskDetail(id), listTaskMessages(id)])
-      setTask(detail)
-      setMessages(history)
-      setPending([])
-      setEditingId(null)
-      setError(null)
-    } catch (e) {
-      setError(String(e))
-    }
-  }, [])
+  const requests = useTaskRequests()
+  const { reloaded } = requests
+
+  const loadTask = useCallback(
+    async (id: number) => {
+      try {
+        const [detail, history] = await Promise.all([getTaskDetail(id), listTaskMessages(id)])
+        // 読み込み中に別のタスクへ移っていたら捨てる。追い越した結果で表示を上書きしない。
+        if (selectedRef.current !== id) return
+        setTask(detail)
+        setMessages(history)
+        setEditingId(null)
+        reloaded(id)
+      } catch (e) {
+        if (selectedRef.current === id) setError(String(e))
+      }
+    },
+    [reloaded],
+  )
+
+  // コマンドが終わったら、そのタスクを見ているときだけ引き直す。一覧は常に引き直す
+  // (タイトル・工程の進捗が変わりうるため)。
+  const settle = async (id: number) => {
+    if (selectedRef.current === id) await loadTask(id)
+    await loadTasks()
+  }
 
   useEffect(() => {
     if (taskId !== null) void loadTask(taskId)
@@ -77,7 +105,7 @@ export default function App() {
     try {
       const created = await createTask()
       await loadTasks()
-      setTaskId(created.id)
+      selectTask(created.id)
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -86,32 +114,27 @@ export default function App() {
     }
   }
 
+  // 応答待ちのタスクでは、送信・編集・再試行・削除のすべてを不可にする(Issue #41、
+  // legacy/frontend.md 1節)。他のタスクは応答待ちの間も操作できる。
+  const disableActions = taskId === null || requests.isBusy(taskId)
+
   const send = async () => {
     const text = draft.trim()
-    if (!text || sending || taskId === null) return
+    if (!text || disableActions || taskId === null) return
+    const id = taskId
     setDraft('')
     // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
     // DBから引き直す(docs/spec/principles.md 3節「保存するのは組み立て終わった応答」)。
-    setPending([
-      { role: 'user', content: text },
-      { role: 'pending', content: '応答待ち…' },
-    ])
-    setSending(true)
-    setError(null)
-    try {
-      await sendTaskChatMessage(taskId, text)
-      await loadTask(taskId)
-      await loadTasks()
-    } catch (e) {
-      setError(String(e))
-      await loadTask(taskId)
-    } finally {
-      setSending(false)
-    }
+    await requests.run(
+      id,
+      [
+        { role: 'user', content: text },
+        { role: 'pending', content: '応答待ち…' },
+      ],
+      () => sendTaskChatMessage(id, text),
+      settle,
+    )
   }
-
-  // 応答待ち中は編集・再試行・削除のすべてを不可にする(Issue #41、legacy/frontend.md 1節)。
-  const disableActions = sending || taskId === null
 
   // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す(Issue #95)。
   // バックエンドはコマンド最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
@@ -131,58 +154,43 @@ export default function App() {
   const submitEdit = async (messageId: number) => {
     const text = editDraft.trim()
     if (!text || disableActions || taskId === null) return
+    const id = taskId
     setEditingId(null)
     hideSuperseded(messageId, null)
-    setPending([
-      { role: 'user', content: text },
-      { role: 'pending', content: '応答待ち…' },
-    ])
-    setSending(true)
-    setError(null)
-    try {
-      await editTaskChatMessage(taskId, messageId, text)
-      await loadTask(taskId)
-      await loadTasks()
-    } catch (e) {
-      setError(String(e))
-      await loadTask(taskId)
-    } finally {
-      setSending(false)
-    }
+    await requests.run(
+      id,
+      [
+        { role: 'user', content: text },
+        { role: 'pending', content: '応答待ち…' },
+      ],
+      () => editTaskChatMessage(id, messageId, text),
+      settle,
+    )
   }
 
   const retry = async (messageId: number) => {
     if (disableActions || taskId === null) return
+    const id = taskId
     hideSuperseded(messageId, messages.find((m) => m.id === messageId)?.turn_id ?? null)
-    setPending([{ role: 'pending', content: '応答待ち…' }])
-    setSending(true)
-    setError(null)
-    try {
-      await retryTaskChatMessage(taskId, messageId)
-      await loadTask(taskId)
-      await loadTasks()
-    } catch (e) {
-      setError(String(e))
-      await loadTask(taskId)
-    } finally {
-      setSending(false)
-    }
+    await requests.run(
+      id,
+      [{ role: 'pending', content: '応答待ち…' }],
+      () => retryTaskChatMessage(id, messageId),
+      settle,
+    )
   }
 
+  // 確認ダイアログ無しの即座に取り消し可能な論理削除(legacy/frontend.md 1節)。最初の
+  // ユーザー発言を消すと一覧のフォールバック表示が変わる(Issue #61)が、引き直しは
+  // `requests`が一覧ごと行う。
   const remove = async (messageId: number) => {
-    // 確認ダイアログ無しの即座に取り消し可能な論理削除(legacy/frontend.md 1節)。
     if (disableActions || taskId === null) return
-    setError(null)
-    try {
-      await deleteTaskChatMessage(taskId, messageId)
-      await loadTask(taskId)
-      // 最初のユーザー発言を消すとフォールバック表示が変わる(Issue #61)。ヘッダー側は
-      // 直前の`loadTask`で引き直し済み。
-      await loadTasks()
-    } catch (e) {
-      setError(String(e))
-    }
+    const id = taskId
+    await requests.run(id, [], () => deleteTaskChatMessage(id, messageId), settle)
   }
+
+  const pending = taskId === null ? [] : requests.pendingOf(taskId)
+  const failure = taskId === null ? null : requests.failureOf(taskId)
 
   if (settingsOpen) {
     return <Settings onClose={() => setSettingsOpen(false)} />
@@ -193,7 +201,7 @@ export default function App() {
       <Sidebar
         tasks={tasks}
         selectedTaskId={taskId}
-        onSelect={setTaskId}
+        onSelect={selectTask}
         onAddTask={() => void addTask()}
         adding={adding}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -328,6 +336,12 @@ export default function App() {
               <span className="entry-content">{entry.content}</span>
             </li>
           ))}
+          {/* コマンド自体の失敗。保存されたエラー発言と同じ見た目にする(Issue #152) */}
+          {failure && (
+            <li className="entry entry-error">
+              <span className="entry-content">{failure}</span>
+            </li>
+          )}
         </ul>
 
         <form
@@ -354,10 +368,10 @@ export default function App() {
                 void send()
               }
             }}
-            disabled={sending || taskId === null}
+            disabled={disableActions}
             placeholder="タスクについて話しかける"
           />
-          <button type="submit" disabled={sending || taskId === null || !draft.trim()}>
+          <button type="submit" disabled={disableActions || !draft.trim()}>
             送信
           </button>
         </form>

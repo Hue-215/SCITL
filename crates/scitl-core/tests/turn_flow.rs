@@ -5,12 +5,14 @@ use rusqlite::Connection;
 use scitl_core::config::{McpEndpoint, McpServerConfig};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
+use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
     ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolArguments, ToolSchema,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     delete_message, edit_user_message, retry_reply, run_turn, McpAccess, SystemPrompts, ToolLimits,
+    TurnContext,
 };
 use serde_json::json;
 
@@ -381,6 +383,27 @@ impl LlmAdapter for ReasoningAdapter {
     }
 }
 
+/// プロバイダー未選択・既定のプロンプト・外部ツール無し・既定の上限の文脈。
+/// 生成中の集合は呼ぶたびに新しく作る(テストは並行に走り、タスクIDが重なるため)。
+/// テストの間だけ使うものなので、寿命を合わせる手間を省いてリークさせる。
+fn context_without_provider() -> TurnContext<'static> {
+    TurnContext {
+        adapter: None,
+        prompts: SystemPrompts::default(),
+        mcp: McpAccess::none(),
+        limits: ToolLimits::default(),
+        generating: Box::leak(Box::new(InFlightSet::new())),
+    }
+}
+
+/// アダプタだけを差し替えた文脈。
+fn context(adapter: &dyn LlmAdapter) -> TurnContext<'_> {
+    TurnContext {
+        adapter: Some(adapter),
+        ..context_without_provider()
+    }
+}
+
 fn seed_task(conn: &Connection) -> i64 {
     let now = db::now_iso8601();
     conn.execute(
@@ -418,12 +441,12 @@ async fn run_turn_continues_when_an_mcp_server_cannot_be_reached() {
 
     let events = run_turn(
         db.clone(),
-        Some(&adapter),
+        &TurnContext {
+            mcp: McpAccess::new(&servers, &catalog),
+            ..context(&adapter)
+        },
         task_id,
         "タイトルを「買い物」にして".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::new(&servers, &catalog),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -446,12 +469,9 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
 
     let events = run_turn(
         db.clone(),
-        Some(&adapter),
+        &context(&adapter),
         task_id,
         "タイトルを「買い物」にして".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -498,12 +518,12 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     };
     run_turn(
         db.clone(),
-        Some(&adapter),
+        &TurnContext {
+            prompts: prompts_config,
+            ..context(&adapter)
+        },
         task_id,
         "工程を追加して".to_string(),
-        &prompts_config,
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -581,17 +601,9 @@ async fn history_carries_send_time_beside_the_user_text() {
     let db = Arc::new(Mutex::new(conn));
 
     for text in ["工程を追加して", "ありがとう"] {
-        run_turn(
-            db.clone(),
-            Some(&adapter),
-            task_id,
-            text.to_string(),
-            &SystemPrompts::default(),
-            &McpAccess::none(),
-            ToolLimits::default(),
-        )
-        .await
-        .unwrap();
+        run_turn(db.clone(), &context(&adapter), task_id, text.to_string())
+            .await
+            .unwrap();
     }
 
     let stored_user_times: Vec<String> = {
@@ -643,12 +655,9 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
 
     run_turn(
         db.clone(),
-        Some(&adapter),
+        &context(&adapter),
         task_id,
         "工程を追加してタイトルも変えて".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -684,12 +693,9 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
 
     let events = run_turn(
         db.clone(),
-        Some(&adapter),
+        &context(&adapter),
         task_id,
         "1番目の工程を完了にして".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -744,12 +750,9 @@ async fn run_turn_reports_malformed_tool_arguments_to_the_model_without_running_
 
     let events = run_turn(
         db.clone(),
-        Some(&adapter),
+        &context(&adapter),
         task_id,
         "タイトルを変えて".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -840,12 +843,9 @@ async fn run_narrating_turn(final_text: Option<&'static str>) -> Vec<db::message
     let db = Arc::new(Mutex::new(conn));
     run_turn(
         db.clone(),
-        Some(&adapter),
+        &context(&adapter),
         task_id,
         "工程を追加して".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -890,12 +890,9 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
 
     let events = run_turn(
         db.clone(),
-        Some(&FailingAdapter),
+        &context(&FailingAdapter),
         task_id,
         "こんにちは".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -921,12 +918,9 @@ async fn run_turn_persists_error_message_for_empty_response() {
 
     run_turn(
         db.clone(),
-        Some(&EmptyResponseAdapter),
+        &context(&EmptyResponseAdapter),
         task_id,
         "こんにちは".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -946,12 +940,9 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
 
     run_turn(
         db.clone(),
-        Some(&AlwaysToolCallAdapter),
+        &context(&AlwaysToolCallAdapter),
         task_id,
         "工程を追加して".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -977,15 +968,15 @@ async fn run_turn_honors_the_configured_max_tool_rounds() {
 
     run_turn(
         db.clone(),
-        Some(&AlwaysToolCallAdapter),
+        &TurnContext {
+            limits: ToolLimits {
+                max_rounds_per_turn: 2,
+                ..ToolLimits::default()
+            },
+            ..context(&AlwaysToolCallAdapter)
+        },
         task_id,
         "工程を追加して".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits {
-            max_rounds_per_turn: 2,
-            ..ToolLimits::default()
-        },
     )
     .await
     .unwrap();
@@ -1012,15 +1003,15 @@ async fn run_turn_persists_error_message_when_the_tool_time_budget_is_exhausted(
 
     run_turn(
         db.clone(),
-        Some(&AlwaysToolCallAdapter),
+        &TurnContext {
+            limits: ToolLimits {
+                total_timeout: std::time::Duration::ZERO,
+                ..ToolLimits::default()
+            },
+            ..context(&AlwaysToolCallAdapter)
+        },
         task_id,
         "工程を追加して".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits {
-            total_timeout: std::time::Duration::ZERO,
-            ..ToolLimits::default()
-        },
     )
     .await
     .unwrap();
@@ -1044,15 +1035,15 @@ async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
 
     run_turn(
         db.clone(),
-        Some(&AlwaysToolCallAdapter),
+        &TurnContext {
+            limits: ToolLimits {
+                total_timeout: std::time::Duration::from_nanos(1),
+                ..ToolLimits::default()
+            },
+            ..context(&AlwaysToolCallAdapter)
+        },
         task_id,
         "工程を追加して".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits {
-            total_timeout: std::time::Duration::from_nanos(1),
-            ..ToolLimits::default()
-        },
     )
     .await
     .unwrap();
@@ -1082,12 +1073,9 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
 
     run_turn(
         db.clone(),
-        None,
+        &context_without_provider(),
         task_id,
         "こんにちは".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1108,12 +1096,9 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
 
     run_turn(
         db.clone(),
-        Some(&UnreadyAdapter(Readiness::NoModel)),
+        &context(&UnreadyAdapter(Readiness::NoModel)),
         task_id,
         "こんにちは".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1133,12 +1118,9 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
 
     run_turn(
         db.clone(),
-        Some(&FailingAdapter),
+        &context(&FailingAdapter),
         task_id,
         "1回目".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1147,17 +1129,9 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
         calls: AtomicUsize::new(0),
         sent_messages: Mutex::new(Vec::new()),
     };
-    run_turn(
-        db.clone(),
-        Some(&adapter),
-        task_id,
-        "2回目".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
-    )
-    .await
-    .unwrap();
+    run_turn(db.clone(), &context(&adapter), task_id, "2回目".to_string())
+        .await
+        .unwrap();
 
     let rounds = adapter.sent_messages.into_inner().unwrap();
     let first_round = &rounds[0];
@@ -1182,12 +1156,9 @@ async fn edit_user_message_truncates_and_regenerates() {
 
     run_turn(
         db.clone(),
-        Some(&TextAdapter::one("応答A")),
+        &context(&TextAdapter::one("応答A")),
         task_id,
         "元の質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1200,13 +1171,10 @@ async fn edit_user_message_truncates_and_regenerates() {
 
     edit_user_message(
         db.clone(),
-        Some(&TextAdapter::one("応答B")),
+        &context(&TextAdapter::one("応答B")),
         task_id,
         user_message_id,
         "編集後の質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1227,6 +1195,51 @@ async fn edit_user_message_truncates_and_regenerates() {
     assert!(deleted_at.is_some());
 }
 
+/// 編集の削除と挿入は1つの単位(Issue #151)。挿入が失敗したら、削除も残らない。
+#[tokio::test]
+async fn failed_edit_leaves_the_conversation_untouched() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("応答A")),
+        task_id,
+        "元の質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        // 編集後の本文の挿入だけを失敗させる。
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_edit_insert BEFORE INSERT ON messages
+             WHEN NEW.content = '編集後の質問'
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "user").unwrap().id
+    };
+
+    let result = edit_user_message(
+        db.clone(),
+        &context(&TextAdapter::one("応答B")),
+        task_id,
+        user_message_id,
+        "編集後の質問".to_string(),
+    )
+    .await;
+    assert!(result.is_err());
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, vec!["元の質問", "応答A"]);
+}
+
 /// 編集(Issue #95): ツールを実行したターンを編集で破棄しても、編集後の発言は**元の位置**に
 /// 現れる。編集後の本文は新しい行として挿入されるが、生き残る通常発言はすべて対象より前の
 /// idなので、破棄されたターンのツール実行記録さえ会話から外れれば順序は元のままになる。
@@ -1240,12 +1253,9 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
     // 1ターン目: 編集対象より前に来る、生き残る会話。
     run_turn(
         db.clone(),
-        Some(&TextAdapter::one("応答A")),
+        &context(&TextAdapter::one("応答A")),
         task_id,
         "最初の質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1253,14 +1263,11 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
     // 2ターン目: ツールを実行するターン。これを編集で破棄する。
     run_turn(
         db.clone(),
-        Some(&FakeAdapter {
+        &context(&FakeAdapter {
             calls: AtomicUsize::new(0),
         }),
         task_id,
         "タイトル決めて".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1277,13 +1284,10 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
 
     edit_user_message(
         db.clone(),
-        Some(&TextAdapter::one("応答B")),
+        &context(&TextAdapter::one("応答B")),
         task_id,
         target_id,
         "編集後の質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1325,12 +1329,9 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
 
     run_turn(
         db.clone(),
-        Some(&adapter),
+        &context(&adapter),
         task_id,
         "工程を追加して".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1382,12 +1383,9 @@ async fn edit_user_message_rejects_assistant_target() {
 
     run_turn(
         db.clone(),
-        Some(&TextAdapter::one("応答A")),
+        &context(&TextAdapter::one("応答A")),
         task_id,
         "質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1400,13 +1398,10 @@ async fn edit_user_message_rejects_assistant_target() {
 
     let result = edit_user_message(
         db.clone(),
-        Some(&TextAdapter::one("応答B")),
+        &context(&TextAdapter::one("応答B")),
         task_id,
         assistant_message_id,
         "書き換え".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await;
     assert!(result.is_err());
@@ -1422,12 +1417,9 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
 
     run_turn(
         db.clone(),
-        Some(&TextAdapter::one("応答A")),
+        &context(&TextAdapter::one("応答A")),
         task_id,
         "質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1441,12 +1433,9 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
 
     retry_reply(
         db.clone(),
-        Some(&TextAdapter::one("応答B")),
+        &context(&TextAdapter::one("応答B")),
         task_id,
         assistant_message_id,
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1472,12 +1461,9 @@ async fn retry_reply_rejects_user_target() {
 
     run_turn(
         db.clone(),
-        Some(&TextAdapter::one("応答A")),
+        &context(&TextAdapter::one("応答A")),
         task_id,
         "質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1490,12 +1476,9 @@ async fn retry_reply_rejects_user_target() {
 
     let result = retry_reply(
         db.clone(),
-        Some(&TextAdapter::one("応答B")),
+        &context(&TextAdapter::one("応答B")),
         task_id,
         user_message_id,
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await;
     assert!(result.is_err());
@@ -1511,12 +1494,9 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
 
     run_turn(
         db.clone(),
-        Some(&EmptyResponseAdapter),
+        &context(&EmptyResponseAdapter),
         task_id,
         "質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1530,12 +1510,9 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
 
     retry_reply(
         db.clone(),
-        Some(&TextAdapter::one("応答B")),
+        &context(&TextAdapter::one("応答B")),
         task_id,
         error_message_id,
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1562,12 +1539,9 @@ async fn delete_message_removes_an_error_reply() {
 
     run_turn(
         db.clone(),
-        Some(&EmptyResponseAdapter),
+        &context(&EmptyResponseAdapter),
         task_id,
         "質問".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1578,7 +1552,7 @@ async fn delete_message_removes_an_error_reply() {
         messages.iter().find(|m| m.role == "error").unwrap().id
     };
 
-    delete_message(db.clone(), task_id, error_message_id)
+    delete_message(db.clone(), &InFlightSet::new(), task_id, error_message_id)
         .await
         .unwrap();
 
@@ -1597,23 +1571,17 @@ async fn delete_message_removes_only_the_target_without_cascade() {
 
     run_turn(
         db.clone(),
-        Some(&TextAdapter::one("応答1")),
+        &context(&TextAdapter::one("応答1")),
         task_id,
         "1回目".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
     run_turn(
         db.clone(),
-        Some(&TextAdapter::one("応答2")),
+        &context(&TextAdapter::one("応答2")),
         task_id,
         "2回目".to_string(),
-        &SystemPrompts::default(),
-        &McpAccess::none(),
-        ToolLimits::default(),
     )
     .await
     .unwrap();
@@ -1624,7 +1592,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
-    delete_message(db.clone(), task_id, first_user_id)
+    delete_message(db.clone(), &InFlightSet::new(), task_id, first_user_id)
         .await
         .unwrap();
 
@@ -1633,4 +1601,128 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
     // カスケードしないため、1回目の応答・2回目のやり取りはそのまま残る。
     assert_eq!(contents, vec!["応答1", "2回目", "応答2"]);
+}
+
+/// 同じタスクで応答を生成中なら、次のターンは何も書かずに断る(Issue #152)。
+/// 別のタスクは妨げず、ターンが終われば同じタスクでもまた始められる。
+#[tokio::test]
+async fn a_turn_is_rejected_while_the_same_task_is_generating() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let other_task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    // 断られた1回は`send`まで届かないので、成功する2回ぶんだけ返信を持たせる。
+    let adapter = TextAdapter {
+        replies: Mutex::new(vec!["応答".to_string(); 2]),
+    };
+    let generating = InFlightSet::new();
+    let ctx = TurnContext {
+        generating: &generating,
+        ..context(&adapter)
+    };
+
+    let in_progress = generating.try_begin(task_id).unwrap();
+    let result = run_turn(db.clone(), &ctx, task_id, "こんにちは".to_string()).await;
+    assert!(matches!(result, Err(CoreError::TaskBusy(id)) if id == task_id));
+    {
+        let conn = db.lock().unwrap();
+        assert!(db::messages::list_for_task(&conn, task_id)
+            .unwrap()
+            .is_empty());
+    }
+
+    run_turn(db.clone(), &ctx, other_task_id, "こんにちは".to_string())
+        .await
+        .unwrap();
+
+    drop(in_progress);
+    run_turn(db.clone(), &ctx, task_id, "こんにちは".to_string())
+        .await
+        .unwrap();
+    assert!(
+        generating.try_begin(task_id).is_some(),
+        "ターンが終われば生成中は外れる"
+    );
+}
+
+/// 生成中のタスクでは発言を削除できない(Issue #152)。生成中のターンが読んだ履歴と
+/// DBの発言が食い違うため。
+#[tokio::test]
+async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("応答")),
+        task_id,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        messages.iter().find(|m| m.role == "user").unwrap().id
+    };
+
+    let generating = InFlightSet::new();
+    let _in_progress = generating.try_begin(task_id).unwrap();
+    let result = delete_message(db.clone(), &generating, task_id, user_message_id).await;
+
+    assert!(matches!(result, Err(CoreError::TaskBusy(id)) if id == task_id));
+    let conn = db.lock().unwrap();
+    assert_eq!(
+        db::messages::list_for_task(&conn, task_id).unwrap().len(),
+        2
+    );
+}
+
+/// 再試行が途中で失敗しても、1回目の失敗と同じくエラー発言が同じターンに残る
+/// (Issue #152)。何も残さずに抜けると、返信を消したターンごと会話から消える。
+#[tokio::test]
+async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("応答A")),
+        task_id,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (reply_id, turn_id) = {
+        let conn = db.lock().unwrap();
+        // 再試行の返信の保存だけを失敗させる(エラー発言の保存は通す)。
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_reply_insert BEFORE INSERT ON messages
+             WHEN NEW.role = 'assistant'
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let reply = messages.iter().find(|m| m.role == "assistant").unwrap();
+        (reply.id, reply.turn_id.clone().unwrap())
+    };
+
+    retry_reply(
+        db.clone(),
+        &context(&TextAdapter::one("応答B")),
+        task_id,
+        reply_id,
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(roles, vec!["user", "error"]);
+    assert_eq!(messages[1].turn_id.as_deref(), Some(turn_id.as_str()));
+    assert_eq!(messages[1].attempt_no, Some(2));
+    assert_eq!(messages[1].error_kind.as_deref(), Some("unexpected"));
 }

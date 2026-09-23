@@ -5,14 +5,17 @@ mod commands;
 use std::sync::{Arc, Mutex};
 
 use scitl_core::db::SharedConnection;
+use scitl_core::in_flight::InFlightSet;
 use scitl_core::settings::Settings;
 use tauri::Manager;
 
-/// コマンド層(`commands/*.rs`)が触れる唯一の状態。どちらもロックの扱いはcore側に閉じる
-/// (DBは`db::with_conn`、設定は`settings::Settings`)。
+/// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
+/// (DBは`db::with_conn`、設定は`settings::Settings`、生成中のタスクは`in_flight`)。
 pub struct AppState {
     pub db: SharedConnection,
     pub settings: Arc<Settings>,
+    /// 応答を生成中のタスク(`orchestration::TurnContext::generating`)。
+    pub generating: InFlightSet<i64>,
 }
 
 fn main() {
@@ -27,6 +30,7 @@ fn main() {
             app.manage(AppState {
                 db: Arc::new(Mutex::new(conn)),
                 settings: Arc::new(settings),
+                generating: InFlightSet::new(),
             });
             Ok(())
         })

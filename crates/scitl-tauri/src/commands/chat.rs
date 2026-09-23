@@ -20,17 +20,12 @@ pub async fn send_task_chat_message(
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
     // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
-    let turn = state.settings.snapshot();
-    let mcp = turn.mcp();
-
+    let snapshot = state.settings.snapshot();
     run_turn(
         state.db.clone(),
-        turn.adapter(),
+        &snapshot.turn_context(&state.generating),
         task_id,
         text,
-        &turn.prompts(),
-        &mcp,
-        turn.tool_limits(),
     )
     .await
     .map_err(|e| e.to_string())
@@ -47,19 +42,13 @@ pub async fn edit_task_chat_message(
     message_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
-    let turn = state.settings.snapshot();
-    let mcp = turn.mcp();
-
+    let snapshot = state.settings.snapshot();
     edit_user_message(
         state.db.clone(),
-        turn.adapter(),
+        &snapshot.turn_context(&state.generating),
         task_id,
         message_id,
         text,
-        &turn.prompts(),
-        &mcp,
-        turn.tool_limits(),
     )
     .await
     .map_err(|e| e.to_string())
@@ -73,18 +62,12 @@ pub async fn retry_task_chat_message(
     task_id: i64,
     message_id: i64,
 ) -> Result<Vec<ResponseEvent>, String> {
-    // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
-    let turn = state.settings.snapshot();
-    let mcp = turn.mcp();
-
+    let snapshot = state.settings.snapshot();
     retry_reply(
         state.db.clone(),
-        turn.adapter(),
+        &snapshot.turn_context(&state.generating),
         task_id,
         message_id,
-        &turn.prompts(),
-        &mcp,
-        turn.tool_limits(),
     )
     .await
     .map_err(|e| e.to_string())
@@ -98,7 +81,7 @@ pub async fn delete_task_chat_message(
     task_id: i64,
     message_id: i64,
 ) -> Result<(), String> {
-    delete_message(state.db.clone(), task_id, message_id)
+    delete_message(state.db.clone(), &state.generating, task_id, message_id)
         .await
         .map_err(|e| e.to_string())
 }

@@ -9,7 +9,6 @@
 
 pub mod view;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -21,10 +20,11 @@ use crate::config::{
     ProviderConfig, SecretRef, ToolConfig,
 };
 use crate::db::error::{CoreError, Result};
+use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};
 use crate::llm::LlmAdapter;
 use crate::mcp::{self, ToolCatalog};
-use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits};
+use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext};
 use crate::secrets;
 
 pub use view::SettingsView;
@@ -77,23 +77,17 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn adapter(&self) -> Option<&dyn LlmAdapter> {
-        self.adapter.as_deref().map(|a| a as &dyn LlmAdapter)
-    }
-
-    pub fn prompts(&self) -> SystemPrompts<'_> {
-        SystemPrompts {
-            base: self.config.general.system_prompt.as_deref(),
-            task_chat: self.config.general.task_chat_system_prompt.as_deref(),
+    pub fn turn_context<'a>(&'a self, generating: &'a InFlightSet<i64>) -> TurnContext<'a> {
+        TurnContext {
+            adapter: self.adapter.as_deref().map(|a| a as &dyn LlmAdapter),
+            prompts: SystemPrompts {
+                base: self.config.general.system_prompt.as_deref(),
+                task_chat: self.config.general.task_chat_system_prompt.as_deref(),
+            },
+            mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
+            limits: ToolLimits::from_config(&self.config.tools),
+            generating,
         }
-    }
-
-    pub fn mcp(&self) -> McpAccess<'_> {
-        McpAccess::new(&self.config.mcp_servers, &self.mcp_tools)
-    }
-
-    pub fn tool_limits(&self) -> ToolLimits {
-        ToolLimits::from_config(&self.config.tools)
     }
 }
 
@@ -106,9 +100,8 @@ pub struct Settings {
     /// 永続化した写しはサーバー側の更新を検知できない)。設定画面の表示と、ターン開始時の
     /// ツール公開(`orchestration::McpAccess`)が同じここを読む。
     mcp_tools: Arc<ToolCatalog>,
-    /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。ボタンの無効化
-    /// (連打防止)は画面側の責務だが、それだけでは保証にならない。
-    fetching: Mutex<HashSet<String>>,
+    /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。
+    fetching: InFlightSet<String>,
 }
 
 impl Settings {
@@ -127,7 +120,7 @@ impl Settings {
             }),
             writer: Mutex::new(()),
             mcp_tools: Arc::new(ToolCatalog::new()),
-            fetching: Mutex::new(HashSet::new()),
+            fetching: InFlightSet::new(),
         })
     }
 
@@ -385,7 +378,10 @@ impl Settings {
     /// (Issue #104)。config.tomlには書き込まない。ロックはサーバー設定を複製するまで
     /// だけ持ち、接続の`.await`をまたがせない。
     pub async fn fetch_mcp_tools(&self, server_id: &str) -> Result<SettingsView> {
-        let _in_flight = InFlight::begin(&self.fetching, server_id)?;
+        let _in_flight = self
+            .fetching
+            .try_begin(server_id.to_string())
+            .ok_or_else(|| invalid("already fetching tools for this server"))?;
         let server = self
             .current()
             .config
@@ -445,29 +441,6 @@ impl Draft<'_> {
 /// アダプタの組み立てに使う設定値。`providers::build_active_adapter`が読むものと揃える。
 fn adapter_inputs(config: &Config) -> (Option<&ProviderConfig>, Option<std::time::Duration>) {
     (config.active_provider(), config.general.response_timeout())
-}
-
-struct InFlight<'a> {
-    set: &'a Mutex<HashSet<String>>,
-    key: String,
-}
-
-impl<'a> InFlight<'a> {
-    fn begin(set: &'a Mutex<HashSet<String>>, key: &str) -> Result<Self> {
-        if !set.lock().expect("mutex poisoned").insert(key.to_string()) {
-            return Err(invalid("already fetching tools for this server"));
-        }
-        Ok(Self {
-            set,
-            key: key.to_string(),
-        })
-    }
-}
-
-impl Drop for InFlight<'_> {
-    fn drop(&mut self) {
-        self.set.lock().expect("mutex poisoned").remove(&self.key);
-    }
 }
 
 /// 秘密情報に触れる前に済ませられる検証をすべて行う。
@@ -606,7 +579,7 @@ mod tests {
         let view = add_local_provider(&settings, "Local");
         let id = view.providers[0].id.clone();
         assert_eq!(view.active_provider_id.as_deref(), Some(id.as_str()));
-        assert!(settings.snapshot().adapter().is_some());
+        assert!(settings.snapshot().adapter.is_some());
 
         let view = settings.add_model(&id, " m1 ").unwrap();
         assert_eq!(view.providers[0].active_model.as_deref(), Some("m1"));
@@ -631,7 +604,7 @@ mod tests {
         assert_eq!(view.active_provider_id.as_deref(), Some(second.as_str()));
         let view = settings.delete_provider(&second).unwrap();
         assert_eq!(view.active_provider_id, None);
-        assert!(settings.snapshot().adapter().is_none());
+        assert!(settings.snapshot().adapter.is_none());
     }
 
     #[test]
