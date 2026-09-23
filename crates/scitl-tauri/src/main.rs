@@ -25,7 +25,7 @@ fn main() {
             std::fs::create_dir_all(&app_data_dir)?;
             let conn = scitl_core::db::open(app_data_dir.join("scitl.sqlite3"))?;
 
-            let settings = Settings::load(app_data_dir.join("config.toml"))?;
+            let settings = Settings::load(app_data_dir.join("config.toml"));
 
             app.manage(AppState {
                 db: Arc::new(Mutex::new(conn)),

@@ -202,8 +202,9 @@ async fn generate_turn_response(
     ctx: &TurnContext<'_>,
     attempt: Attempt,
 ) -> Result<Vec<ResponseEvent>> {
-    let Some(adapter) = ctx.adapter else {
-        return fail_turn(db, &attempt, TurnFailure::NoProvider).await;
+    let adapter = match &ctx.adapter {
+        Ok(adapter) => *adapter,
+        Err(failure) => return fail_turn(db, &attempt, failure.clone()).await,
     };
     if let Some(failure) = turn_error::from_readiness(adapter.readiness()) {
         return fail_turn(db, &attempt, failure).await;

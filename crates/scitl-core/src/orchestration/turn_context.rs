@@ -3,13 +3,14 @@
 
 use crate::in_flight::InFlightSet;
 use crate::llm::LlmAdapter;
-use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits};
+use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnFailure};
 
 /// 組み立ては[`crate::settings::Snapshot::turn_context`]が行う。
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct TurnContext<'a> {
-    /// `None`はプロバイダー未選択。ターンはエラー発言(`no_provider`)で終わる。
-    pub adapter: Option<&'a dyn LlmAdapter>,
+    /// 使えるアダプタ、または使えない理由(プロバイダー未選択・組み立てられない・設定ファイルを
+    /// 読めない)。使えなければ、ターンはその理由のエラー発言で終わる。
+    pub adapter: Result<&'a dyn LlmAdapter, TurnFailure>,
     pub prompts: SystemPrompts<'a>,
     pub mcp: McpAccess<'a>,
     pub limits: ToolLimits,

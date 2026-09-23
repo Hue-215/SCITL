@@ -21,6 +21,8 @@ pub struct ProviderView {
     pub models: Vec<String>,
     pub active_model: Option<String>,
     pub has_api_key: bool,
+    /// このプロバイダーをアクティブにしているが、組み立てられない理由(Issue #155)。
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,6 +82,8 @@ pub struct ToolSettingsView {
 
 #[derive(Debug, Serialize)]
 pub struct SettingsView {
+    /// 起動時に設定ファイルを読めなかった理由(Issue #155)。あれば設定は保存されない。
+    pub config_error: Option<String>,
     pub general: GeneralSettingsView,
     pub tools: ToolSettingsView,
     pub providers: Vec<ProviderView>,
@@ -87,8 +91,19 @@ pub struct SettingsView {
     pub mcp_servers: Vec<McpServerView>,
 }
 
-pub(super) fn build(config: &Config, catalog: &ToolCatalog) -> SettingsView {
+/// 設定の問題(`settings`モジュール冒頭)。
+pub(super) struct Problems<'a> {
+    pub config_error: Option<&'a str>,
+    pub active_provider_error: Option<&'a str>,
+}
+
+pub(super) fn build(
+    config: &Config,
+    catalog: &ToolCatalog,
+    problems: Problems<'_>,
+) -> SettingsView {
     SettingsView {
+        config_error: problems.config_error.map(str::to_string),
         general: GeneralSettingsView {
             system_prompt: config.general.system_prompt.clone(),
             task_chat_system_prompt: config.general.task_chat_system_prompt.clone(),
@@ -112,6 +127,10 @@ pub(super) fn build(config: &Config, catalog: &ToolCatalog) -> SettingsView {
                 models: p.models.clone(),
                 active_model: p.active_model.clone(),
                 has_api_key: p.key_ref.is_some(),
+                error: problems
+                    .active_provider_error
+                    .filter(|_| config.active_provider_id.as_deref() == Some(p.id.as_str()))
+                    .map(str::to_string),
             })
             .collect(),
         active_provider_id: config.active_provider_id.clone(),

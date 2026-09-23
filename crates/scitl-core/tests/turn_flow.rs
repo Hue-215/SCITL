@@ -12,7 +12,7 @@ use scitl_core::llm::{
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     delete_message, edit_user_message, retry_reply, run_turn, McpAccess, SystemPrompts, ToolLimits,
-    TurnContext,
+    TurnContext, TurnFailure,
 };
 use serde_json::json;
 
@@ -443,7 +443,7 @@ impl LlmAdapter for ReasoningAdapter {
 /// テストの間だけ使うものなので、寿命を合わせる手間を省いてリークさせる。
 fn context_without_provider() -> TurnContext<'static> {
     TurnContext {
-        adapter: None,
+        adapter: Err(TurnFailure::NoProvider),
         prompts: SystemPrompts::default(),
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
@@ -454,7 +454,7 @@ fn context_without_provider() -> TurnContext<'static> {
 /// アダプタだけを差し替えた文脈。
 fn context(adapter: &dyn LlmAdapter) -> TurnContext<'_> {
     TurnContext {
-        adapter: Some(adapter),
+        adapter: Ok(adapter),
         ..context_without_provider()
     }
 }
