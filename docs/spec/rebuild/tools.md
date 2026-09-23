@@ -34,11 +34,11 @@ MCP版:             update_task(task_id, title?, description?, deadline?, status
 
 | ツール | タスクチャット版の引数 | MCP版の引数 | 総合チャット | タスクチャット | MCP |
 |---|---|---|:---:|:---:|:---:|
-| タスク一覧取得 | なし | なし | ○ | ○ | ○ |
+| タスク一覧取得(未アーカイブのみ) | なし | なし | ○ | ○ | ○ |
 | タスク詳細取得 | - | タスクID | ○ | - | ○ |
 | 現在のタスクの詳細取得 | なし | - | - | ○ | - |
 | タスク作成 | - | タイトル | - | - | ○ |
-| タスク更新 | title?, description?, deadline?, status? | task_id, title?, description?, deadline?, status? | - | ○ | ○ |
+| タスク更新 | title?, description?, deadline?, status?, clear? | task_id, title?, description?, deadline?, status?, clear? | - | ○ | ○ |
 | 工程の追加 | descriptions: string[] | task_id, descriptions: string[] | - | ○ | ○ |
 | 工程の更新 | step_id, description?, done? | task_id, step_id, description?, done? | - | ○ | ○ |
 | 工程の削除 | step_id | task_id, step_id | - | ○ | ○ |
@@ -64,6 +64,22 @@ MCP版:             update_task(task_id, title?, description?, deadline?, status
   というモデル向けの判断が2箇所に分裂する(`../principles.md` 5節)。モデルには毎ターンの
   最新状態JSONで `title: null` が見えているので、タスクチャット用システムプロンプトで
   設定を促す。未設定のまま残った場合の一覧表示は表示側のフォールバックで扱う
+- **値を消すのは `clear` 引数だけにする**: `clear: ("deadline" | "description")[]` に
+  列挙した項目を未設定(NULL)に戻す。引数の省略と `null` はどちらも「変えない」で、
+  `null` に「消す」の意味を持たせない。型に緩いモデルは変えないつもりの項目にも
+  `null` を入れがちで、締切が消える事故になる。同じ項目を設定と消去の両方に指定したら
+  エラーにする。タイトルは未設定に戻す操作を持たないので `clear` に含めない
+- **`description` の空文字列はエラーにする**: 消去に読み替えず(`../principles.md` 3節)、
+  エラー文で `clear` を案内する。空文字列を書き込むと、未設定の表し方が NULL と2つになる
+  (同2節)
+- **アーカイブは冪等にする**: 既にアーカイブ済みのタスクをもう一度アーカイブしても
+  `archived_at` は最初の日時のまま(工程の `done_at` と同じ。`../legacy/data-model.md` 1節)。
+  状態の列は現在の状態だけを表し、いつ何をしたかは会話ログのツール実行記録が持つ
+- **工程の説明は前後の空白を落とし、空ならエラーにする**(追加・更新とも)。落とさないと
+  追加時の重複排除が効かない。追加で空の説明が1つでもあれば、1件も追加しない
+- **タスク一覧取得はアーカイブ済みを返さない**(旧実装と同じ)。アーカイブは溜まる一方で、
+  返し続けるとトークンが増え続け、優先度の相談ではノイズになる。アーカイブ済みを探す
+  用途が出たら引数を足す
 - **`title` はサニタイズしてから保存する**。この経路のタイトルはモデル出力であり、
   `../principles.md` 4節「自由入力は地の文に混ぜる前にサニタイズする」の対象
   (制御文字・前後の引用符・長さ)

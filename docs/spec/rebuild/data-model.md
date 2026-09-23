@@ -35,9 +35,12 @@
 | archived_at | TEXT | ISO8601。NULL=未アーカイブ |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
 | created_at | TEXT | ISO8601。NOT NULL |
-| updated_at | TEXT | ISO8601。NOT NULL |
+| updated_at | TEXT | ISO8601。NOT NULL。配下の工程の追加・更新・削除でも更新する |
 
 優先度カラムは持たない(`../principles.md` 2節)。
+
+`updated_at` は「タスクが最後に変わった日時」で、工程の変更も含める(工程はタスクの一部で、
+画面上もタスクの中に見える)。工程側には `updated_at` 列を持たない。
 
 ### task_steps
 
