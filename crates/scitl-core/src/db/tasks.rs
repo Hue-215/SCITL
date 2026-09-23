@@ -90,26 +90,42 @@ pub struct TaskListItem {
     pub fallback_label: Option<String>,
 }
 
-/// 削除済み(deleted_at)を除く全タスクを作成日時昇順で返す。アーカイブ済みと未アーカイブの
-/// 振り分けはフロントエンド側(archived_atの有無)で行う。
-pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
-    let mut stmt = conn.prepare(
-        "SELECT t.id, t.title, t.deadline, t.archived_at,
-                COUNT(s.id) FILTER (WHERE s.done_at IS NOT NULL) AS steps_done,
-                COUNT(s.id) AS steps_total,
-                (SELECT m.content FROM messages m
+/// 画面のヘッダー向けのタスク詳細。`TaskListItem`と同じフォールバックを添え、一覧と
+/// ヘッダーで未設定時の呼び方を揃える。`Task`そのものには足さない:`Task`はモデルへ渡す
+/// `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する
+/// (docs/spec/rebuild/tools.md「モデルには `title: null` をそのまま見せる」)。
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskDetailView {
+    #[serde(flatten)]
+    pub task: Task,
+    /// `TaskListItem::fallback_label`と同じ。
+    pub fallback_label: Option<String>,
+}
+
+/// タスク`t`の最初のユーザー発言を引く相関サブクエリ。フォールバックの元になる発言の選び方を
+/// 一覧と詳細で食い違わせないため、ここだけに書く。
+const FIRST_USER_MESSAGE: &str = "(SELECT m.content FROM messages m
                   WHERE m.task_id = t.id
                     AND m.role = 'user'
                     AND m.kind = 'normal'
                     AND m.deleted_at IS NULL
                   ORDER BY m.created_at ASC, m.id ASC
-                  LIMIT 1) AS first_user_message
+                  LIMIT 1)";
+
+/// 削除済み(deleted_at)を除く全タスクを作成日時昇順で返す。アーカイブ済みと未アーカイブの
+/// 振り分けはフロントエンド側(archived_atの有無)で行う。
+pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT t.id, t.title, t.deadline, t.archived_at,
+                COUNT(s.id) FILTER (WHERE s.done_at IS NOT NULL) AS steps_done,
+                COUNT(s.id) AS steps_total,
+                {FIRST_USER_MESSAGE} AS first_user_message
          FROM tasks t
          LEFT JOIN task_steps s ON s.task_id = t.id AND s.deleted_at IS NULL
          WHERE t.deleted_at IS NULL
          GROUP BY t.id
-         ORDER BY t.created_at ASC",
-    )?;
+         ORDER BY t.created_at ASC"
+    ))?;
     let rows = stmt
         .query_map([], |row| {
             let first_user_message: Option<String> = row.get(6)?;
@@ -149,6 +165,20 @@ pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
     )
     .optional()?
     .ok_or(CoreError::TaskNotFound(task_id))
+}
+
+/// 画面のヘッダー向け。存在しない・削除済みなら`get_task`と同じく`TaskNotFound`。
+pub fn get_task_detail_view(conn: &Connection, task_id: i64) -> Result<TaskDetailView> {
+    let task = get_task(conn, task_id)?;
+    let first_user_message: Option<String> = conn.query_row(
+        &format!("SELECT {FIRST_USER_MESSAGE} FROM tasks t WHERE t.id = ?1"),
+        [task_id],
+        |row| row.get(0),
+    )?;
+    Ok(TaskDetailView {
+        task,
+        fallback_label: first_user_message.as_deref().and_then(fallback_label),
+    })
 }
 
 pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Result<Task> {
@@ -284,12 +314,12 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
-/// サイドバーでタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を
+/// 画面でタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を
 /// 付け、続きがあることを示す。
 const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 
-/// 最初のユーザー発言から、一覧に出せる1行を作る。DBには書き戻さない表示専用の処理
-/// (Issue #61)。空白しか無い発言では`None`を返す。
+/// 最初のユーザー発言から、タイトルの代わりに出せる1行を作る。DBには書き戻さない
+/// 表示専用の処理(Issue #61)。空白しか無い発言では`None`を返す。
 fn fallback_label(first_user_message: &str) -> Option<String> {
     let squeezed = collapse_whitespace(first_user_message);
     if squeezed.is_empty() {
@@ -774,6 +804,33 @@ mod tests {
             list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
             Some("書き直した発言")
         );
+    }
+
+    #[test]
+    fn detail_view_has_same_fallback_as_list_and_keeps_title_null() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, "  来週の  発表資料を\n作りたい  ");
+
+        let view = get_task_detail_view(&conn, id).unwrap();
+        assert_eq!(
+            view.fallback_label,
+            list_tasks(&conn).unwrap()[0].fallback_label
+        );
+        assert!(view.fallback_label.is_some());
+        assert!(view.task.title.is_none());
+    }
+
+    #[test]
+    fn detail_view_of_deleted_task_is_not_found() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        delete_task(&conn, id).unwrap();
+
+        assert!(matches!(
+            get_task_detail_view(&conn, id),
+            Err(CoreError::TaskNotFound(_))
+        ));
     }
 
     #[test]

@@ -10,9 +10,9 @@ use crate::AppState;
 pub async fn get_task_detail(
     state: State<'_, AppState>,
     task_id: i64,
-) -> Result<scitl_core::db::tasks::Task, String> {
+) -> Result<scitl_core::db::tasks::TaskDetailView, String> {
     with_db(&state, move |conn| {
-        scitl_core::db::tasks::get_task(conn, task_id)
+        scitl_core::db::tasks::get_task_detail_view(conn, task_id)
     })
     .await
 }

@@ -5,12 +5,13 @@ import type {
   ResponseEvent,
   SettingsView,
   Task,
+  TaskDetail,
   TaskSummary,
 } from './types'
 
 // フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
 // docs/spec/rebuild/architecture.md 7節。
-export function getTaskDetail(taskId: number): Promise<Task> {
+export function getTaskDetail(taskId: number): Promise<TaskDetail> {
   return invoke('get_task_detail', { taskId })
 }
 

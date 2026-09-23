@@ -1,4 +1,9 @@
-import { buildThoughtItems, isErrorResult, parseToolExecution } from './thinking'
+import {
+  buildThoughtItems,
+  isErrorResult,
+  parseToolExecution,
+  type ToolExecutionContent,
+} from './thinking'
 import type { Message } from './types'
 
 // 「思考・ツール」の折りたたみ表示(Issue #42、docs/spec/legacy/frontend.md 1節)。
@@ -12,6 +17,18 @@ import type { Message } from './types'
 // 思考・ツール引数・結果はすべてプレーンテキストとして描画する(JSXのテキスト補間と
 // <pre>のみを使い、dangerouslySetInnerHTMLは使わない)。Markdown描画は別Issue #39の
 // 範囲であり、ここでは扱わない。
+
+// ツール呼び出し1件の引数と結果。内部・外部(MCP)のどちらの表示でも同じ形で見せる。
+function ToolCallDetail({ content }: { content: ToolExecutionContent }) {
+  return (
+    <div className="tool-call-detail">
+      <p className="tool-call-label">引数</p>
+      <pre>{JSON.stringify(content.arguments ?? {}, null, 2)}</pre>
+      <p className="tool-call-label">結果</p>
+      <pre>{JSON.stringify(content.result ?? null, null, 2)}</pre>
+    </div>
+  )
+}
 
 export function ThinkingTools({ entries }: { entries: Message[] }) {
   const items = buildThoughtItems(entries)
@@ -37,12 +54,7 @@ export function ThinkingTools({ entries }: { entries: Message[] }) {
                   {item.content.tool ?? '不明なツール'}()
                   {item.isError && <span className="thinking-tools-error">・エラー</span>}
                 </summary>
-                <div className="tool-call-detail">
-                  <p className="tool-call-label">引数</p>
-                  <pre>{JSON.stringify(item.content.arguments ?? {}, null, 2)}</pre>
-                  <p className="tool-call-label">結果</p>
-                  <pre>{JSON.stringify(item.content.result ?? null, null, 2)}</pre>
-                </div>
+                <ToolCallDetail content={item.content} />
               </details>
             </li>
           ),
@@ -64,12 +76,7 @@ export function ExternalToolLine({ message }: { message: Message }) {
         {isError && <span className="thinking-tools-error">・エラー</span>}
         <span className="external-tool-label">MCP</span>
       </summary>
-      <div className="tool-call-detail">
-        <p className="tool-call-label">引数</p>
-        <pre>{JSON.stringify(content.arguments ?? {}, null, 2)}</pre>
-        <p className="tool-call-label">結果</p>
-        <pre>{JSON.stringify(content.result ?? null, null, 2)}</pre>
-      </div>
+      <ToolCallDetail content={content} />
     </details>
   )
 }

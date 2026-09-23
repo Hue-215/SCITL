@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { taskName } from './taskName'
 import type { TaskSummary } from './types'
 
 interface SidebarProps {
@@ -14,10 +15,33 @@ function taskLabel(task: TaskSummary): string {
   const progress =
     task.steps_total > 0 ? `${task.steps_done}/${task.steps_total}完了` : '工程なし'
   const deadline = task.deadline ?? '締切未設定'
-  // タイトルはモデルの update_task 頼みなので、付くまでは最初のユーザー発言で代用する
-  // (Issue #61。フォールバックの中身はRust側が作る)。
-  const name = task.title ?? task.fallback_label ?? '(無題)'
-  return `${name} · ${deadline} · ${progress}`
+  return `${taskName(task)} · ${deadline} · ${progress}`
+}
+
+function TaskList({
+  tasks,
+  selectedTaskId,
+  onSelect,
+}: {
+  tasks: TaskSummary[]
+  selectedTaskId: number | null
+  onSelect: (taskId: number) => void
+}) {
+  return (
+    <ul className="sidebar-task-list">
+      {tasks.map((task) => (
+        <li key={task.id}>
+          <button
+            type="button"
+            className={task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'}
+            onClick={() => onSelect(task.id)}
+          >
+            {taskLabel(task)}
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 // サイドバー: 総合チャット行(固定・現時点では無効)・タスク一覧・アーカイブ折りたたみ・
@@ -54,19 +78,7 @@ export default function Sidebar({
 
       {/* 総合行と新規タスクを常に見える位置に留めるため、スクロールするのはここだけ */}
       <div className="sidebar-scroll">
-        <ul className="sidebar-task-list">
-          {active.map((task) => (
-            <li key={task.id}>
-              <button
-                type="button"
-                className={task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'}
-                onClick={() => onSelect(task.id)}
-              >
-                {taskLabel(task)}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <TaskList tasks={active} selectedTaskId={selectedTaskId} onSelect={onSelect} />
 
         {archived.length > 0 && (
           <div className="sidebar-archived">
@@ -78,21 +90,7 @@ export default function Sidebar({
               アーカイブ済み({archived.length}){archivedOpen ? ' ▲' : ' ▼'}
             </button>
             {archivedOpen && (
-              <ul className="sidebar-task-list">
-                {archived.map((task) => (
-                  <li key={task.id}>
-                    <button
-                      type="button"
-                      className={
-                        task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'
-                      }
-                      onClick={() => onSelect(task.id)}
-                    >
-                      {taskLabel(task)}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <TaskList tasks={archived} selectedTaskId={selectedTaskId} onSelect={onSelect} />
             )}
           </div>
         )}
