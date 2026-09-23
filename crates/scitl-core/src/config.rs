@@ -210,8 +210,25 @@ pub fn save(path: &Path, config: &Config) -> Result<(), CoreError> {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(CoreError::Config(e.to_string()));
     }
+    sync_parent_dir(path);
     Ok(())
 }
+
+/// 置き換え自体を永続化する。呼び出し元は保存の直後に、古い設定だけが参照していた
+/// 秘密情報を消すため、置き換えが電源断で巻き戻ると設定が消えた鍵を指して残る。
+/// 失敗しても保存は済んでいるので、エラーにはしない。
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+            eprintln!("failed to sync config directory: {e}");
+        }
+    }
+}
+
+/// Windowsではディレクトリを開いてfsyncできない(`MoveFileEx`の置き換えに任せる)。
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {

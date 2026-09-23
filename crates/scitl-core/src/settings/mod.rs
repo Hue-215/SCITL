@@ -40,7 +40,8 @@ pub struct NewProvider {
 /// サーバー追加フォームからの入力。接続方式ごとに必要な値だけを受け取る
 /// (`McpEndpoint`と同じタグ付きenumにすることで、フロントエンドが送る形と
 /// Rust側の型を対応させる)。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。
-#[derive(Debug, Deserialize)]
+/// 値を含むため`Debug`は付けない(ログに出す経路を作らない)。
+#[derive(Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum NewMcpEndpoint {
     Stdio {
@@ -63,6 +64,8 @@ struct Current {
     /// アクティブなプロバイダーが無い(未登録・全プロバイダーを削除した等)場合は`None`。
     /// この場合、チャット送信はエラー発言(`no_provider`)として保存される。
     adapter: Option<SharedAdapter>,
+    /// `adapter`を鍵無しで組み立てた(資格情報ストアから読めなかった)。
+    key_unavailable: bool,
 }
 
 /// ある時点の設定と、それから作ったアダプタの組。ターンはこれを取ってからロックを離し、
@@ -114,12 +117,13 @@ impl Settings {
     /// 限るため(principles.md 1節)。
     pub fn load(path: PathBuf) -> Result<Self> {
         let config = config::load(&path)?;
-        let adapter = providers::build_active_adapter(&config)?;
+        let built = providers::build_active_adapter(&config)?;
         Ok(Self {
             path,
             current: Mutex::new(Current {
                 config: Arc::new(config),
-                adapter,
+                adapter: built.adapter,
+                key_unavailable: built.key_unavailable,
             }),
             writer: Mutex::new(()),
             mcp_tools: Arc::new(ToolCatalog::new()),
@@ -149,12 +153,13 @@ impl Settings {
 
     fn edit(&self) -> Draft<'_> {
         let writer = self.writer.lock().expect("settings writer mutex poisoned");
-        let before = self.current().config;
+        let current = self.current();
         Draft {
             settings: self,
             _writer: writer,
-            config: (*before).clone(),
-            before,
+            config: (*current.config).clone(),
+            before: current.config,
+            key_unavailable: current.key_unavailable,
         }
     }
 
@@ -402,14 +407,18 @@ struct Draft<'a> {
     _writer: MutexGuard<'a, ()>,
     before: Arc<Config>,
     config: Config,
+    key_unavailable: bool,
 }
 
 impl Draft<'_> {
     /// アダプタを組み立ててから保存する(組み立てに失敗する設定をファイルへ残さない)。
     /// アダプタは作り直しが要る変更の時だけ組み立てる。MCPのチェック1つの切り替えで
-    /// 資格情報ストアを読みに行かない。
+    /// 資格情報ストアを読みに行かない。ただし前回鍵を読めなかった場合は、設定を変えるたびに
+    /// 読み直す(ストアのロック解除後に、再起動せずに直るように)。
     fn commit(self) -> Result<SettingsView> {
-        let adapter = if adapter_inputs(&self.before) != adapter_inputs(&self.config) {
+        let rebuild =
+            self.key_unavailable || adapter_inputs(&self.before) != adapter_inputs(&self.config);
+        let built = if rebuild {
             Some(providers::build_active_adapter(&self.config)?)
         } else {
             None
@@ -424,8 +433,9 @@ impl Draft<'_> {
                 .lock()
                 .expect("settings mutex poisoned");
             current.config = Arc::clone(&config);
-            if let Some(adapter) = adapter {
-                current.adapter = adapter;
+            if let Some(built) = built {
+                current.adapter = built.adapter;
+                current.key_unavailable = built.key_unavailable;
             }
         }
         Ok(view::build(&config, &self.settings.mcp_tools))

@@ -13,6 +13,13 @@ use openai_compat::OpenAiCompatAdapter;
 
 pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
 
+pub struct ActiveAdapter {
+    pub adapter: Option<SharedAdapter>,
+    /// 鍵を読めずに鍵無しで組み立てた。資格情報ストアのロック解除後などに読み直せるよう、
+    /// 呼び出し元は次の機会に組み立て直す。
+    pub key_unavailable: bool,
+}
+
 /// 登録前の`base_url`の検証。方言ごとの規則は各アダプタが持ち、ここは振り分けるだけ。
 pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), CoreError> {
     match api_format {
@@ -27,11 +34,14 @@ pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), Co
 /// 資格情報ストアが利用できない(OSユーザーが変わった、キーチェーンをクリアした等)
 /// 場合でもアプリ自体は起動させる。鍵無し扱いに落とし、実際のAPI呼び出し時に
 /// プロバイダー側の認証エラーとして表面化させる。
-pub fn build_active_adapter(config: &Config) -> Result<Option<SharedAdapter>, CoreError> {
+pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError> {
     let Some(provider) = config.active_provider() else {
-        return Ok(None);
+        return Ok(ActiveAdapter {
+            adapter: None,
+            key_unavailable: false,
+        });
     };
-    let api_key = load_api_key(provider);
+    let (api_key, key_unavailable) = load_api_key(provider);
     let model = provider.resolved_model().unwrap_or_default();
     let timeout = config.general.response_timeout();
 
@@ -44,15 +54,22 @@ pub fn build_active_adapter(config: &Config) -> Result<Option<SharedAdapter>, Co
             timeout,
         )?),
     };
-    Ok(Some(adapter))
+    Ok(ActiveAdapter {
+        adapter: Some(adapter),
+        key_unavailable,
+    })
 }
 
-fn load_api_key(provider: &ProviderConfig) -> SecretString {
+/// 2つ目は「鍵があるはずなのに読めなかった」。
+fn load_api_key(provider: &ProviderConfig) -> (SecretString, bool) {
     let Some(key_ref) = &provider.key_ref else {
-        return SecretString::from(String::new());
+        return (SecretString::from(String::new()), false);
     };
-    secrets::load(key_ref).unwrap_or_else(|e| {
-        eprintln!("failed to read API key from secret store, continuing without it: {e}");
-        SecretString::from(String::new())
-    })
+    match secrets::load(key_ref) {
+        Ok(key) => (key, false),
+        Err(e) => {
+            eprintln!("failed to read API key from secret store, continuing without it: {e}");
+            (SecretString::from(String::new()), true)
+        }
+    }
 }
