@@ -176,15 +176,17 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     .map_err(Into::into)
 }
 
-/// 削除(共通)の唯一の入口。対象はユーザー/アシスタントの通常発言のみ
+/// 削除(共通)の唯一の入口。対象はユーザー発言とターンの返信(アシスタント発言・
+/// エラー発言)の通常発言のみ
 /// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない」)。
+/// 返信を消したターンは通常発言が残らないため、`list_for_task`がターンごと会話から外す。
 /// 確認ダイアログを挟まない即時の論理削除で、`deleted_at`を立てるだけの取り消し可能な
 /// 操作にする(`deleted_at`をNULLに戻せば復元できる。復元UIは本Issueの範囲外)。
 pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
     let msg = find_message(conn, id)?.ok_or(CoreError::MessageNotFound(id))?;
-    if msg.kind != "normal" || (msg.role != "user" && msg.role != "assistant") {
+    if msg.kind != "normal" || !matches!(msg.role.as_str(), "user" | "assistant" | "error") {
         return Err(CoreError::InvalidMessageOperation(
-            "delete is only allowed for normal user/assistant messages".to_string(),
+            "delete is only allowed for normal user/assistant/error messages".to_string(),
         ));
     }
     let updated = conn.execute(
@@ -199,7 +201,7 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
 
 /// `from_id`以降(自身を含む)の通常発言(`kind='normal'`)を一括で論理削除する。
 /// 編集・再試行のカスケード用の共通入口(編集は対象のユーザー発言から、再試行は対象の
-/// アシスタント発言から、それぞれ以降をすべて削除してから会話を再生成する)。
+/// ターンの返信から、それぞれ以降をすべて削除してから会話を再生成する)。
 ///
 /// ツール実行記録(`kind='tool_execution'`)は対象に含めない
 /// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない

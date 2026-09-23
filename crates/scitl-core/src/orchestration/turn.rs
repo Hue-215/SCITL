@@ -52,7 +52,7 @@ pub async fn run_turn(
     .await?;
 
     let turn_id = Ulid::new().to_string();
-    // 新規ターンなので1から始まる。以降の再試行は`retry_assistant_message`が
+    // 新規ターンなので1から始まる。以降の再試行は`retry_reply`が
     // `next_attempt_no`で採番する。
     let attempt_no: i64 = 1;
     generate_turn_response(
@@ -82,7 +82,7 @@ pub async fn edit_user_message(
     with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
-        validate_target(&target, task_id, "user")?;
+        validate_target(&target, task_id, &["user"])?;
 
         messages::soft_delete_normal_from(conn, task_id, message_id)?;
         messages::insert_message(
@@ -106,11 +106,15 @@ pub async fn edit_user_message(
     generate_turn_response(db, adapter, task_id, turn_id, 1, prompts, mcp, limits).await
 }
 
-/// 再試行(アシスタント発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言を
+/// 再試行(ターンの返信のみ、Issue #41・#130)。対象の発言以降(自身を含む)の通常発言を
 /// 論理削除し、同じ`turn_id`のまま`attempt_no`を増やして応答を生成し直す
 /// (`docs/spec/rebuild/data-model.md`「ターン境界」)。対応するユーザー発言は
 /// `id < message_id`のためカスケードの対象外で、そのまま履歴に残る。
-pub async fn retry_assistant_message(
+///
+/// 返信は成功時のアシスタント発言と失敗時のエラー発言のどちらでもよい。どちらも1試行に
+/// 1行だけの通常発言で(data-model.md「1ターン内の往復で保存するもの」)、作り直し方は
+/// 変わらない。
+pub async fn retry_reply(
     db: SharedConnection,
     adapter: Option<&dyn LlmAdapter>,
     task_id: i64,
@@ -122,11 +126,9 @@ pub async fn retry_assistant_message(
     let (turn_id, attempt_no) = with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
             .ok_or(CoreError::MessageNotFound(message_id))?;
-        validate_target(&target, task_id, "assistant")?;
+        validate_target(&target, task_id, &["assistant", "error"])?;
         let turn_id = target.turn_id.clone().ok_or_else(|| {
-            CoreError::InvalidMessageOperation(
-                "assistant message has no turn_id to retry".to_string(),
-            )
+            CoreError::InvalidMessageOperation("reply has no turn_id to retry".to_string())
         })?;
 
         messages::soft_delete_normal_from(conn, task_id, message_id)?;
@@ -143,7 +145,7 @@ pub async fn retry_assistant_message(
 
 /// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
 /// カスケードはしない(対象の1件だけを消す。編集・再試行のカスケード削除とは別の操作)。
-/// 対象はユーザー/アシスタントの通常発言のみ(`db::messages::soft_delete_message`が検証する)。
+/// 対象はユーザー発言とターンの返信(`db::messages::soft_delete_message`が検証する)。
 pub async fn delete_message(db: SharedConnection, task_id: i64, message_id: i64) -> Result<()> {
     with_conn(db, move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -158,17 +160,18 @@ pub async fn delete_message(db: SharedConnection, task_id: i64, message_id: i64)
     .await
 }
 
-/// `edit_user_message`/`retry_assistant_message`共通の対象検証。役割・種別・所属タスクを
+/// `edit_user_message`/`retry_reply`共通の対象検証。役割・種別・所属タスクを
 /// 1箇所で確認する(`docs/spec/principles.md` 5節)。
-fn validate_target(target: &Message, task_id: i64, expected_role: &str) -> Result<()> {
+fn validate_target(target: &Message, task_id: i64, expected_roles: &[&str]) -> Result<()> {
     if target.task_id != Some(task_id) {
         return Err(CoreError::InvalidMessageOperation(
             "message does not belong to this task".to_string(),
         ));
     }
-    if target.kind != "normal" || target.role != expected_role {
+    if target.kind != "normal" || !expected_roles.contains(&target.role.as_str()) {
         return Err(CoreError::InvalidMessageOperation(format!(
-            "target must be a normal {expected_role} message"
+            "target must be a normal {} message",
+            expected_roles.join("/")
         )));
     }
     Ok(())
@@ -177,7 +180,7 @@ fn validate_target(target: &Message, task_id: i64, expected_role: &str) -> Resul
 /// 応答生成の本体(architecture.md 1節)。LLM呼び出し →
 /// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
 /// までを1つの関数に閉じる(docs/spec/principles.md 5節)。`run_turn`(新規発言)・
-/// `edit_user_message`(編集)・`retry_assistant_message`(再試行)はいずれも、対象となる
+/// `edit_user_message`(編集)・`retry_reply`(再試行)はいずれも、対象となる
 /// ユーザー発言をDBに用意した上でこれを呼ぶ共通の末尾処理。
 ///
 /// 外部(MCP)サーバーへの接続はこのターンの間だけ生かし、結果によらずここで閉じる
@@ -277,7 +280,7 @@ async fn run_tool_rounds(
     sessions: &mut McpSessions,
     limits: ToolLimits,
 ) -> Result<Vec<ResponseEvent>> {
-    // 呼び出し元(`run_turn`/`edit_user_message`/`retry_assistant_message`)が対象の
+    // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
     let history = with_conn(db.clone(), move |conn| build_history(conn, task_id)).await?;
 
