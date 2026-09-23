@@ -51,6 +51,12 @@ impl ProviderConfig {
     }
 }
 
+/// 応答タイムアウトの既定値(秒)。未設定のときに使う実体はここ1箇所だけ。
+/// タイムアウト自体は常に掛ける(HTTPクライアントの既定は無制限で、応答しない
+/// エンドポイント1つでターンが永久に固まるため)。生成の長い非ストリーミング応答も
+/// 待てるよう、余裕を持たせる。
+pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
+
 /// システムプロンプト等、モデル・プロバイダーに依存しない全般設定
 /// (legacy/frontend.md 2節)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -61,20 +67,22 @@ pub struct GeneralConfig {
     /// 工程ツールの使い分けのようなタスクチャット固有の指示は`system_prompt`とは
     /// 別に持つ(docs/spec/legacy/data-model.md 3節「システムプロンプト3種」)。
     pub task_chat_system_prompt: Option<String>,
-    /// 応答タイムアウト(秒)。未設定はアダプタ側の既定値を使う。値の解釈は
+    /// 応答タイムアウト(秒)。未設定は[`DEFAULT_RESPONSE_TIMEOUT_SECS`]。値の解釈は
     /// [`Self::response_timeout`]に閉じる。
     pub response_timeout_secs: Option<u64>,
 }
 
 impl GeneralConfig {
-    /// 未設定(`None`)と、保存済みの設定に紛れ込んだ`0`はどちらも`None`(アダプタの既定値)。
-    /// `0`は「即タイムアウト」ではなく設定の不備として扱う。更新時にも弾くが、手で編集した
+    /// 未設定(`None`)と、保存済みの設定に紛れ込んだ`0`はどちらも既定値。`0`は
+    /// 「即タイムアウト」ではなく設定の不備として扱う。更新時にも弾くが、手で編集した
     /// `config.toml`が同じ経路を通るため、ここでも受け止める
     /// (`orchestration::ToolLimits::from_config`と同じ扱い)。
-    pub fn response_timeout(&self) -> Option<Duration> {
-        self.response_timeout_secs
-            .filter(|s| *s > 0)
-            .map(Duration::from_secs)
+    pub fn response_timeout(&self) -> Duration {
+        Duration::from_secs(
+            self.response_timeout_secs
+                .filter(|s| *s > 0)
+                .unwrap_or(DEFAULT_RESPONSE_TIMEOUT_SECS),
+        )
     }
 }
 
@@ -86,7 +94,8 @@ impl GeneralConfig {
 /// 1箇所だけ持つ(設定ファイル側に既定値を書き写すと、2箇所を揃える必要が生まれる)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
-    /// 1ターンあたりのツール呼び出しラウンド数の上限。
+    /// 1ターンでツールを実行するラウンドの上限。使い切ったら、ツールを渡さずにもう一度だけ
+    /// モデルを呼んで返信させる(`orchestration::turn`)。
     pub max_rounds_per_turn: Option<u32>,
     /// 1ターン内のツール実行に使える時間の合計(秒)。LLMの応答待ちは含まない
     /// (そちらは`GeneralConfig::response_timeout_secs`が見る)。
@@ -332,17 +341,24 @@ mod tests {
     }
 
     #[test]
-    fn zero_response_timeout_is_treated_as_unset() {
+    fn unset_or_zero_response_timeout_falls_back_to_the_default() {
         let general = GeneralConfig {
             response_timeout_secs: Some(0),
             ..GeneralConfig::default()
         };
-        assert_eq!(general.response_timeout(), None);
+        assert_eq!(
+            general.response_timeout(),
+            Duration::from_secs(DEFAULT_RESPONSE_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            GeneralConfig::default().response_timeout(),
+            Duration::from_secs(DEFAULT_RESPONSE_TIMEOUT_SECS)
+        );
         let general = GeneralConfig {
             response_timeout_secs: Some(30),
             ..GeneralConfig::default()
         };
-        assert_eq!(general.response_timeout(), Some(Duration::from_secs(30)));
+        assert_eq!(general.response_timeout(), Duration::from_secs(30));
     }
 
     #[test]

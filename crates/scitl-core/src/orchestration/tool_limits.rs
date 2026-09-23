@@ -12,15 +12,15 @@ use crate::config::ToolConfig;
 /// (設定可能にしただけで、何も設定していないユーザーの挙動は変えない)。
 pub const DEFAULT_MAX_ROUNDS_PER_TURN: u32 = 4;
 
-/// ツール実行に使える合計時間の既定値。応答タイムアウトの既定値(300秒、
-/// `docs/spec/legacy/frontend.md` 3節)と揃える。普段は発動せず、応答しない
-/// 外部サーバーでターンが延々と返らなくなるのを防ぐための天井として置く。
-pub const DEFAULT_TOTAL_TIMEOUT_SECS: u64 = 300;
+/// ツール実行に使える合計時間の既定値。応答タイムアウトの既定値に揃える。普段は発動せず、
+/// 応答しない外部サーバーでターンが延々と返らなくなるのを防ぐための天井として置く。
+pub const DEFAULT_TOTAL_TIMEOUT_SECS: u64 = crate::config::DEFAULT_RESPONSE_TIMEOUT_SECS;
 
 /// 解決済みの上限。ターンはこの型だけを見て、`Option`の解釈はしない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolLimits {
-    /// 1ターンあたりのツール呼び出しラウンド数の上限。
+    /// 1ターンでツールを実行するラウンドの上限。使い切ったら、ツールを渡さずにもう一度だけ
+    /// モデルを呼んで返信させる(`turn`)。
     pub max_rounds_per_turn: u32,
     /// 1ターン内のツール実行に使える時間の合計。LLMの応答待ちは含まない
     /// (そちらはアダプタ側のタイムアウトが見る)。判定はツール呼び出しの区切りで

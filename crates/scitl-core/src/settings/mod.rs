@@ -6,6 +6,12 @@
 //! アダプタの組み立て→保存→差し替え、の順で進める。途中で失敗すれば何も差し替えないので、
 //! メモリ上の設定とファイルが食い違わない。読み手(ターンの開始)が取る`current`のロックは
 //! 差し替えの一瞬だけで、資格情報ストアやファイルのI/Oを待たされない。
+//!
+//! 設定に問題があっても起動は止めない(Issue #155。画面から直す手段が無くなるため)。
+//! 設定ファイルを読めなければ空の設定で動かし、読めなかったファイルを上書きしないよう
+//! 保存を断る。アクティブなプロバイダーを組み立てられなければ、そのプロバイダーを使えない
+//! ものとして動かし、削除・切り替えで直せるようにする。どちらも理由を設定画面に出し、
+//! チャットでは理由に応じたエラー発言にする。
 
 pub mod view;
 
@@ -24,7 +30,7 @@ use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};
 use crate::llm::LlmAdapter;
 use crate::mcp::{self, ToolCatalog};
-use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext};
+use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext, TurnFailure};
 use crate::secrets;
 
 pub use view::SettingsView;
@@ -61,25 +67,58 @@ pub enum NewMcpEndpoint {
 #[derive(Clone)]
 struct Current {
     config: Arc<Config>,
-    /// アクティブなプロバイダーが無い(未登録・全プロバイダーを削除した等)場合は`None`。
-    /// この場合、チャット送信はエラー発言(`no_provider`)として保存される。
-    adapter: Option<SharedAdapter>,
+    adapter: AdapterState,
     /// `adapter`を鍵無しで組み立てた(資格情報ストアから読めなかった)。
     key_unavailable: bool,
+}
+
+/// アクティブなプロバイダーのアダプタ。
+#[derive(Clone)]
+enum AdapterState {
+    Ready(SharedAdapter),
+    /// アクティブなプロバイダーが無い(未登録・全プロバイダーを削除した等)。
+    NoProvider,
+    /// アクティブなプロバイダーを組み立てられない。理由を持つ。
+    Broken(String),
+}
+
+impl AdapterState {
+    fn broken_reason(&self) -> Option<&str> {
+        match self {
+            Self::Broken(reason) => Some(reason),
+            Self::Ready(_) | Self::NoProvider => None,
+        }
+    }
+}
+
+/// 組み立ての結果を状態に直す。2つ目は「鍵を読めずに鍵無しで組み立てた」。
+fn adapter_state(built: Result<providers::ActiveAdapter>) -> (AdapterState, bool) {
+    match built {
+        Ok(providers::ActiveAdapter {
+            adapter: Some(adapter),
+            key_unavailable,
+        }) => (AdapterState::Ready(adapter), key_unavailable),
+        Ok(providers::ActiveAdapter { adapter: None, .. }) => (AdapterState::NoProvider, false),
+        Err(e) => (AdapterState::Broken(e.to_string()), false),
+    }
 }
 
 /// ある時点の設定と、それから作ったアダプタの組。ターンはこれを取ってからロックを離し、
 /// ターンに渡す値はここから組み立てる(送信・編集・再試行、GUI・CLIで同じ組み立てを使う)。
 pub struct Snapshot {
     pub config: Arc<Config>,
-    adapter: Option<SharedAdapter>,
+    /// 使えるアダプタ、または使えない理由(ターンはこの理由のエラー発言で終わる)。
+    adapter: std::result::Result<SharedAdapter, TurnFailure>,
     mcp_tools: Arc<ToolCatalog>,
 }
 
 impl Snapshot {
     pub fn turn_context<'a>(&'a self, generating: &'a InFlightSet<i64>) -> TurnContext<'a> {
         TurnContext {
-            adapter: self.adapter.as_deref().map(|a| a as &dyn LlmAdapter),
+            adapter: match &self.adapter {
+                Ok(adapter) => Ok(adapter.as_ref() as &dyn LlmAdapter),
+                Err(failure) => Err(failure.clone()),
+            },
             prompts: SystemPrompts {
                 base: self.config.general.system_prompt.as_deref(),
                 task_chat: self.config.general.task_chat_system_prompt.as_deref(),
@@ -93,6 +132,9 @@ impl Snapshot {
 
 pub struct Settings {
     path: PathBuf,
+    /// 起動時に設定ファイルを読めなかった理由(パスを含む)。あれば保存を断る。直すには
+    /// ファイルを直して再起動する。
+    config_error: Option<String>,
     current: Mutex<Current>,
     writer: Mutex<()>,
     /// 取得済みのMCPツール一覧(Issue #104)。アプリ起動中だけ保持するメモリキャッシュで、
@@ -107,34 +149,64 @@ pub struct Settings {
 impl Settings {
     /// 設定ファイルを読み、アクティブなプロバイダーのアダプタを組み立てる。ファイルが無ければ
     /// プロバイダー0件で始める。既定の通信先を補わないのは、通信先をユーザーが登録したものに
-    /// 限るため(principles.md 1節)。
-    pub fn load(path: PathBuf) -> Result<Self> {
-        let config = config::load(&path)?;
-        let built = providers::build_active_adapter(&config)?;
-        Ok(Self {
+    /// 限るため(principles.md 1節)。読めない・組み立てられない場合も失敗にはしない
+    /// (モジュール冒頭)。
+    pub fn load(path: PathBuf) -> Self {
+        let (config, config_error) = match config::load(&path) {
+            Ok(config) => (config, None),
+            Err(e) => {
+                let reason = format!("{}: {e}", path.display());
+                eprintln!("failed to read the config file, starting with empty settings: {reason}");
+                (Config::default(), Some(reason))
+            }
+        };
+        let (adapter, key_unavailable) = adapter_state(providers::build_active_adapter(&config));
+        if let Some(reason) = adapter.broken_reason() {
+            eprintln!("the active provider cannot be used: {reason}");
+        }
+        Self {
             path,
+            config_error,
             current: Mutex::new(Current {
                 config: Arc::new(config),
-                adapter: built.adapter,
-                key_unavailable: built.key_unavailable,
+                adapter,
+                key_unavailable,
             }),
             writer: Mutex::new(()),
             mcp_tools: Arc::new(ToolCatalog::new()),
             fetching: InFlightSet::new(),
-        })
+        }
     }
 
     pub fn snapshot(&self) -> Snapshot {
         let current = self.current();
+        let adapter = match (&self.config_error, current.adapter) {
+            (Some(_), _) => Err(TurnFailure::SettingsUnreadable),
+            (None, AdapterState::Ready(adapter)) => Ok(adapter),
+            (None, AdapterState::NoProvider) => Err(TurnFailure::NoProvider),
+            (None, AdapterState::Broken(_)) => Err(TurnFailure::ProviderConfig),
+        };
         Snapshot {
             config: current.config,
-            adapter: current.adapter,
+            adapter,
             mcp_tools: Arc::clone(&self.mcp_tools),
         }
     }
 
     pub fn view(&self) -> SettingsView {
-        view::build(&self.current().config, &self.mcp_tools)
+        let current = self.current();
+        self.build_view(&current.config, &current.adapter)
+    }
+
+    fn build_view(&self, config: &Config, adapter: &AdapterState) -> SettingsView {
+        view::build(
+            config,
+            &self.mcp_tools,
+            view::Problems {
+                config_error: self.config_error.as_deref(),
+                active_provider_error: adapter.broken_reason(),
+            },
+        )
     }
 
     fn current(&self) -> Current {
@@ -153,6 +225,7 @@ impl Settings {
             config: (*current.config).clone(),
             before: current.config,
             key_unavailable: current.key_unavailable,
+            adapter_broken: current.adapter.broken_reason().is_some(),
         }
     }
 
@@ -404,42 +477,58 @@ struct Draft<'a> {
     before: Arc<Config>,
     config: Config,
     key_unavailable: bool,
+    adapter_broken: bool,
 }
 
 impl Draft<'_> {
-    /// アダプタを組み立ててから保存する(組み立てに失敗する設定をファイルへ残さない)。
-    /// アダプタは作り直しが要る変更の時だけ組み立てる。MCPのチェック1つの切り替えで
-    /// 資格情報ストアを読みに行かない。ただし前回鍵を読めなかった場合は、設定を変えるたびに
-    /// 読み直す(ストアのロック解除後に、再起動せずに直るように)。
+    /// アダプタを組み立ててから保存する。アダプタは作り直しが要る変更の時だけ組み立てる。
+    /// MCPのチェック1つの切り替えで資格情報ストアを読みに行かない。ただし前回鍵を読めなかった・
+    /// 組み立てられなかった場合は、設定を変えるたびに組み立て直す(ストアのロック解除後などに、
+    /// 再起動せずに直るように)。
+    ///
+    /// アダプタの入力を変える変更で組み立てに失敗したら、保存しない(組み立てられない設定を
+    /// 新たにファイルへ残さない)。入力を変えない変更は、組み立てられないままの状態で通す
+    /// (起動時から壊れているプロバイダーがあっても、無関係な設定は変えられるように)。
     fn commit(self) -> Result<SettingsView> {
-        let rebuild =
-            self.key_unavailable || adapter_inputs(&self.before) != adapter_inputs(&self.config);
-        let built = if rebuild {
-            Some(providers::build_active_adapter(&self.config)?)
+        // 理由(パスと読めなかった箇所)は設定画面の上部に出ているので、ここでは繰り返さない。
+        if self.settings.config_error.is_some() {
+            return Err(invalid(
+                "settings are not saved because the config file could not be read at startup; \
+                 fix the file and restart the app",
+            ));
+        }
+        let inputs_changed = adapter_inputs(&self.before) != adapter_inputs(&self.config);
+        let rebuilt = if inputs_changed || self.key_unavailable || self.adapter_broken {
+            let built = match providers::build_active_adapter(&self.config) {
+                Err(e) if inputs_changed => return Err(e),
+                built => built,
+            };
+            Some(adapter_state(built))
         } else {
             None
         };
         config::save(&self.settings.path, &self.config)?;
 
         let config = Arc::new(self.config);
-        {
+        let adapter = {
             let mut current = self
                 .settings
                 .current
                 .lock()
                 .expect("settings mutex poisoned");
             current.config = Arc::clone(&config);
-            if let Some(built) = built {
-                current.adapter = built.adapter;
-                current.key_unavailable = built.key_unavailable;
+            if let Some((adapter, key_unavailable)) = rebuilt {
+                current.adapter = adapter;
+                current.key_unavailable = key_unavailable;
             }
-        }
-        Ok(view::build(&config, &self.settings.mcp_tools))
+            current.adapter.clone()
+        };
+        Ok(self.settings.build_view(&config, &adapter))
     }
 }
 
 /// アダプタの組み立てに使う設定値。`providers::build_active_adapter`が読むものと揃える。
-fn adapter_inputs(config: &Config) -> (Option<&ProviderConfig>, Option<std::time::Duration>) {
+fn adapter_inputs(config: &Config) -> (Option<&ProviderConfig>, std::time::Duration) {
     (config.active_provider(), config.general.response_timeout())
 }
 
@@ -559,7 +648,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("scitl-settings-test-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
-        (Settings::load(path.clone()).unwrap(), path)
+        (Settings::load(path.clone()), path)
+    }
+
+    fn ready_adapter(settings: &Settings) -> SharedAdapter {
+        match settings.current().adapter {
+            AdapterState::Ready(adapter) => adapter,
+            AdapterState::NoProvider | AdapterState::Broken(_) => panic!("adapter is not ready"),
+        }
     }
 
     fn add_local_provider(settings: &Settings, name: &str) -> SettingsView {
@@ -579,7 +675,7 @@ mod tests {
         let view = add_local_provider(&settings, "Local");
         let id = view.providers[0].id.clone();
         assert_eq!(view.active_provider_id.as_deref(), Some(id.as_str()));
-        assert!(settings.snapshot().adapter.is_some());
+        assert!(settings.snapshot().adapter.is_ok());
 
         let view = settings.add_model(&id, " m1 ").unwrap();
         assert_eq!(view.providers[0].active_model.as_deref(), Some("m1"));
@@ -604,7 +700,10 @@ mod tests {
         assert_eq!(view.active_provider_id.as_deref(), Some(second.as_str()));
         let view = settings.delete_provider(&second).unwrap();
         assert_eq!(view.active_provider_id, None);
-        assert!(settings.snapshot().adapter.is_none());
+        assert!(matches!(
+            settings.snapshot().adapter,
+            Err(TurnFailure::NoProvider)
+        ));
     }
 
     #[test]
@@ -651,11 +750,77 @@ mod tests {
         assert!(matches!(err, CoreError::InvalidSettings(_)));
     }
 
+    /// 設定ファイルを読めなくても起動し、理由を画面とターンへ渡す。読めなかったファイルは
+    /// 上書きしない(Issue #155)。
+    #[test]
+    fn unreadable_config_file_starts_empty_and_refuses_to_save() {
+        let dir = std::env::temp_dir().join(format!("scitl-settings-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "providers = [").unwrap();
+
+        let settings = Settings::load(path.clone());
+
+        assert!(settings.view().config_error.is_some());
+        assert!(matches!(
+            settings.snapshot().adapter,
+            Err(TurnFailure::SettingsUnreadable)
+        ));
+        let err = settings
+            .update_general(Some("prompt".to_string()), None, None)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidSettings(_)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "providers = [");
+    }
+
+    /// アクティブなプロバイダーを組み立てられなくても起動し、そのプロバイダーを使えない
+    /// ものとして扱う。無関係な変更は通し、削除すれば直る(Issue #155)。
+    #[test]
+    fn broken_active_provider_does_not_block_startup_or_unrelated_changes() {
+        let dir = std::env::temp_dir().join(format!("scitl-settings-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        // ホスト名宛のhttpは検証で弾かれる(net::validate_external_url)。
+        std::fs::write(
+            &path,
+            r#"
+active_provider_id = "broken"
+
+[[providers]]
+id = "broken"
+name = "Broken"
+api_format = "open_ai_compat"
+base_url = "http://example.com/v1"
+models = ["m"]
+"#,
+        )
+        .unwrap();
+
+        let settings = Settings::load(path);
+        let view = settings.view();
+        assert!(view.config_error.is_none());
+        assert!(view.providers[0].error.is_some());
+        assert!(matches!(
+            settings.snapshot().adapter,
+            Err(TurnFailure::ProviderConfig)
+        ));
+
+        // アダプタの入力を変えない変更は通る。
+        settings.update_tools(Some(3), None).unwrap();
+        // 使えるプロバイダーを足しても、アクティブは壊れたままなので状態は変わらない。
+        add_local_provider(&settings, "Local");
+        assert!(settings.view().providers[0].error.is_some());
+
+        let view = settings.delete_provider("broken").unwrap();
+        assert!(view.providers.iter().all(|p| p.error.is_none()));
+        assert!(settings.snapshot().adapter.is_ok());
+    }
+
     #[test]
     fn adapter_is_rebuilt_only_when_its_inputs_change() {
         let (settings, _) = temp_settings();
         let id = add_local_provider(&settings, "A").providers[0].id.clone();
-        let before = settings.current().adapter.unwrap();
+        let before = ready_adapter(&settings);
 
         settings
             .add_mcp_server(
@@ -667,9 +832,9 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(Arc::ptr_eq(&before, &settings.current().adapter.unwrap()));
+        assert!(Arc::ptr_eq(&before, &ready_adapter(&settings)));
 
         settings.add_model(&id, "m1").unwrap();
-        assert!(!Arc::ptr_eq(&before, &settings.current().adapter.unwrap()));
+        assert!(!Arc::ptr_eq(&before, &ready_adapter(&settings)));
     }
 }

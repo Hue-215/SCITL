@@ -74,6 +74,8 @@ export interface GeneralSettings {
   system_prompt: string | null
   task_chat_system_prompt: string | null
   response_timeout_secs: number | null
+  // 未設定時に実際に使われる値(ToolSettingsのdefault_*と同じ扱い)。
+  default_response_timeout_secs: number
 }
 
 // ツール呼び出しの上限(Issue #71)。default_*は未設定時に実際に使われる値で、
@@ -94,6 +96,8 @@ export interface ProviderView {
   models: string[]
   active_model: string | null
   has_api_key: boolean
+  // このプロバイダーをアクティブにしているが、組み立てられない理由。
+  error: string | null
 }
 
 export type McpEndpointView =
@@ -117,6 +121,8 @@ export interface McpToolInfo {
 }
 
 export interface SettingsView {
+  // 起動時に設定ファイルを読めなかった理由。あれば設定は保存されない。
+  config_error: string | null
   general: GeneralSettings
   tools: ToolSettings
   providers: ProviderView[]

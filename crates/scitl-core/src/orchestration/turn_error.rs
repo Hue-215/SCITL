@@ -9,6 +9,8 @@ use crate::llm::Readiness;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnFailure {
     NoProvider,
+    /// 起動時に設定ファイルを読めなかった(Issue #155)。理由は設定画面に出す。
+    SettingsUnreadable,
     NoModel,
     EmptyResponse,
     /// 上限が未設定なら設定を促すヒントを文言に加える(`legacy/backend.md` 4節手順6)。
@@ -43,6 +45,7 @@ impl TurnFailure {
     pub fn kind(&self) -> &'static str {
         match self {
             TurnFailure::NoProvider => "no_provider",
+            TurnFailure::SettingsUnreadable => "settings_unreadable",
             TurnFailure::NoModel => "no_model",
             TurnFailure::EmptyResponse => "empty_response",
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
@@ -60,6 +63,9 @@ impl TurnFailure {
         match self {
             TurnFailure::NoProvider => {
                 "LLMプロバイダーが設定されていません。設定画面で追加してください。".to_string()
+            }
+            TurnFailure::SettingsUnreadable => {
+                "設定ファイルを読み込めませんでした。設定画面で詳細を確認してください。".to_string()
             }
             TurnFailure::NoModel => {
                 "モデルが選択されていません。設定画面でモデルを選択してください。".to_string()

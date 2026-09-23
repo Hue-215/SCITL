@@ -194,9 +194,9 @@ fn neutralize_reserved_tags(text: &str) -> String {
     out
 }
 
-/// アダプタが構成不足で呼び出しに進めない状態(Issue #40)。プロバイダの選択有無は
-/// `Option<&dyn LlmAdapter>`の`None`で表すためここには含めない
-/// (`orchestration::turn_error::from_readiness`参照)。
+/// アダプタが構成不足で呼び出しに進めない状態(Issue #40)。プロバイダの選択有無など、
+/// アダプタ自体が無い場合は`orchestration::TurnContext::adapter`の`Err`で表すため
+/// ここには含めない(`orchestration::turn_error::from_readiness`参照)。
 ///
 /// APIキーの空・未設定はここに含めない。ローカルプロバイダーは認証不要で意図的に
 /// 空のままにする場合があり、空文字列だけでは「未設定で使えない」のか「設定不要」なのかを

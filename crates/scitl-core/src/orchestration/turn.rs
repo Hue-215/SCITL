@@ -10,6 +10,7 @@ use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
     ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments, ToolCallRequest,
+    ToolSchema,
 };
 use crate::mcp::McpSessions;
 use crate::orchestration::mcp_access::McpAccess;
@@ -201,8 +202,9 @@ async fn generate_turn_response(
     ctx: &TurnContext<'_>,
     attempt: Attempt,
 ) -> Result<Vec<ResponseEvent>> {
-    let Some(adapter) = ctx.adapter else {
-        return fail_turn(db, &attempt, TurnFailure::NoProvider).await;
+    let adapter = match &ctx.adapter {
+        Ok(adapter) => *adapter,
+        Err(failure) => return fail_turn(db, &attempt, failure.clone()).await,
     };
     if let Some(failure) = turn_error::from_readiness(adapter.readiness()) {
         return fail_turn(db, &attempt, failure).await;
@@ -306,6 +308,11 @@ async fn prepare_external_tools(
     ExternalToolset::build(fetched, &tools::task_chat_tool_names())
 }
 
+/// ツールの上限に達したあとの最後の呼び出しで、システムプロンプトの末尾に足す一節。
+/// ツールを渡さない理由を伝えないと、モデルがツールを呼ぶつもりの文を返しがちになる。
+const ROUND_LIMIT_NOTE: &str = "The tool call limit for this turn has been reached, so no tools \
+     are available now. Reply to the user based on the tool results so far.";
+
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
 /// 分けてあるだけで、1ターンの流れとしては地続き。
 async fn run_tool_rounds(
@@ -345,8 +352,13 @@ async fn run_tool_rounds(
     // まとめて保存する(docs/spec/rebuild/data-model.md「1ターン内の往復で保存するもの」)。
     let mut reply_parts: Vec<String> = Vec::new();
 
-    for _round in 1..=ctx.limits.max_rounds_per_turn {
-        let system_prompt_text = with_conn(db.clone(), {
+    // 上限のラウンドまでツールを実行したら、ツールを渡さずにもう一度だけ呼ぶ
+    // (docs/spec/rebuild/tools.md 4節)。`u64`で数えるのは、上限が`u32::MAX`でも
+    // 最後の1回を数えられるようにするため。
+    let tool_rounds = u64::from(ctx.limits.max_rounds_per_turn);
+    for round in 1..=tool_rounds + 1 {
+        let final_call = round > tool_rounds;
+        let mut system_prompt_text = with_conn(db.clone(), {
             let base_owned = base_owned.clone();
             let task_chat_owned = task_chat_owned.clone();
             move |conn| {
@@ -358,13 +370,18 @@ async fn run_tool_rounds(
             }
         })
         .await?;
+        if final_call {
+            system_prompt_text.push_str("\n\n");
+            system_prompt_text.push_str(ROUND_LIMIT_NOTE);
+        }
 
         let mut messages_to_send = Vec::with_capacity(1 + history.len() + round_trip.len());
         messages_to_send.push(ChatMessage::System(system_prompt_text));
         messages_to_send.extend(history.iter().cloned());
         messages_to_send.extend(round_trip.iter().cloned());
 
-        let events = match adapter.send(&messages_to_send, &exposed_tools).await {
+        let offered: &[ToolSchema] = if final_call { &[] } else { &exposed_tools };
+        let events = match adapter.send(&messages_to_send, offered).await {
             Ok(events) => events,
             Err(e) => {
                 return fail_turn(db, attempt, turn_error::classify(&e)).await;
@@ -419,6 +436,10 @@ async fn run_tool_rounds(
             })
             .await?;
             return Ok(all_events);
+        }
+        // ツールを渡していないのに呼んできた。実行はせず、上限到達として終える。
+        if final_call {
+            return fail_turn(db, attempt, TurnFailure::ToolRoundLimit).await;
         }
 
         // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。
@@ -494,7 +515,7 @@ async fn run_tool_rounds(
         }
     }
 
-    fail_turn(db, attempt, TurnFailure::ToolRoundLimit).await
+    unreachable!("the final call always returns")
 }
 
 /// ツール1件の実行。名前が外部ツールとして公開したものなら対応するサーバーへ、
