@@ -29,6 +29,9 @@ pub enum LinkVerdict {
 pub struct LinkInspection {
     pub url: String,
     pub verdict: LinkVerdict,
+    /// `verdict`から決まる。「開く」を出すかどうかの判断を画面側に写さないため、
+    /// 判定結果として一緒に渡す。
+    pub can_open: bool,
     /// 書かれたホストと実際の移動先ホストが食い違う場合だけ、移動先のURL全体
     /// (ホストはpunycode)。見た目の似た文字によるなりすまし(ホモグラフ)や、
     /// `%65vil.com`・全角英字のような、ブラウザが変換してから向かう書き方を見分けるため。
@@ -39,8 +42,20 @@ pub struct LinkInspection {
 }
 
 impl LinkInspection {
-    pub fn can_open(&self) -> bool {
-        matches!(self.verdict, LinkVerdict::Web | LinkVerdict::Mail)
+    fn new(
+        url: String,
+        verdict: LinkVerdict,
+        real_url: Option<String>,
+        userinfo_host: Option<String>,
+    ) -> Self {
+        let can_open = matches!(verdict, LinkVerdict::Web | LinkVerdict::Mail);
+        Self {
+            url,
+            verdict,
+            can_open,
+            real_url,
+            userinfo_host,
+        }
     }
 }
 
@@ -49,12 +64,7 @@ impl LinkInspection {
 /// から変換するため、ここでの判定と実際の移動先は一致する。
 pub fn inspect(raw: &str) -> LinkInspection {
     let url = raw.trim().to_string();
-    let verdict_only = |verdict| LinkInspection {
-        url: url.clone(),
-        verdict,
-        real_url: None,
-        userinfo_host: None,
-    };
+    let verdict_only = |verdict| LinkInspection::new(url.clone(), verdict, None, None);
 
     let Ok(parsed) = Url::parse(&url) else {
         return verdict_only(LinkVerdict::Unreadable);
@@ -71,28 +81,73 @@ pub fn inspect(raw: &str) -> LinkInspection {
     let (Some(host), Some(written)) = (parsed.host_str(), written_host(&url)) else {
         return verdict_only(LinkVerdict::Unreadable);
     };
-
-    LinkInspection {
-        verdict: LinkVerdict::Web,
-        real_url: (!written.eq_ignore_ascii_case(host)).then(|| parsed.to_string()),
-        userinfo_host: (!parsed.username().is_empty() || parsed.password().is_some())
-            .then(|| host.to_string()),
-        url,
+    // WHATWG URLはホストに`"`等を許すが、OSがブラウザの起動コマンドへURLを差し込む際に
+    // 引数の区切りとして解釈されうる。実在するドメイン名に現れない文字は開かない。
+    if let Some(url::Host::Domain(domain)) = parsed.host() {
+        if !domain
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        {
+            return verdict_only(LinkVerdict::Unreadable);
+        }
     }
+
+    let real_url = (!written.eq_ignore_ascii_case(host)).then(|| parsed.to_string());
+    let userinfo_host =
+        (!parsed.username().is_empty() || parsed.password().is_some()).then(|| host.to_string());
+    LinkInspection::new(url, LinkVerdict::Web, real_url, userinfo_host)
 }
 
 /// 確認ダイアログで承認されたリンクを、判定し直してからOSの既定アプリで開く。
 /// 渡すのは解析・正規化後のURLで、判定した対象と開く対象を一致させる。
+/// 確認ダイアログを経たこと自体はここでは検証できない(WebView側の呼び出しを信用しない
+/// 前提のため、ここで保証するのは開く対象が許可された形であることまで)。
 pub fn open_confirmed(raw: &str) -> Result<()> {
     let inspection = inspect(raw);
-    if !inspection.can_open() {
+    if !inspection.can_open {
         return Err(CoreError::Link(format!(
             "refused to open link: {:?}",
             inspection.verdict
         )));
     }
-    let url = Url::parse(&inspection.url).map_err(|e| CoreError::Link(e.to_string()))?;
-    open::that_detached(url.as_str()).map_err(|e| CoreError::Link(e.to_string()))
+    let mut url = Url::parse(&inspection.url).map_err(|e| CoreError::Link(e.to_string()))?;
+    if url.scheme() == "mailto" {
+        keep_standard_mailto_fields(&mut url);
+    }
+    open::that_detached(os_safe(&url)).map_err(|e| CoreError::Link(e.to_string()))
+}
+
+/// RFC 3986でURLにそのまま書けない文字(`"`・空白・`<>^`|{}\`等)をパーセント表記にする。
+/// `Url`の直列化は、mailtoのパスや特別スキームのクエリにこれらを残すことがあり、
+/// OSが起動コマンドへURLを差し込む際に引用の終端や引数の区切りとして解釈されうる。
+/// パーセント表記にしても、受け取る側にとってのURLの意味は変わらない。
+fn os_safe(url: &Url) -> String {
+    let mut out = String::with_capacity(url.as_str().len());
+    for b in url.as_str().bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=%".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// mailtoのクエリを、宛先・件名・本文に関わる標準の項目(RFC 6068)だけに絞る。
+/// メールソフトによっては`attach`等でローカルのファイルを添付した下書きを作れるため。
+fn keep_standard_mailto_fields(url: &mut Url) {
+    let Some(query) = url.query() else { return };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|field| {
+            let name = field.split('=').next().unwrap_or("");
+            ["to", "cc", "bcc", "subject", "body"]
+                .iter()
+                .any(|allowed| name.eq_ignore_ascii_case(allowed))
+        })
+        .collect();
+    let kept = kept.join("&");
+    url.set_query((!kept.is_empty()).then_some(kept.as_str()));
 }
 
 /// http/httpsのURL文字列から、書かれたままのホスト部分を取り出す。区切りの解釈は
@@ -195,7 +250,7 @@ mod tests {
         let i = inspect("mailto:someone@example.com");
         assert_eq!(i.verdict, LinkVerdict::Mail);
         assert_eq!(i.userinfo_host, None);
-        assert!(i.can_open());
+        assert!(i.can_open);
     }
 
     #[test]
@@ -214,7 +269,7 @@ mod tests {
                 },
                 "{url}"
             );
-            assert!(!i.can_open());
+            assert!(!i.can_open);
         }
     }
 
@@ -229,8 +284,49 @@ mod tests {
         ] {
             let i = inspect(url);
             assert_eq!(i.verdict, LinkVerdict::Unreadable, "{url:?}");
-            assert!(!i.can_open());
+            assert!(!i.can_open);
         }
+    }
+
+    #[test]
+    fn host_with_characters_outside_domain_names_is_unreadable() {
+        let i = inspect("http://a%22b.com/");
+        assert_eq!(i.verdict, LinkVerdict::Unreadable);
+        assert!(!i.can_open);
+    }
+
+    #[test]
+    fn os_safe_escapes_characters_that_could_split_arguments() {
+        let url = Url::parse("mailto:a\" -x b@c.com").unwrap();
+        assert_eq!(os_safe(&url), "mailto:a%22%20-x%20b@c.com");
+        let url = Url::parse("https://e.com/p|^?q=a|b^c{d}`e").unwrap();
+        assert_eq!(
+            os_safe(&url),
+            "https://e.com/p%7C%5E?q=a%7Cb%5Ec%7Bd%7D%60e"
+        );
+    }
+
+    #[test]
+    fn os_safe_keeps_ordinary_urls_unchanged() {
+        for s in [
+            "https://example.com/a/b?x=1&y=%E3%81%82#frag",
+            "http://[::1]:8080/",
+            "mailto:someone@example.com?subject=hi",
+        ] {
+            let url = Url::parse(s).unwrap();
+            assert_eq!(os_safe(&url), url.as_str());
+        }
+    }
+
+    #[test]
+    fn mailto_keeps_only_standard_fields() {
+        let mut url =
+            Url::parse("mailto:a@b.com?subject=hi&attach=/etc/passwd&Body=x&cc=c@d.com").unwrap();
+        keep_standard_mailto_fields(&mut url);
+        assert_eq!(url.as_str(), "mailto:a@b.com?subject=hi&Body=x&cc=c@d.com");
+        let mut url = Url::parse("mailto:a@b.com?attach=/etc/passwd").unwrap();
+        keep_standard_mailto_fields(&mut url);
+        assert_eq!(url.as_str(), "mailto:a@b.com");
     }
 
     #[test]
