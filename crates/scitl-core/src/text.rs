@@ -10,13 +10,22 @@ fn is_bidi_control(c: char) -> bool {
 }
 
 /// `char::is_control`(Cc)が拾わない書式文字(Cf)のうち、見えないまま文字列に紛れて
-/// 見た目を惑わすもの(双方向制御文字・ゼロ幅文字等)。標準ライブラリに一般カテゴリの
-/// 判定が無いため、該当する範囲を列挙する。
+/// 見た目を惑わすもの(双方向制御文字・ゼロ幅文字・タグ文字等)。タグ文字(U+E0000〜)は
+/// ASCIIを見えない形で写せるため、画面に見えない指示を紛れ込ませる手口に使われる。
+/// 標準ライブラリに一般カテゴリの判定が無いため、該当する範囲を列挙する。
 pub fn is_invisible_format(c: char) -> bool {
     is_bidi_control(c)
         || matches!(
             c,
-            '\u{00AD}' | '\u{180E}' | '\u{200B}'..='\u{200D}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}'
+            '\u{00AD}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200D}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{206A}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E007F}'
         )
 }
 
@@ -84,6 +93,15 @@ mod tests {
         assert_eq!(display_label("ab\u{202E}cd\u{200B}e", 100), "abcde");
         assert_eq!(display_label("a\n\tb\u{7}c", 100), "a b c");
         assert_eq!(display_label("  a   b  ", 100), "a b");
+    }
+
+    #[test]
+    fn label_removes_tag_characters() {
+        // タグ文字で「hi」を写したもの。画面には見えないまま残らないこと。
+        assert_eq!(
+            display_label("read\u{E0068}\u{E0069}_file", 100),
+            "read_file"
+        );
     }
 
     #[test]
