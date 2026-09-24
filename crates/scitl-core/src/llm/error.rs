@@ -130,7 +130,7 @@ impl ErrorDetail {
             }
             source = cause.source();
         }
-        // 連鎖の途中のエラーが要求URLを表示に含めても載せない。
+        // 連鎖の途中のreqwestのエラーが、同じ要求URLをそのまま表示に含めても載せない。
         if let Some(url) = url {
             text = text.replace(&url, URL_PLACEHOLDER);
         }
