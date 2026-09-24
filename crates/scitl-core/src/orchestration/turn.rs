@@ -9,7 +9,7 @@ use crate::db::messages::{self, Kind, Message, NewMessage, Role};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
-    neutralize_reserved_tags, ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments,
+    ChatMessage, FinishReason, LlmAdapter, PromptText, ResponseEvent, ToolArguments,
     ToolCallRequest, ToolSchema,
 };
 use crate::mcp::McpSessions;
@@ -512,12 +512,12 @@ async fn run_tool_rounds(
             content: if text.is_empty() { None } else { Some(text) },
             tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
         });
-        // 結果には自由入力が載る(docs/spec/rebuild/architecture.md 3節)。保存する
-        // 実行記録(上)は受け取ったまま残し、モデルへ送る側でだけ無害化する。
+        // 結果には自由入力が載る。保存する実行記録(上)は受け取ったまま残し、モデルへ
+        // 送る側でだけ無害化する(docs/spec/rebuild/architecture.md 10節)。
         for (call, result) in executed {
             round_trip.push(ChatMessage::Tool {
                 tool_call_id: call.id,
-                content: neutralize_reserved_tags(&result.to_string()),
+                content: PromptText::json(&result),
             });
         }
     }
@@ -602,8 +602,8 @@ async fn fail_turn(
     }])
 }
 
-/// API送信用の履歴。送信日時は`ChatMessage::User`の`sent_at`として本文と分けて運ぶ
-/// (Issue #68。組み立ては`llm::render_user_content`)。アシスタント発言に日時を付けないのは、
+/// API送信用の履歴。送信日時は本文と分けて囲みの属性に置く
+/// (Issue #68。組み立ては`llm::PromptText::user_message`)。アシスタント発言に日時を付けないのは、
 /// モデルが自分の過去の発言の形を真似て、応答の地の文に日時やタグを書き出すのを避けるため。
 ///
 /// エラー発言(`role='error'`)は除外する
@@ -616,10 +616,7 @@ fn build_history(conn: &Connection, task_id: i64) -> Result<Vec<ChatMessage>> {
         .filter(|m| m.kind == "normal" && m.role != "error")
         .map(|m| {
             if m.role == "user" {
-                ChatMessage::User {
-                    text: m.content,
-                    sent_at: Some(m.created_at),
-                }
+                ChatMessage::User(PromptText::user_message(&m.content, Some(&m.created_at)))
             } else {
                 ChatMessage::Assistant {
                     content: Some(m.content),

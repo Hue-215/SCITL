@@ -73,7 +73,10 @@ pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
 /// タスクチャット面で公開する内部ツールの名前。外部ツールの名前空間化で衝突を
 /// 避けるために使う(`external::ExternalToolset::build`)。
 pub fn task_chat_tool_names() -> Vec<String> {
-    task_chat_tools().into_iter().map(|t| t.name).collect()
+    task_chat_tools()
+        .iter()
+        .map(|t| t.name().to_string())
+        .collect()
 }
 
 /// タスクチャット向けの公開ツール一覧(docs/spec/rebuild/tools.md 2節)。

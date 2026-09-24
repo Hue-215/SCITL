@@ -3,6 +3,7 @@ use serde_json::json;
 
 use crate::db::error::Result;
 use crate::db::{now_iso8601, task_steps, tasks};
+use crate::llm::PromptText;
 
 /// ユーザーが設定するシステムプロンプト。総合チャットとタスクチャットでは
 /// 公開ツールが異なるため(docs/spec/rebuild/tools.md 5節)、`base`と`task_chat`を
@@ -44,11 +45,11 @@ pub fn build_system_prompt(
 
     sections.push(format!("current datetime (ISO8601 UTC): {}", now_iso8601()));
 
-    // タイトル・説明・工程は自由入力(docs/spec/rebuild/architecture.md 3節)。
+    // タイトル・説明・工程は自由入力(docs/spec/rebuild/architecture.md 10節)。
     let state = json!({ "task": task, "steps": steps });
     sections.push(format!(
         "current task state:\n{}",
-        crate::llm::neutralize_reserved_tags(&state.to_string())
+        PromptText::json(&state).as_str()
     ));
 
     Ok(sections.join("\n\n"))

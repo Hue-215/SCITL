@@ -12,15 +12,15 @@ pub const NAME: &str = "get_task_list";
 /// 引数なし。文脈から決まる情報を持たないため面によらず同一のスキーマ
 /// (docs/spec/rebuild/tools.md 2節)。
 pub fn schema() -> ToolSchema {
-    ToolSchema {
-        name: NAME.to_string(),
-        description: "List the tasks that are not archived.".to_string(),
-        parameters: json!({
+    ToolSchema::internal(
+        NAME,
+        "List the tasks that are not archived.",
+        json!({
             "type": "object",
             "properties": {},
             "additionalProperties": false
         }),
-    }
+    )
 }
 
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::error::CoreError;
 use crate::llm::{
-    render_user_content, ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent,
-    ToolArguments, ToolCallRequest, ToolSchema,
+    ChatMessage, FinishReason, LlmAdapter, PromptText, Readiness, ResponseEvent, ToolArguments,
+    ToolCallRequest, ToolSchema,
 };
 
 /// HTTPエラー時にエラー文へ載せるプロバイダ応答本文の上限。
@@ -167,7 +167,7 @@ const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is n
 /// - 同じ役割が続いたら1つにまとめる。ユーザー発言は組み立てた囲みごと連結するので、
 ///   発言ごとの送信日時は残る
 /// - 最初の発言がアシスタント発言なら、その前にユーザー発言を補う。補う発言に日時は
-///   付けない(`ChatMessage::User`の`sent_at`)
+///   付けない(`PromptText::user_message`の`sent_at`)
 ///
 /// ツールの往復(`tool_calls`を持つassistantに続くtool)には手を加えない。
 fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
@@ -199,10 +199,9 @@ fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
                 if matches!(message, RequestMessage::Assistant { .. })
                     && matches!(last, None | Some(RequestMessage::System { .. }))
                 {
-                    out.push(to_request_message(&ChatMessage::User {
-                        text: PLACEHOLDER_USER_TEXT.to_string(),
-                        sent_at: None,
-                    }));
+                    out.push(to_request_message(&ChatMessage::User(
+                        PromptText::user_message(PLACEHOLDER_USER_TEXT, None),
+                    )));
                 }
                 out.push(message);
             }
@@ -221,9 +220,8 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
         ChatMessage::System(content) => RequestMessage::System {
             content: content.clone(),
         },
-        ChatMessage::User { text, sent_at } => RequestMessage::User {
-            // 送信日時は本文と混ぜず、構造化した形にして送る(Issue #68)。
-            content: render_user_content(text, sent_at.as_deref()),
+        ChatMessage::User(content) => RequestMessage::User {
+            content: content.as_str().to_string(),
         },
         ChatMessage::Assistant {
             content,
@@ -237,7 +235,7 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
             content,
         } => RequestMessage::Tool {
             tool_call_id: tool_call_id.clone(),
-            content: content.clone(),
+            content: content.as_str().to_string(),
         },
     }
 }
@@ -330,9 +328,9 @@ impl LlmAdapter for OpenAiCompatAdapter {
                 .map(|t| RequestTool {
                     kind: "function",
                     function: RequestFunction {
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                        parameters: t.parameters.clone(),
+                        name: t.name().to_string(),
+                        description: t.description().to_string(),
+                        parameters: t.parameters().clone(),
                     },
                 })
                 .collect(),
@@ -592,10 +590,9 @@ mod tests {
             serde_json::json!({"role": "system", "content": "be helpful"})
         );
 
-        let user = serde_json::to_value(to_request_message(&ChatMessage::User {
-            text: "hi".to_string(),
-            sent_at: Some("2026-09-22T04:12:00Z".to_string()),
-        }))
+        let user = serde_json::to_value(to_request_message(&ChatMessage::User(
+            PromptText::user_message("hi", Some("2026-09-22T04:12:00Z")),
+        )))
         .unwrap();
         assert_eq!(
             user,
@@ -617,10 +614,7 @@ mod tests {
     }
 
     fn user(text: &str, sent_at: &str) -> ChatMessage {
-        ChatMessage::User {
-            text: text.to_string(),
-            sent_at: Some(sent_at.to_string()),
-        }
+        ChatMessage::User(PromptText::user_message(text, Some(sent_at)))
     }
 
     fn assistant(text: &str) -> ChatMessage {
@@ -661,7 +655,7 @@ mod tests {
         // 補った発言も同じ囲みで送り、日時の属性だけを省く。
         assert_eq!(
             sent[1]["content"],
-            render_user_content(PLACEHOLDER_USER_TEXT, None)
+            PromptText::user_message(PLACEHOLDER_USER_TEXT, None).as_str()
         );
     }
 
@@ -681,8 +675,8 @@ mod tests {
             sent[1]["content"],
             format!(
                 "{}\n\n{}",
-                render_user_content("u1", Some("2026-09-22T04:12:00Z")),
-                render_user_content("u2", Some("2026-09-22T05:00:00Z")),
+                PromptText::user_message("u1", Some("2026-09-22T04:12:00Z")).as_str(),
+                PromptText::user_message("u2", Some("2026-09-22T05:00:00Z")).as_str(),
             )
         );
         assert_eq!(sent[2]["content"], "a1\n\na2");
@@ -700,7 +694,7 @@ mod tests {
             },
             ChatMessage::Tool {
                 tool_call_id: Some("call_1".to_string()),
-                content: "{}".to_string(),
+                content: PromptText::json(&serde_json::json!({})),
             },
         ]);
 
@@ -719,7 +713,7 @@ mod tests {
                 },
                 ChatMessage::Tool {
                     tool_call_id: Some(id.to_string()),
-                    content: "{}".to_string(),
+                    content: PromptText::json(&serde_json::json!({})),
                 },
             ]
         };
@@ -807,7 +801,7 @@ mod tests {
     fn serializes_tool_response_and_omits_missing_tool_call_id() {
         let with_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
             tool_call_id: Some("call_1".to_string()),
-            content: "{}".to_string(),
+            content: PromptText::json(&serde_json::json!({})),
         }))
         .unwrap();
         assert_eq!(
@@ -819,7 +813,7 @@ mod tests {
         // (architecture.md 3節)。
         let without_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
             tool_call_id: None,
-            content: "{}".to_string(),
+            content: PromptText::json(&serde_json::json!({})),
         }))
         .unwrap();
         assert_eq!(
