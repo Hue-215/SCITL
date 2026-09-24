@@ -19,21 +19,21 @@ const CLEARABLE: &[&str] = &["deadline", "description"];
 pub fn schema() -> ToolSchema {
     ToolSchema {
         name: NAME.to_string(),
-        description: "現在開いているタスクを更新する".to_string(),
+        description: "Update the currently open task.".to_string(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "title": { "type": "string" },
                 "description": {
                     "type": "string",
-                    "description": "本文。空にはできない(消すときはclearを使う)"
+                    "description": "Task description. Cannot be empty; use clear to remove it."
                 },
                 "deadline": {
                     "type": "string",
                     "format": "date",
                     // 形式を満たさない値は`db::tasks::update_task`が弾く。スキーマ側にも
                     // 明示しておき、モデルが日時形式を渡して往復を1回無駄にするのを減らす。
-                    "description": "締切日(YYYY-MM-DD)"
+                    "description": "Deadline date (YYYY-MM-DD)."
                 },
                 "status": { "type": "string", "enum": ["archived", "unarchived"] },
                 "clear": {
@@ -42,7 +42,7 @@ pub fn schema() -> ToolSchema {
                     "uniqueItems": true,
                     // 省略・nullは「変えない」。値を消すのはこの引数だけにする(nullを消去の
                     // 意味にすると、型に緩いモデルが変えないつもりの項目を消してしまう)。
-                    "description": "消す項目。同じ項目を同時に設定することはできない"
+                    "description": "Fields to remove. A field cannot be set and removed in the same call."
                 }
             },
             "additionalProperties": false

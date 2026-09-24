@@ -238,7 +238,7 @@ fn to_result_value(result: CallToolResult) -> Value {
         } else {
             value.insert(
                 "omitted_structured_content".to_string(),
-                json!("結果が長いため省略しました"),
+                json!("omitted because the result is too long"),
             );
         }
     }
@@ -287,7 +287,7 @@ fn truncate_result_text(text: &str) -> String {
     let mut out: String = text.chars().take(MAX_RESULT_CHARS).collect();
     out.push_str(
         "
-…(結果が長いため以降を省略しました)",
+…(the rest of the result was omitted because it is too long)",
     );
     out
 }

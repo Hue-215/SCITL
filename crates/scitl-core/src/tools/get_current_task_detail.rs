@@ -14,7 +14,9 @@ pub const NAME: &str = "get_current_task_detail";
 pub fn schema() -> ToolSchema {
     ToolSchema {
         name: NAME.to_string(),
-        description: "現在開いているタスクの詳細(本文・工程を含む)を取得する".to_string(),
+        description:
+            "Get the details of the currently open task, including its description and steps."
+                .to_string(),
         parameters: json!({
             "type": "object",
             "properties": {},
