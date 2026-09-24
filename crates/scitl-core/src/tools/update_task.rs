@@ -17,10 +17,10 @@ const CLEARABLE: &[&str] = &["deadline", "description"];
 /// タスクチャット版のスキーマ。`task_id`を引数に含めない
 /// (docs/spec/rebuild/tools.md 1節「確定方針」)。
 pub fn schema() -> ToolSchema {
-    ToolSchema {
-        name: NAME.to_string(),
-        description: "Update the currently open task.".to_string(),
-        parameters: json!({
+    ToolSchema::internal(
+        NAME,
+        "Update the currently open task.",
+        json!({
             "type": "object",
             "properties": {
                 "title": { "type": "string" },
@@ -47,7 +47,7 @@ pub fn schema() -> ToolSchema {
             },
             "additionalProperties": false
         }),
-    }
+    )
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {

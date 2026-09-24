@@ -5,12 +5,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::error::CoreError;
 use crate::llm::{
-    render_user_content, ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent,
-    ToolArguments, ToolCallRequest, ToolSchema,
+    ChatMessage, FinishReason, LlmAdapter, PromptText, Readiness, ResponseEvent, ToolArguments,
+    ToolCallRequest, ToolSchema,
 };
 
 /// HTTPエラー時にエラー文へ載せるプロバイダ応答本文の上限。
 const MAX_ERROR_BODY_CHARS: usize = 512;
+/// 応答本文に送信した鍵が現れたときの置き換え先。
+const REDACTED: &str = "[redacted]";
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
 /// (docs/spec/rebuild/architecture.md 2節)。方言吸収はこのファイル内に閉じ込め、
@@ -82,9 +84,9 @@ fn provider_error(e: reqwest::Error) -> CoreError {
 }
 
 /// プロバイダ制御下の応答本文は、エラー発言の詳細としてDBに残り画面にも出る
-/// (Issue #159。`data-model.md` messages「error_detail」)。長さを制限し、制御文字と
-/// 表示を惑わす不可視の書式文字を潰し、送信した鍵そのものが含まれていれば伏せ字にして
-/// から載せる(principles.md 4節)。ゲートウェイがリクエストヘッダをエコーバックする
+/// (Issue #159。`data-model.md` messages「error_detail」)。画面に出す診断文字列として
+/// 1行に整えて長さを制限し(architecture.md 10節)、送信した鍵そのものが含まれていれば
+/// 伏せ字にしてから載せる(principles.md 4節)。ゲートウェイがリクエストヘッダをエコーバックする
 /// 構成だと`Authorization`ヘッダの値がそのまま本文に現れうるため、サイズ制限だけでは
 /// 防げない。鍵をURLに置く構成は`validate_base_url`がクエリ・userinfoを拒否して塞いで
 /// いるため、伏せ字の対象は鍵1つで足りる。HTTPリクエストから切り離してテストできるよう
@@ -97,43 +99,21 @@ fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> CoreErr
 }
 
 fn sanitize_error_body(body: &str, api_key: &str) -> String {
-    let redacted = if api_key.is_empty() {
-        body.to_string()
-    } else {
-        body.replace(api_key, "[redacted]")
-    };
-    let mut sanitized: String = redacted
-        .chars()
-        .map(|c| {
-            if c.is_control() || is_invisible_format_char(c) {
-                ' '
-            } else {
-                c
-            }
-        })
-        .take(MAX_ERROR_BODY_CHARS)
-        .collect();
-    if redacted.chars().nth(MAX_ERROR_BODY_CHARS).is_some() {
-        sanitized.push('…');
+    if api_key.is_empty() {
+        return crate::text::display_label(body, MAX_ERROR_BODY_CHARS);
     }
-    sanitized
-}
-
-/// `char::is_control`(Cc)が拾わない書式文字(Cf)のうち、表示の順序を入れ替える
-/// 双方向制御文字と、見えないまま文字列に紛れるゼロ幅文字。標準ライブラリに一般カテゴリの
-/// 判定が無いため、該当する範囲を列挙する。
-fn is_invisible_format_char(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{061C}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{FEFF}'
-    )
+    // 伏せ字は整える前と後の両方で掛ける。後で掛けるのは、鍵の途中に見えない文字を挟んだ形が
+    // 除いた時点で鍵として現れるため。その照合は整えた鍵で行う(鍵の前後に空白が付いたまま
+    // 保存されていても、ヘッダー値としては空白を落とした形で送られ、そのまま返ってくる)。
+    // 切り詰めは伏せ字の後に行い、境界で鍵の一部が残らないようにする。
+    let visible = crate::text::visible_line(&body.replace(api_key, REDACTED));
+    let visible_key = crate::text::visible_line(api_key);
+    let redacted = if visible_key.is_empty() {
+        visible
+    } else {
+        visible.replace(&visible_key, REDACTED)
+    };
+    crate::text::ellipsize(&redacted, MAX_ERROR_BODY_CHARS)
 }
 
 #[derive(Serialize)]
@@ -194,7 +174,7 @@ const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is n
 /// - 同じ役割が続いたら1つにまとめる。ユーザー発言は組み立てた囲みごと連結するので、
 ///   発言ごとの送信日時は残る
 /// - 最初の発言がアシスタント発言なら、その前にユーザー発言を補う。補う発言に日時は
-///   付けない(`ChatMessage::User`の`sent_at`)
+///   付けない(`PromptText::user_message`の`sent_at`)
 ///
 /// ツールの往復(`tool_calls`を持つassistantに続くtool)には手を加えない。
 fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
@@ -226,10 +206,9 @@ fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
                 if matches!(message, RequestMessage::Assistant { .. })
                     && matches!(last, None | Some(RequestMessage::System { .. }))
                 {
-                    out.push(to_request_message(&ChatMessage::User {
-                        text: PLACEHOLDER_USER_TEXT.to_string(),
-                        sent_at: None,
-                    }));
+                    out.push(to_request_message(&ChatMessage::User(
+                        PromptText::user_message(PLACEHOLDER_USER_TEXT, None),
+                    )));
                 }
                 out.push(message);
             }
@@ -248,9 +227,8 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
         ChatMessage::System(content) => RequestMessage::System {
             content: content.clone(),
         },
-        ChatMessage::User { text, sent_at } => RequestMessage::User {
-            // 送信日時は本文と混ぜず、構造化した形にして送る(Issue #68)。
-            content: render_user_content(text, sent_at.as_deref()),
+        ChatMessage::User(content) => RequestMessage::User {
+            content: content.as_str().to_string(),
         },
         ChatMessage::Assistant {
             content,
@@ -264,7 +242,7 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
             content,
         } => RequestMessage::Tool {
             tool_call_id: tool_call_id.clone(),
-            content: content.clone(),
+            content: content.as_str().to_string(),
         },
     }
 }
@@ -357,9 +335,9 @@ impl LlmAdapter for OpenAiCompatAdapter {
                 .map(|t| RequestTool {
                     kind: "function",
                     function: RequestFunction {
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                        parameters: t.parameters.clone(),
+                        name: t.name().to_string(),
+                        description: t.description().to_string(),
+                        parameters: t.parameters().clone(),
                     },
                 })
                 .collect(),
@@ -573,7 +551,7 @@ mod tests {
             panic!("expected CoreError::LlmHttp");
         };
         assert_eq!(status, 401);
-        assert_eq!(body, "bad token [redacted] ");
+        assert_eq!(body, "bad token [redacted]");
     }
 
     #[test]
@@ -587,9 +565,25 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_error_body_blanks_bidi_and_zero_width_chars() {
+    fn sanitize_error_body_removes_bidi_and_zero_width_chars() {
         let body = "a\u{202E}b\u{2066}c\u{200B}d\u{FEFF}e";
-        assert_eq!(sanitize_error_body(body, ""), "a b c d e");
+        assert_eq!(sanitize_error_body(body, ""), "abcde");
+    }
+
+    #[test]
+    fn sanitize_error_body_redacts_key_saved_with_surrounding_spaces() {
+        let body = "token sk-supersecret1234 rejected";
+        let sanitized = sanitize_error_body(body, " sk-supersecret1234\t");
+        assert!(!sanitized.contains("sk-supersecret1234"));
+        assert!(sanitized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn sanitize_error_body_redacts_key_split_by_invisible_chars() {
+        let body = "token sk-super\u{200B}secret1234 rejected";
+        let sanitized = sanitize_error_body(body, "sk-supersecret1234");
+        assert!(!sanitized.contains("sk-supersecret1234"));
+        assert!(sanitized.contains("[redacted]"));
     }
 
     #[test]
@@ -611,10 +605,9 @@ mod tests {
             serde_json::json!({"role": "system", "content": "be helpful"})
         );
 
-        let user = serde_json::to_value(to_request_message(&ChatMessage::User {
-            text: "hi".to_string(),
-            sent_at: Some("2026-09-22T04:12:00Z".to_string()),
-        }))
+        let user = serde_json::to_value(to_request_message(&ChatMessage::User(
+            PromptText::user_message("hi", Some("2026-09-22T04:12:00Z")),
+        )))
         .unwrap();
         assert_eq!(
             user,
@@ -636,10 +629,7 @@ mod tests {
     }
 
     fn user(text: &str, sent_at: &str) -> ChatMessage {
-        ChatMessage::User {
-            text: text.to_string(),
-            sent_at: Some(sent_at.to_string()),
-        }
+        ChatMessage::User(PromptText::user_message(text, Some(sent_at)))
     }
 
     fn assistant(text: &str) -> ChatMessage {
@@ -680,7 +670,7 @@ mod tests {
         // 補った発言も同じ囲みで送り、日時の属性だけを省く。
         assert_eq!(
             sent[1]["content"],
-            render_user_content(PLACEHOLDER_USER_TEXT, None)
+            PromptText::user_message(PLACEHOLDER_USER_TEXT, None).as_str()
         );
     }
 
@@ -700,8 +690,8 @@ mod tests {
             sent[1]["content"],
             format!(
                 "{}\n\n{}",
-                render_user_content("u1", Some("2026-09-22T04:12:00Z")),
-                render_user_content("u2", Some("2026-09-22T05:00:00Z")),
+                PromptText::user_message("u1", Some("2026-09-22T04:12:00Z")).as_str(),
+                PromptText::user_message("u2", Some("2026-09-22T05:00:00Z")).as_str(),
             )
         );
         assert_eq!(sent[2]["content"], "a1\n\na2");
@@ -719,7 +709,7 @@ mod tests {
             },
             ChatMessage::Tool {
                 tool_call_id: Some("call_1".to_string()),
-                content: "{}".to_string(),
+                content: PromptText::json(&serde_json::json!({})),
             },
         ]);
 
@@ -738,7 +728,7 @@ mod tests {
                 },
                 ChatMessage::Tool {
                     tool_call_id: Some(id.to_string()),
-                    content: "{}".to_string(),
+                    content: PromptText::json(&serde_json::json!({})),
                 },
             ]
         };
@@ -826,7 +816,7 @@ mod tests {
     fn serializes_tool_response_and_omits_missing_tool_call_id() {
         let with_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
             tool_call_id: Some("call_1".to_string()),
-            content: "{}".to_string(),
+            content: PromptText::json(&serde_json::json!({})),
         }))
         .unwrap();
         assert_eq!(
@@ -838,7 +828,7 @@ mod tests {
         // (architecture.md 3節)。
         let without_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
             tool_call_id: None,
-            content: "{}".to_string(),
+            content: PromptText::json(&serde_json::json!({})),
         }))
         .unwrap();
         assert_eq!(

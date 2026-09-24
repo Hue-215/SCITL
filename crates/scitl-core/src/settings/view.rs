@@ -11,6 +11,8 @@ use crate::config::{
 };
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
+use crate::text;
+use crate::tools::external;
 
 #[derive(Debug, Serialize)]
 pub struct ProviderView {
@@ -43,8 +45,15 @@ pub enum McpEndpointView {
 /// (表示に不要なサーバー由来のデータをWebViewへ出さない)。
 #[derive(Debug, Serialize)]
 pub struct McpToolView {
+    /// サーバーが返したままの名前。有効化を切り替えるときの鍵として送り返すだけで、
+    /// 画面には描かない(描くのは`label`)。
     pub name: String,
+    /// 画面に出す名前と説明。サーバーが書いた文字列なので、見えない文字を除いた写しを渡す
+    /// (architecture.md 10節)。
+    pub label: String,
     pub description: Option<String>,
+    /// モデルへ公開できる名前か。公開できないツールは有効にできない。
+    pub exposable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,9 +63,14 @@ pub struct McpServerView {
     pub enabled: bool,
     pub endpoint: McpEndpointView,
     pub enabled_tools: Vec<String>,
-    /// 取得済みのツール一覧(Issue #104)。`None`は「まだ取得していない」。
-    /// 画面はこれを描くだけで、自前では保持しない。
-    pub tools: Option<Vec<McpToolView>>,
+    /// 画面に出すツール一覧。取得済みの一覧(Issue #104)に、そこに無い有効化済みのツールを
+    /// 足したもの。有効化済みのツールを必ず出すのは、出さないと確認することも外すことも
+    /// できないため(一覧のキャッシュはアプリ起動中だけなので、再起動直後は未取得になる。
+    /// サーバーが消したツールは、同じ名前のツールが後から足されると選び直さずに公開される)。
+    /// 一覧に無いツールの説明はサーバーに聞かないと分からないので無い。画面はこれを描く
+    /// だけで、自前では組み立てない。
+    pub tools: Vec<McpToolView>,
+    pub tools_fetched: bool,
 }
 
 /// 一般設定。応答タイムアウトは`ToolSettingsView`と同じく、設定値(未設定は`None`)と
@@ -143,6 +157,18 @@ pub(super) fn build(
 }
 
 fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView {
+    let fetched = catalog.get(&s.id);
+    let listed = fetched.as_deref().unwrap_or_default();
+    let mut tools: Vec<McpToolView> = listed
+        .iter()
+        .map(|t| mcp_tool_view(&s.name, &t.name, t.description.as_deref()))
+        .collect();
+    tools.extend(
+        s.enabled_tools
+            .iter()
+            .filter(|name| !listed.iter().any(|t| &t.name == *name))
+            .map(|name| mcp_tool_view(&s.name, name, None)),
+    );
     let endpoint = match &s.endpoint {
         McpEndpoint::Stdio {
             command,
@@ -164,14 +190,66 @@ fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView 
         enabled: s.enabled,
         endpoint,
         enabled_tools: s.enabled_tools.iter().cloned().collect(),
-        tools: catalog.get(&s.id).map(|tools| {
-            tools
-                .into_iter()
-                .map(|t| McpToolView {
-                    name: t.name,
-                    description: t.description,
-                })
-                .collect()
-        }),
+        tools,
+        tools_fetched: fetched.is_some(),
+    }
+}
+
+/// ツール名・説明を画面に出すときの上限文字数。
+const MAX_TOOL_LABEL_CHARS: usize = 100;
+const MAX_TOOL_DESCRIPTION_CHARS: usize = 2000;
+
+fn mcp_tool_view(server_name: &str, name: &str, description: Option<&str>) -> McpToolView {
+    McpToolView {
+        name: name.to_string(),
+        label: text::display_label(name, MAX_TOOL_LABEL_CHARS),
+        description: description.map(|d| text::display_block(d, MAX_TOOL_DESCRIPTION_CHARS)),
+        exposable: external::exposed_name(server_name, name).is_some(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::mcp::McpToolInfo;
+
+    #[test]
+    fn tool_view_shows_a_visible_copy_and_keeps_the_raw_name_as_the_key() {
+        let server = McpServerConfig {
+            id: "id1".to_string(),
+            name: "files".to_string(),
+            enabled: true,
+            endpoint: McpEndpoint::Stdio {
+                command: "true".to_string(),
+                args: Vec::new(),
+                env_refs: Vec::new(),
+            },
+            enabled_tools: BTreeSet::from(["gone".to_string()]),
+        };
+        let catalog = ToolCatalog::new();
+        catalog.store(
+            "id1",
+            vec![McpToolInfo {
+                name: "\u{202E}elif_eteled".to_string(),
+                description: Some("line1\n\u{200B}line2".to_string()),
+                input_schema: json!({ "type": "object" }),
+            }],
+        );
+
+        let view = mcp_server_view(&server, &catalog);
+        assert!(view.tools_fetched);
+        let tool = &view.tools[0];
+        assert_eq!(tool.name, "\u{202E}elif_eteled");
+        assert_eq!(tool.label, "elif_eteled");
+        assert_eq!(tool.description.as_deref(), Some("line1\nline2"));
+        assert!(!tool.exposable);
+        // サーバーの一覧から消えた有効化済みのツールも、外せるように出す。
+        assert_eq!(view.tools.len(), 2);
+        assert_eq!(view.tools[1].name, "gone");
+        assert!(view.tools[1].description.is_none());
     }
 }

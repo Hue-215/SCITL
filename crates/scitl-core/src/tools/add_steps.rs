@@ -16,10 +16,10 @@ const KNOWN_ARGS: &[&str] = &["descriptions"];
 /// (docs/spec/rebuild/tools.md 1節)。説明は常に配列のみを受ける
 /// (同2節「変更点の詳細」— 文字列/配列の多相引数をやめる)。
 pub fn schema() -> ToolSchema {
-    ToolSchema {
-        name: NAME.to_string(),
-        description: "Add steps to the currently open task.".to_string(),
-        parameters: json!({
+    ToolSchema::internal(
+        NAME,
+        "Add steps to the currently open task.",
+        json!({
             "type": "object",
             "properties": {
                 "descriptions": {
@@ -31,7 +31,7 @@ pub fn schema() -> ToolSchema {
             "required": ["descriptions"],
             "additionalProperties": false
         }),
-    }
+    )
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {

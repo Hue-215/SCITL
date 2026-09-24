@@ -32,6 +32,7 @@ use crate::llm::LlmAdapter;
 use crate::mcp::{self, ToolCatalog};
 use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext, TurnFailure};
 use crate::secrets;
+use crate::tools::external;
 
 pub use view::SettingsView;
 
@@ -440,6 +441,12 @@ impl Settings {
         let mut draft = self.edit();
         let server = find_mcp_server_mut(&mut draft.config, server_id)?;
         if enabled {
+            // 画面でも有効にできないようにしているが、判定を画面に任せない。
+            if external::exposed_name(&server.name, tool_name).is_none() {
+                return Err(invalid(
+                    "this tool cannot be enabled because its name cannot be exposed to the model",
+                ));
+            }
             server.enabled_tools.insert(tool_name.to_string());
         } else {
             server.enabled_tools.remove(tool_name);
@@ -748,6 +755,38 @@ mod tests {
         settings.add_mcp_server("tools", endpoint()).unwrap();
         let err = settings.add_mcp_server("tools", endpoint()).unwrap_err();
         assert!(matches!(err, CoreError::InvalidSettings(_)));
+    }
+
+    #[test]
+    fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
+        let (settings, _) = temp_settings();
+        let view = settings
+            .add_mcp_server(
+                "tools",
+                NewMcpEndpoint::Stdio {
+                    command: "npx".to_string(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                },
+            )
+            .unwrap();
+        let id = view.mcp_servers[0].id.clone();
+
+        let err = settings
+            .set_mcp_tool_enabled(&id, "read\u{202E}file", true)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidSettings(_)));
+
+        let view = settings
+            .set_mcp_tool_enabled(&id, "read_file", true)
+            .unwrap();
+        assert_eq!(view.mcp_servers[0].enabled_tools, vec!["read_file"]);
+        // 一覧が未取得でも、有効化済みのツールは説明なしで一覧に出る。
+        let server = &view.mcp_servers[0];
+        assert!(!server.tools_fetched);
+        assert_eq!(server.tools.len(), 1);
+        assert_eq!(server.tools[0].label, "read_file");
+        assert!(server.tools[0].description.is_none());
     }
 
     /// 設定ファイルを読めなくても起動し、理由を画面とターンへ渡す。読めなかったファイルは

@@ -73,7 +73,10 @@ pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
 /// タスクチャット面で公開する内部ツールの名前。外部ツールの名前空間化で衝突を
 /// 避けるために使う(`external::ExternalToolset::build`)。
 pub fn task_chat_tool_names() -> Vec<String> {
-    task_chat_tools().into_iter().map(|t| t.name).collect()
+    task_chat_tools()
+        .iter()
+        .map(|t| t.name().to_string())
+        .collect()
 }
 
 /// タスクチャット向けの公開ツール一覧(docs/spec/rebuild/tools.md 2節)。
@@ -123,6 +126,15 @@ fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result
 mod tests {
     use super::*;
     use crate::db;
+
+    #[test]
+    fn every_internal_tool_schema_builds() {
+        // `ToolSchema::internal`は引数スキーマを読み直せないと止まる。どの面の定義も組み立てる。
+        for surface in [Surface::General, Surface::Task, Surface::Mcp] {
+            tool_definitions(surface);
+        }
+        assert!(!task_chat_tools().is_empty());
+    }
 
     #[test]
     fn unknown_tool_is_reported_as_unknown_tool() {

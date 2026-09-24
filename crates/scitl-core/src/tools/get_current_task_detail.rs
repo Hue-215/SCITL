@@ -12,17 +12,15 @@ pub const NAME: &str = "get_current_task_detail";
 /// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない
 /// (docs/spec/rebuild/tools.md 1節)。
 pub fn schema() -> ToolSchema {
-    ToolSchema {
-        name: NAME.to_string(),
-        description:
-            "Get the details of the currently open task, including its description and steps."
-                .to_string(),
-        parameters: json!({
+    ToolSchema::internal(
+        NAME,
+        "Get the details of the currently open task, including its description and steps.",
+        json!({
             "type": "object",
             "properties": {},
             "additionalProperties": false
         }),
-    }
+    )
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {

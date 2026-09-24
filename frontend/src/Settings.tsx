@@ -20,7 +20,6 @@ import {
 import type {
   ApiFormat,
   McpServerView,
-  McpToolInfo,
   ProviderView,
   SettingsView,
 } from './types'
@@ -664,15 +663,9 @@ function McpServerCard({
     server.endpoint.transport === 'stdio' ? server.endpoint.env_names : server.endpoint.header_names
   const secretLabel = server.endpoint.transport === 'stdio' ? '環境変数' : 'ヘッダー'
 
-  // 一覧が未取得でも、ユーザーが有効にしたツールの名前はconfig.tomlから分かる。
-  // それを描かないと、アプリを再起動した直後は有効化済みのツールを確認することも
-  // 外すこともできない(キャッシュはアプリ起動中のみ。Issue #104)。説明文はサーバーに
-  // 聞かないと分からないので、取得するまで出ない。
-  const fetched = tools !== null
-  const displayTools: McpToolInfo[] =
-    tools ?? server.enabled_tools.map((name) => ({ name, description: null }))
-  const collapsible = displayTools.length >= TOOL_COLLAPSE_THRESHOLD
-  const visibleTools = collapsible && !expanded ? [] : displayTools
+  const fetched = server.tools_fetched
+  const collapsible = tools.length >= TOOL_COLLAPSE_THRESHOLD
+  const visibleTools = collapsible && !expanded ? [] : tools
 
   return (
     <li className="provider-card">
@@ -700,7 +693,7 @@ function McpServerCard({
         </p>
       )}
 
-      {displayTools.length === 0 ? (
+      {tools.length === 0 ? (
         <p className="list-empty">
           {fetched ? 'ツールがありません。' : 'ツール一覧は未取得です。'}
         </p>
@@ -713,22 +706,32 @@ function McpServerCard({
           )}
           {collapsible && (
             <button type="button" onClick={() => setExpanded((v) => !v)}>
-              {expanded ? '折りたたむ' : `${displayTools.length}件のツールを表示`}
+              {expanded ? '折りたたむ' : `${tools.length}件のツールを表示`}
             </button>
           )}
           <ul className="model-list">
-            {visibleTools.map((tool) => (
-              <li key={tool.name} className="model-row">
-                <label className="choice" title={tool.description ?? undefined}>
-                  <input
-                    type="checkbox"
-                    checked={server.enabled_tools.includes(tool.name)}
-                    onChange={(e) => onSetToolEnabled(tool.name, e.target.checked)}
-                  />
-                  {tool.name}
-                </label>
-              </li>
-            ))}
+            {visibleTools.map((tool) => {
+              const checked = server.enabled_tools.includes(tool.name)
+              return (
+                <li key={tool.name} className="model-row">
+                  <label className="choice" title={tool.description ?? undefined}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      // 公開できないツールは有効にさせない。既に有効なら外す操作だけは残す。
+                      disabled={!tool.exposable && !checked}
+                      onChange={(e) => onSetToolEnabled(tool.name, e.target.checked)}
+                    />
+                    {tool.label}
+                  </label>
+                  {!tool.exposable && (
+                    <span className="provider-card-meta">
+                      モデルに渡せない名前のため、有効にできません
+                    </span>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </>
       )}

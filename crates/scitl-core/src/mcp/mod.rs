@@ -26,7 +26,6 @@ use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, Conte
 use rmcp::service::RunningService;
 use rmcp::RoleClient;
 use secrecy::SecretString;
-use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::config::{McpEndpoint, McpServerConfig, SecretRef};
@@ -49,12 +48,17 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// サンプリング要求等には応答しない(公開範囲を広げないための既定。principles.md 4節)。
 type ClientService = RunningService<RoleClient, ()>;
 
-#[derive(Debug, Clone, Serialize)]
+/// サーバーから受け取ったツール1件。どの値も受け取ったまま持つ(architecture.md 10節
+/// 「保存するデータは書き換えない」)。画面へ出す形は`settings::view`が作り、
+/// これ自体はWebViewへ渡さない。
+#[derive(Debug, Clone)]
 pub struct McpToolInfo {
+    /// 有効化の照合とサーバー呼び出しに使う識別子。書き換えると、サーバー上の別の
+    /// ツールを呼びうる。
     pub name: String,
     pub description: Option<String>,
-    /// サーバーが宣言した引数スキーマ(JSON Schema)。モデルへツールを公開するときに
-    /// そのまま渡す(信頼境界は登録したこと自体に置く。principles.md 4節)。
+    /// サーバーが宣言した引数スキーマ(JSON Schema)。モデルへツールを公開するときに渡す。
+    /// 中身は検証しない(信頼境界は登録したこと自体に置く。principles.md 4節)。
     /// 設定画面へは渡さない(表示に使わないものをWebViewへ出さない)。
     pub input_schema: Value,
 }
@@ -112,7 +116,12 @@ impl McpSessions {
         let result = tokio::time::timeout(LIST_TOOLS_TIMEOUT, service.list_tools(None))
             .await
             .map_err(|_| CoreError::Mcp("timed out listing tools".to_string()))?
-            .map_err(|e| CoreError::Mcp(format!("failed to list tools: {e}")))?;
+            .map_err(|e| {
+                CoreError::Mcp(format!(
+                    "failed to list tools: {}",
+                    describe_server_error(&e)
+                ))
+            })?;
         Ok(result.tools.into_iter().map(to_tool_info).collect())
     }
 
@@ -142,7 +151,12 @@ impl McpSessions {
         )
         .await
         .map_err(|_| CoreError::Mcp("timed out calling tool".to_string()))?
-        .map_err(|e| CoreError::Mcp(format!("failed to call tool: {e}")))?;
+        .map_err(|e| {
+            CoreError::Mcp(format!(
+                "failed to call tool: {}",
+                describe_server_error(&e)
+            ))
+        })?;
 
         match response {
             CallToolResponse::Complete(result) => Ok(to_result_value(result)),
@@ -219,8 +233,8 @@ pub async fn list_tools(server: &McpServerConfig) -> Result<Vec<McpToolInfo>, Co
 
 fn to_tool_info(tool: rmcp::model::Tool) -> McpToolInfo {
     McpToolInfo {
-        name: sanitize_tool_text(&tool.name),
-        description: tool.description.as_deref().map(sanitize_tool_text),
+        name: tool.name.to_string(),
+        description: tool.description.map(|d| d.to_string()),
         input_schema: Value::Object(Map::clone(&tool.input_schema)),
     }
 }
@@ -355,22 +369,14 @@ async fn resolve_secrets(refs: &[SecretRef]) -> Result<Vec<(String, SecretString
     .await
 }
 
-/// サーバーが書いた文字列(ツール名・説明・stderr)をUIへ渡す前の無害化。
-/// 制御文字を除去し、長さの上限を設ける(principles.md 4節「防御は多層にする」;
-/// WebViewはモデル/外部サーバー出力を描画する境界であるため、テキストとしてのみ
-/// 扱われることを前提にしても、表示に使う文字種と長さは呼び出し側で絞る)。
-const MAX_TEXT_CHARS: usize = 2000;
+/// サーバーとのやり取りの失敗を、エラー文言に載せる形にする。rmcpのエラー表示には
+/// サーバーが書いた`message`と任意のJSON(`data`)がそのまま入り、設定画面・ツール実行記録・
+/// モデルへ返す結果のすべてに載るため、画面に出す診断文字列として整える
+/// (architecture.md 10節)。
+const MAX_SERVER_ERROR_CHARS: usize = 512;
 
-fn sanitize_tool_text(input: &str) -> String {
-    let cleaned: String = input
-        .chars()
-        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-        .collect();
-    if cleaned.chars().count() > MAX_TEXT_CHARS {
-        cleaned.chars().take(MAX_TEXT_CHARS).collect()
-    } else {
-        cleaned
-    }
+fn describe_server_error(e: &impl std::fmt::Display) -> String {
+    crate::text::display_label(&e.to_string(), MAX_SERVER_ERROR_CHARS)
 }
 
 #[cfg(test)]

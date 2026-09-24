@@ -15,10 +15,10 @@ const KNOWN_ARGS: &[&str] = &["step_id"];
 /// タスクチャット版のスキーマ。`task_id`を引数に含めない
 /// (docs/spec/rebuild/tools.md 1節)。
 pub fn schema() -> ToolSchema {
-    ToolSchema {
-        name: NAME.to_string(),
-        description: "Delete a step of the currently open task.".to_string(),
-        parameters: json!({
+    ToolSchema::internal(
+        NAME,
+        "Delete a step of the currently open task.",
+        json!({
             "type": "object",
             "properties": {
                 "step_id": { "type": "integer" }
@@ -26,7 +26,7 @@ pub fn schema() -> ToolSchema {
             "required": ["step_id"],
             "additionalProperties": false
         }),
-    }
+    )
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {

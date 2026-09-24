@@ -9,6 +9,7 @@ pub mod net;
 pub mod orchestration;
 pub mod secrets;
 pub mod settings;
+pub mod text;
 pub mod tools;
 
 pub use db::error::CoreError;

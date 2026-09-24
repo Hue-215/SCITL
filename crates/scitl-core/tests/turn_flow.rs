@@ -7,7 +7,8 @@ use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, Readiness, ResponseEvent, ToolArguments, ToolSchema,
+    ChatMessage, FinishReason, LlmAdapter, PromptText, Readiness, ResponseEvent, ToolArguments,
+    ToolSchema,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -142,7 +143,10 @@ impl LlmAdapter for FailingToolAdapter {
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         for message in messages {
             if let ChatMessage::Tool { content, .. } = message {
-                self.tool_results.lock().unwrap().push(content.clone());
+                self.tool_results
+                    .lock()
+                    .unwrap()
+                    .push(content.as_str().to_string());
             }
         }
 
@@ -623,7 +627,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
             content,
         } => {
             assert_eq!(tool_call_id.as_deref(), Some("call_1"));
-            assert!(content.contains("買い出し"));
+            assert!(content.as_str().contains("買い出し"));
         }
         other => panic!("expected Tool, got {other:?}"),
     }
@@ -680,9 +684,11 @@ async fn history_carries_send_time_beside_the_user_text() {
     let last = rounds.last().unwrap();
     let history = &last[1..];
     match &history[0] {
-        ChatMessage::User { text, sent_at } => {
-            assert_eq!(text, "工程を追加して");
-            assert_eq!(sent_at.as_deref(), Some(stored_user_times[0].as_str()));
+        ChatMessage::User(content) => {
+            assert_eq!(
+                content,
+                &PromptText::user_message("工程を追加して", Some(&stored_user_times[0]))
+            );
         }
         other => panic!("expected User, got {other:?}"),
     }
@@ -694,9 +700,11 @@ async fn history_carries_send_time_beside_the_user_text() {
         other => panic!("expected Assistant, got {other:?}"),
     }
     match &history[2] {
-        ChatMessage::User { text, sent_at } => {
-            assert_eq!(text, "ありがとう");
-            assert_eq!(sent_at.as_deref(), Some(stored_user_times[1].as_str()));
+        ChatMessage::User(content) => {
+            assert_eq!(
+                content,
+                &PromptText::user_message("ありがとう", Some(&stored_user_times[1]))
+            );
         }
         other => panic!("expected User, got {other:?}"),
     }
@@ -1289,12 +1297,13 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
     let leaks = |needle: &str| {
         first_round.iter().any(|m| match m {
             ChatMessage::System(content)
-            | ChatMessage::User { text: content, .. }
             | ChatMessage::Assistant {
                 content: Some(content),
                 ..
+            } => content.contains(needle),
+            ChatMessage::User(content) | ChatMessage::Tool { content, .. } => {
+                content.as_str().contains(needle)
             }
-            | ChatMessage::Tool { content, .. } => content.contains(needle),
             ChatMessage::Assistant { content: None, .. } => false,
         })
     };
@@ -1514,15 +1523,14 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
     for round in &rounds {
         for message in round {
             match message {
-                ChatMessage::User { text: content, .. }
-                | ChatMessage::Assistant {
+                ChatMessage::Assistant {
                     content: Some(content),
                     ..
                 } => {
                     assert!(!content.contains("考える"));
                 }
-                ChatMessage::Tool { content, .. } => {
-                    assert!(!content.contains("考える"));
+                ChatMessage::User(content) | ChatMessage::Tool { content, .. } => {
+                    assert!(!content.as_str().contains("考える"));
                 }
                 _ => {}
             }

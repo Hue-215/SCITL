@@ -3,6 +3,7 @@ use serde_json::json;
 
 use crate::db::error::Result;
 use crate::db::{now_iso8601, task_steps, tasks};
+use crate::llm::PromptText;
 
 /// ユーザーが設定するシステムプロンプト。総合チャットとタスクチャットでは
 /// 公開ツールが異なるため(docs/spec/rebuild/tools.md 5節)、`base`と`task_chat`を
@@ -39,16 +40,16 @@ pub fn build_system_prompt(
 
     // ユーザー発言を包む予約タグの読み方(Issue #68)。囲みと`sent_at`の意味を伝えないと、
     // モデルはタグを本文の一部と受け取り、応答にそのまま書き写す。文面は組み立て側
-    // (`llm::render_user_content`)から生成する。
+    // (`llm::PromptText::user_message`)から生成する。
     sections.push(crate::llm::user_message_format_note());
 
     sections.push(format!("current datetime (ISO8601 UTC): {}", now_iso8601()));
 
-    // タイトル・説明・工程は自由入力(docs/spec/rebuild/architecture.md 3節)。
+    // タイトル・説明・工程は自由入力(docs/spec/rebuild/architecture.md 10節)。
     let state = json!({ "task": task, "steps": steps });
     sections.push(format!(
         "current task state:\n{}",
-        crate::llm::neutralize_reserved_tags(&state.to_string())
+        PromptText::json(&state).as_str()
     ));
 
     Ok(sections.join("\n\n"))
