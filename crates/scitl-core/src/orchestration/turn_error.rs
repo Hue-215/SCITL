@@ -299,8 +299,8 @@ mod tests {
         }
     }
 
-    /// 応答タイムアウトは設定で延ばせると伝える。接続できないことはタイムアウトと
-    /// 取り違えさせない。
+    /// 応答タイムアウトは設定で延ばせると伝える。接続の失敗の文言では、タイムアウトの
+    /// 設定を案内しない。
     #[test]
     fn response_timeout_points_at_the_setting() {
         let failure = llm(LlmError::Timeout(detail("x")));
