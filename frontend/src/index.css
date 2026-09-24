@@ -776,6 +776,18 @@ option {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--space-2);
+}
+
+/* 名前(モデル名・ツール名)は区切りの無い英数字の連続でも折り返し、右側の操作や注記を
+   押し出さない。縮むのは名前の側だけにする。 */
+.model-row > .choice {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-row > :not(.choice) {
+  flex-shrink: 0;
 }
 
 /* 一覧が空のときの一文。プロバイダー・モデル・MCPサーバー・ツールで共通。 */
