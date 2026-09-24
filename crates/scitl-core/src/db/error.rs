@@ -22,13 +22,9 @@ pub enum CoreError {
     UnknownTool(String),
     #[error("invalid argument {name}: {reason}")]
     InvalidArgument { name: String, reason: String },
-    /// HTTP応答を伴わないプロバイダー呼び出しの失敗(接続失敗・応答の解釈失敗等)。
+    /// LLMプロバイダーの呼び出しの失敗。種類はアダプタが決める。
     #[error("llm provider error: {0}")]
-    Llm(String),
-    /// プロバイダーが非成功の状態コードを返した。`body`はアダプタがサニタイズ済みのもの
-    /// (`openai_compat::sanitize_error_body`)に限る。
-    #[error("llm provider returned http {status}: {body}")]
-    LlmHttp { status: u16, body: String },
+    Llm(#[from] crate::llm::LlmError),
     #[error("invalid provider configuration: {0}")]
     ProviderConfig(String),
     #[error("secret store error: {0}")]

@@ -1,8 +1,10 @@
+mod error;
 mod prompt;
 pub mod providers;
 
 use serde::{Deserialize, Serialize};
 
+pub use error::{ErrorDetail, LlmError};
 pub use prompt::{user_message_format_note, PromptText};
 
 use crate::db::error::CoreError;

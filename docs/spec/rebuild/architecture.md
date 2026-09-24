@@ -18,7 +18,7 @@ SCITL-2.0/
 │   ├── scitl-core/                 # UI非依存のコアライブラリ
 │   │   └── src/
 │   │       ├── db/                 # tasks/steps/messages(/attachments)のrepository
-│   │       ├── llm/                # types(イベント列), adapter trait, providers/
+│   │       ├── llm/                # types(イベント列), adapter trait, 失敗の種類, providers/
 │   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
 │   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), state_prompt.rs(最新状態)
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
@@ -81,6 +81,17 @@ SCITL-2.0/
 思考デルタ/確定したツール呼び出し/終了理由)とする(`../principles.md` 3節「応答はイベントの
 並びとして受け取る」、Issue #8)。ストリーミングしないプロバイダーは各イベントを1回ずつ
 流せばよく、ツール呼び出しループも画面もどちらの場合も同じ経路で扱える。
+
+**失敗も種類を付けて返す**(Issue #180): アダプタは失敗を`llm::LlmError`の種類(タイムアウト・
+通信の失敗・応答の解釈失敗・空応答・コンテキスト超過・認証・利用制限・その他のHTTPエラー等)に
+して返し、`orchestration::turn_error`は種類から文言と`error_kind`を選ぶだけにする。文字列の
+中身で分類すると、文言が変わったときに黙って分類から漏れるため。
+
+- 方言によらない失敗(reqwestが報告する通信の失敗と、状態コードだけで決まるもの)の変換は
+  `llm::LlmError`に置き、全アダプタがそれを呼ぶ
+- 応答本文でしか分からない失敗(コンテキスト超過の書き方等)の判定は各`providers/*.rs`に置く
+- 詳細は`llm::ErrorDetail`で運ぶ。サニタイズするコンストラクタでしか作れない
+  (`data-model.md` messages「エラー発言の詳細」)
 
 **アダプタに渡す発言列も、ツール呼び出しの往復を表現できる形にする**: モデルが出した
 ツール呼び出しと、その実行結果は、同一ターン内のループでモデルに返す必要がある

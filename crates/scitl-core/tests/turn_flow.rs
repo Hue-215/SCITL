@@ -7,8 +7,8 @@ use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, PromptText, Readiness, ResponseEvent, ToolArguments,
-    ToolSchema,
+    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, ResponseEvent,
+    ToolArguments, ToolSchema,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -231,10 +231,7 @@ impl LlmAdapter for FailingAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
     ) -> Result<Vec<ResponseEvent>, CoreError> {
-        Err(CoreError::LlmHttp {
-            status: 401,
-            body: "invalid api key".to_string(),
-        })
+        Err(LlmError::from_status(reqwest::StatusCode::UNAUTHORIZED, "invalid api key", "").into())
     }
 }
 

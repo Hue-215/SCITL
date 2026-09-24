@@ -5,14 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::error::CoreError;
 use crate::llm::{
-    ChatMessage, FinishReason, LlmAdapter, PromptText, Readiness, ResponseEvent, ToolArguments,
-    ToolCallRequest, ToolSchema,
+    ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
+    ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
-
-/// HTTPエラー時にエラー文へ載せるプロバイダ応答本文の上限。
-const MAX_ERROR_BODY_CHARS: usize = 512;
-/// 応答本文に送信した鍵が現れたときの置き換え先。
-const REDACTED: &str = "[redacted]";
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
 /// (docs/spec/rebuild/architecture.md 2節)。方言吸収はこのファイル内に閉じ込め、
@@ -77,43 +72,39 @@ fn completions_endpoint(base_url: &str) -> Result<reqwest::Url, CoreError> {
         .map_err(|e| CoreError::ProviderConfig(format!("failed to build endpoint: {e}")))
 }
 
-/// reqwestのエラーDisplayは要求URLを含む。base_urlにクエリ形式で鍵を置く構成の
-/// プロバイダでは鍵がエラー文に混入するため、URLを剥がしてから文字列化する。
-fn provider_error(e: reqwest::Error) -> CoreError {
-    CoreError::Llm(e.without_url().to_string())
-}
-
-/// プロバイダ制御下の応答本文は、エラー発言の詳細としてDBに残り画面にも出る
-/// (Issue #159。`data-model.md` messages「error_detail」)。画面に出す診断文字列として
-/// 1行に整えて長さを制限し(architecture.md 10節)、送信した鍵そのものが含まれていれば
-/// 伏せ字にしてから載せる(principles.md 4節)。ゲートウェイがリクエストヘッダをエコーバックする
-/// 構成だと`Authorization`ヘッダの値がそのまま本文に現れうるため、サイズ制限だけでは
-/// 防げない。鍵をURLに置く構成は`validate_base_url`がクエリ・userinfoを拒否して塞いで
-/// いるため、伏せ字の対象は鍵1つで足りる。HTTPリクエストから切り離してテストできるよう
-/// 関数として独立させる。
-fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> CoreError {
-    CoreError::LlmHttp {
-        status: status.as_u16(),
-        body: sanitize_error_body(body, api_key),
-    }
-}
-
-fn sanitize_error_body(body: &str, api_key: &str) -> String {
-    if api_key.is_empty() {
-        return crate::text::display_label(body, MAX_ERROR_BODY_CHARS);
-    }
-    // 伏せ字は整える前と後の両方で掛ける。後で掛けるのは、鍵の途中に見えない文字を挟んだ形が
-    // 除いた時点で鍵として現れるため。その照合は整えた鍵で行う(鍵の前後に空白が付いたまま
-    // 保存されていても、ヘッダー値としては空白を落とした形で送られ、そのまま返ってくる)。
-    // 切り詰めは伏せ字の後に行い、境界で鍵の一部が残らないようにする。
-    let visible = crate::text::visible_line(&body.replace(api_key, REDACTED));
-    let visible_key = crate::text::visible_line(api_key);
-    let redacted = if visible_key.is_empty() {
-        visible
+/// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
+/// ここで判定し、残りは状態コードによる共通の分類に任せる。
+fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> LlmError {
+    if is_context_exceeded(body) {
+        LlmError::ContextExceeded(ErrorDetail::http(status, body, api_key))
     } else {
-        visible.replace(&visible_key, REDACTED)
+        LlmError::from_status(status, body, api_key)
+    }
+}
+
+/// OpenAI互換を名乗るサーバーでも、コンテキスト超過の書き方はそれぞれ違う。知っている
+/// 書き方を並べ、外れたものは状態コードによる分類に落ちる。
+fn is_context_exceeded(body: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
     };
-    crate::text::ellipsize(&redacted, MAX_ERROR_BODY_CHARS)
+    // 多くは`{"error": {...}}`で包むが、包まずに返すサーバーもある。
+    let error = match parsed.get("error") {
+        Some(error) if error.is_object() => error,
+        _ => &parsed,
+    };
+    let field = |name: &str| error.get(name).and_then(serde_json::Value::as_str);
+    // `{"error": "..."}`と文面だけで返すサーバーもある。
+    let message = field("message").or_else(|| parsed.get("error")?.as_str());
+    // OpenAI
+    field("code") == Some("context_length_exceeded")
+        // llama.cpp(llama-server)
+        || field("type") == Some("exceed_context_size_error")
+        // 専用のコードを持たないサーバー(vLLM等)は文面でしか分からない
+        || message.is_some_and(|m| {
+            let m = m.to_lowercase();
+            m.contains("context length") || m.contains("context size")
+        })
 }
 
 #[derive(Serialize)]
@@ -352,21 +343,22 @@ impl LlmAdapter for OpenAiCompatAdapter {
         if !self.api_key.expose_secret().is_empty() {
             request = request.bearer_auth(self.api_key.expose_secret());
         }
-        let response = request.json(&body).send().await.map_err(provider_error)?;
+        let transport_error = |e| LlmError::from_transport(e, self.api_key.expose_secret());
+        let response = request.json(&body).send().await.map_err(transport_error)?;
 
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(http_error(status, &text, self.api_key.expose_secret()));
+            return Err(http_error(status, &text, self.api_key.expose_secret()).into());
         }
 
-        let parsed: CompletionResponse = response.json().await.map_err(provider_error)?;
+        let parsed: CompletionResponse = response.json().await.map_err(transport_error)?;
 
         let choice = parsed
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| CoreError::Llm("empty choices".to_string()))?;
+            .ok_or(LlmError::EmptyResponse)?;
 
         let mut events = Vec::new();
         // 思考は生成順として本文・ツール呼び出しより先に置く(`principles.md` 3節
@@ -540,58 +532,73 @@ mod tests {
         );
     }
 
+    fn bad_request(body: &str) -> LlmError {
+        http_error(reqwest::StatusCode::BAD_REQUEST, body, "")
+    }
+
     #[test]
-    fn http_error_carries_status_and_sanitized_body() {
-        let err = http_error(
-            reqwest::StatusCode::UNAUTHORIZED,
-            "bad token sk-secret\n",
-            "sk-secret",
-        );
-        let CoreError::LlmHttp { status, body } = err else {
-            panic!("expected CoreError::LlmHttp");
+    fn recognizes_openai_context_exceeded() {
+        let body = r#"{"error":{"message":"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}"#;
+        assert!(matches!(bad_request(body), LlmError::ContextExceeded(_)));
+    }
+
+    #[test]
+    fn recognizes_llama_cpp_context_exceeded() {
+        let body = r#"{"error":{"code":400,"message":"the request exceeds the available context size, try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9000,"n_ctx":8192}}"#;
+        assert!(matches!(bad_request(body), LlmError::ContextExceeded(_)));
+    }
+
+    #[test]
+    fn recognizes_vllm_context_exceeded_with_or_without_the_error_wrapper() {
+        let message = "This model's maximum context length is 4096 tokens. However, you requested 5000 tokens.";
+        let unwrapped = serde_json::json!({
+            "object": "error", "message": message, "type": "BadRequestError", "param": null, "code": 400
+        });
+        let wrapped = serde_json::json!({
+            "error": { "message": message, "type": "BadRequestError", "param": null, "code": 400 }
+        });
+        for body in [unwrapped, wrapped] {
+            assert!(matches!(
+                bad_request(&body.to_string()),
+                LlmError::ContextExceeded(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn recognizes_context_exceeded_in_an_error_given_as_a_bare_message() {
+        for body in [
+            r#"{"error":"The model is loaded with a Context Length of only 4096 tokens, which is not enough."}"#,
+            r#"{"error":"the request exceeds the available context size"}"#,
+        ] {
+            assert!(matches!(bad_request(body), LlmError::ContextExceeded(_)));
+        }
+    }
+
+    /// 本文で判定できなければ、状態コードによる分類に落ちる。
+    #[test]
+    fn other_error_bodies_fall_back_to_the_status_code() {
+        assert!(matches!(
+            bad_request(r#"{"error":{"message":"invalid model","code":"model_not_found"}}"#),
+            LlmError::Http(_)
+        ));
+        assert!(matches!(bad_request("not json"), LlmError::Http(_)));
+        assert!(matches!(
+            http_error(reqwest::StatusCode::UNAUTHORIZED, "", ""),
+            LlmError::Auth(_)
+        ));
+    }
+
+    #[test]
+    fn context_exceeded_keeps_the_sanitized_body_as_detail() {
+        let body = r#"{"error":{"code":"context_length_exceeded","message":"sk-secret"}}"#;
+        let LlmError::ContextExceeded(detail) =
+            http_error(reqwest::StatusCode::BAD_REQUEST, body, "sk-secret")
+        else {
+            panic!("expected LlmError::ContextExceeded");
         };
-        assert_eq!(status, 401);
-        assert_eq!(body, "bad token [redacted]");
-    }
-
-    #[test]
-    fn sanitize_error_body_strips_control_chars_and_truncates() {
-        let body = format!("line1\nline2\x07{}", "x".repeat(600));
-        let sanitized = sanitize_error_body(&body, "unused-key");
-        assert!(!sanitized.contains('\n'));
-        assert!(!sanitized.contains('\x07'));
-        assert!(sanitized.ends_with('…'));
-        assert!(sanitized.chars().count() <= MAX_ERROR_BODY_CHARS + 1);
-    }
-
-    #[test]
-    fn sanitize_error_body_removes_bidi_and_zero_width_chars() {
-        let body = "a\u{202E}b\u{2066}c\u{200B}d\u{FEFF}e";
-        assert_eq!(sanitize_error_body(body, ""), "abcde");
-    }
-
-    #[test]
-    fn sanitize_error_body_redacts_key_saved_with_surrounding_spaces() {
-        let body = "token sk-supersecret1234 rejected";
-        let sanitized = sanitize_error_body(body, " sk-supersecret1234\t");
-        assert!(!sanitized.contains("sk-supersecret1234"));
-        assert!(sanitized.contains("[redacted]"));
-    }
-
-    #[test]
-    fn sanitize_error_body_redacts_key_split_by_invisible_chars() {
-        let body = "token sk-super\u{200B}secret1234 rejected";
-        let sanitized = sanitize_error_body(body, "sk-supersecret1234");
-        assert!(!sanitized.contains("sk-supersecret1234"));
-        assert!(sanitized.contains("[redacted]"));
-    }
-
-    #[test]
-    fn sanitize_error_body_redacts_leaked_api_key() {
-        let body = "upstream rejected token sk-supersecret1234 for this request";
-        let sanitized = sanitize_error_body(body, "sk-supersecret1234");
-        assert!(!sanitized.contains("sk-supersecret1234"));
-        assert!(sanitized.contains("[redacted]"));
+        assert!(detail.as_str().starts_with("HTTP 400: "));
+        assert!(!detail.as_str().contains("sk-secret"));
     }
 
     #[test]
