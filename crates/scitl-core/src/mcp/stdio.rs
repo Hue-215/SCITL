@@ -30,6 +30,9 @@ use super::{resolve_secrets, ClientService};
 /// 子プロセスの標準エラーから読み取る上限バイト数。エラー表示に使う分だけあればよく、
 /// サーバーが大量に出力してもメモリを食い潰さないようにする。
 const MAX_CAPTURED_STDERR_BYTES: usize = 4096;
+/// 捕捉した標準エラーを画面に出す診断文字列として整えるときの上限文字数
+/// (architecture.md 10節)。
+const MAX_STDERR_CHARS: usize = 2000;
 
 /// 子プロセスを起動し、MCPセッションを確立する。確立に失敗した場合は、捕捉した
 /// 標準エラー出力を添えたエラーを返す(接続できない原因はたいていサーバー側の
@@ -75,7 +78,7 @@ pub(super) async fn connect(
         }
         Err(e) => {
             let captured = capture_stderr(stderr).await;
-            let reason = format!("failed to connect: {e}");
+            let reason = format!("failed to connect: {}", super::describe_server_error(&e));
             Err(CoreError::Mcp(if captured.is_empty() {
                 reason
             } else {
@@ -106,7 +109,7 @@ async fn capture_stderr(stderr: Option<ChildStderr>) -> String {
         .take(MAX_CAPTURED_STDERR_BYTES as u64)
         .read_to_end(&mut buf)
         .await;
-    super::sanitize_tool_text(&String::from_utf8_lossy(&buf))
+    crate::text::display_block(&String::from_utf8_lossy(&buf), MAX_STDERR_CHARS)
 }
 
 /// stdio子プロセスに引き継ぐ環境変数の許可リスト。OS標準の実行に必要な最小限のみ

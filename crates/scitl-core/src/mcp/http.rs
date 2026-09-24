@@ -37,7 +37,10 @@ pub(super) async fn connect(
         .custom_headers(headers);
     let transport = StreamableHttpClientTransport::with_client(client, config);
 
-    ().serve(transport)
-        .await
-        .map_err(|e| CoreError::Mcp(format!("failed to connect: {e}")))
+    ().serve(transport).await.map_err(|e| {
+        CoreError::Mcp(format!(
+            "failed to connect: {}",
+            super::describe_server_error(&e)
+        ))
+    })
 }

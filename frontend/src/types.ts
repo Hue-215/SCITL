@@ -112,14 +112,19 @@ export interface McpServerView {
   enabled: boolean
   endpoint: McpEndpointView
   enabled_tools: string[]
-  // 取得済みのツール一覧(Issue #104)。nullは「まだ取得していない」。
+  // 画面に出すツール一覧。未取得なら有効化済みのツールだけが説明なしで入る(Issue #104)。
   // 取得結果はRust側のキャッシュが持ち、画面はそれを描くだけ。
-  tools: McpToolInfo[] | null
+  tools: McpToolView[]
+  tools_fetched: boolean
 }
 
-export interface McpToolInfo {
+// crates/scitl-core/src/settings/view.rs の McpToolView。
+export interface McpToolView {
+  // サーバーが返したままの名前。有効化を切り替えるときの鍵にだけ使い、画面には描かない。
   name: string
+  label: string
   description: string | null
+  exposable: boolean
 }
 
 export interface SettingsView {
