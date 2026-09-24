@@ -82,9 +82,9 @@ fn provider_error(e: reqwest::Error) -> CoreError {
 }
 
 /// プロバイダ制御下の応答本文は、エラー発言の詳細としてDBに残り画面にも出る
-/// (Issue #159。`data-model.md` messages「error_detail」)。長さを制限し、制御文字と
-/// 表示を惑わす不可視の書式文字を潰し、送信した鍵そのものが含まれていれば伏せ字にして
-/// から載せる(principles.md 4節)。ゲートウェイがリクエストヘッダをエコーバックする
+/// (Issue #159。`data-model.md` messages「error_detail」)。画面に出す診断文字列として
+/// 1行に整えて長さを制限し(architecture.md 10節)、送信した鍵そのものが含まれていれば
+/// 伏せ字にしてから載せる(principles.md 4節)。ゲートウェイがリクエストヘッダをエコーバックする
 /// 構成だと`Authorization`ヘッダの値がそのまま本文に現れうるため、サイズ制限だけでは
 /// 防げない。鍵をURLに置く構成は`validate_base_url`がクエリ・userinfoを拒否して塞いで
 /// いるため、伏せ字の対象は鍵1つで足りる。HTTPリクエストから切り離してテストできるよう
@@ -97,43 +97,16 @@ fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> CoreErr
 }
 
 fn sanitize_error_body(body: &str, api_key: &str) -> String {
+    // 伏せ字は見えない文字を除いた後に掛ける。先に掛けると、鍵の途中に見えない文字を
+    // 挟んだ形が伏せ字をすり抜け、除いた時点で鍵が現れる。切り詰めは伏せ字の後に行い、
+    // 境界で鍵の一部が残らないようにする。
+    let visible = crate::text::visible_line(body);
     let redacted = if api_key.is_empty() {
-        body.to_string()
+        visible
     } else {
-        body.replace(api_key, "[redacted]")
+        visible.replace(api_key, "[redacted]")
     };
-    let mut sanitized: String = redacted
-        .chars()
-        .map(|c| {
-            if c.is_control() || is_invisible_format_char(c) {
-                ' '
-            } else {
-                c
-            }
-        })
-        .take(MAX_ERROR_BODY_CHARS)
-        .collect();
-    if redacted.chars().nth(MAX_ERROR_BODY_CHARS).is_some() {
-        sanitized.push('…');
-    }
-    sanitized
-}
-
-/// `char::is_control`(Cc)が拾わない書式文字(Cf)のうち、表示の順序を入れ替える
-/// 双方向制御文字と、見えないまま文字列に紛れるゼロ幅文字。標準ライブラリに一般カテゴリの
-/// 判定が無いため、該当する範囲を列挙する。
-fn is_invisible_format_char(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{061C}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{FEFF}'
-    )
+    crate::text::ellipsize(&redacted, MAX_ERROR_BODY_CHARS)
 }
 
 #[derive(Serialize)]
@@ -573,7 +546,7 @@ mod tests {
             panic!("expected CoreError::LlmHttp");
         };
         assert_eq!(status, 401);
-        assert_eq!(body, "bad token [redacted] ");
+        assert_eq!(body, "bad token [redacted]");
     }
 
     #[test]
@@ -587,9 +560,17 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_error_body_blanks_bidi_and_zero_width_chars() {
+    fn sanitize_error_body_removes_bidi_and_zero_width_chars() {
         let body = "a\u{202E}b\u{2066}c\u{200B}d\u{FEFF}e";
-        assert_eq!(sanitize_error_body(body, ""), "a b c d e");
+        assert_eq!(sanitize_error_body(body, ""), "abcde");
+    }
+
+    #[test]
+    fn sanitize_error_body_redacts_key_split_by_invisible_chars() {
+        let body = "token sk-super\u{200B}secret1234 rejected";
+        let sanitized = sanitize_error_body(body, "sk-supersecret1234");
+        assert!(!sanitized.contains("sk-supersecret1234"));
+        assert!(sanitized.contains("[redacted]"));
     }
 
     #[test]

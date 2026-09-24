@@ -2,6 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::{now_iso8601, CoreError, Result};
+use crate::text::{collapse_whitespace, ellipsize, truncate_chars};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Task {
@@ -247,29 +248,17 @@ pub(super) fn touch(conn: &Connection, task_id: i64) -> Result<()> {
 
 const MAX_TITLE_CHARS: usize = 40;
 
-/// タイトル文字列をタイトルとして書き込む前に無害化する(`docs/spec/principles.md` 4節
-/// 「自由入力は地の文に混ぜる前にサニタイズする」)。今後すべてのタイトルがモデルの
-/// `update_task`呼び出し由来になるため、書き込みの唯一の経路である`update_task`に集約する
-/// (docs/spec/principles.md 5節)。制御文字(改行を含む)を空白に畳み込み、前後の空白・
-/// 引用符を除き、連続空白を1つにまとめ、[`MAX_TITLE_CHARS`]で切り詰める。
+/// タイトル文字列を、1行のタイトルとして書き込める形に正規化する。値の形を決めるもので、
+/// 防御としての無害化は出力先ごとに掛ける(docs/spec/rebuild/architecture.md 10節)。
+/// 書き込みの唯一の経路である`update_task`に集約する(docs/spec/principles.md 5節)。
+/// 制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、連続空白を1つに
+/// まとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので省略の印は付けない。
 fn sanitize_title(raw: &str) -> String {
     let squeezed = collapse_whitespace(raw);
     let trimmed =
         squeezed.trim_matches(|c: char| matches!(c, '"' | '\'' | '「' | '」' | '『' | '』'));
     // 引用符を剥がした内側にも空白が残りうるため、もう一度畳んでから切り詰める。
-    collapse_whitespace(trimmed)
-        .chars()
-        .take(MAX_TITLE_CHARS)
-        .collect()
-}
-
-/// 制御文字(改行を含む)を空白に畳み、連続空白を1つにまとめ、前後の空白を落とす。
-fn collapse_whitespace(raw: &str) -> String {
-    let replaced: String = raw
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    replaced.split_whitespace().collect::<Vec<_>>().join(" ")
+    truncate_chars(&collapse_whitespace(trimmed), MAX_TITLE_CHARS).0
 }
 
 /// `deadline`として書き込める形(`YYYY-MM-DD`)かを検証する。タイトルと違い、外れた値を
@@ -322,16 +311,7 @@ const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 /// 表示専用の処理(Issue #61)。空白しか無い発言では`None`を返す。
 fn fallback_label(first_user_message: &str) -> Option<String> {
     let squeezed = collapse_whitespace(first_user_message);
-    if squeezed.is_empty() {
-        return None;
-    }
-    let mut chars = squeezed.chars();
-    let head: String = chars.by_ref().take(MAX_FALLBACK_LABEL_CHARS).collect();
-    Some(if chars.next().is_some() {
-        format!("{head}…")
-    } else {
-        head
-    })
+    (!squeezed.is_empty()).then(|| ellipsize(&squeezed, MAX_FALLBACK_LABEL_CHARS))
 }
 
 /// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない
