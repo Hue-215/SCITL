@@ -183,6 +183,66 @@ struct RequestToolCallFunction {
     arguments: String,
 }
 
+/// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
+const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is not available.)";
+
+/// 発言列を、userから始まりuserとassistantが交互に並ぶ形に整えて変換する
+/// (architecture.md 3節)。発言の削除やエラー発言の除外で、履歴はアシスタント発言から
+/// 始まったり同じ役割が続いたりする。チャットテンプレートが交互の並びを要求するサーバー
+/// (llama.cppのGemma・Mistral系等)は、そのままではリクエストを拒否する。
+///
+/// - 同じ役割が続いたら1つにまとめる。ユーザー発言は組み立てた囲みごと連結するので、
+///   発言ごとの送信日時は残る
+/// - 最初の発言がアシスタント発言なら、その前にユーザー発言を補う。補う発言に日時は
+///   付けない(`ChatMessage::User`の`sent_at`)
+///
+/// ツールの往復(`tool_calls`を持つassistantに続くtool)には手を加えない。
+fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
+    let mut out: Vec<RequestMessage> = Vec::with_capacity(messages.len() + 1);
+    for message in messages {
+        match (out.last_mut(), to_request_message(message)) {
+            (Some(RequestMessage::User { content: prev }), RequestMessage::User { content }) => {
+                append_paragraph(prev, &content);
+            }
+            (
+                Some(RequestMessage::Assistant {
+                    content: prev,
+                    tool_calls: prev_calls,
+                }),
+                RequestMessage::Assistant {
+                    content,
+                    tool_calls,
+                },
+            ) => {
+                if let Some(content) = content {
+                    match prev {
+                        Some(prev) => append_paragraph(prev, &content),
+                        None => *prev = Some(content),
+                    }
+                }
+                prev_calls.extend(tool_calls);
+            }
+            (last, message) => {
+                if matches!(message, RequestMessage::Assistant { .. })
+                    && matches!(last, None | Some(RequestMessage::System { .. }))
+                {
+                    out.push(to_request_message(&ChatMessage::User {
+                        text: PLACEHOLDER_USER_TEXT.to_string(),
+                        sent_at: None,
+                    }));
+                }
+                out.push(message);
+            }
+        }
+    }
+    out
+}
+
+fn append_paragraph(prev: &mut String, next: &str) {
+    prev.push_str("\n\n");
+    prev.push_str(next);
+}
+
 fn to_request_message(message: &ChatMessage) -> RequestMessage {
     match message {
         ChatMessage::System(content) => RequestMessage::System {
@@ -291,7 +351,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         let body = RequestBody {
             model: &self.model,
-            messages: messages.iter().map(to_request_message).collect(),
+            messages: to_request_messages(messages),
             tools: tools
                 .iter()
                 .map(|t| RequestTool {
@@ -572,6 +632,126 @@ mod tests {
         assert_eq!(
             assistant,
             serde_json::json!({"role": "assistant", "content": "done"})
+        );
+    }
+
+    fn user(text: &str, sent_at: &str) -> ChatMessage {
+        ChatMessage::User {
+            text: text.to_string(),
+            sent_at: Some(sent_at.to_string()),
+        }
+    }
+
+    fn assistant(text: &str) -> ChatMessage {
+        ChatMessage::Assistant {
+            content: Some(text.to_string()),
+            tool_calls: Vec::new(),
+        }
+    }
+
+    fn tool_call(id: &str) -> ToolCallRequest {
+        ToolCallRequest {
+            id: Some(id.to_string()),
+            name: "get_current_task_detail".to_string(),
+            arguments: serde_json::json!({}).into(),
+        }
+    }
+
+    fn request_json(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
+        to_request_messages(messages)
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .collect()
+    }
+
+    fn roles(sent: &[serde_json::Value]) -> Vec<&str> {
+        sent.iter().map(|m| m["role"].as_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn fills_in_a_user_message_when_the_conversation_starts_with_the_assistant() {
+        let sent = request_json(&[
+            ChatMessage::System("s".to_string()),
+            assistant("a"),
+            user("u", "2026-09-22T04:12:00Z"),
+        ]);
+
+        assert_eq!(roles(&sent), vec!["system", "user", "assistant", "user"]);
+        // 補った発言も同じ囲みで送り、日時の属性だけを省く。
+        assert_eq!(
+            sent[1]["content"],
+            render_user_content(PLACEHOLDER_USER_TEXT, None)
+        );
+    }
+
+    #[test]
+    fn merges_consecutive_messages_of_the_same_role() {
+        let sent = request_json(&[
+            ChatMessage::System("s".to_string()),
+            user("u1", "2026-09-22T04:12:00Z"),
+            user("u2", "2026-09-22T05:00:00Z"),
+            assistant("a1"),
+            assistant("a2"),
+        ]);
+
+        assert_eq!(roles(&sent), vec!["system", "user", "assistant"]);
+        // 発言ごとの囲みと送信日時はそのまま残る。
+        assert_eq!(
+            sent[1]["content"],
+            format!(
+                "{}\n\n{}",
+                render_user_content("u1", Some("2026-09-22T04:12:00Z")),
+                render_user_content("u2", Some("2026-09-22T05:00:00Z")),
+            )
+        );
+        assert_eq!(sent[2]["content"], "a1\n\na2");
+    }
+
+    #[test]
+    fn merges_assistant_text_into_a_following_tool_call() {
+        let sent = request_json(&[
+            ChatMessage::System("s".to_string()),
+            user("u", "2026-09-22T04:12:00Z"),
+            assistant("a"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![tool_call("call_1")],
+            },
+            ChatMessage::Tool {
+                tool_call_id: Some("call_1".to_string()),
+                content: "{}".to_string(),
+            },
+        ]);
+
+        assert_eq!(roles(&sent), vec!["system", "user", "assistant", "tool"]);
+        assert_eq!(sent[2]["content"], "a");
+        assert_eq!(sent[2]["tool_calls"][0]["id"], "call_1");
+    }
+
+    #[test]
+    fn leaves_tool_round_trips_as_they_are() {
+        let round_trip = |id: &str| {
+            [
+                ChatMessage::Assistant {
+                    content: None,
+                    tool_calls: vec![tool_call(id)],
+                },
+                ChatMessage::Tool {
+                    tool_call_id: Some(id.to_string()),
+                    content: "{}".to_string(),
+                },
+            ]
+        };
+        let mut messages = vec![
+            ChatMessage::System("s".to_string()),
+            user("u", "2026-09-22T04:12:00Z"),
+        ];
+        messages.extend(round_trip("call_1"));
+        messages.extend(round_trip("call_2"));
+
+        assert_eq!(
+            roles(&request_json(&messages)),
+            vec!["system", "user", "assistant", "tool", "assistant", "tool"]
         );
     }
 
