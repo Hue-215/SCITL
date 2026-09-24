@@ -245,13 +245,13 @@ pub(super) fn touch(conn: &Connection, task_id: i64) -> Result<()> {
     Ok(())
 }
 
+const MAX_TITLE_CHARS: usize = 40;
+
 /// タイトル文字列をタイトルとして書き込む前に無害化する(`docs/spec/principles.md` 4節
 /// 「自由入力は地の文に混ぜる前にサニタイズする」)。今後すべてのタイトルがモデルの
 /// `update_task`呼び出し由来になるため、書き込みの唯一の経路である`update_task`に集約する
 /// (docs/spec/principles.md 5節)。制御文字(改行を含む)を空白に畳み込み、前後の空白・
-/// 引用符を除き、連続空白を1つにまとめ、上限文字数で切り詰める。
-const MAX_TITLE_CHARS: usize = 40;
-
+/// 引用符を除き、連続空白を1つにまとめ、[`MAX_TITLE_CHARS`]で切り詰める。
 fn sanitize_title(raw: &str) -> String {
     let squeezed = collapse_whitespace(raw);
     let trimmed =

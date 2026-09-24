@@ -15,8 +15,9 @@ import type { Message } from './types'
 // ChatMessageの構成要素として存在しないため、バックエンド側で型として遮断されている)。
 //
 // 思考・ツール引数・結果はすべてプレーンテキストとして描画する(JSXのテキスト補間と
-// <pre>のみを使い、dangerouslySetInnerHTMLは使わない)。Markdown描画は別Issue #39の
-// 範囲であり、ここでは扱わない。
+// <pre>のみを使い、dangerouslySetInnerHTMLは使わない)。いずれもモデルや外部ツールが
+// 出したものをそのまま確かめるための表示なので、本文用のMarkdown描画(Markdown.tsx)は
+// 通さない。整形しない分、ここからリンクや画像が作られることも無い。
 
 // ツール呼び出し1件の引数と結果。内部・外部(MCP)のどちらの表示でも同じ形で見せる。
 function ToolCallDetail({ content }: { content: ToolExecutionContent }) {

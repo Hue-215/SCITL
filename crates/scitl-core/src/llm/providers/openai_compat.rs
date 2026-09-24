@@ -363,7 +363,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
                     },
                 })
                 .collect(),
-            // 非ストリーミングでも戻り値はイベント列に組み立て直す(本モジュール冒頭コメント参照)。
+            // 非ストリーミングでも戻り値はイベント列に組み立て直す(`ResponseEvent`参照)。
             stream: false,
         };
 
