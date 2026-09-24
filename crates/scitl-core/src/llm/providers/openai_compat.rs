@@ -11,6 +11,8 @@ use crate::llm::{
 
 /// HTTPエラー時にエラー文へ載せるプロバイダ応答本文の上限。
 const MAX_ERROR_BODY_CHARS: usize = 512;
+/// 応答本文に送信した鍵が現れたときの置き換え先。
+const REDACTED: &str = "[redacted]";
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
 /// (docs/spec/rebuild/architecture.md 2節)。方言吸収はこのファイル内に閉じ込め、
@@ -97,14 +99,19 @@ fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> CoreErr
 }
 
 fn sanitize_error_body(body: &str, api_key: &str) -> String {
-    // 伏せ字は見えない文字を除いた後に掛ける。先に掛けると、鍵の途中に見えない文字を
-    // 挟んだ形が伏せ字をすり抜け、除いた時点で鍵が現れる。切り詰めは伏せ字の後に行い、
-    // 境界で鍵の一部が残らないようにする。
-    let visible = crate::text::visible_line(body);
-    let redacted = if api_key.is_empty() {
+    if api_key.is_empty() {
+        return crate::text::display_label(body, MAX_ERROR_BODY_CHARS);
+    }
+    // 伏せ字は整える前と後の両方で掛ける。後で掛けるのは、鍵の途中に見えない文字を挟んだ形が
+    // 除いた時点で鍵として現れるため。その照合は整えた鍵で行う(鍵の前後に空白が付いたまま
+    // 保存されていても、ヘッダー値としては空白を落とした形で送られ、そのまま返ってくる)。
+    // 切り詰めは伏せ字の後に行い、境界で鍵の一部が残らないようにする。
+    let visible = crate::text::visible_line(&body.replace(api_key, REDACTED));
+    let visible_key = crate::text::visible_line(api_key);
+    let redacted = if visible_key.is_empty() {
         visible
     } else {
-        visible.replace(api_key, "[redacted]")
+        visible.replace(&visible_key, REDACTED)
     };
     crate::text::ellipsize(&redacted, MAX_ERROR_BODY_CHARS)
 }
@@ -561,6 +568,14 @@ mod tests {
     fn sanitize_error_body_removes_bidi_and_zero_width_chars() {
         let body = "a\u{202E}b\u{2066}c\u{200B}d\u{FEFF}e";
         assert_eq!(sanitize_error_body(body, ""), "abcde");
+    }
+
+    #[test]
+    fn sanitize_error_body_redacts_key_saved_with_surrounding_spaces() {
+        let body = "token sk-supersecret1234 rejected";
+        let sanitized = sanitize_error_body(body, " sk-supersecret1234\t");
+        assert!(!sanitized.contains("sk-supersecret1234"));
+        assert!(sanitized.contains("[redacted]"));
     }
 
     #[test]
