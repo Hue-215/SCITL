@@ -94,12 +94,14 @@ fn is_context_exceeded(body: &str) -> bool {
         _ => &parsed,
     };
     let field = |name: &str| error.get(name).and_then(serde_json::Value::as_str);
+    // `{"error": "..."}`と文面だけで返すサーバーもある。
+    let message = field("message").or_else(|| parsed.get("error")?.as_str());
     // OpenAI
     field("code") == Some("context_length_exceeded")
         // llama.cpp(llama-server)
         || field("type") == Some("exceed_context_size_error")
-        // vLLM(専用のコードを持たず、OpenAIの文面を写している)
-        || field("message").is_some_and(|m| m.contains("maximum context length"))
+        // 専用のコードを持たないサーバー(vLLM等)は文面でしか分からない
+        || message.is_some_and(|m| m.to_lowercase().contains("context length"))
 }
 
 #[derive(Serialize)]
@@ -558,6 +560,12 @@ mod tests {
                 LlmError::ContextExceeded(_)
             ));
         }
+    }
+
+    #[test]
+    fn recognizes_context_exceeded_in_an_error_given_as_a_bare_message() {
+        let body = r#"{"error":"The model is loaded with a Context Length of only 4096 tokens, which is not enough."}"#;
+        assert!(matches!(bad_request(body), LlmError::ContextExceeded(_)));
     }
 
     /// 本文で判定できなければ、状態コードによる分類に落ちる。
