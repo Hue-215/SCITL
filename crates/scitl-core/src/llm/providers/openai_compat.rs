@@ -101,7 +101,10 @@ fn is_context_exceeded(body: &str) -> bool {
         // llama.cpp(llama-server)
         || field("type") == Some("exceed_context_size_error")
         // 専用のコードを持たないサーバー(vLLM等)は文面でしか分からない
-        || message.is_some_and(|m| m.to_lowercase().contains("context length"))
+        || message.is_some_and(|m| {
+            let m = m.to_lowercase();
+            m.contains("context length") || m.contains("context size")
+        })
 }
 
 #[derive(Serialize)]
@@ -564,8 +567,12 @@ mod tests {
 
     #[test]
     fn recognizes_context_exceeded_in_an_error_given_as_a_bare_message() {
-        let body = r#"{"error":"The model is loaded with a Context Length of only 4096 tokens, which is not enough."}"#;
-        assert!(matches!(bad_request(body), LlmError::ContextExceeded(_)));
+        for body in [
+            r#"{"error":"The model is loaded with a Context Length of only 4096 tokens, which is not enough."}"#,
+            r#"{"error":"the request exceeds the available context size"}"#,
+        ] {
+            assert!(matches!(bad_request(body), LlmError::ContextExceeded(_)));
+        }
     }
 
     /// 本文で判定できなければ、状態コードによる分類に落ちる。
