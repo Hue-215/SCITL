@@ -9,8 +9,8 @@ use crate::db::messages::{self, Kind, Message, NewMessage, Role};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
-    ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments, ToolCallRequest,
-    ToolSchema,
+    neutralize_reserved_tags, ChatMessage, FinishReason, LlmAdapter, ResponseEvent, ToolArguments,
+    ToolCallRequest, ToolSchema,
 };
 use crate::mcp::McpSessions;
 use crate::orchestration::mcp_access::McpAccess;
@@ -510,10 +510,12 @@ async fn run_tool_rounds(
             content: if text.is_empty() { None } else { Some(text) },
             tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
         });
+        // 結果には自由入力が載る(docs/spec/rebuild/architecture.md 3節)。保存する
+        // 実行記録(上)は受け取ったまま残し、モデルへ送る側でだけ無害化する。
         for (call, result) in executed {
             round_trip.push(ChatMessage::Tool {
                 tool_call_id: call.id,
-                content: result.to_string(),
+                content: neutralize_reserved_tags(&result.to_string()),
             });
         }
     }

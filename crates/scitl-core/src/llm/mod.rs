@@ -167,10 +167,15 @@ pub fn user_message_format_note() -> String {
     )
 }
 
-/// 本文に現れる`<scitl:...>`・`</scitl:...>`の`<`を実体参照に置き換え、タグとして
-/// 読まれないようにする。予約タグの名前空間`scitl:`ごと対象にするのは、今後タグを
+/// プロンプトへ埋め込む自由入力の無害化の唯一の入口(docs/spec/principles.md 4節
+/// 「予約タグは無効化する」)。`<scitl:...>`・`</scitl:...>`の`<`を実体参照に置き換え、
+/// タグとして読まれないようにする。予約タグの名前空間`scitl:`ごと対象にするのは、今後タグを
 /// 増やしたときに無害化の対象を足し忘れないため。
-fn neutralize_reserved_tags(text: &str) -> String {
+///
+/// 直列化済みのJSONにそのまま掛けてよい。JSONの構文に`<`は現れないので、置き換わるのは
+/// 文字列値の中身だけで、JSONとしての形は崩れない。どの経路に掛けるかは
+/// docs/spec/rebuild/architecture.md 3節。
+pub fn neutralize_reserved_tags(text: &str) -> String {
     const NAMESPACE: &str = "scitl:";
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
