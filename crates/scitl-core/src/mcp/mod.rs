@@ -343,18 +343,16 @@ pub fn validate_header_value(value: &str) -> Result<(), CoreError> {
         .map_err(|e| CoreError::Mcp(format!("invalid header value: {e}")))
 }
 
-/// `refs`が指す秘密情報をまとめて解決する。`secrets::load`(keyring呼び出し)は同期I/Oで
-/// あり、architecture.md 4節の規律(同期処理は`spawn_blocking`から呼ぶ)に従って
-/// 非同期タスク上で直接呼ばない。
+/// `refs`が指す秘密情報をまとめて解決する。`secrets::load`は資格情報ストアを呼ぶ同期I/Oの
+/// ため、[`crate::blocking::run`]を通す。
 async fn resolve_secrets(refs: &[SecretRef]) -> Result<Vec<(String, SecretString)>, CoreError> {
     let refs = refs.to_vec();
-    tokio::task::spawn_blocking(move || {
+    crate::blocking::run(move || {
         refs.into_iter()
             .map(|r| secrets::load(&r.key_ref).map(|secret| (r.name, secret)))
-            .collect::<Result<Vec<_>, _>>()
+            .collect()
     })
     .await
-    .map_err(|e| CoreError::Mcp(format!("secret resolution task panicked: {e}")))?
 }
 
 /// サーバーが書いた文字列(ツール名・説明・stderr)をUIへ渡す前の無害化。
