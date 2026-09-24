@@ -63,10 +63,12 @@ pub struct McpServerView {
     pub enabled: bool,
     pub endpoint: McpEndpointView,
     pub enabled_tools: Vec<String>,
-    /// 画面に出すツール一覧。取得済みならその一覧(Issue #104)。未取得でも有効化済みの
-    /// ツールは入れる。一覧のキャッシュはアプリ起動中だけなので、入れないと再起動直後は
-    /// 有効化済みのツールを確認することも外すこともできない。説明はサーバーに聞かないと
-    /// 分からないので、取得するまで無い。画面はこれを描くだけで、自前では組み立てない。
+    /// 画面に出すツール一覧。取得済みの一覧(Issue #104)に、そこに無い有効化済みのツールを
+    /// 足したもの。有効化済みのツールを必ず出すのは、出さないと確認することも外すことも
+    /// できないため(一覧のキャッシュはアプリ起動中だけなので、再起動直後は未取得になる。
+    /// サーバーが消したツールは、同じ名前のツールが後から足されると選び直さずに公開される)。
+    /// 一覧に無いツールの説明はサーバーに聞かないと分からないので無い。画面はこれを描く
+    /// だけで、自前では組み立てない。
     pub tools: Vec<McpToolView>,
     pub tools_fetched: bool,
 }
@@ -156,6 +158,17 @@ pub(super) fn build(
 
 fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView {
     let fetched = catalog.get(&s.id);
+    let listed = fetched.as_deref().unwrap_or_default();
+    let mut tools: Vec<McpToolView> = listed
+        .iter()
+        .map(|t| mcp_tool_view(&s.name, &t.name, t.description.as_deref()))
+        .collect();
+    tools.extend(
+        s.enabled_tools
+            .iter()
+            .filter(|name| !listed.iter().any(|t| &t.name == *name))
+            .map(|name| mcp_tool_view(&s.name, name, None)),
+    );
     let endpoint = match &s.endpoint {
         McpEndpoint::Stdio {
             command,
@@ -177,17 +190,7 @@ fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView 
         enabled: s.enabled,
         endpoint,
         enabled_tools: s.enabled_tools.iter().cloned().collect(),
-        tools: match &fetched {
-            Some(tools) => tools
-                .iter()
-                .map(|t| mcp_tool_view(&s.name, &t.name, t.description.as_deref()))
-                .collect(),
-            None => s
-                .enabled_tools
-                .iter()
-                .map(|name| mcp_tool_view(&s.name, name, None))
-                .collect(),
-        },
+        tools,
         tools_fetched: fetched.is_some(),
     }
 }
@@ -225,7 +228,7 @@ mod tests {
                 args: Vec::new(),
                 env_refs: Vec::new(),
             },
-            enabled_tools: BTreeSet::new(),
+            enabled_tools: BTreeSet::from(["gone".to_string()]),
         };
         let catalog = ToolCatalog::new();
         catalog.store(
@@ -244,5 +247,9 @@ mod tests {
         assert_eq!(tool.label, "elif_eteled");
         assert_eq!(tool.description.as_deref(), Some("line1\nline2"));
         assert!(!tool.exposable);
+        // サーバーの一覧から消えた有効化済みのツールも、外せるように出す。
+        assert_eq!(view.tools.len(), 2);
+        assert_eq!(view.tools[1].name, "gone");
+        assert!(view.tools[1].description.is_none());
     }
 }
