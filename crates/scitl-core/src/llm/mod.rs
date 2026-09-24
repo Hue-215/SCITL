@@ -132,13 +132,24 @@ pub struct ToolSchema {
 }
 
 impl ToolSchema {
-    /// アプリ自身が書いた定義(内部ツール)。説明を`&'static str`に限るのは、実行時の
-    /// 文字列(外部から来たもの)がこの経路で無害化を通らずに入るのを防ぐため。
-    pub fn internal(name: &str, description: &'static str, parameters: serde_json::Value) -> Self {
+    /// アプリ自身が書いた定義(内部ツール)。名前と説明を`&'static str`に限るのは、実行時の
+    /// 文字列(外部から来たもの)がこの経路で無害化を通らずに入るのを防ぐため。引数スキーマは
+    /// 実行時に組み立てうる(DBの値を`enum`に並べる等)ので、外部と同じく無害化を掛ける。
+    ///
+    /// # Panics
+    ///
+    /// 無害化した引数スキーマを読み直せない場合。置き換えはJSONの形を崩さないため起きず、
+    /// 起きればコード側の誤りなので、内部ツールの定義を組み立てるテストで止める。
+    pub fn internal(
+        name: &'static str,
+        description: &'static str,
+        parameters: serde_json::Value,
+    ) -> Self {
         Self {
             name: name.to_string(),
             description: description.to_string(),
-            parameters,
+            parameters: prompt::neutralize_json_value(&parameters)
+                .expect("neutralizing reserved tags keeps the schema valid JSON"),
         }
     }
 

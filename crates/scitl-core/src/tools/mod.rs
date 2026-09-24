@@ -128,6 +128,15 @@ mod tests {
     use crate::db;
 
     #[test]
+    fn every_internal_tool_schema_builds() {
+        // `ToolSchema::internal`は引数スキーマを読み直せないと止まる。どの面の定義も組み立てる。
+        for surface in [Surface::General, Surface::Task, Surface::Mcp] {
+            tool_definitions(surface);
+        }
+        assert!(!task_chat_tools().is_empty());
+    }
+
+    #[test]
     fn unknown_tool_is_reported_as_unknown_tool() {
         // モデルに返る文言が「未知の引数」にならないこと(ツール名の誤りだと伝える)。
         let conn = db::open_in_memory().unwrap();
