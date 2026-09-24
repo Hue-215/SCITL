@@ -17,7 +17,7 @@ const KNOWN_ARGS: &[&str] = &["step_id"];
 pub fn schema() -> ToolSchema {
     ToolSchema {
         name: NAME.to_string(),
-        description: "現在開いているタスクの工程を削除する".to_string(),
+        description: "Delete a step of the currently open task.".to_string(),
         parameters: json!({
             "type": "object",
             "properties": {

@@ -14,7 +14,7 @@ pub const NAME: &str = "get_task_list";
 pub fn schema() -> ToolSchema {
     ToolSchema {
         name: NAME.to_string(),
-        description: "アーカイブしていないタスクの一覧を取得する".to_string(),
+        description: "List the tasks that are not archived.".to_string(),
         parameters: json!({
             "type": "object",
             "properties": {},

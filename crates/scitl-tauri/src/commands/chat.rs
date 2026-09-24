@@ -32,9 +32,7 @@ pub async fn send_task_chat_message(
 }
 
 /// 発言の編集(Issue #41)。ユーザー発言のみが対象で、対象以降の発言をすべて論理削除して
-/// 編集後の内容から会話を再生成する。応答待ち中はフロントエンド側で操作自体を出さない
-/// (本コマンドは全操作を停止させる専用のロックは持たず、既存のsend_task_chat_messageと
-/// 同様にUI側の`sending`状態で直列化する設計を踏襲する)。
+/// 編集後の内容から会話を再生成する。
 #[tauri::command]
 pub async fn edit_task_chat_message(
     state: State<'_, AppState>,

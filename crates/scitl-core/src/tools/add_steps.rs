@@ -18,7 +18,7 @@ const KNOWN_ARGS: &[&str] = &["descriptions"];
 pub fn schema() -> ToolSchema {
     ToolSchema {
         name: NAME.to_string(),
-        description: "現在開いているタスクに工程を追加する".to_string(),
+        description: "Add steps to the currently open task.".to_string(),
         parameters: json!({
             "type": "object",
             "properties": {

@@ -121,8 +121,10 @@ pub async fn retry_reply(
             CoreError::InvalidMessageOperation("reply has no turn_id to retry".to_string())
         })?;
 
-        messages::soft_delete_normal_from(conn, task_id, message_id)?;
+        // 採番を削除より先に済ませ、削除をこのクロージャ最後の書き込みにする。削除のあとで
+        // 失敗すると、エラー発言を残さないまま返信だけが会話から消える。
         let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
+        messages::soft_delete_normal_from(conn, task_id, message_id)?;
         Ok(Attempt {
             task_id,
             turn_id,
