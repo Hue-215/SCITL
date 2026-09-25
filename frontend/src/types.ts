@@ -126,6 +126,29 @@ export interface ProviderView {
   error: string | null
 }
 
+// crates/scitl-core/src/config.rs の ReasoningEffort。
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+
+// crates/scitl-core/src/settings/view.rs の ChatModelsView(チャット入力欄の下のモデル選択)。
+export interface ModelChoice {
+  provider_id: string
+  provider_name: string
+  model: string
+}
+
+export interface SelectedModel extends ModelChoice {
+  // 思考に対応する(3層で解決済み)。対応しなければ思考の強さは選べない。
+  thinking: boolean
+  reasoning_effort: ReasoningEffort
+}
+
+export interface ChatModelsView {
+  // 設定画面で表示にしたモデル。
+  choices: ModelChoice[]
+  // 一覧から隠したモデルでも、使っていれば入る。
+  selected: SelectedModel | null
+}
+
 export type McpEndpointView =
   | { transport: 'stdio'; command: string; args: string[]; env_names: string[] }
   | { transport: 'streamable_http'; url: string; header_names: string[] }

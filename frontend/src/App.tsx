@@ -9,6 +9,7 @@ import {
   retryTaskChatMessage,
   sendTaskChatMessage,
 } from './api'
+import ChatModelBar from './ChatModelBar'
 import Markdown from './Markdown'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
@@ -406,6 +407,8 @@ export default function App() {
             送信
           </button>
         </form>
+
+        <ChatModelBar onError={setError} />
       </main>
     </div>
   )

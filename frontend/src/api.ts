@@ -2,8 +2,10 @@ import { invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
   Capability,
+  ChatModelsView,
   LinkInspection,
   Message,
+  ReasoningEffort,
   ResponseEvent,
   SettingsView,
   Task,
@@ -141,6 +143,24 @@ export function resetModelCapabilities(providerId: string, model: string): Promi
 
 export function detectModelCapabilities(providerId: string): Promise<SettingsView> {
   return invoke('detect_model_capabilities', { providerId })
+}
+
+// チャット入力欄の下のモデル選択(Issue #64)。選び直した後は一覧を引き直す
+// (能力の問い合わせを伴うため、Rust側で保存とは別のコマンドにしてある)。
+export function getChatModels(): Promise<ChatModelsView> {
+  return invoke('get_chat_models')
+}
+
+export function selectChatModel(providerId: string, model: string): Promise<void> {
+  return invoke('select_chat_model', { providerId, model })
+}
+
+export function setReasoningEffort(
+  providerId: string,
+  model: string,
+  effort: ReasoningEffort,
+): Promise<void> {
+  return invoke('set_reasoning_effort', { providerId, model, effort })
 }
 
 export type NewMcpEndpoint =

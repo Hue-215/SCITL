@@ -277,6 +277,75 @@ option {
   padding-block: var(--space-2);
 }
 
+/* 入力欄の下で、モデル選択と思考の強さ選択を両端に置く。 */
+.chat-model-bar {
+  flex-shrink: 0;
+}
+
+/* 選択一覧(.dropdown-popup)の位置と幅の基準。左右余白の内側にあるので、一覧の端が
+   両端のボタンの端に揃う。 */
+.chat-model-bar-row {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* 名前の長いモデルでも、隣のボタンを押し出さずに自分が縮む。 */
+.dropdown {
+  min-width: 0;
+}
+
+.dropdown-toggle {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+}
+
+/* ボタンの上に開く。位置と幅は位置決めされた入れ物(.chat-model-bar-row)が基準で、
+   .dropdown自身は基準にしない(Dropdown.tsx)。一覧だけがスクロールし、検索欄は留まる
+   (ui.md 4節)。 */
+.dropdown-popup {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  /* 後から描かれる会話欄より手前に出す。重なる相手はこの1つだけなので1で足りる。 */
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: 100%;
+  /* 検索欄と7行ほど。ここでしか使わない値なのでトークン化しない。 */
+  max-height: 20rem;
+  overflow: hidden;
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.dropdown-popup-start {
+  left: 0;
+}
+
+.dropdown-popup-end {
+  right: 0;
+}
+
+.dropdown-search {
+  flex-shrink: 0;
+  border-width: 0 0 var(--border-width);
+}
+
+.dropdown-options {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dropdown-empty {
+  padding: var(--space-2);
+}
+
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
@@ -354,24 +423,36 @@ option {
   gap: var(--space-1);
 }
 
-/* サイドバーの一覧行。タスクとアーカイブ折りたたみで形は同じで、文字色だけが違う。 */
-.sidebar-task,
-.sidebar-archived-toggle {
+/* 一覧の1行を占めるボタン。サイドバー(タスク・アーカイブ折りたたみ)と、チャット入力欄の
+   下の選択一覧(Dropdown.tsx)で形が同じ。 */
+.list-row {
   width: 100%;
+  /* 名前と補足(.list-row-detail)を並べ、収まらなければ補足を次の行へ送る。 */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
   text-align: left;
   padding: var(--space-2);
   border-color: transparent;
   background: transparent;
   font-size: var(--font-size-sm);
+  /* モデル名のような区切りの無い英数字の連続でも、一覧の幅を押し広げずに折り返す。 */
+  overflow-wrap: anywhere;
+}
+
+.list-row.selected {
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+}
+
+/* 名前の横に添える補足(モデルの属するプロバイダー名)。 */
+.list-row-detail {
+  color: var(--color-text-secondary);
 }
 
 .sidebar-archived-toggle {
   color: var(--color-text-secondary);
-}
-
-.sidebar-task.selected {
-  background: var(--color-primary-container);
-  color: var(--color-on-primary-container);
 }
 
 .sidebar-add {
