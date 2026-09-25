@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
+  AvailableModel,
   Capability,
   ChatModelsView,
   LinkInspection,
@@ -103,7 +104,7 @@ export function addModels(providerId: string, models: string[]): Promise<Setting
 
 // プロバイダーが提供するモデル名(Issue #33)。名前順で、登録済みのものも含む。
 // 設定には書かないので、登録はaddModelsで行う。
-export function listProviderModels(providerId: string): Promise<string[]> {
+export function listProviderModels(providerId: string): Promise<AvailableModel[]> {
   return invoke('list_provider_models', { providerId })
 }
 

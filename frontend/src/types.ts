@@ -103,7 +103,10 @@ export interface ModelCapabilities {
 
 // crates/scitl-core/src/settings/view.rs の ModelView。
 export interface ModelView {
+  // 操作の鍵として送り返す名前。画面に出すのはlabel。
   name: string
+  // 見えない文字を除いた、画面に出す名前(architecture.md 10節)。
+  label: string
   visible: boolean
   capabilities: ModelCapabilities
   // 手動設定が無いとき(自動検出 → 既定値)のコンテキスト長。
@@ -133,7 +136,16 @@ export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
 export interface ModelChoice {
   provider_id: string
   provider_name: string
+  // 選ぶときに送り返す名前。画面に出すのはlabel(ModelViewと同じ)。
   model: string
+  label: string
+}
+
+// crates/scitl-core/src/settings/view.rs の AvailableModel(プロバイダーから取得したモデル)。
+export interface AvailableModel {
+  // サーバーが返したままの名前。登録するときに送り返す。
+  name: string
+  label: string
 }
 
 export interface SelectedModel extends ModelChoice {

@@ -5,7 +5,7 @@ use secrecy::SecretString;
 use tauri::State;
 
 use scitl_core::config::{ApiFormat, Capability, ReasoningEffort};
-use scitl_core::settings::{ChatModelsView, NewProvider, SettingsView};
+use scitl_core::settings::{AvailableModel, ChatModelsView, NewProvider, SettingsView};
 
 use super::with_settings;
 use crate::AppState;
@@ -159,7 +159,7 @@ pub async fn detect_model_capabilities(
 pub async fn list_provider_models(
     state: State<'_, AppState>,
     provider_id: String,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<AvailableModel>, String> {
     state
         .settings
         .list_provider_models(&provider_id)

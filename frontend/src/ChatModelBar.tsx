@@ -59,12 +59,12 @@ export default function ChatModelBar({ onError }: { onError: (message: string) =
         <Dropdown
           open={open === 'model'}
           onOpenChange={toggle('model')}
-          label={selected ? selected.model : 'モデル未選択'}
-          title={selected ? `${selected.model}(${selected.provider_name})` : undefined}
+          label={selected ? selected.label : 'モデル未選択'}
+          title={selected ? `${selected.label}(${selected.provider_name})` : undefined}
           disabled={view === null}
           options={choices.map((c) => ({
             key: choiceKey(c),
-            label: c.model,
+            label: c.label,
             detail: c.provider_name,
           }))}
           selectedKey={selected && choiceKey(selected)}
