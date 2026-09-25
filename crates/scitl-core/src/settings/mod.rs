@@ -286,20 +286,20 @@ impl Settings {
         Ok(())
     }
 
-    /// アクティブなモデルが無ければ、名前の分からないモデルとして既定値を返す(その場合
-    /// ターンはアダプタの段階で失敗するので、この値は使われない)。
+    /// アクティブなモデルが無ければ既定値を返す(その場合ターンはアダプタの段階で
+    /// 失敗するので、この値は使われない)。
     fn active_model_capabilities(&self, config: &Config) -> ModelCapabilities {
         config
             .active_model()
             .map(|(p, model)| {
                 llm::resolve_capabilities(model, self.detected.get(&p.id, &model.name).as_ref())
             })
-            .unwrap_or_else(|| llm::default_capabilities(""))
+            .unwrap_or(llm::DEFAULT_CAPABILITIES)
     }
 
     /// 手動設定より下の層(自動検出 → 既定値)で決まる値。
     fn fallback_capabilities(&self, provider_id: &str, model: &str) -> ModelCapabilities {
-        llm::fallback_capabilities(model, self.detected.get(provider_id, model).as_ref())
+        llm::fallback_capabilities(self.detected.get(provider_id, model).as_ref())
     }
 
     pub fn view(&self) -> SettingsView {
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn reasoning_effort_is_sent_only_to_models_that_think() {
         let (_, path) = temp_settings();
-        let config_with = |model: &str, effort_line: &str| {
+        let config_with = |model_lines: &str| {
             format!(
                 r#"
 active_provider_id = "p"
@@ -899,13 +899,13 @@ api_format = "open_ai_compat"
 base_url = "http://localhost:1234/v1"
 
 [[providers.models]]
-name = "{model}"
-{effort_line}
+name = "m"
+{model_lines}
 "#
             )
         };
-        let effort_for = |model: &str, effort_line: &str| {
-            std::fs::write(&path, config_with(model, effort_line)).unwrap();
+        let effort_for = |model_lines: &str| {
+            std::fs::write(&path, config_with(model_lines)).unwrap();
             let settings = Settings::load(path.clone());
             let generating = InFlightSet::new();
             settings
@@ -915,10 +915,11 @@ name = "{model}"
         };
 
         let low = r#"reasoning_effort = "low""#;
-        assert_eq!(effort_for("qwen3:8b", low), Some(ReasoningEffort::Low));
-        assert_eq!(effort_for("qwen2.5:7b", low), None);
+        assert_eq!(effort_for(low), Some(ReasoningEffort::Low));
+        let without_thinking = format!("{low}\n[providers.models.overrides]\nthinking = false");
+        assert_eq!(effort_for(&without_thinking), None);
         // まだ選んでいないモデルでも、サーバーの既定には任せない。
-        assert_eq!(effort_for("qwen3:8b", ""), Some(ReasoningEffort::default()));
+        assert_eq!(effort_for(""), Some(ReasoningEffort::default()));
     }
 
     #[test]
@@ -954,6 +955,9 @@ name = "{model}"
         settings.add_model(&a, "qwen3:8b").unwrap();
         settings.add_model(&a, "hidden").unwrap();
         settings.add_model(&b, "qwen2.5:7b").unwrap();
+        settings
+            .set_model_capability(&b, "qwen2.5:7b", Capability::Thinking, false)
+            .unwrap();
         settings.set_model_visible(&a, "hidden", false).unwrap();
         settings
             .set_reasoning_effort(&a, "qwen3:8b", ReasoningEffort::High)
@@ -1207,7 +1211,7 @@ name = "m"
             .id
             .clone();
         settings.add_model(&id, "m").unwrap();
-        let fallback = llm::default_capabilities("m");
+        let fallback = llm::DEFAULT_CAPABILITIES;
 
         let view = settings
             .set_model_capability(&id, "m", Capability::Tools, !fallback.tools)

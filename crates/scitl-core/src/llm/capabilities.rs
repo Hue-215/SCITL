@@ -2,7 +2,7 @@
 //! 画面の表示も、能力に応じた送信の切り替えも、ここが返す値だけを見る。
 //!
 //! 3層は上から、手動設定(`config::ModelOverrides`)→ 自動検出([`DetectedCapabilities`]。
-//! 推論サーバーへの問い合わせは`providers`が行う)→ 既定値([`default_capabilities`])。
+//! 推論サーバーへの問い合わせは`providers`が行う)→ 既定値([`DEFAULT_CAPABILITIES`])。
 //! 項目ごとに、値を持つ一番上の層が決める。
 
 use std::collections::HashMap;
@@ -42,159 +42,30 @@ pub struct DetectedCapabilities {
     pub context_length: Option<u32>,
 }
 
-/// 既定値の表にも当たらないモデルのコンテキスト長。ローカル推論サーバーが既定で確保する
+/// どの層でもコンテキスト長が分からないときの値。ローカル推論サーバーが既定で確保する
 /// 長さの小さい側に合わせる。大きく見積もると履歴の間引きが足りずに超過で止まるが、
 /// 小さく見積もっても古い発言が早めに落ちるだけで会話は続くため。
 pub const FALLBACK_CONTEXT_LENGTH: u32 = 4096;
 
-/// 既定値の表の1行。
-struct DefaultRow {
-    pattern: NamePattern,
-    image: bool,
-    tools: bool,
-    thinking: bool,
-    /// クラウド専用のモデルにだけ書く。手元で動かせるモデルは、学習時の長さではなく
-    /// 推論サーバーの起動時の設定で決まるため、名前からは分からない。
-    context_length: Option<u32>,
-}
-
-/// モデル名との照合。名前は[`normalize`]した形で比べる。
-enum NamePattern {
-    /// 先頭が一致する。短い名前(`o3`等)が他のモデル名の途中に当たらないように使う。
-    Prefix(&'static str),
-    Contains(&'static str),
-    /// すべてを含む。語順が揃わない名前(`llama3.2-vision`と`Llama-3.2-11B-Vision`)に使う。
-    ContainsAll(&'static [&'static str]),
-}
-
-impl NamePattern {
-    fn matches(&self, normalized: &str) -> bool {
-        match self {
-            Self::Prefix(p) => normalized.starts_with(p),
-            Self::Contains(p) => normalized.contains(p),
-            Self::ContainsAll(parts) => parts.iter().all(|p| normalized.contains(p)),
-        }
-    }
-}
-
-const fn row(
-    pattern: NamePattern,
-    image: bool,
-    tools: bool,
-    thinking: bool,
-    context_length: Option<u32>,
-) -> DefaultRow {
-    DefaultRow {
-        pattern,
-        image,
-        tools,
-        thinking,
-        context_length,
-    }
-}
-
-use NamePattern::{Contains, ContainsAll, Prefix};
-
-/// モデル名ごとの既定値(architecture.md 2節「モデル能力の既定値」)。上から順に照合し、
-/// 最初に当たった行を使う。同じ系列の中で能力が違うものは、細かい名前を先に置く。
-/// ここに無いモデルは[`UNKNOWN_MODEL`]になる。表の値が実物と違っても、利用者は手動設定で
-/// 直せる(設定画面のモデル表)。
-const DEFAULT_TABLE: &[DefaultRow] = &[
-    // OpenAI
-    row(Contains("gpt4o"), true, true, false, Some(128_000)),
-    row(Contains("gpt4.1"), true, true, false, Some(1_047_576)),
-    row(Contains("gpt4turbo"), true, true, false, Some(128_000)),
-    row(Contains("gpt5"), true, true, true, Some(400_000)),
-    row(Contains("gpt3.5"), false, true, false, Some(16_385)),
-    row(Prefix("o1mini"), false, false, true, Some(128_000)),
-    row(Prefix("o3mini"), false, true, true, Some(200_000)),
-    row(Prefix("o1"), true, true, true, Some(200_000)),
-    row(Prefix("o3"), true, true, true, Some(200_000)),
-    row(Prefix("o4"), true, true, true, Some(200_000)),
-    // 手元でも動かせるので長さは書かない。
-    row(Contains("gptoss"), false, true, true, None),
-    // Anthropic
-    row(Contains("claude37"), true, true, true, Some(200_000)),
-    row(Contains("claude3"), true, true, false, Some(200_000)),
-    row(Contains("claude"), true, true, true, Some(200_000)),
-    // Google
-    row(Contains("gemini1"), true, true, false, Some(1_048_576)),
-    row(Contains("gemini2.0"), true, true, false, Some(1_048_576)),
-    row(Contains("gemini"), true, true, true, Some(1_048_576)),
-    row(Contains("gemma3"), true, false, false, None),
-    row(Contains("gemma"), false, false, false, None),
-    // DeepSeek。`deepseek-chat`・`deepseek-reasoner`はAPI専用の名前。
-    row(
-        Contains("deepseekreasoner"),
-        false,
-        true,
-        true,
-        Some(128_000),
-    ),
-    row(Contains("deepseekchat"), false, true, false, Some(128_000)),
-    row(Contains("deepseekr1"), false, false, true, None),
-    // Qwen
-    row(Contains("qwen3vl"), true, true, false, None),
-    row(Contains("qwen2.5vl"), true, false, false, None),
-    row(Contains("qwen2vl"), true, false, false, None),
-    row(Contains("qwq"), false, true, true, None),
-    row(Contains("qwen3"), false, true, true, None),
-    row(Contains("qwen2.5"), false, true, false, None),
-    // Meta
-    row(
-        ContainsAll(&["llama3.2", "vision"]),
-        true,
-        false,
-        false,
-        None,
-    ),
-    row(Contains("llama4"), true, true, false, None),
-    row(Contains("llama3"), false, true, false, None),
-    row(Contains("llava"), true, false, false, None),
-    // その他
-    row(Contains("mistral"), false, true, false, None),
-    row(Contains("phi4reasoning"), false, false, true, None),
-    row(Contains("phi"), false, false, false, None),
-];
-
-/// 表に無いモデル。ツールは対応ありとする。タスクの更新はツール経由でしか行えず
-/// (tools.md)、対応なしを既定にすると、登録しただけのモデルではアプリの中心の操作が
-/// できなくなるため。
-const UNKNOWN_MODEL: DefaultRow = row(Contains(""), false, true, false, None);
-
-/// 照合用に名前を揃える。提供元の前置き(`openai/`、`Qwen/`等)を落とし、大文字小文字と
-/// 区切り(`-`・`_`・空白)の違いを無視する(`Llama-3.2-Vision`と`llama3.2-vision`を
-/// 同じ系列として扱うため)。`.`は版の区切り(`qwen2.5`)なので残す。
-fn normalize(model_name: &str) -> String {
-    let base = model_name.rsplit('/').next().unwrap_or(model_name);
-    base.chars()
-        .filter(|c| !matches!(c, '-' | '_') && !c.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-/// 一番下の層。モデル名だけから決める。
-pub fn default_capabilities(model_name: &str) -> ModelCapabilities {
-    let normalized = normalize(model_name);
-    let row = DEFAULT_TABLE
-        .iter()
-        .find(|r| r.pattern.matches(&normalized))
-        .unwrap_or(&UNKNOWN_MODEL);
-    ModelCapabilities {
-        image: row.image,
-        tools: row.tools,
-        thinking: row.thinking,
-        context_length: row.context_length.unwrap_or(FALLBACK_CONTEXT_LENGTH),
-    }
-}
+/// 一番下の層。モデル名によらず一律の値にする(architecture.md 3節)。名前から能力を
+/// 引く表は、出典を確かめられず新しいモデルにも追従できないため持たない。実物との違いは
+/// 手動設定(設定画面のモデル表)と自動検出で埋める。
+///
+/// - ツールはありとする。タスクの更新はツール経由でしか行えず(tools.md)、なしにすると
+///   登録しただけのモデルではアプリの中心の操作ができなくなるため
+/// - 思考はありとする。なしにすると、手動設定しない限り思考の強さを選べなくなるため。
+///   思考の強さの指定を拒むAPIでは、その旨のエラー発言からモデル表での変更へ誘導する
+pub const DEFAULT_CAPABILITIES: ModelCapabilities = ModelCapabilities {
+    image: false,
+    tools: true,
+    thinking: true,
+    context_length: FALLBACK_CONTEXT_LENGTH,
+};
 
 /// 手動設定より下の層(自動検出 → 既定値)で決まる値。手動設定を「下の層と同じなら外す」
 /// 判定(`settings`)と、設定画面のプレースホルダはこれを見る。
-pub fn fallback_capabilities(
-    model_name: &str,
-    detected: Option<&DetectedCapabilities>,
-) -> ModelCapabilities {
-    let default = default_capabilities(model_name);
+pub fn fallback_capabilities(detected: Option<&DetectedCapabilities>) -> ModelCapabilities {
+    let default = DEFAULT_CAPABILITIES;
     let Some(detected) = detected else {
         return default;
     };
@@ -217,7 +88,7 @@ pub fn resolve_capabilities(
     model: &ModelConfig,
     detected: Option<&DetectedCapabilities>,
 ) -> ModelCapabilities {
-    let fallback = fallback_capabilities(&model.name, detected);
+    let fallback = fallback_capabilities(detected);
     let manual = &model.overrides;
     ModelCapabilities {
         image: manual.image.unwrap_or(fallback.image),
@@ -279,10 +150,7 @@ mod tests {
     #[test]
     fn manual_settings_take_precedence_over_lower_layers() {
         let mut model = ModelConfig::new("m".to_string());
-        assert_eq!(
-            resolve_capabilities(&model, None),
-            default_capabilities("m")
-        );
+        assert_eq!(resolve_capabilities(&model, None), DEFAULT_CAPABILITIES);
 
         model.overrides.image = Some(true);
         model.overrides.tools = Some(false);
@@ -290,13 +158,13 @@ mod tests {
         let resolved = resolve_capabilities(&model, None);
         assert!(resolved.image);
         assert!(!resolved.tools);
-        assert_eq!(resolved.thinking, default_capabilities("m").thinking);
+        assert_eq!(resolved.thinking, DEFAULT_CAPABILITIES.thinking);
         assert_eq!(resolved.context_length, 4096);
 
         model.overrides.context_length = Some(0);
         assert_eq!(
             resolve_capabilities(&model, None).context_length,
-            default_capabilities("m").context_length
+            DEFAULT_CAPABILITIES.context_length
         );
     }
 
@@ -314,7 +182,7 @@ mod tests {
         assert!(resolved.thinking);
         assert_eq!(resolved.context_length, 32_768);
         // サーバーが教えない項目は既定値。
-        assert_eq!(resolved.tools, default_capabilities("unknown-model").tools);
+        assert_eq!(resolved.tools, DEFAULT_CAPABILITIES.tools);
 
         model.overrides.thinking = Some(false);
         model.overrides.context_length = Some(8192);
@@ -330,65 +198,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            fallback_capabilities("m", Some(&detected)).context_length,
+            fallback_capabilities(Some(&detected)).context_length,
             FALLBACK_CONTEXT_LENGTH
         );
-    }
-
-    #[test]
-    fn default_table_ignores_case_separators_and_vendor_prefix() {
-        for name in [
-            "llama3.2-vision:11b",
-            "Llama-3.2-11B-Vision-Instruct",
-            "meta-llama/Llama-3.2-11B-Vision",
-        ] {
-            let caps = default_capabilities(name);
-            assert!(caps.image, "{name}");
-            assert!(!caps.tools, "{name}");
-        }
-        assert_eq!(
-            default_capabilities("openai/gpt-4o"),
-            default_capabilities("gpt-4o-2024-08-06")
-        );
-    }
-
-    #[test]
-    fn more_specific_rows_win_within_a_family() {
-        assert!(!default_capabilities("qwen2.5-vl:7b").tools);
-        assert!(default_capabilities("qwen2.5-vl:7b").image);
-        assert!(default_capabilities("qwen2.5:7b").tools);
-        assert!(!default_capabilities("qwen2.5:7b").image);
-        assert!(!default_capabilities("claude-3-5-sonnet").thinking);
-        assert!(default_capabilities("claude-sonnet-4-5").thinking);
-    }
-
-    #[test]
-    fn short_openai_names_match_only_at_the_start() {
-        assert!(default_capabilities("o3").thinking);
-        assert!(default_capabilities("o4-mini").thinking);
-        // 途中に`o3`を含むだけのモデルは当たらない。
-        assert_eq!(
-            default_capabilities("foo3"),
-            default_capabilities("unknown-model")
-        );
-    }
-
-    #[test]
-    fn open_weight_models_leave_context_length_to_the_fallback() {
-        assert_eq!(
-            default_capabilities("qwen3:8b").context_length,
-            FALLBACK_CONTEXT_LENGTH
-        );
-        assert_eq!(default_capabilities("gpt-4o").context_length, 128_000);
-    }
-
-    #[test]
-    fn unknown_models_assume_tool_support() {
-        let caps = default_capabilities("some-new-model");
-        assert!(caps.tools);
-        assert!(!caps.image);
-        assert!(!caps.thinking);
-        assert_eq!(caps.context_length, FALLBACK_CONTEXT_LENGTH);
     }
 
     #[test]
