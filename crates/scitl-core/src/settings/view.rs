@@ -156,7 +156,7 @@ pub struct SelectedModel {
     pub choice: ModelChoice,
     /// 思考に対応する(3層で解決済み)。対応しなければ思考の強さは選べない。
     pub thinking: bool,
-    pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_effort: ReasoningEffort,
 }
 
 pub(super) fn chat_models(config: &Config, detected: &DetectedCatalog) -> ChatModelsView {

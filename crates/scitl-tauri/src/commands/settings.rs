@@ -192,7 +192,7 @@ pub async fn set_reasoning_effort(
     state: State<'_, AppState>,
     provider_id: String,
     model: String,
-    effort: Option<ReasoningEffort>,
+    effort: ReasoningEffort,
 ) -> Result<(), String> {
     with_settings(&state, move |s| {
         s.set_reasoning_effort(&provider_id, &model, effort)

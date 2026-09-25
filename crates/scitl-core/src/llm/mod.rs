@@ -212,8 +212,9 @@ pub trait LlmAdapter: Send + Sync {
     /// (理由は[`Readiness`]のドキュメント)。判定材料はプロバイダごとに異なるため各実装に委ねる。
     fn readiness(&self) -> Readiness;
 
-    /// `reasoning_effort`が`None`なら思考の強さを指定しない。思考に対応しないモデルでは
-    /// 呼び出し元が`None`にしてから渡す(指定そのものを拒むAPIがあるため)。
+    /// `reasoning_effort`は、思考に対応するモデルでは常に`Some`、対応しないモデルでは
+    /// `None`(指定そのものを拒むAPIがあるため、強さを指定しない)。どちらにするかは
+    /// 呼び出し元が能力から決める。
     async fn send(
         &self,
         messages: &[ChatMessage],

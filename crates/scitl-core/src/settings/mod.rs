@@ -131,7 +131,7 @@ impl Snapshot {
             reasoning_effort: self
                 .config
                 .active_model()
-                .and_then(|(_, model)| model.reasoning_effort)
+                .map(|(_, model)| model.reasoning_effort)
                 .filter(|_| self.capabilities.thinking),
             mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
             limits: ToolLimits::from_config(&self.config.tools),
@@ -507,14 +507,13 @@ impl Settings {
         draft.commit().map(drop)
     }
 
-    /// `None`は思考の強さを指定しない。思考に対応しないモデルにも保存はできる(送るときに
-    /// 外す。[`Snapshot::turn_context`])。能力は手動設定で後から変わりうるため、選んだ値は
-    /// 捨てずに残す。
+    /// 思考に対応しないモデルにも保存はできる(送るときに外す。[`Snapshot::turn_context`])。
+    /// 能力は手動設定で後から変わりうるため、選んだ値は捨てずに残す。
     pub fn set_reasoning_effort(
         &self,
         provider_id: &str,
         model: &str,
-        effort: Option<ReasoningEffort>,
+        effort: ReasoningEffort,
     ) -> Result<()> {
         let mut draft = self.edit();
         find_model_mut(&mut draft.config, provider_id, model)?.reasoning_effort = effort;
@@ -884,11 +883,11 @@ mod tests {
             .unwrap()
     }
 
-    /// 思考に対応しないモデルでは、選んである強さを送らない。
+    /// 思考に対応するモデルには強さを必ず送り、対応しないモデルには送らない。
     #[test]
     fn reasoning_effort_is_sent_only_to_models_that_think() {
         let (_, path) = temp_settings();
-        let config_with = |model: &str| {
+        let config_with = |model: &str, effort_line: &str| {
             format!(
                 r#"
 active_provider_id = "p"
@@ -901,12 +900,12 @@ base_url = "http://localhost:1234/v1"
 
 [[providers.models]]
 name = "{model}"
-reasoning_effort = "low"
+{effort_line}
 "#
             )
         };
-        let effort_for = |model: &str| {
-            std::fs::write(&path, config_with(model)).unwrap();
+        let effort_for = |model: &str, effort_line: &str| {
+            std::fs::write(&path, config_with(model, effort_line)).unwrap();
             let settings = Settings::load(path.clone());
             let generating = InFlightSet::new();
             settings
@@ -915,8 +914,11 @@ reasoning_effort = "low"
                 .reasoning_effort
         };
 
-        assert_eq!(effort_for("qwen3:8b"), Some(ReasoningEffort::Low));
-        assert_eq!(effort_for("qwen2.5:7b"), None);
+        let low = r#"reasoning_effort = "low""#;
+        assert_eq!(effort_for("qwen3:8b", low), Some(ReasoningEffort::Low));
+        assert_eq!(effort_for("qwen2.5:7b", low), None);
+        // まだ選んでいないモデルでも、サーバーの既定には任せない。
+        assert_eq!(effort_for("qwen3:8b", ""), Some(ReasoningEffort::default()));
     }
 
     #[test]
@@ -954,7 +956,7 @@ reasoning_effort = "low"
         settings.add_model(&b, "qwen2.5:7b").unwrap();
         settings.set_model_visible(&a, "hidden", false).unwrap();
         settings
-            .set_reasoning_effort(&a, "qwen3:8b", Some(ReasoningEffort::High))
+            .set_reasoning_effort(&a, "qwen3:8b", ReasoningEffort::High)
             .unwrap();
 
         let chat_models =
@@ -965,7 +967,7 @@ reasoning_effort = "low"
         let selected = listed.selected.unwrap();
         assert_eq!(selected.choice.model, "qwen3:8b");
         assert!(selected.thinking);
-        assert_eq!(selected.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(selected.reasoning_effort, ReasoningEffort::High);
 
         settings.select_chat_model(&a, "hidden").unwrap();
         assert_eq!(
@@ -977,7 +979,6 @@ reasoning_effort = "low"
         let selected = chat_models(&settings).selected.unwrap();
         assert_eq!(selected.choice.provider_name, "B");
         assert!(!selected.thinking);
-        assert_eq!(selected.reasoning_effort, None);
     }
 
     #[test]

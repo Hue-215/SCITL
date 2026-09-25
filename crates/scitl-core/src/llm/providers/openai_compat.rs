@@ -115,7 +115,8 @@ struct RequestBody<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<RequestTool>,
     /// OpenAIの`reasoning_effort`。互換を名乗るサーバーにも同じ名前で受けるものが多い。
-    /// 値を拒むサーバーでは、その失敗がエラー発言に残り、強さを既定に戻せば送らなくなる。
+    /// 指定を拒むサーバーでは、その失敗がエラー発言に残る(モデル表で思考のチェックを
+    /// 外せば送らなくなる)。
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
     stream: bool,
