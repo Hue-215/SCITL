@@ -33,7 +33,7 @@ function TaskList({
         <li key={task.id}>
           <button
             type="button"
-            className={task.id === selectedTaskId ? 'sidebar-task selected' : 'sidebar-task'}
+            className={task.id === selectedTaskId ? 'list-row selected' : 'list-row'}
             onClick={() => onSelect(task.id)}
           >
             {taskLabel(task)}
@@ -84,7 +84,7 @@ export default function Sidebar({
           <div className="sidebar-archived">
             <button
               type="button"
-              className="sidebar-archived-toggle"
+              className="list-row sidebar-archived-toggle"
               onClick={() => setArchivedOpen((open) => !open)}
             >
               アーカイブ済み({archived.length}){archivedOpen ? ' ▲' : ' ▼'}

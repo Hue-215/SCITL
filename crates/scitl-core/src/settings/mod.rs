@@ -23,7 +23,8 @@ use serde::Deserialize;
 
 use crate::config::{
     self, validate_mcp_server_name, ApiFormat, Capability, Config, GeneralConfig, McpEndpoint,
-    McpServerConfig, ModelConfig, ModelOverrides, ProviderConfig, SecretRef, ToolConfig,
+    McpServerConfig, ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort, SecretRef,
+    ToolConfig,
 };
 use crate::db::error::{CoreError, Result};
 use crate::in_flight::InFlightSet;
@@ -34,7 +35,7 @@ use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext, Tu
 use crate::secrets;
 use crate::tools::external;
 
-pub use view::SettingsView;
+pub use view::{ChatModelsView, SettingsView};
 
 /// プロバイダー追加フォームからの入力。
 pub struct NewProvider {
@@ -127,6 +128,11 @@ impl Snapshot {
                 task_chat: self.config.general.task_chat_system_prompt.as_deref(),
             },
             capabilities: self.capabilities,
+            reasoning_effort: self
+                .config
+                .active_model()
+                .map(|(_, model)| model.reasoning_effort)
+                .filter(|_| self.capabilities.thinking),
             mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
             limits: ToolLimits::from_config(&self.config.tools),
             generating,
@@ -207,17 +213,31 @@ impl Settings {
     }
 
     /// ターンの開始に使う[`Self::snapshot`]。アクティブなモデルの能力をまだ推論サーバーに
-    /// 問い合わせていなければ、先に問い合わせる(アプリ起動後の最初のターンだけ)。
+    /// 問い合わせていなければ、先に問い合わせる([`Self::detect_active_model_once`])。
     ///
     /// 問い合わせに失敗してもターンは止めない。サーバーに繋がらないならターン自体が
-    /// 失敗して理由がエラー発言に残り、繋がるなら既定値の層で進められるため。失敗は
-    /// 覚えないので、次のターンで問い合わせ直す。
+    /// 失敗して理由がエラー発言に残り、繋がるなら既定値の層で進められるため。
     pub async fn snapshot_for_turn(&self) -> Snapshot {
+        self.detect_active_model_once().await;
+        self.snapshot()
+    }
+
+    /// チャット入力欄の下のモデル選択(Issue #64)。思考の強さを選べるかは能力で決まるので、
+    /// ターンの開始と同じく、アクティブなモデルを先に問い合わせる。失敗したら自動検出より
+    /// 下の層の値で出す。
+    pub async fn chat_models(&self) -> ChatModelsView {
+        self.detect_active_model_once().await;
+        view::chat_models(&self.current().config, &self.detected)
+    }
+
+    /// アクティブなモデルの能力を、まだ推論サーバーに問い合わせていなければ問い合わせる
+    /// (アプリ起動後、モデルごとに最初の1回)。失敗は覚えないので、次の機会に問い合わせ直す。
+    async fn detect_active_model_once(&self) {
         let config = self.current().config;
-        let target = config.active_provider().and_then(|p| {
-            let model = p.resolved_model()?;
-            (providers::can_detect_capabilities(p) && self.detected.get(&p.id, model).is_none())
-                .then(|| (p.clone(), model.to_string()))
+        let target = config.active_model().and_then(|(p, model)| {
+            (providers::can_detect_capabilities(p)
+                && self.detected.get(&p.id, &model.name).is_none())
+            .then(|| (p.clone(), model.name.clone()))
         });
         if let Some((provider, model)) = target {
             if let Err(e) = self.detect(&provider, vec![model]).await {
@@ -227,7 +247,6 @@ impl Settings {
                 );
             }
         }
-        self.snapshot()
     }
 
     /// プロバイダーの全モデルの能力を推論サーバーに問い合わせ直す(設定画面)。
@@ -271,13 +290,9 @@ impl Settings {
     /// ターンはアダプタの段階で失敗するので、この値は使われない)。
     fn active_model_capabilities(&self, config: &Config) -> ModelCapabilities {
         config
-            .active_provider()
-            .and_then(|p| {
-                let model = p.model(p.resolved_model()?)?;
-                Some(llm::resolve_capabilities(
-                    model,
-                    self.detected.get(&p.id, &model.name).as_ref(),
-                ))
+            .active_model()
+            .map(|(p, model)| {
+                llm::resolve_capabilities(model, self.detected.get(&p.id, &model.name).as_ref())
             })
             .unwrap_or_else(|| llm::default_capabilities(""))
     }
@@ -476,6 +491,33 @@ impl Settings {
         }
         provider.active_model = Some(model.to_string());
         draft.commit()
+    }
+
+    /// チャット入力欄の下で選んだモデルに切り替える(Issue #64)。一覧はプロバイダーを跨ぐので、
+    /// アクティブなプロバイダーとそのモデルを1回の保存で切り替える。2回に分けると、間で
+    /// 落ちたときに意図しない組が残る。
+    pub fn select_chat_model(&self, provider_id: &str, model: &str) -> Result<()> {
+        let mut draft = self.edit();
+        let provider = find_provider_mut(&mut draft.config, provider_id)?;
+        if provider.model(model).is_none() {
+            return Err(model_not_found(model));
+        }
+        provider.active_model = Some(model.to_string());
+        draft.config.active_provider_id = Some(provider_id.to_string());
+        draft.commit().map(drop)
+    }
+
+    /// 思考に対応しないモデルにも保存はできる(送るときに外す。[`Snapshot::turn_context`])。
+    /// 能力は手動設定で後から変わりうるため、選んだ値は捨てずに残す。
+    pub fn set_reasoning_effort(
+        &self,
+        provider_id: &str,
+        model: &str,
+        effort: ReasoningEffort,
+    ) -> Result<()> {
+        let mut draft = self.edit();
+        find_model_mut(&mut draft.config, provider_id, model)?.reasoning_effort = effort;
+        draft.commit().map(drop)
     }
 
     /// チャットのモデル一覧に出すかどうか。
@@ -839,6 +881,104 @@ mod tests {
                 api_key: None,
             })
             .unwrap()
+    }
+
+    /// 思考に対応するモデルには強さを必ず送り、対応しないモデルには送らない。
+    #[test]
+    fn reasoning_effort_is_sent_only_to_models_that_think() {
+        let (_, path) = temp_settings();
+        let config_with = |model: &str, effort_line: &str| {
+            format!(
+                r#"
+active_provider_id = "p"
+
+[[providers]]
+id = "p"
+name = "Local"
+api_format = "open_ai_compat"
+base_url = "http://localhost:1234/v1"
+
+[[providers.models]]
+name = "{model}"
+{effort_line}
+"#
+            )
+        };
+        let effort_for = |model: &str, effort_line: &str| {
+            std::fs::write(&path, config_with(model, effort_line)).unwrap();
+            let settings = Settings::load(path.clone());
+            let generating = InFlightSet::new();
+            settings
+                .snapshot()
+                .turn_context(&generating)
+                .reasoning_effort
+        };
+
+        let low = r#"reasoning_effort = "low""#;
+        assert_eq!(effort_for("qwen3:8b", low), Some(ReasoningEffort::Low));
+        assert_eq!(effort_for("qwen2.5:7b", low), None);
+        // まだ選んでいないモデルでも、サーバーの既定には任せない。
+        assert_eq!(effort_for("qwen3:8b", ""), Some(ReasoningEffort::default()));
+    }
+
+    #[test]
+    fn chat_model_selection_switches_provider_and_model_together() {
+        let (settings, path) = temp_settings();
+        let a = add_local_provider(&settings, "A").providers[0].id.clone();
+        let b = add_local_provider(&settings, "B").providers[1].id.clone();
+        settings.add_model(&a, "a1").unwrap();
+        settings.add_model(&b, "b1").unwrap();
+        settings.add_model(&b, "b2").unwrap();
+
+        settings.select_chat_model(&b, "b2").unwrap();
+        let reloaded = config::load(&path).unwrap();
+        let (provider, model) = reloaded.active_model().unwrap();
+        assert_eq!(
+            (provider.id.as_str(), model.name.as_str()),
+            (b.as_str(), "b2")
+        );
+
+        assert!(settings.select_chat_model(&a, "b1").is_err());
+        assert_eq!(
+            settings.current().config.active_provider_id.as_deref(),
+            Some(b.as_str()),
+            "失敗した選択は何も変えない"
+        );
+    }
+
+    #[test]
+    fn chat_models_list_visible_models_and_the_selected_one_even_if_hidden() {
+        let (settings, _) = temp_settings();
+        let a = add_local_provider(&settings, "A").providers[0].id.clone();
+        let b = add_local_provider(&settings, "B").providers[1].id.clone();
+        settings.add_model(&a, "qwen3:8b").unwrap();
+        settings.add_model(&a, "hidden").unwrap();
+        settings.add_model(&b, "qwen2.5:7b").unwrap();
+        settings.set_model_visible(&a, "hidden", false).unwrap();
+        settings
+            .set_reasoning_effort(&a, "qwen3:8b", ReasoningEffort::High)
+            .unwrap();
+
+        let chat_models =
+            |settings: &Settings| view::chat_models(&settings.current().config, &settings.detected);
+        let listed = chat_models(&settings);
+        let names: Vec<_> = listed.choices.iter().map(|c| c.model.as_str()).collect();
+        assert_eq!(names, ["qwen3:8b", "qwen2.5:7b"]);
+        let selected = listed.selected.unwrap();
+        assert_eq!(selected.choice.model, "qwen3:8b");
+        assert!(selected.thinking);
+        assert_eq!(selected.reasoning_effort, ReasoningEffort::High);
+
+        settings.select_chat_model(&a, "hidden").unwrap();
+        assert_eq!(
+            chat_models(&settings).selected.unwrap().choice.model,
+            "hidden"
+        );
+
+        settings.select_chat_model(&b, "qwen2.5:7b").unwrap();
+        let selected = chat_models(&settings).selected.unwrap();
+        assert_eq!(selected.choice.provider_name, "B");
+        assert!(!selected.thinking);
     }
 
     #[test]
