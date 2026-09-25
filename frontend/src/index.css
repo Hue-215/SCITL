@@ -151,6 +151,14 @@ input:not([type='radio']):not([type='checkbox']) {
   padding: var(--space-2);
 }
 
+/* 受け付けられない入力は欄そのものにも示す。誤りの一文を欄の近くに置けないとき
+   (表のセル等)でも、どの欄が誤っているか分かるように。 */
+select[aria-invalid='true'],
+textarea[aria-invalid='true'],
+input[aria-invalid='true']:not([type='radio']):not([type='checkbox']) {
+  border-color: var(--color-danger);
+}
+
 button {
   background: var(--color-surface-alt);
   padding: var(--space-1) var(--space-2);
@@ -944,6 +952,11 @@ option {
 /* 桁数の入る幅。ここでしか使わない値なのでトークン化しない。 */
 .model-context-length {
   width: 7em;
+}
+
+/* 表のセルの中に出すので、欄の幅で折り返す。 */
+.model-context-length-error {
+  font-size: var(--font-size-sm);
 }
 
 /* 表の中では枠も塗りも持たせず、行の中で目立たせない。 */

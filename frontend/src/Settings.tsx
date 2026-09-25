@@ -214,7 +214,8 @@ function usePositiveIntegerInput(value: number | null, onSave: (value: number | 
   }, [value])
 
   const save = () => {
-    const trimmed = text.trim()
+    // IMEを切り忘れて打った全角の数字も受け付ける。
+    const trimmed = text.normalize('NFKC').trim()
     const parsed = trimmed === '' ? null : Number(trimmed)
     if (parsed !== null && (!Number.isInteger(parsed) || parsed <= 0)) {
       setInvalid(true)
@@ -719,8 +720,10 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
           className="model-context-length"
           placeholder={`既定 ${model.default_context_length}`}
           aria-label={`${shown}のコンテキスト長`}
-          title={contextLength.invalid ? POSITIVE_INTEGER_ERROR : undefined}
         />
+        {contextLength.invalid && (
+          <p className="error model-context-length-error">{POSITIVE_INTEGER_ERROR}</p>
+        )}
       </td>
       <td>
         <span className="model-actions">
