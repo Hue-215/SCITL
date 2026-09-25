@@ -28,10 +28,10 @@ pub struct ProviderConfig {
     pub name: String,
     pub api_format: ApiFormat,
     pub base_url: String,
-    /// このプロバイダーで使えるモデル名の一覧。手動追加・削除する(設定画面「APIプロバイダー」
+    /// このプロバイダーで使えるモデルの一覧。手動追加・削除する(設定画面「APIプロバイダー」
     /// タブ)。API問い合わせによる一括取得は別Issueで扱う。
     #[serde(default)]
-    pub models: Vec<String>,
+    pub models: Vec<ModelConfig>,
     /// `models`のうちチャットで実際に使うモデル。`models`に無い値は無効。
     pub active_model: Option<String>,
     /// [`crate::secrets`]に保存した秘密情報を指す不透明な参照。未設定(鍵が要らない
@@ -46,8 +46,72 @@ impl ProviderConfig {
         let active = self
             .active_model
             .as_deref()
-            .filter(|m| self.models.iter().any(|x| x == m));
-        active.or_else(|| self.models.first().map(String::as_str))
+            .filter(|m| self.model(m).is_some());
+        active.or_else(|| self.models.first().map(|m| m.name.as_str()))
+    }
+
+    pub fn model(&self, name: &str) -> Option<&ModelConfig> {
+        self.models.iter().find(|m| m.name == name)
+    }
+}
+
+/// 登録済みの1モデル(Issue #65)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub name: String,
+    /// チャットのモデル一覧に出すか。
+    #[serde(default = "visible_by_default")]
+    pub visible: bool,
+    /// 能力の手動設定。能力を3層で解決するうちの一番上の層で、値の無い項目は下の層で決まる
+    /// (principles.md 3節、[`crate::llm::resolve_capabilities`])。
+    #[serde(default, skip_serializing_if = "ModelOverrides::is_empty")]
+    pub overrides: ModelOverrides,
+}
+
+impl ModelConfig {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            visible: visible_by_default(),
+            overrides: ModelOverrides::default(),
+        }
+    }
+}
+
+/// 追加したモデルは、隠すまでチャットの一覧に出す。
+fn visible_by_default() -> bool {
+    true
+}
+
+/// モデルの能力のうち、対応の有無で表すもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    Image,
+    Tools,
+    Thinking,
+}
+
+/// 能力の手動設定。`None`は「手動では決めていない」。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelOverrides {
+    pub image: Option<bool>,
+    pub tools: Option<bool>,
+    pub thinking: Option<bool>,
+    pub context_length: Option<u32>,
+}
+
+impl ModelOverrides {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn flag_mut(&mut self, capability: Capability) -> &mut Option<bool> {
+        match capability {
+            Capability::Image => &mut self.image,
+            Capability::Tools => &mut self.tools,
+            Capability::Thinking => &mut self.thinking,
+        }
     }
 }
 
@@ -261,7 +325,7 @@ mod tests {
                 name: "OpenAI".to_string(),
                 api_format: ApiFormat::OpenAiCompat,
                 base_url: "https://api.openai.com/v1".to_string(),
-                models: vec!["gpt-4o-mini".to_string()],
+                models: vec![ModelConfig::new("gpt-4o-mini".to_string())],
                 active_model: Some("gpt-4o-mini".to_string()),
                 key_ref: Some("provider:default".to_string()),
             }],
@@ -377,11 +441,62 @@ mod tests {
             name: "Local".to_string(),
             api_format: ApiFormat::OpenAiCompat,
             base_url: "http://localhost:1234/v1".to_string(),
-            models: vec!["a".to_string(), "b".to_string()],
+            models: vec![
+                ModelConfig::new("a".to_string()),
+                ModelConfig::new("b".to_string()),
+            ],
             active_model: Some("not-in-list".to_string()),
             key_ref: None,
         };
         assert_eq!(provider.resolved_model(), Some("a"));
+    }
+
+    #[test]
+    fn model_table_roundtrips_and_omitted_fields_take_defaults() {
+        let text = r#"
+[[providers]]
+id = "p"
+name = "Local"
+api_format = "open_ai_compat"
+base_url = "http://localhost:1234/v1"
+
+[[providers.models]]
+name = "plain"
+
+[[providers.models]]
+name = "tuned"
+visible = false
+
+[providers.models.overrides]
+tools = false
+context_length = 8192
+"#;
+        let config: Config = toml::from_str(text).unwrap();
+        let models = &config.providers[0].models;
+        assert_eq!(models[0], ModelConfig::new("plain".to_string()));
+        assert!(!models[1].visible);
+        assert_eq!(models[1].overrides.tools, Some(false));
+        assert_eq!(models[1].overrides.image, None);
+        assert_eq!(models[1].overrides.context_length, Some(8192));
+
+        let saved = toml::to_string_pretty(&config).unwrap();
+        let reloaded: Config = toml::from_str(&saved).unwrap();
+        assert_eq!(reloaded.providers[0].models, *models);
+    }
+
+    /// モデル名だけを並べた形(Issue #65より前)は読まない。起動時の読み込みエラー
+    /// (`settings`モジュール冒頭)として扱われる。
+    #[test]
+    fn model_names_without_table_are_rejected() {
+        let text = r#"
+[[providers]]
+id = "p"
+name = "Local"
+api_format = "open_ai_compat"
+base_url = "http://localhost:1234/v1"
+models = ["a"]
+"#;
+        assert!(toml::from_str::<Config>(text).is_err());
     }
 
     fn tempdir() -> std::path::PathBuf {
@@ -410,8 +525,10 @@ id = "default"
 name = "OpenAI"
 api_format = "open_ai_compat"
 base_url = "https://api.openai.com/v1"
-models = ["gpt-4o-mini"]
 active_model = "gpt-4o-mini"
+
+[[providers.models]]
+name = "gpt-4o-mini"
 "#,
         )
         .unwrap();

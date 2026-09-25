@@ -4,7 +4,7 @@
 use secrecy::SecretString;
 use tauri::State;
 
-use scitl_core::config::ApiFormat;
+use scitl_core::config::{ApiFormat, Capability};
 use scitl_core::settings::{NewProvider, SettingsView};
 
 use super::with_settings;
@@ -103,4 +103,56 @@ pub async fn set_active_model(
     model: String,
 ) -> Result<SettingsView, String> {
     with_settings(&state, move |s| s.set_active_model(&provider_id, &model)).await
+}
+
+#[tauri::command]
+pub async fn set_model_visible(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+    visible: bool,
+) -> Result<SettingsView, String> {
+    with_settings(&state, move |s| {
+        s.set_model_visible(&provider_id, &model, visible)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_model_capability(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+    capability: Capability,
+    supported: bool,
+) -> Result<SettingsView, String> {
+    with_settings(&state, move |s| {
+        s.set_model_capability(&provider_id, &model, capability, supported)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_model_context_length(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+    context_length: Option<u32>,
+) -> Result<SettingsView, String> {
+    with_settings(&state, move |s| {
+        s.set_model_context_length(&provider_id, &model, context_length)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn reset_model_capabilities(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+) -> Result<SettingsView, String> {
+    with_settings(&state, move |s| {
+        s.reset_model_capabilities(&provider_id, &model)
+    })
+    .await
 }

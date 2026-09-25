@@ -1,10 +1,11 @@
 pub mod openai_compat;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use secrecy::SecretString;
 
-use crate::config::{ApiFormat, Config, ProviderConfig};
+use crate::config::{ApiFormat, Config};
 use crate::db::error::CoreError;
 use crate::llm::LlmAdapter;
 use crate::secrets;
@@ -27,6 +28,37 @@ pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), Co
     }
 }
 
+/// アダプタの組み立てに使う設定値。[`build_active_adapter`]は設定からこれだけを読む。
+/// 設定の変更でアダプタを組み立て直すかどうかは、これが変わったかで決める
+/// (モデルの表示や能力の切り替えのたびに資格情報ストアを読みに行かないように)。
+#[derive(PartialEq)]
+pub struct AdapterInputs<'a> {
+    provider: Option<ProviderInputs<'a>>,
+    timeout: Duration,
+}
+
+#[derive(PartialEq)]
+struct ProviderInputs<'a> {
+    api_format: ApiFormat,
+    base_url: &'a str,
+    key_ref: Option<&'a str>,
+    model: &'a str,
+}
+
+impl<'a> AdapterInputs<'a> {
+    pub fn of(config: &'a Config) -> Self {
+        Self {
+            provider: config.active_provider().map(|p| ProviderInputs {
+                api_format: p.api_format,
+                base_url: &p.base_url,
+                key_ref: p.key_ref.as_deref(),
+                model: p.resolved_model().unwrap_or_default(),
+            }),
+            timeout: config.general.response_timeout(),
+        }
+    }
+}
+
 /// 現在の`active_provider_id`からアダプタを組み立てる。アクティブなプロバイダーが無い場合は
 /// エラーではなく`None`を返す(全プロバイダー削除は有効な状態であり、チャット送信時に
 /// 初めてエラー発言として表面化させる)。
@@ -35,22 +67,21 @@ pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), Co
 /// 場合でもアプリ自体は起動させる。鍵無し扱いに落とし、実際のAPI呼び出し時に
 /// プロバイダー側の認証エラーとして表面化させる。
 pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError> {
-    let Some(provider) = config.active_provider() else {
+    let AdapterInputs { provider, timeout } = AdapterInputs::of(config);
+    let Some(provider) = provider else {
         return Ok(ActiveAdapter {
             adapter: None,
             key_unavailable: false,
         });
     };
-    let (api_key, key_unavailable) = load_api_key(provider);
-    let model = provider.resolved_model().unwrap_or_default();
-    let timeout = config.general.response_timeout();
+    let (api_key, key_unavailable) = load_api_key(provider.key_ref);
 
     // 方言を足したらここがコンパイルエラーになり、黙ってOpenAI互換で組み立てることはない。
     let adapter: SharedAdapter = match provider.api_format {
         ApiFormat::OpenAiCompat => Arc::new(OpenAiCompatAdapter::new(
-            provider.base_url.clone(),
+            provider.base_url.to_string(),
             api_key,
-            model,
+            provider.model,
             timeout,
         )?),
     };
@@ -61,8 +92,8 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
 }
 
 /// 2つ目は「鍵があるはずなのに読めなかった」。
-fn load_api_key(provider: &ProviderConfig) -> (SecretString, bool) {
-    let Some(key_ref) = &provider.key_ref else {
+fn load_api_key(key_ref: Option<&str>) -> (SecretString, bool) {
+    let Some(key_ref) = key_ref else {
         return (SecretString::from(String::new()), false);
     };
     match secrets::load(key_ref) {

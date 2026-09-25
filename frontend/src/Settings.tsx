@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { ChangeEvent, FormEvent } from 'react'
 import {
   addMcpServer,
   addModel,
@@ -9,17 +9,23 @@ import {
   fetchMcpTools,
   getSettings,
   removeModel,
+  resetModelCapabilities,
   setActiveModel,
   setActiveProvider,
   setMcpServerEnabled,
   setMcpToolEnabled,
+  setModelCapability,
+  setModelContextLength,
+  setModelVisible,
   updateGeneralSettings,
   updateToolSettings,
   type NewMcpEndpoint,
 } from './api'
 import type {
   ApiFormat,
+  Capability,
   McpServerView,
+  ModelView,
   ProviderView,
   SettingsView,
 } from './types'
@@ -148,15 +154,7 @@ export default function Settings({ onClose }: SettingsProps) {
                 }
                 onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
                 onSetActiveProvider={(id) => runOrReportError(() => setActiveProvider(id))}
-                onAddModel={(providerId, model) =>
-                  runOrReportError(() => addModel(providerId, model))
-                }
-                onRemoveModel={(providerId, model) =>
-                  runOrReportError(() => removeModel(providerId, model))
-                }
-                onSetActiveModel={(providerId, model) =>
-                  runOrReportError(() => setActiveModel(providerId, model))
-                }
+                onUpdateModels={runOrReportError}
               />
             ) : (
               <McpTab
@@ -200,11 +198,13 @@ interface NumberFieldProps {
   onSave: (value: number | null) => void
 }
 
+const POSITIVE_INTEGER_ERROR = '1以上の整数を入力してください'
+
 // フォーカスを外すと自動保存する数値入力(legacy/frontend.md 2節・4節)。入力中は自身の
 // stateだけを更新し、blur時にのみ親へ確定した値を渡す。入力チェック(空欄は未設定、
-// それ以外は1以上の整数)をこの1箇所に閉じる。3箇所目が出た時点ではなく2箇所目で
-// 部品にしたのは、同じ検証を書き写すと片方だけ直す事故が起きるため(ui.md 1節)。
-function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldProps) {
+// それ以外は1以上の整数)をこの1箇所に閉じ、設定欄(NumberField)とモデル表の
+// コンテキスト長の両方がこれを使う(ui.md 1節)。
+function usePositiveIntegerInput(value: number | null, onSave: (value: number | null) => void) {
   const [text, setText] = useState(value?.toString() ?? '')
   const [invalid, setInvalid] = useState(false)
 
@@ -215,33 +215,38 @@ function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldPr
 
   const save = () => {
     const trimmed = text.trim()
-    if (trimmed === '') {
-      setInvalid(false)
-      onSave(null)
-      return
-    }
-    const parsed = Number(trimmed)
-    if (!Number.isInteger(parsed) || parsed <= 0) {
+    const parsed = trimmed === '' ? null : Number(trimmed)
+    if (parsed !== null && (!Number.isInteger(parsed) || parsed <= 0)) {
       setInvalid(true)
       return
     }
     setInvalid(false)
-    onSave(parsed)
+    // フォーカスが通り過ぎただけで保存しない(モデル表では行ごとに欄がある)。
+    if (parsed !== value) onSave(parsed)
   }
+
+  return {
+    invalid,
+    inputProps: {
+      type: 'text',
+      inputMode: 'numeric' as const,
+      value: text,
+      onChange: (e: ChangeEvent<HTMLInputElement>) => setText(e.target.value),
+      onBlur: save,
+      'aria-invalid': invalid,
+    },
+  }
+}
+
+function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldProps) {
+  const { invalid, inputProps } = usePositiveIntegerInput(value, onSave)
 
   return (
     <label className="settings-field">
       <span>{label}</span>
-      <input
-        type="text"
-        inputMode="numeric"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={save}
-        placeholder={`未設定(既定値 ${defaultValue})`}
-      />
+      <input {...inputProps} placeholder={`未設定(既定値 ${defaultValue})`} />
       {hint && <p className="settings-hint">{hint}</p>}
-      {invalid && <p className="error">1以上の整数を入力してください</p>}
+      {invalid && <p className="error">{POSITIVE_INTEGER_ERROR}</p>}
     </label>
   )
 }
@@ -327,9 +332,9 @@ interface ProvidersTabProps {
   ) => void
   onDeleteProvider: (providerId: string) => void
   onSetActiveProvider: (providerId: string) => void
-  onAddModel: (providerId: string, model: string) => void
-  onRemoveModel: (providerId: string, model: string) => void
-  onSetActiveModel: (providerId: string, model: string) => void
+  // モデルの操作(追加・削除・表の各列)は種類が多いため、個別のコールバックを並べずに
+  // 呼び出しごと受け取り、結果の反映とエラー表示を親に任せる。
+  onUpdateModels: (action: () => Promise<SettingsView>) => void
 }
 
 function ProvidersTab({
@@ -337,9 +342,7 @@ function ProvidersTab({
   onAddProvider,
   onDeleteProvider,
   onSetActiveProvider,
-  onAddModel,
-  onRemoveModel,
-  onSetActiveModel,
+  onUpdateModels,
 }: ProvidersTabProps) {
   const [newModelByProvider, setNewModelByProvider] = useState<Record<string, string>>({})
 
@@ -357,9 +360,7 @@ function ProvidersTab({
             }
             onDeleteProvider={() => onDeleteProvider(provider.id)}
             onSetActiveProvider={() => onSetActiveProvider(provider.id)}
-            onAddModel={(model) => onAddModel(provider.id, model)}
-            onRemoveModel={(model) => onRemoveModel(provider.id, model)}
-            onSetActiveModel={(model) => onSetActiveModel(provider.id, model)}
+            onUpdateModels={onUpdateModels}
           />
         ))}
         {settings.providers.length === 0 && <li className="list-empty">プロバイダーが未登録です。</li>}
@@ -377,9 +378,7 @@ interface ProviderCardProps {
   onSetNewModel: (value: string) => void
   onDeleteProvider: () => void
   onSetActiveProvider: () => void
-  onAddModel: (model: string) => void
-  onRemoveModel: (model: string) => void
-  onSetActiveModel: (model: string) => void
+  onUpdateModels: (action: () => Promise<SettingsView>) => void
 }
 
 function ProviderCard({
@@ -389,9 +388,7 @@ function ProviderCard({
   onSetNewModel,
   onDeleteProvider,
   onSetActiveProvider,
-  onAddModel,
-  onRemoveModel,
-  onSetActiveModel,
+  onUpdateModels,
 }: ProviderCardProps) {
   const hasModel = provider.models.length > 0
 
@@ -425,27 +422,11 @@ function ProviderCard({
         </p>
       )}
 
-      <ul className="model-list">
-        {provider.models.map((model) => (
-          <li key={model} className="model-row">
-            <label className="choice">
-              <input
-                type="radio"
-                name={`active-model-${provider.id}`}
-                checked={provider.active_model === model}
-                onChange={() => onSetActiveModel(model)}
-              />
-              {model}
-            </label>
-            <button type="button" onClick={() => onRemoveModel(model)}>
-              削除
-            </button>
-          </li>
-        ))}
-        {provider.models.length === 0 && (
-          <li className="list-empty">モデル未登録(登録するとアクティブに選択できます)</li>
-        )}
-      </ul>
+      {hasModel ? (
+        <ModelTable provider={provider} onUpdate={onUpdateModels} />
+      ) : (
+        <p className="list-empty">モデル未登録(登録するとアクティブに選択できます)</p>
+      )}
 
       <form
         className="model-add-form"
@@ -453,7 +434,7 @@ function ProviderCard({
           e.preventDefault()
           const model = newModel.trim()
           if (!model) return
-          onAddModel(model)
+          onUpdateModels(() => addModel(provider.id, model))
           onSetNewModel('')
         }}
       >
@@ -467,6 +448,213 @@ function ProviderCard({
     </li>
   )
 }
+
+const CAPABILITY_COLUMNS: { capability: Capability; label: string }[] = [
+  { capability: 'image', label: '画像' },
+  { capability: 'tools', label: 'ツール' },
+  { capability: 'thinking', label: '思考' },
+]
+
+interface ModelTableProps {
+  provider: ProviderView
+  onUpdate: (action: () => Promise<SettingsView>) => void
+}
+
+// モデル表(legacy/frontend.md 3節、Issue #65)。能力は解決済みの値を描くだけで、
+// 手動設定の正規化(初期値と同じ値なら手動設定を外す)はRust側が持つ。
+function ModelTable({ provider, onUpdate }: ModelTableProps) {
+  const models = provider.models
+  const [expanded, setExpanded] = useState(false)
+  const [query, setQuery] = useState('')
+
+  const collapsible = models.length >= LIST_COLLAPSE_THRESHOLD
+  const needle = query.trim().toLowerCase()
+  const matched = needle ? models.filter((m) => m.name.toLowerCase().includes(needle)) : models
+  // 折りたたんでいても、検索したら当たった行は出す(legacy/frontend.md 3節)。
+  const shown = collapsible && !expanded && !needle ? [] : matched
+
+  return (
+    <>
+      {collapsible && (
+        <div className="model-table-toolbar">
+          <CollapseToggle
+            count={models.length}
+            noun="モデル"
+            expanded={expanded}
+            onToggle={() => setExpanded((v) => !v)}
+          />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="モデル名で検索"
+            aria-label="モデル名で検索"
+          />
+        </div>
+      )}
+      {shown.length > 0 && (
+        <div className="model-table-scroll">
+          <table className="model-table">
+            <thead>
+              <tr>
+                <th>使用</th>
+                <th>表示</th>
+                <th>モデル</th>
+                {CAPABILITY_COLUMNS.map(({ capability, label }) => (
+                  <th key={capability}>{label}</th>
+                ))}
+                <th>コンテキスト長</th>
+                <th aria-label="操作" />
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((model) => (
+                <ModelRow
+                  key={model.name}
+                  providerId={provider.id}
+                  model={model}
+                  active={provider.active_model === model.name}
+                  onUpdate={onUpdate}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {needle && matched.length === 0 && (
+        <p className="list-empty">「{query.trim()}」に一致するモデルはありません。</p>
+      )}
+    </>
+  )
+}
+
+interface ModelRowProps {
+  providerId: string
+  model: ModelView
+  active: boolean
+  onUpdate: (action: () => Promise<SettingsView>) => void
+}
+
+function ModelRow({ providerId, model, active, onUpdate }: ModelRowProps) {
+  const name = model.name
+  // 欄には手動設定だけを出し、既定値はプレースホルダに回す。手動設定が既定値と同じなら
+  // Rust側で外されるので、解決済みの値が既定値と違うことが手動設定があることと同じになる。
+  const resolvedLength = model.capabilities.context_length
+  const contextLength = usePositiveIntegerInput(
+    resolvedLength === model.default_context_length ? null : resolvedLength,
+    (value) => onUpdate(() => setModelContextLength(providerId, name, value)),
+  )
+
+  return (
+    <tr className={model.visible ? undefined : 'model-hidden'}>
+      <td>
+        <input
+          type="radio"
+          name={`active-model-${providerId}`}
+          checked={active}
+          onChange={() => onUpdate(() => setActiveModel(providerId, name))}
+          aria-label={`${name}を使う`}
+        />
+      </td>
+      <td>
+        <input
+          type="checkbox"
+          checked={model.visible}
+          onChange={(e) => {
+            const visible = e.target.checked
+            onUpdate(() => setModelVisible(providerId, name, visible))
+          }}
+          aria-label={`${name}をチャットのモデル一覧に出す`}
+        />
+      </td>
+      <td className="model-name">{name}</td>
+      {CAPABILITY_COLUMNS.map(({ capability, label }) => (
+        <td key={capability}>
+          <span className="model-capability">
+            <input
+              type="checkbox"
+              checked={model.capabilities[capability]}
+              onChange={(e) => {
+                const supported = e.target.checked
+                onUpdate(() => setModelCapability(providerId, name, capability, supported))
+              }}
+              aria-label={`${name}の${label}対応`}
+            />
+            {capability === 'tools' && !model.capabilities.tools && (
+              <span
+                className="model-warning"
+                role="img"
+                aria-label={TOOLS_OFF_WARNING}
+                title={TOOLS_OFF_WARNING}
+              >
+                ⚠
+              </span>
+            )}
+          </span>
+        </td>
+      ))}
+      <td>
+        <input
+          {...contextLength.inputProps}
+          className="model-context-length"
+          placeholder={
+            model.default_context_length === null
+              ? '未設定'
+              : `既定 ${model.default_context_length}`
+          }
+          aria-label={`${name}のコンテキスト長`}
+          title={contextLength.invalid ? POSITIVE_INTEGER_ERROR : undefined}
+        />
+      </td>
+      <td>
+        <span className="model-actions">
+          {model.overridden && (
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => onUpdate(() => resetModelCapabilities(providerId, name))}
+              aria-label={`${name}の能力を初期値に戻す`}
+              title="能力を初期値に戻す"
+            >
+              ↺
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => onUpdate(() => removeModel(providerId, name))}
+            aria-label={`${name}を削除`}
+            title="削除"
+          >
+            ×
+          </button>
+        </span>
+      </td>
+    </tr>
+  )
+}
+
+const TOOLS_OFF_WARNING =
+  'ツール呼び出しに対応しないモデルでは、タスクや工程の更新ができなくなります'
+
+interface CollapseToggleProps {
+  count: number
+  noun: string
+  expanded: boolean
+  onToggle: () => void
+}
+
+// 件数の多い一覧(モデル表・MCPのツール一覧)を既定で畳むための開閉ボタン。
+function CollapseToggle({ count, noun, expanded, onToggle }: CollapseToggleProps) {
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={expanded}>
+      {expanded ? '折りたたむ' : `${count}件の${noun}を表示`}
+    </button>
+  )
+}
+
+// この件数以上の一覧は既定で畳む。モデル表とMCPのツール一覧で揃える。
+const LIST_COLLAPSE_THRESHOLD = 5
 
 interface AddProviderFormProps {
   onAdd: (name: string, apiFormat: ApiFormat, baseUrl: string, apiKey: string | null) => void
@@ -626,8 +814,6 @@ interface McpServerCardProps {
   onFetchTools: () => Promise<void>
 }
 
-const TOOL_COLLAPSE_THRESHOLD = 5
-
 // 取得済みのツール一覧は`server.tools`(Rust側のキャッシュ)から来る。カード自身では
 // 保持しない——保持すると設定画面を閉じた時点で消え、有効にしたツールを確認することも
 // 外すこともできなくなる(Issue #104)。
@@ -664,7 +850,7 @@ function McpServerCard({
   const secretLabel = server.endpoint.transport === 'stdio' ? '環境変数' : 'ヘッダー'
 
   const fetched = server.tools_fetched
-  const collapsible = tools.length >= TOOL_COLLAPSE_THRESHOLD
+  const collapsible = tools.length >= LIST_COLLAPSE_THRESHOLD
   const visibleTools = collapsible && !expanded ? [] : tools
 
   return (
@@ -705,9 +891,12 @@ function McpServerCard({
             </p>
           )}
           {collapsible && (
-            <button type="button" onClick={() => setExpanded((v) => !v)}>
-              {expanded ? '折りたたむ' : `${tools.length}件のツールを表示`}
-            </button>
+            <CollapseToggle
+              count={tools.length}
+              noun="ツール"
+              expanded={expanded}
+              onToggle={() => setExpanded((v) => !v)}
+            />
           )}
           <ul className="model-list">
             {visibleTools.map((tool) => {

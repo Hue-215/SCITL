@@ -741,6 +741,8 @@ option {
 .provider-card > .provider-card-header,
 .provider-card > .provider-card-meta,
 .provider-card > .model-list,
+.provider-card > .model-table-toolbar,
+.provider-card > .model-table-scroll,
 .provider-card > .model-add-form {
   align-self: stretch;
 }
@@ -794,6 +796,90 @@ option {
 .list-empty {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+}
+
+/* モデル表(Issue #65)。列が多く、狭い窓では収まらないため、表の中だけで横に
+   スクロールさせる(カードを押し広げない。.markdown tableと同じ扱い)。 */
+.model-table-scroll {
+  overflow-x: auto;
+}
+
+.model-table {
+  width: 100%;
+}
+
+/* 基盤層の罫線(Markdownの表向け)のうち、列の区切りと見出しの下だけを残す。
+   行は位置で揃って読めるので横線は要らず、外枠はカードの枠と二重になる。 */
+.model-table th,
+.model-table td {
+  border: 0;
+}
+
+.model-table :is(th, td) + :is(th, td) {
+  border-left: var(--border-width) solid var(--color-border);
+}
+
+.model-table thead th {
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.model-table th {
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.model-table td {
+  vertical-align: middle;
+}
+
+/* 名前の列だけが残りの幅を取り、区切りの無い英数字の連続でも折り返す。狭い窓では
+   1文字ずつに潰れないよう下限を持たせ、足りない分は表の横スクロールに回す。
+   下限はここでしか使わない値なのでトークン化しない。 */
+.model-table .model-name {
+  width: 100%;
+  min-width: 8em;
+  overflow-wrap: anywhere;
+}
+
+/* チャットの一覧に出さないモデルは名前を弱める。 */
+.model-table .model-hidden .model-name {
+  color: var(--color-text-secondary);
+}
+
+.model-capability,
+.model-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.model-warning {
+  color: var(--color-danger);
+  cursor: help;
+}
+
+/* 桁数の入る幅。ここでしか使わない値なのでトークン化しない。 */
+.model-context-length {
+  width: 7em;
+}
+
+/* 表の中では枠も塗りも持たせず、行の中で目立たせない。 */
+.model-actions .icon-button {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+/* 開閉ボタンと検索欄を1行に並べる。検索欄が残りの幅を取る。 */
+.model-table-toolbar {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.model-table-toolbar input {
+  flex: 1;
+  min-width: 0;
 }
 
 /* 1行に収める(入力欄+追加ボタン)。 */
