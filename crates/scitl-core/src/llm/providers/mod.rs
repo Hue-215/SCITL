@@ -115,6 +115,14 @@ pub async fn detect_capabilities(
     }
 }
 
+/// プロバイダーが提供するモデル名の一覧(Issue #33)。名前順で、登録済みのものも含む。
+pub async fn list_models(provider: &ProviderConfig) -> Result<Vec<String>, CoreError> {
+    let api_key = load_api_key_off_thread(provider).await?;
+    match provider.api_format {
+        ApiFormat::OpenAiCompat => openai_compat::list_models(&provider.base_url, &api_key).await,
+    }
+}
+
 /// 非同期の問い合わせの前に鍵を読む。資格情報ストアの呼び出しはブロックするため
 /// 別スレッドで行う。読めなければ鍵無しで進め、認証の失敗として表面化させる
 /// ([`build_active_adapter`]と同じ扱い)。

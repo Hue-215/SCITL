@@ -59,6 +59,7 @@ fn main() {
             commands::settings::set_model_context_length,
             commands::settings::reset_model_capabilities,
             commands::settings::detect_model_capabilities,
+            commands::settings::list_provider_models,
             commands::settings::get_chat_models,
             commands::settings::select_chat_model,
             commands::settings::set_reasoning_effort,

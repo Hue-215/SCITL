@@ -266,6 +266,14 @@ impl Settings {
         Ok(self.view())
     }
 
+    /// プロバイダーが提供するモデル名を問い合わせる(Issue #33)。登録済みのものも含めて
+    /// 名前順に返し、設定には書かない。どれを登録するかは利用者が選び、[`Self::add_models`]で
+    /// 登録する(一括で登録しない理由はarchitecture.md 3節)。
+    pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<String>> {
+        let provider = self.provider(provider_id)?;
+        providers::list_models(&provider).await
+    }
+
     /// 非同期の問い合わせに使う、ある時点のプロバイダー設定の複製。ロックを`.await`に
     /// またがせないため、複製してから問い合わせる。
     fn provider(&self, provider_id: &str) -> Result<ProviderConfig> {

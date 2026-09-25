@@ -170,6 +170,20 @@ pub async fn detect_model_capabilities(
         .map_err(|e| e.to_string())
 }
 
+/// プロバイダーへの問い合わせは非同期で、`detect_model_capabilities`と同じく
+/// `with_settings`を通さない。
+#[tauri::command]
+pub async fn list_provider_models(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<String>, String> {
+    state
+        .settings
+        .list_provider_models(&provider_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// チャット入力欄の下のモデル選択(Issue #64)。アクティブなモデルを推論サーバーに
 /// 問い合わせることがあるため非同期で、`with_settings`を通さない。
 #[tauri::command]
