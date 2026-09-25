@@ -1351,6 +1351,52 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
     assert!(!leaks("invalid api key"));
 }
 
+/// コンテキスト長に収まらない古い発言は、ユーザー発言の単位で落とす(Issue #66)。
+/// このターンのユーザー発言とツールの往復は、どのラウンドでも残る。
+#[tokio::test]
+async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    let long_text = format!(
+        "古い発言{}",
+        "あ".repeat(DEFAULT_CAPABILITIES.context_length as usize)
+    );
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("古い返信")),
+        task_id,
+        long_text,
+    )
+    .await
+    .unwrap();
+
+    let adapter = RecordingAdapter {
+        calls: AtomicUsize::new(0),
+        sent_messages: Mutex::new(Vec::new()),
+    };
+    run_turn(db.clone(), &context(&adapter), task_id, "2回目".to_string())
+        .await
+        .unwrap();
+
+    let rounds = adapter.sent_messages.into_inner().unwrap();
+    assert_eq!(rounds.len(), 2);
+    for round in &rounds {
+        match &round[1] {
+            ChatMessage::User(content) => assert!(content.as_str().contains("2回目")),
+            other => {
+                panic!("expected the kept history to start with the user message, got {other:?}")
+            }
+        }
+        assert!(!round.iter().any(|m| matches!(
+            m,
+            ChatMessage::Assistant { content: Some(c), .. } if c == "古い返信"
+        )));
+    }
+    assert!(matches!(rounds[1].last(), Some(ChatMessage::Tool { .. })));
+}
+
 /// 編集(Issue #41): 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から
 /// 会話が再生成される。旧アシスタント応答は履歴から消え、新しい応答だけが残る。
 #[tokio::test]

@@ -1,3 +1,4 @@
+mod history_trim;
 mod mcp_access;
 mod state_prompt;
 mod tool_limits;
