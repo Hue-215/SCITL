@@ -79,12 +79,12 @@ pub async fn set_active_provider(
 }
 
 #[tauri::command]
-pub async fn add_model(
+pub async fn add_models(
     state: State<'_, AppState>,
     provider_id: String,
-    model: String,
+    models: Vec<String>,
 ) -> Result<SettingsView, String> {
-    with_settings(&state, move |s| s.add_model(&provider_id, &model)).await
+    with_settings(&state, move |s| s.add_models(&provider_id, &models)).await
 }
 
 #[tauri::command]
@@ -166,6 +166,20 @@ pub async fn detect_model_capabilities(
     state
         .settings
         .detect_model_capabilities(&provider_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// プロバイダーへの問い合わせは非同期で、`detect_model_capabilities`と同じく
+/// `with_settings`を通さない。
+#[tauri::command]
+pub async fn list_provider_models(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<String>, String> {
+    state
+        .settings
+        .list_provider_models(&provider_id)
         .await
         .map_err(|e| e.to_string())
 }

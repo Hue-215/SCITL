@@ -129,13 +129,10 @@ impl Probe<'_> {
     /// 「このサーバーではない」として`None`。
     async fn send<T: DeserializeOwned>(
         &self,
-        mut request: reqwest::RequestBuilder,
+        request: reqwest::RequestBuilder,
     ) -> Result<Option<T>, CoreError> {
+        let request = super::with_api_key(request, self.api_key);
         let key = self.api_key.expose_secret();
-        // チャットの呼び出しと同じく、鍵が空ならヘッダーごと付けない。
-        if !key.is_empty() {
-            request = request.bearer_auth(key);
-        }
         let transport_error = |e| CoreError::Llm(LlmError::from_transport(e, key));
         let response = request.send().await.map_err(transport_error)?;
         if !response.status().is_success() {

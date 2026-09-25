@@ -100,8 +100,15 @@ export function setActiveProvider(providerId: string): Promise<SettingsView> {
   return invoke('set_active_provider', { providerId })
 }
 
-export function addModel(providerId: string, model: string): Promise<SettingsView> {
-  return invoke('add_model', { providerId, model })
+// 1件でも登録できない名前があれば、1件も登録しない。
+export function addModels(providerId: string, models: string[]): Promise<SettingsView> {
+  return invoke('add_models', { providerId, models })
+}
+
+// プロバイダーが提供するモデル名(Issue #33)。名前順で、登録済みのものも含む。
+// 設定には書かないので、登録はaddModelsで行う。
+export function listProviderModels(providerId: string): Promise<string[]> {
+  return invoke('list_provider_models', { providerId })
 }
 
 export function removeModel(providerId: string, model: string): Promise<SettingsView> {

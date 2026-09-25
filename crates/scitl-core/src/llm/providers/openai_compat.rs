@@ -60,17 +60,61 @@ pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
     crate::net::validate_external_url(&url).map_err(CoreError::ProviderConfig)
 }
 
-/// `base_url`と`chat/completions`を安全に連結する。文字列の`format!`連結は末尾スラッシュの
-/// 有無で壊れやすく(`//chat/completions`等)、`validate_base_url`が防ぐ意図(パスがクエリの
-/// 置き場所にならないこと)とも噛み合わないため`Url::join`を使う。
-fn completions_endpoint(base_url: &str) -> Result<reqwest::Url, CoreError> {
+/// `base_url`と`chat/completions`等のパスを安全に連結する。文字列の`format!`連結は末尾
+/// スラッシュの有無で壊れやすく(`//chat/completions`等)、`validate_base_url`が防ぐ意図
+/// (パスがクエリの置き場所にならないこと)とも噛み合わないため`Url::join`を使う。
+fn endpoint(base_url: &str, path: &str) -> Result<reqwest::Url, CoreError> {
     let mut url = reqwest::Url::parse(base_url)
         .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    url.join("chat/completions")
+    url.join(path)
         .map_err(|e| CoreError::ProviderConfig(format!("failed to build endpoint: {e}")))
+}
+
+/// 一覧は生成を待たずに返るので、生成を待つための応答タイムアウト
+/// (`config::GeneralConfig::response_timeout`)は使わない。
+const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `GET {base_url}/models`で、プロバイダーが提供するモデル名を取得する(Issue #33)。
+/// 名前順に並べ、重複と空の名前を除く。問い合わせ先は`base_url`の下だけで、通信先は
+/// 増やさない(principles.md 1節)。
+pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
+    let client = crate::net::hardened_client(base_url, Some(LIST_MODELS_TIMEOUT))?;
+    let request = super::with_api_key(client.get(endpoint(base_url, "models")?), api_key);
+    let key = api_key.expose_secret();
+    let transport_error = |e| LlmError::from_transport(e, key);
+    let response = request.send().await.map_err(transport_error)?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(LlmError::from_status(status, &text, key).into());
+    }
+
+    let parsed: ModelList = response.json().await.map_err(transport_error)?;
+    let mut names: Vec<String> = parsed
+        .data
+        .into_iter()
+        .map(|m| m.id)
+        .filter(|id| !id.trim().is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+/// `GET /models`の応答。`object`・`owned_by`等は使わない(互換を名乗るサーバーには
+/// 省くものがある)。
+#[derive(Deserialize)]
+struct ModelList {
+    data: Vec<ListedModel>,
+}
+
+#[derive(Deserialize)]
+struct ListedModel {
+    id: String,
 }
 
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
@@ -396,13 +440,8 @@ impl LlmAdapter for OpenAiCompatAdapter {
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
-        let endpoint = completions_endpoint(&self.base_url)?;
-        let mut request = self.client.post(endpoint);
-        // 認証不要のローカル推論サーバー向けに、鍵が空なら`Authorization`ヘッダーごと付けない
-        // (`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
-        if !self.api_key.expose_secret().is_empty() {
-            request = request.bearer_auth(self.api_key.expose_secret());
-        }
+        let endpoint = endpoint(&self.base_url, "chat/completions")?;
+        let request = super::with_api_key(self.client.post(endpoint), &self.api_key);
         let transport_error = |e| LlmError::from_transport(e, self.api_key.expose_secret());
         let response = request.json(&body).send().await.map_err(transport_error)?;
 
@@ -535,6 +574,38 @@ mod tests {
         )));
     }
 
+    #[tokio::test]
+    async fn lists_models_under_the_base_url_sorted_without_duplicates() {
+        let (base_url, handle) = spawn_capturing(
+            r#"{"object":"list","data":[{"id":"gpt-b","object":"model"},{"id":"gpt-a"},{"id":"gpt-b"},{"id":" "}]}"#,
+        );
+        let names = list_models(&base_url, &SecretString::from("sk-test"))
+            .await
+            .unwrap();
+        let headers = handle.join().unwrap();
+
+        assert_eq!(names, ["gpt-a", "gpt-b"]);
+        assert!(headers.starts_with("get /v1/models http/1.1"));
+        assert!(headers.contains("authorization: bearer sk-test"));
+    }
+
+    #[tokio::test]
+    async fn listing_models_reports_a_rejected_key_as_an_auth_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.read(&mut [0u8; 4096]);
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            );
+        });
+        let result = list_models(&format!("http://{addr}/v1"), &SecretString::from("")).await;
+        server.join().unwrap();
+
+        assert!(matches!(result, Err(CoreError::Llm(LlmError::Auth(_)))));
+    }
+
     #[test]
     fn accepts_https_base_url() {
         assert!(validate_base_url("https://api.openai.com/v1").is_ok());
@@ -577,15 +648,15 @@ mod tests {
     }
 
     #[test]
-    fn completions_endpoint_joins_regardless_of_trailing_slash() {
+    fn endpoint_joins_regardless_of_trailing_slash() {
         assert_eq!(
-            completions_endpoint("https://api.openai.com/v1")
+            endpoint("https://api.openai.com/v1", "chat/completions")
                 .unwrap()
                 .as_str(),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            completions_endpoint("https://api.openai.com/v1/")
+            endpoint("https://api.openai.com/v1/", "chat/completions")
                 .unwrap()
                 .as_str(),
             "https://api.openai.com/v1/chat/completions"

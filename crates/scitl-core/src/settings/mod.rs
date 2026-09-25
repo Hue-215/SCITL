@@ -255,14 +255,7 @@ impl Settings {
             .detecting
             .try_begin(provider_id.to_string())
             .ok_or_else(|| invalid("already detecting capabilities for this provider"))?;
-        let provider = self
-            .current()
-            .config
-            .providers
-            .iter()
-            .find(|p| p.id == provider_id)
-            .cloned()
-            .ok_or_else(|| provider_not_found(provider_id))?;
+        let provider = self.provider(provider_id)?;
         if !providers::can_detect_capabilities(&provider) {
             return Err(invalid(
                 "capabilities can be detected only from servers on this machine or the local network",
@@ -271,6 +264,26 @@ impl Settings {
         let models = provider.models.iter().map(|m| m.name.clone()).collect();
         self.detect(&provider, models).await?;
         Ok(self.view())
+    }
+
+    /// プロバイダーが提供するモデル名を問い合わせる(Issue #33)。登録済みのものも含めて
+    /// 名前順に返し、設定には書かない。どれを登録するかは利用者が選び、[`Self::add_models`]で
+    /// 登録する(一括で登録しない理由はarchitecture.md 3節)。
+    pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<String>> {
+        let provider = self.provider(provider_id)?;
+        providers::list_models(&provider).await
+    }
+
+    /// 非同期の問い合わせに使う、ある時点のプロバイダー設定の複製。ロックを`.await`に
+    /// またがせないため、複製してから問い合わせる。
+    fn provider(&self, provider_id: &str) -> Result<ProviderConfig> {
+        self.current()
+            .config
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .cloned()
+            .ok_or_else(|| provider_not_found(provider_id))
     }
 
     /// 問い合わせた全モデルの結果を置き換える。サーバーが答えなかったモデルも「検出した
@@ -452,20 +465,28 @@ impl Settings {
         draft.commit()
     }
 
-    /// 最初に登録したモデルをアクティブにする。
-    pub fn add_model(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
-        let model = model.trim();
-        if model.is_empty() {
-            return Err(invalid("model name must not be empty"));
-        }
+    /// 手動追加(1件)と、取得した一覧から選んだ分(複数件)の両方が通る。1件でも登録できない
+    /// 名前があれば何も登録しない。モデルが無かったプロバイダーでは、最初の1件を
+    /// アクティブにする。
+    pub fn add_models<S: AsRef<str>>(
+        &self,
+        provider_id: &str,
+        models: &[S],
+    ) -> Result<SettingsView> {
         let mut draft = self.edit();
         let provider = find_provider_mut(&mut draft.config, provider_id)?;
-        if provider.model(model).is_some() {
-            return Err(invalid(format!("model already registered: {model}")));
+        for model in models {
+            let model = model.as_ref().trim();
+            if model.is_empty() {
+                return Err(invalid("model name must not be empty"));
+            }
+            if provider.model(model).is_some() {
+                return Err(invalid(format!("model already registered: {model}")));
+            }
+            provider.models.push(ModelConfig::new(model.to_string()));
         }
-        provider.models.push(ModelConfig::new(model.to_string()));
         if provider.active_model.is_none() {
-            provider.active_model = Some(model.to_string());
+            provider.active_model = provider.models.first().map(|m| m.name.clone());
         }
         draft.commit()
     }
@@ -927,9 +948,9 @@ name = "m"
         let (settings, path) = temp_settings();
         let a = add_local_provider(&settings, "A").providers[0].id.clone();
         let b = add_local_provider(&settings, "B").providers[1].id.clone();
-        settings.add_model(&a, "a1").unwrap();
-        settings.add_model(&b, "b1").unwrap();
-        settings.add_model(&b, "b2").unwrap();
+        settings.add_models(&a, &["a1"]).unwrap();
+        settings.add_models(&b, &["b1"]).unwrap();
+        settings.add_models(&b, &["b2"]).unwrap();
 
         settings.select_chat_model(&b, "b2").unwrap();
         let reloaded = config::load(&path).unwrap();
@@ -952,9 +973,9 @@ name = "m"
         let (settings, _) = temp_settings();
         let a = add_local_provider(&settings, "A").providers[0].id.clone();
         let b = add_local_provider(&settings, "B").providers[1].id.clone();
-        settings.add_model(&a, "qwen3:8b").unwrap();
-        settings.add_model(&a, "hidden").unwrap();
-        settings.add_model(&b, "qwen2.5:7b").unwrap();
+        settings.add_models(&a, &["qwen3:8b"]).unwrap();
+        settings.add_models(&a, &["hidden"]).unwrap();
+        settings.add_models(&b, &["qwen2.5:7b"]).unwrap();
         settings
             .set_model_capability(&b, "qwen2.5:7b", Capability::Thinking, false)
             .unwrap();
@@ -993,9 +1014,9 @@ name = "m"
         assert_eq!(view.active_provider_id.as_deref(), Some(id.as_str()));
         assert!(settings.snapshot().adapter.is_ok());
 
-        let view = settings.add_model(&id, " m1 ").unwrap();
+        let view = settings.add_models(&id, &[" m1 "]).unwrap();
         assert_eq!(view.providers[0].active_model.as_deref(), Some("m1"));
-        let view = settings.add_model(&id, "m2").unwrap();
+        let view = settings.add_models(&id, &["m2"]).unwrap();
         assert_eq!(
             view.providers[0].active_model.as_deref(),
             Some("m1"),
@@ -1009,6 +1030,36 @@ name = "m"
             .map(|m| m.name.as_str())
             .collect();
         assert_eq!(names, ["m1", "m2"]);
+    }
+
+    #[test]
+    fn adding_several_models_registers_all_or_none() {
+        let (settings, _) = temp_settings();
+        let id = add_local_provider(&settings, "Local").providers[0]
+            .id
+            .clone();
+
+        let view = settings.add_models(&id, &["b", "a"]).unwrap();
+        let names: Vec<_> = view.providers[0]
+            .models
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(names, ["b", "a"]);
+        assert_eq!(
+            view.providers[0].active_model.as_deref(),
+            Some("b"),
+            "モデルが無かったプロバイダーでは最初の1件がアクティブになる"
+        );
+
+        for rejected in [&["c", "a"][..], &["c", "c"], &["c", " "]] {
+            assert!(settings.add_models(&id, rejected).is_err());
+            let config = settings.current().config;
+            assert!(
+                config.providers[0].model("c").is_none(),
+                "{rejected:?}: 登録できない名前が混ざれば1件も登録しない"
+            );
+        }
     }
 
     #[test]
@@ -1031,8 +1082,8 @@ name = "m"
     fn removing_active_model_falls_back_to_first() {
         let (settings, _) = temp_settings();
         let id = add_local_provider(&settings, "A").providers[0].id.clone();
-        settings.add_model(&id, "m1").unwrap();
-        settings.add_model(&id, "m2").unwrap();
+        settings.add_models(&id, &["m1"]).unwrap();
+        settings.add_models(&id, &["m2"]).unwrap();
         settings.set_active_model(&id, "m2").unwrap();
 
         let view = settings.remove_model(&id, "m2").unwrap();
@@ -1189,7 +1240,7 @@ name = "m"
             .unwrap();
         assert!(Arc::ptr_eq(&before, &ready_adapter(&settings)));
 
-        settings.add_model(&id, "m1").unwrap();
+        settings.add_models(&id, &["m1"]).unwrap();
         let after_model = ready_adapter(&settings);
         assert!(!Arc::ptr_eq(&before, &after_model));
 
@@ -1210,7 +1261,7 @@ name = "m"
         let id = add_local_provider(&settings, "Local").providers[0]
             .id
             .clone();
-        settings.add_model(&id, "m").unwrap();
+        settings.add_models(&id, &["m"]).unwrap();
         let fallback = llm::DEFAULT_CAPABILITIES;
 
         let view = settings
@@ -1259,7 +1310,7 @@ name = "m"
         let id = add_local_provider(&settings, "Local").providers[0]
             .id
             .clone();
-        settings.add_model(&id, "m").unwrap();
+        settings.add_models(&id, &["m"]).unwrap();
         settings.detected.store(
             &id,
             "m",

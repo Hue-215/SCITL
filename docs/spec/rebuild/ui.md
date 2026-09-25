@@ -46,6 +46,7 @@
 | 線 | `--border-width`, `--focus-ring-width` |
 | チャット吹き出しのマージン | `--bubble-margin-near`, `--bubble-margin-far`(近い側の2倍を式で持つ) |
 | 複数行入力欄が伸びる範囲 | `--textarea-min-height`, `--textarea-max-height`(全欄共通の1組) |
+| 検索欄付きの選択一覧が伸びる上限 | `--option-list-max-height` |
 | レイアウトの基準値 | `--sidebar-width`, `--settings-rail-width`, `--content-min-width`, `--content-max-width` |
 
 直値を書いてよいのは、**その1箇所でしか使わない見た目上の定数**だけ(セレクトの▼の

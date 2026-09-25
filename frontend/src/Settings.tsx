@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import {
   addMcpServer,
-  addModel,
+  addModels,
   addProvider,
   deleteMcpServer,
   deleteProvider,
   detectModelCapabilities,
   fetchMcpTools,
   getSettings,
+  listProviderModels,
   removeModel,
   resetModelCapabilities,
   setActiveModel,
@@ -393,11 +394,38 @@ function ProviderCard({
 }: ProviderCardProps) {
   const hasModel = provider.models.length > 0
   const [detecting, setDetecting] = useState(false)
+  // 取得したモデル名。設定には書かないので、カードを閉じれば(設定画面を離れれば)捨てる。
+  const [available, setAvailable] = useState<string[] | null>(null)
+  const [listing, setListing] = useState(false)
+  // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように。MCPの
+  // ツール一覧の取得と同じ扱い)。
+  const [listError, setListError] = useState<string | null>(null)
 
   const detect = async () => {
     setDetecting(true)
     await onUpdateModels(() => detectModelCapabilities(provider.id))
     setDetecting(false)
+  }
+
+  // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
+  // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
+  const add = (models: string[]) =>
+    onUpdateModels(async () => {
+      const added = await addModels(provider.id, models)
+      if (!provider.can_detect_capabilities) return added
+      return detectModelCapabilities(provider.id).catch(() => added)
+    })
+
+  const listModels = async () => {
+    setListing(true)
+    setListError(null)
+    try {
+      setAvailable(await listProviderModels(provider.id))
+    } catch (e) {
+      setListError(String(e))
+    } finally {
+      setListing(false)
+    }
   }
 
   return (
@@ -447,13 +475,7 @@ function ProviderCard({
           e.preventDefault()
           const model = newModel.trim()
           if (!model) return
-          // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
-          // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
-          void onUpdateModels(async () => {
-            const added = await addModel(provider.id, model)
-            if (!provider.can_detect_capabilities) return added
-            return detectModelCapabilities(provider.id).catch(() => added)
-          })
+          void add([model])
           onSetNewModel('')
         }}
       >
@@ -463,8 +485,111 @@ function ProviderCard({
           placeholder="モデル名を入力して追加"
         />
         <button type="submit">追加</button>
+        <button type="button" onClick={() => void listModels()} disabled={listing}>
+          {listing ? '取得中…' : 'モデル一覧を取得'}
+        </button>
       </form>
+      {listError && <p className="error">{listError}</p>}
+      {available && (
+        <ModelPicker
+          available={available}
+          registered={provider.models.map((m) => m.name)}
+          onAdd={add}
+          onClose={() => setAvailable(null)}
+        />
+      )}
     </li>
+  )
+}
+
+interface ModelPickerProps {
+  // プロバイダーから取得したモデル名(登録済みのものを含む)。
+  available: string[]
+  registered: string[]
+  onAdd: (models: string[]) => Promise<void>
+  onClose: () => void
+}
+
+// 取得したモデルから、登録するものを選ぶ欄(Issue #33。一括で登録しない理由は
+// architecture.md 3節)。登録済みのモデルは候補から外す(追加すると表の側へ移る)。
+function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps) {
+  const [selected, setSelected] = useState<string[]>([])
+  const [query, setQuery] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  const candidates = available.filter((name) => !registered.includes(name))
+  const needle = query.trim().toLowerCase()
+  const matched = needle ? candidates.filter((n) => n.toLowerCase().includes(needle)) : candidates
+  // 追加や別の操作で登録済みになったものは、選択から外れたものとして数える。
+  const chosen = selected.filter((name) => candidates.includes(name))
+
+  const toggle = (name: string, checked: boolean) =>
+    setSelected((prev) => (checked ? [...prev, name] : prev.filter((n) => n !== name)))
+
+  const submit = async () => {
+    setAdding(true)
+    // 候補の並び(名前順)で登録する。選んだ順にすると、表の並びが操作の順に左右される。
+    await onAdd(candidates.filter((name) => chosen.includes(name)))
+    setSelected([])
+    setAdding(false)
+  }
+
+  return (
+    <div className="model-picker">
+      {candidates.length === 0 ? (
+        <p className="list-empty">取得した{available.length}件のモデルはすべて登録済みです。</p>
+      ) : (
+        <>
+          <div className="model-table-toolbar">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`${candidates.length}件の未登録モデルから検索`}
+              aria-label="取得したモデルを検索"
+            />
+            <button
+              type="button"
+              onClick={() => setSelected((prev) => [...new Set([...prev, ...matched])])}
+              disabled={matched.every((name) => chosen.includes(name))}
+            >
+              {needle ? '一致したものをすべて選択' : 'すべて選択'}
+            </button>
+          </div>
+          <ul className="model-list model-picker-options">
+            {matched.map((name) => (
+              <li key={name} className="model-row">
+                <label className="choice">
+                  <input
+                    type="checkbox"
+                    checked={chosen.includes(name)}
+                    onChange={(e) => toggle(name, e.target.checked)}
+                  />
+                  {name}
+                </label>
+              </li>
+            ))}
+            {matched.length === 0 && (
+              <li className="list-empty">「{query.trim()}」に一致するモデルはありません。</li>
+            )}
+          </ul>
+        </>
+      )}
+      <div className="model-picker-actions">
+        {candidates.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={chosen.length === 0 || adding}
+          >
+            {adding ? '追加中…' : `選択した${chosen.length}件を追加`}
+          </button>
+        )}
+        <button type="button" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+    </div>
   )
 }
 
