@@ -104,6 +104,10 @@
      行数を基準に決め直す場合は、上の内訳の通りpaddingとborderの分を足すこと。 */
   --textarea-min-height: 3rem;
   --textarea-max-height: 10rem;
+
+  /* 検索欄付きの選択一覧が伸びる上限(チャット入力欄の下の選択一覧、取得したモデルの
+     候補欄)。検索欄と7行ほどが収まる。 */
+  --option-list-max-height: 20rem;
 }
 
 /*

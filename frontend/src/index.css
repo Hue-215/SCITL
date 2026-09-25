@@ -316,8 +316,7 @@ option {
   flex-direction: column;
   width: max-content;
   max-width: 100%;
-  /* 検索欄と7行ほど。ここでしか使わない値なのでトークン化しない。 */
-  max-height: 20rem;
+  max-height: var(--option-list-max-height);
   overflow: hidden;
   border: var(--border-width) solid var(--color-border);
   background: var(--color-surface);
@@ -824,7 +823,8 @@ option {
 .provider-card > .model-list,
 .provider-card > .model-table-toolbar,
 .provider-card > .model-table-scroll,
-.provider-card > .model-add-form {
+.provider-card > .model-add-form,
+.provider-card > .model-picker {
   align-self: stretch;
 }
 
@@ -971,6 +971,37 @@ option {
 
 .model-add-form input {
   flex: 1;
+  min-width: 0;
+}
+
+/* 取得したモデルの候補欄(Issue #33)。検索欄と操作ボタンは留まり、候補だけが
+   スクロールする(ui.md 4節)。左右の余白はスクロールしない子と、候補の各行が持つ。 */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: var(--option-list-max-height);
+  overflow: hidden;
+  border: var(--border-width) solid var(--color-border);
+}
+
+.model-picker > :not(.model-picker-options) {
+  padding: var(--space-2);
+}
+
+.model-picker-options {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.model-picker-options > * {
+  padding: 0 var(--space-2);
+}
+
+.model-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 /* 節の始まりを示す仕切り線。線とその下の余白は、区切られる側のブロックが上端に持つ
