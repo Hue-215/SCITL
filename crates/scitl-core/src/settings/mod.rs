@@ -504,7 +504,8 @@ impl Draft<'_> {
                  fix the file and restart the app",
             ));
         }
-        let inputs_changed = adapter_inputs(&self.before) != adapter_inputs(&self.config);
+        let inputs_changed = providers::AdapterInputs::of(&self.before)
+            != providers::AdapterInputs::of(&self.config);
         let rebuilt = if inputs_changed || self.key_unavailable || self.adapter_broken {
             let built = match providers::build_active_adapter(&self.config) {
                 Err(e) if inputs_changed => return Err(e),
@@ -532,11 +533,6 @@ impl Draft<'_> {
         };
         Ok(self.settings.build_view(&config, &adapter))
     }
-}
-
-/// アダプタの組み立てに使う設定値。`providers::build_active_adapter`が読むものと揃える。
-fn adapter_inputs(config: &Config) -> (Option<&ProviderConfig>, std::time::Duration) {
-    (config.active_provider(), config.general.response_timeout())
 }
 
 /// 秘密情報に触れる前に済ませられる検証をすべて行う。
