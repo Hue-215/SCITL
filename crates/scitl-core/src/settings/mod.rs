@@ -127,6 +127,11 @@ impl Snapshot {
                 task_chat: self.config.general.task_chat_system_prompt.as_deref(),
             },
             capabilities: self.capabilities,
+            reasoning_effort: self
+                .config
+                .active_model()
+                .and_then(|(_, model)| model.reasoning_effort)
+                .filter(|_| self.capabilities.thinking),
             mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
             limits: ToolLimits::from_config(&self.config.tools),
             generating,
@@ -271,13 +276,9 @@ impl Settings {
     /// ターンはアダプタの段階で失敗するので、この値は使われない)。
     fn active_model_capabilities(&self, config: &Config) -> ModelCapabilities {
         config
-            .active_provider()
-            .and_then(|p| {
-                let model = p.model(p.resolved_model()?)?;
-                Some(llm::resolve_capabilities(
-                    model,
-                    self.detected.get(&p.id, &model.name).as_ref(),
-                ))
+            .active_model()
+            .map(|(p, model)| {
+                llm::resolve_capabilities(model, self.detected.get(&p.id, &model.name).as_ref())
             })
             .unwrap_or_else(|| llm::default_capabilities(""))
     }
@@ -839,6 +840,41 @@ mod tests {
                 api_key: None,
             })
             .unwrap()
+    }
+
+    /// 思考に対応しないモデルでは、選んである強さを送らない。
+    #[test]
+    fn reasoning_effort_is_sent_only_to_models_that_think() {
+        let (_, path) = temp_settings();
+        let config_with = |model: &str| {
+            format!(
+                r#"
+active_provider_id = "p"
+
+[[providers]]
+id = "p"
+name = "Local"
+api_format = "open_ai_compat"
+base_url = "http://localhost:1234/v1"
+
+[[providers.models]]
+name = "{model}"
+reasoning_effort = "low"
+"#
+            )
+        };
+        let effort_for = |model: &str| {
+            std::fs::write(&path, config_with(model)).unwrap();
+            let settings = Settings::load(path.clone());
+            let generating = InFlightSet::new();
+            settings
+                .snapshot()
+                .turn_context(&generating)
+                .reasoning_effort
+        };
+
+        assert_eq!(effort_for("qwen3:8b"), Some(config::ReasoningEffort::Low));
+        assert_eq!(effort_for("qwen2.5:7b"), None);
     }
 
     #[test]

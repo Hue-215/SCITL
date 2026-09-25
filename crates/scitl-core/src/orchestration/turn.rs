@@ -401,7 +401,10 @@ async fn run_tool_rounds(
         messages_to_send.extend(round_trip.iter().cloned());
 
         let offered: &[ToolSchema] = if final_call { &[] } else { &exposed_tools };
-        let events = match adapter.send(&messages_to_send, offered).await {
+        let events = match adapter
+            .send(&messages_to_send, offered, ctx.reasoning_effort)
+            .await
+        {
             Ok(events) => events,
             Err(e) => {
                 return fail_turn(db, attempt, turn_error::classify(&e)).await;

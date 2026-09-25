@@ -12,6 +12,7 @@ pub use capabilities::{
 pub use error::{ErrorDetail, LlmError};
 pub use prompt::{user_message_format_note, PromptText};
 
+use crate::config::ReasoningEffort;
 use crate::db::error::CoreError;
 
 /// アダプタ層が上位に返す形は完成した応答1つではなくイベントの並び
@@ -211,10 +212,13 @@ pub trait LlmAdapter: Send + Sync {
     /// (理由は[`Readiness`]のドキュメント)。判定材料はプロバイダごとに異なるため各実装に委ねる。
     fn readiness(&self) -> Readiness;
 
+    /// `reasoning_effort`が`None`なら思考の強さを指定しない。思考に対応しないモデルでは
+    /// 呼び出し元が`None`にしてから渡す(指定そのものを拒むAPIがあるため)。
     async fn send(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
+        reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError>;
 }
 

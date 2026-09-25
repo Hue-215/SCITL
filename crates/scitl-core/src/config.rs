@@ -66,6 +66,11 @@ pub struct ModelConfig {
     /// (principles.md 3節、[`crate::llm::resolve_capabilities`])。
     #[serde(default, skip_serializing_if = "ModelOverrides::is_empty")]
     pub overrides: ModelOverrides,
+    /// 思考の強さ(チャット入力欄の下で選ぶ。Issue #64)。`None`はリクエストで指定せず、
+    /// サーバーの既定に任せる。モデルごとに持つのは、受け付ける値がモデルごとに違うため
+    /// (あるモデルに合わせた値を、切り替えた先のモデルへ持ち込まない)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ModelConfig {
@@ -74,6 +79,7 @@ impl ModelConfig {
             name,
             visible: visible_by_default(),
             overrides: ModelOverrides::default(),
+            reasoning_effort: None,
         }
     }
 }
@@ -90,6 +96,17 @@ pub enum Capability {
     Image,
     Tools,
     Thinking,
+}
+
+/// 思考の強さ。リクエストでの書き方は方言ごとにアダプタが決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    /// 思考させない。
+    Off,
+    Low,
+    Medium,
+    High,
 }
 
 /// 能力の手動設定。`None`は「手動では決めていない」。
@@ -251,6 +268,12 @@ impl Config {
     pub fn active_provider(&self) -> Option<&ProviderConfig> {
         let active_id = self.active_provider_id.as_deref()?;
         self.providers.iter().find(|p| p.id == active_id)
+    }
+
+    /// チャットで使うモデルと、その属するプロバイダー。
+    pub fn active_model(&self) -> Option<(&ProviderConfig, &ModelConfig)> {
+        let provider = self.active_provider()?;
+        Some((provider, provider.model(provider.resolved_model()?)?))
     }
 }
 
@@ -466,6 +489,7 @@ name = "plain"
 [[providers.models]]
 name = "tuned"
 visible = false
+reasoning_effort = "high"
 
 [providers.models.overrides]
 tools = false
@@ -475,6 +499,7 @@ context_length = 8192
         let models = &config.providers[0].models;
         assert_eq!(models[0], ModelConfig::new("plain".to_string()));
         assert!(!models[1].visible);
+        assert_eq!(models[1].reasoning_effort, Some(ReasoningEffort::High));
         assert_eq!(models[1].overrides.tools, Some(false));
         assert_eq!(models[1].overrides.image, None);
         assert_eq!(models[1].overrides.context_length, Some(8192));

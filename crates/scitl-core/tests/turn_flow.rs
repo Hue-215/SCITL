@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
-use scitl_core::config::{McpEndpoint, McpServerConfig};
+use scitl_core::config::{McpEndpoint, McpServerConfig, ReasoningEffort};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
@@ -42,6 +42,7 @@ impl LlmAdapter for RecordingAdapter {
         &self,
         messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         self.sent_messages.lock().unwrap().push(messages.to_vec());
 
@@ -86,6 +87,7 @@ impl LlmAdapter for FakeAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -140,6 +142,7 @@ impl LlmAdapter for FailingToolAdapter {
         &self,
         messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         for message in messages {
             if let ChatMessage::Tool { content, .. } = message {
@@ -186,6 +189,7 @@ impl LlmAdapter for MultiToolCallAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
@@ -230,6 +234,7 @@ impl LlmAdapter for FailingAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         Err(LlmError::from_status(reqwest::StatusCode::UNAUTHORIZED, "invalid api key", "").into())
     }
@@ -248,6 +253,7 @@ impl LlmAdapter for EmptyResponseAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         Ok(vec![ResponseEvent::Done {
             finish_reason: FinishReason::Stop,
@@ -268,6 +274,7 @@ impl LlmAdapter for AlwaysToolCallAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         Ok(vec![
             ResponseEvent::ToolCall {
@@ -308,6 +315,7 @@ impl LlmAdapter for ToolsWhileOfferedAdapter {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         self.offered.lock().unwrap().push(tools.len());
         self.system_prompts
@@ -350,6 +358,7 @@ impl LlmAdapter for UnreadyAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         panic!("readiness()がReadyでない場合、sendは呼ばれないはず");
     }
@@ -380,6 +389,7 @@ impl LlmAdapter for TextAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         let text = self.replies.lock().unwrap().remove(0);
         Ok(vec![
@@ -409,6 +419,7 @@ impl LlmAdapter for ReasoningAdapter {
         &self,
         messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         self.sent_messages.lock().unwrap().push(messages.to_vec());
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
@@ -450,6 +461,7 @@ fn context_without_provider() -> TurnContext<'static> {
         adapter: Err(TurnFailure::NoProvider),
         prompts: SystemPrompts::default(),
         capabilities: default_capabilities(""),
+        reasoning_effort: None,
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
         generating: Box::leak(Box::new(InFlightSet::new())),
@@ -921,6 +933,7 @@ impl LlmAdapter for NarratingToolAdapter {
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             return Ok(vec![

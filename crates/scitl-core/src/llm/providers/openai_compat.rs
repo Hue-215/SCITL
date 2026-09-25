@@ -3,6 +3,7 @@ use std::time::Duration;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use crate::config::ReasoningEffort;
 use crate::db::error::CoreError;
 use crate::llm::{
     ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
@@ -113,7 +114,20 @@ struct RequestBody<'a> {
     messages: Vec<RequestMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<RequestTool>,
+    /// OpenAIの`reasoning_effort`。互換を名乗るサーバーにも同じ名前で受けるものが多い。
+    /// 値を拒むサーバーでは、その失敗がエラー発言に残り、強さを既定に戻せば送らなくなる。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
     stream: bool,
+}
+
+fn reasoning_effort_value(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::Off => "none",
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+    }
 }
 
 /// `ChatMessage`(core側の型)をOpenAI互換の発言列に変換する。役割ごとに必要な
@@ -263,6 +277,32 @@ struct RequestFunction {
     parameters: serde_json::Value,
 }
 
+fn request_body<'a>(
+    model: &'a str,
+    messages: &[ChatMessage],
+    tools: &[ToolSchema],
+    reasoning_effort: Option<ReasoningEffort>,
+) -> RequestBody<'a> {
+    RequestBody {
+        model,
+        messages: to_request_messages(messages),
+        tools: tools
+            .iter()
+            .map(|t| RequestTool {
+                kind: "function",
+                function: RequestFunction {
+                    name: t.name().to_string(),
+                    description: t.description().to_string(),
+                    parameters: t.parameters().clone(),
+                },
+            })
+            .collect(),
+        reasoning_effort: reasoning_effort.map(reasoning_effort_value),
+        // 非ストリーミングでも戻り値はイベント列に組み立て直す(`ResponseEvent`参照)。
+        stream: false,
+    }
+}
+
 #[derive(Deserialize)]
 struct CompletionResponse {
     choices: Vec<Choice>,
@@ -317,24 +357,9 @@ impl LlmAdapter for OpenAiCompatAdapter {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
+        reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<Vec<ResponseEvent>, CoreError> {
-        let body = RequestBody {
-            model: &self.model,
-            messages: to_request_messages(messages),
-            tools: tools
-                .iter()
-                .map(|t| RequestTool {
-                    kind: "function",
-                    function: RequestFunction {
-                        name: t.name().to_string(),
-                        description: t.description().to_string(),
-                        parameters: t.parameters().clone(),
-                    },
-                })
-                .collect(),
-            // 非ストリーミングでも戻り値はイベント列に組み立て直す(`ResponseEvent`参照)。
-            stream: false,
-        };
+        let body = request_body(&self.model, messages, tools, reasoning_effort);
 
         let endpoint = completions_endpoint(&self.base_url)?;
         let mut request = self.client.post(endpoint);
@@ -441,7 +466,7 @@ mod tests {
         let adapter =
             OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", TEST_TIMEOUT)
                 .unwrap();
-        adapter.send(&[], &[]).await.unwrap();
+        adapter.send(&[], &[], None).await.unwrap();
         handle.join().unwrap()
     }
 
@@ -465,7 +490,7 @@ mod tests {
         let adapter =
             OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT)
                 .unwrap();
-        let events = adapter.send(&[], &[]).await.unwrap();
+        let events = adapter.send(&[], &[], None).await.unwrap();
         handle.join().unwrap();
 
         assert!(events.iter().any(|e| matches!(
@@ -632,6 +657,17 @@ mod tests {
         assert_eq!(
             assistant,
             serde_json::json!({"role": "assistant", "content": "done"})
+        );
+    }
+
+    #[test]
+    fn sends_reasoning_effort_only_when_given() {
+        let body = |effort| serde_json::to_value(request_body("m", &[], &[], effort)).unwrap();
+        assert!(body(None).get("reasoning_effort").is_none());
+        assert_eq!(body(Some(ReasoningEffort::Off))["reasoning_effort"], "none");
+        assert_eq!(
+            body(Some(ReasoningEffort::High))["reasoning_effort"],
+            "high"
         );
     }
 
