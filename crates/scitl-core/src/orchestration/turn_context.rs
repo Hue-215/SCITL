@@ -2,7 +2,7 @@
 //! 1つの型にまとめて渡す(principles.md 5節)。
 
 use crate::in_flight::InFlightSet;
-use crate::llm::LlmAdapter;
+use crate::llm::{LlmAdapter, ModelCapabilities};
 use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnFailure};
 
 /// 組み立ては[`crate::settings::Snapshot::turn_context`]が行う。
@@ -12,6 +12,9 @@ pub struct TurnContext<'a> {
     /// 読めない)。使えなければ、ターンはその理由のエラー発言で終わる。
     pub adapter: Result<&'a dyn LlmAdapter, TurnFailure>,
     pub prompts: SystemPrompts<'a>,
+    /// 使うモデルの能力(`llm::resolve_capabilities`で解決済み)。ツールに対応しなければ
+    /// ツールを渡さない。
+    pub capabilities: ModelCapabilities,
     pub mcp: McpAccess<'a>,
     pub limits: ToolLimits,
     /// 応答を生成中のタスク。アプリの起動中ずっと同じ集合を渡す。同じタスクで2つの

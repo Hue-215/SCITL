@@ -139,6 +139,10 @@ export function resetModelCapabilities(providerId: string, model: string): Promi
   return invoke('reset_model_capabilities', { providerId, model })
 }
 
+export function detectModelCapabilities(providerId: string): Promise<SettingsView> {
+  return invoke('detect_model_capabilities', { providerId })
+}
+
 export type NewMcpEndpoint =
   | { transport: 'stdio'; command: string; args: string[]; env: [string, string][] }
   | { transport: 'streamable_http'; url: string; headers: [string, string][] }

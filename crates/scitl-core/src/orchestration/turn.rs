@@ -215,7 +215,12 @@ async fn generate_turn_response(
     }
 
     let mut sessions = McpSessions::new();
-    let external = prepare_external_tools(&ctx.mcp, &mut sessions).await;
+    // ツールに対応しないモデルには外部ツールも渡さないので、外部サーバーにも繋がない。
+    let external = if ctx.capabilities.tools {
+        prepare_external_tools(&ctx.mcp, &mut sessions).await
+    } else {
+        ExternalToolset::default()
+    };
     let result =
         run_tool_rounds(db.clone(), adapter, ctx, &attempt, &external, &mut sessions).await;
     sessions.close().await;
@@ -334,9 +339,14 @@ async fn run_tool_rounds(
     let history = with_conn(db.clone(), move |conn| build_history(conn, task_id)).await?;
 
     // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
-    // 衝突の排除は`ExternalToolset`が済ませてある。
-    let mut exposed_tools = tools::task_chat_tools();
-    exposed_tools.extend(external.schemas());
+    // 衝突の排除は`ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
+    // (対応しないモデルにツールを渡すと、リクエストごと拒否するサーバーがある)。
+    let tools_available = ctx.capabilities.tools;
+    let mut exposed_tools = Vec::new();
+    if tools_available {
+        exposed_tools.extend(tools::task_chat_tools());
+        exposed_tools.extend(external.schemas());
+    }
 
     let mut all_events = Vec::new();
     // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
@@ -359,8 +369,13 @@ async fn run_tool_rounds(
 
     // 上限のラウンドまでツールを実行したら、ツールを渡さずにもう一度だけ呼ぶ
     // (docs/spec/rebuild/tools.md 4節)。`u64`で数えるのは、上限が`u32::MAX`でも
-    // 最後の1回を数えられるようにするため。
-    let tool_rounds = u64::from(ctx.limits.max_rounds_per_turn);
+    // 最後の1回を数えられるようにするため。ツールに対応しないモデルは、最初の呼び出しが
+    // その最後の1回になる。
+    let tool_rounds = if tools_available {
+        u64::from(ctx.limits.max_rounds_per_turn)
+    } else {
+        0
+    };
     for round in 1..=tool_rounds + 1 {
         let final_call = round > tool_rounds;
         let mut system_prompt_text = with_conn(db.clone(), {
@@ -371,11 +386,11 @@ async fn run_tool_rounds(
                     base: base_owned.as_deref(),
                     task_chat: task_chat_owned.as_deref(),
                 };
-                build_system_prompt(conn, task_id, &prompts)
+                build_system_prompt(conn, task_id, &prompts, tools_available)
             }
         })
         .await?;
-        if final_call {
+        if final_call && tools_available {
             system_prompt_text.push_str("\n\n");
             system_prompt_text.push_str(ROUND_LIMIT_NOTE);
         }

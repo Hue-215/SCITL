@@ -1,13 +1,15 @@
+mod local_server;
 pub mod openai_compat;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use secrecy::SecretString;
 
-use crate::config::{ApiFormat, Config};
+use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::db::error::CoreError;
-use crate::llm::LlmAdapter;
+use crate::llm::{DetectedCapabilities, LlmAdapter};
 use crate::secrets;
 
 use openai_compat::OpenAiCompatAdapter;
@@ -89,6 +91,29 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
         adapter: Some(adapter),
         key_unavailable,
     })
+}
+
+/// モデルの能力を推論サーバーに問い合わせられるプロバイダーか(能力解決の「自動検出」の層)。
+pub fn can_detect_capabilities(provider: &ProviderConfig) -> bool {
+    match provider.api_format {
+        ApiFormat::OpenAiCompat => local_server::is_detectable(&provider.base_url),
+    }
+}
+
+/// `models`の能力を推論サーバーに問い合わせる。`Ok(None)`は能力を問い合わせられない
+/// サーバー、`Err`はサーバーに繋がらない。サーバーが知らないモデルは結果に含めない。
+pub async fn detect_capabilities(
+    provider: &ProviderConfig,
+    models: &[String],
+) -> Result<Option<HashMap<String, DetectedCapabilities>>, CoreError> {
+    if !can_detect_capabilities(provider) {
+        return Ok(None);
+    }
+    let key_ref = provider.key_ref.clone();
+    let (api_key, _) = crate::blocking::run(move || Ok(load_api_key(key_ref.as_deref()))).await?;
+    match provider.api_format {
+        ApiFormat::OpenAiCompat => local_server::detect(&provider.base_url, &api_key, models).await,
+    }
 }
 
 /// 2つ目は「鍵があるはずなのに読めなかった」。

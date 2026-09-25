@@ -20,7 +20,7 @@ pub async fn send_task_chat_message(
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
     // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
-    let snapshot = state.settings.snapshot();
+    let snapshot = state.settings.snapshot_for_turn().await;
     run_turn(
         state.db.clone(),
         &snapshot.turn_context(&state.generating),
@@ -40,7 +40,7 @@ pub async fn edit_task_chat_message(
     message_id: i64,
     text: String,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let snapshot = state.settings.snapshot();
+    let snapshot = state.settings.snapshot_for_turn().await;
     edit_user_message(
         state.db.clone(),
         &snapshot.turn_context(&state.generating),
@@ -60,7 +60,7 @@ pub async fn retry_task_chat_message(
     task_id: i64,
     message_id: i64,
 ) -> Result<Vec<ResponseEvent>, String> {
-    let snapshot = state.settings.snapshot();
+    let snapshot = state.settings.snapshot_for_turn().await;
     retry_reply(
         state.db.clone(),
         &snapshot.turn_context(&state.generating),

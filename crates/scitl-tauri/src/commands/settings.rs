@@ -156,3 +156,16 @@ pub async fn reset_model_capabilities(
     })
     .await
 }
+
+/// 推論サーバーへの問い合わせは非同期で、`fetch_mcp_tools`と同じく`with_settings`を通さない。
+#[tauri::command]
+pub async fn detect_model_capabilities(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<SettingsView, String> {
+    state
+        .settings
+        .detect_model_capabilities(&provider_id)
+        .await
+        .map_err(|e| e.to_string())
+}

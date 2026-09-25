@@ -15,7 +15,14 @@ pub struct SystemPrompts<'a> {
     pub task_chat: Option<&'a str>,
 }
 
-/// 基本システムプロンプト + タスクチャット用システムプロンプト + 現在日時 +
+/// ツールに対応しないモデルに添える一節(legacy/backend.md 4節手順2「(ツール無効時のみ)
+/// 注意書き」)。伝えないと、モデルはタスクを更新したつもりの返事をする。
+const TOOLS_UNAVAILABLE_NOTE: &str = "Tools are not available with the current model, so you \
+     cannot create, update, or delete tasks or steps. If the user asks for such a change, do \
+     not say that you made it; tell them that the current model cannot apply it.";
+
+/// 基本システムプロンプト + タスクチャット用システムプロンプト +
+/// (ツールに対応しないモデルなら)注意書き + 現在日時 +
 /// タスク・工程の最新状態JSONを毎ターン組み立てる(docs/spec/principles.md 3節
 /// 「最新状態は毎ターン渡す」)。この最新状態は**次ターン以降**の入力履歴を代替するもので、
 /// 同一ターン内のツール呼び出しループでの往復は`turn.rs`が別途モデルに返す
@@ -26,6 +33,7 @@ pub fn build_system_prompt(
     conn: &Connection,
     task_id: i64,
     prompts: &SystemPrompts,
+    tools_available: bool,
 ) -> Result<String> {
     let task = tasks::get_task(conn, task_id)?;
     let steps = task_steps::list_for_task(conn, task_id)?;
@@ -36,6 +44,9 @@ pub fn build_system_prompt(
     }
     if let Some(prompt) = prompts.task_chat.filter(|p| !p.is_empty()) {
         sections.push(prompt.to_string());
+    }
+    if !tools_available {
+        sections.push(TOOLS_UNAVAILABLE_NOTE.to_string());
     }
 
     // ユーザー発言を包む予約タグの読み方(Issue #68)。囲みと`sent_at`の意味を伝えないと、
@@ -70,7 +81,7 @@ mod tests {
             base: Some("base prompt"),
             task_chat: None,
         };
-        let prompt = build_system_prompt(&conn, task_id, &prompts).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &prompts, true).unwrap();
 
         assert!(prompt.contains("base prompt"));
         assert!(prompt.contains("買い出し"));
@@ -90,7 +101,7 @@ mod tests {
         )
         .unwrap();
 
-        let prompt = build_system_prompt(&conn, task_id, &SystemPrompts::default()).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &SystemPrompts::default(), true).unwrap();
         let state_line = prompt.split_once("current task state:\n").unwrap().1;
 
         assert!(!state_line.contains("<scitl:"));
@@ -109,7 +120,7 @@ mod tests {
             base: Some("base prompt"),
             task_chat: Some("task chat prompt"),
         };
-        let prompt = build_system_prompt(&conn, task_id, &prompts).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &prompts, true).unwrap();
 
         let base_pos = prompt.find("base prompt").unwrap();
         let task_chat_pos = prompt.find("task chat prompt").unwrap();
@@ -125,9 +136,27 @@ mod tests {
             base: None,
             task_chat: Some("task chat prompt"),
         };
-        let prompt = build_system_prompt(&conn, task_id, &prompts).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &prompts, true).unwrap();
 
         assert!(prompt.contains("task chat prompt"));
+    }
+
+    #[test]
+    fn adds_the_note_only_when_tools_are_unavailable() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = db::tasks::create_task(&conn).unwrap().id;
+        let prompts = SystemPrompts {
+            base: Some("base prompt"),
+            task_chat: Some("task chat prompt"),
+        };
+
+        let with_tools = build_system_prompt(&conn, task_id, &prompts, true).unwrap();
+        assert!(!with_tools.contains(TOOLS_UNAVAILABLE_NOTE));
+
+        let without_tools = build_system_prompt(&conn, task_id, &prompts, false).unwrap();
+        let note_pos = without_tools.find(TOOLS_UNAVAILABLE_NOTE).unwrap();
+        assert!(without_tools.find("task chat prompt").unwrap() < note_pos);
+        assert!(note_pos < without_tools.find("current task state").unwrap());
     }
 
     #[test]
@@ -135,7 +164,7 @@ mod tests {
         let conn = db::open_in_memory().unwrap();
         let task_id = db::tasks::create_task(&conn).unwrap().id;
 
-        let prompt = build_system_prompt(&conn, task_id, &SystemPrompts::default()).unwrap();
+        let prompt = build_system_prompt(&conn, task_id, &SystemPrompts::default(), true).unwrap();
 
         assert!(prompt.contains("current task state"));
     }

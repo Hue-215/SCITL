@@ -98,7 +98,7 @@ export interface ModelCapabilities {
   image: boolean
   tools: boolean
   thinking: boolean
-  context_length: number | null
+  context_length: number
 }
 
 // crates/scitl-core/src/settings/view.rs の ModelView。
@@ -106,7 +106,8 @@ export interface ModelView {
   name: string
   visible: boolean
   capabilities: ModelCapabilities
-  default_context_length: number | null
+  // 手動設定が無いとき(自動検出 → 既定値)のコンテキスト長。
+  default_context_length: number
   // 能力に手動設定がある(「初期値に戻す」を出す)。
   overridden: boolean
 }
@@ -119,6 +120,8 @@ export interface ProviderView {
   models: ModelView[]
   active_model: string | null
   has_api_key: boolean
+  // モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
+  can_detect_capabilities: boolean
   // このプロバイダーをアクティブにしているが、組み立てられない理由。
   error: string | null
 }

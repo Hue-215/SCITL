@@ -9,7 +9,8 @@ use serde::Serialize;
 use crate::config::{
     ApiFormat, Config, McpEndpoint, McpServerConfig, ModelConfig, DEFAULT_RESPONSE_TIMEOUT_SECS,
 };
-use crate::llm::{self, ModelCapabilities};
+use crate::llm::providers;
+use crate::llm::{self, DetectedCapabilities, DetectedCatalog, ModelCapabilities};
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
 use crate::text;
@@ -24,6 +25,8 @@ pub struct ProviderView {
     pub models: Vec<ModelView>,
     pub active_model: Option<String>,
     pub has_api_key: bool,
+    /// モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
+    pub can_detect_capabilities: bool,
     /// このプロバイダーをアクティブにしているが、組み立てられない理由(Issue #155)。
     pub error: Option<String>,
 }
@@ -34,8 +37,8 @@ pub struct ModelView {
     pub name: String,
     pub visible: bool,
     pub capabilities: ModelCapabilities,
-    /// 手動設定が無いときのコンテキスト長。入力欄のプレースホルダに出す。
-    pub default_context_length: Option<u32>,
+    /// 手動設定が無いとき(自動検出 → 既定値)のコンテキスト長。入力欄のプレースホルダに出す。
+    pub default_context_length: u32,
     /// 能力に手動設定がある(「初期値に戻す」を出す)。
     pub overridden: bool,
 }
@@ -127,6 +130,7 @@ pub(super) struct Problems<'a> {
 pub(super) fn build(
     config: &Config,
     catalog: &ToolCatalog,
+    detected: &DetectedCatalog,
     problems: Problems<'_>,
 ) -> SettingsView {
     SettingsView {
@@ -151,9 +155,14 @@ pub(super) fn build(
                 name: p.name.clone(),
                 api_format: p.api_format,
                 base_url: p.base_url.clone(),
-                models: p.models.iter().map(model_view).collect(),
+                models: p
+                    .models
+                    .iter()
+                    .map(|m| model_view(m, detected.get(&p.id, &m.name).as_ref()))
+                    .collect(),
                 active_model: p.active_model.clone(),
                 has_api_key: p.key_ref.is_some(),
+                can_detect_capabilities: providers::can_detect_capabilities(p),
                 error: problems
                     .active_provider_error
                     .filter(|_| config.active_provider_id.as_deref() == Some(p.id.as_str()))
@@ -169,12 +178,12 @@ pub(super) fn build(
     }
 }
 
-fn model_view(m: &ModelConfig) -> ModelView {
+fn model_view(m: &ModelConfig, detected: Option<&DetectedCapabilities>) -> ModelView {
     ModelView {
         name: m.name.clone(),
         visible: m.visible,
-        capabilities: llm::resolve_capabilities(m),
-        default_context_length: llm::default_capabilities(&m.name).context_length,
+        capabilities: llm::resolve_capabilities(m, detected),
+        default_context_length: llm::fallback_capabilities(&m.name, detected).context_length,
         overridden: !m.overrides.is_empty(),
     }
 }
