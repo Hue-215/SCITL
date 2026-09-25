@@ -287,7 +287,8 @@ impl Settings {
     }
 
     /// 問い合わせた全モデルの結果を置き換える。サーバーが答えなかったモデルも「検出した
-    /// 項目なし」として覚え、ターンのたびに問い合わせ直さない。
+    /// 項目なし」として覚え、ターンのたびに問い合わせ直さない。問い合わせに失敗したら
+    /// 何も置き換えない(一時的な失敗で、取れていた結果を空にしない)。
     async fn detect(&self, provider: &ProviderConfig, models: Vec<String>) -> Result<()> {
         let mut found = providers::detect_capabilities(provider, &models)
             .await?
