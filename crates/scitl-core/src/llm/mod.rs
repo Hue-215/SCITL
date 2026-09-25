@@ -2,6 +2,7 @@ mod capabilities;
 mod error;
 mod prompt;
 pub mod providers;
+mod token_estimate;
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +12,7 @@ pub use capabilities::{
 };
 pub use error::{ErrorDetail, LlmError};
 pub use prompt::{user_message_format_note, PromptText};
+pub use token_estimate::{estimate_message, estimate_tools};
 
 use crate::config::ReasoningEffort;
 use crate::db::error::CoreError;
