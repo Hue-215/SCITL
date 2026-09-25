@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::db::error::CoreError;
@@ -109,10 +109,32 @@ pub async fn detect_capabilities(
     if !can_detect_capabilities(provider) {
         return Ok(None);
     }
-    let key_ref = provider.key_ref.clone();
-    let (api_key, _) = crate::blocking::run(move || Ok(load_api_key(key_ref.as_deref()))).await?;
+    let api_key = load_api_key_off_thread(provider).await?;
     match provider.api_format {
         ApiFormat::OpenAiCompat => local_server::detect(&provider.base_url, &api_key, models).await,
+    }
+}
+
+/// 非同期の問い合わせの前に鍵を読む。資格情報ストアの呼び出しはブロックするため
+/// 別スレッドで行う。読めなければ鍵無しで進め、認証の失敗として表面化させる
+/// ([`build_active_adapter`]と同じ扱い)。
+async fn load_api_key_off_thread(provider: &ProviderConfig) -> Result<SecretString, CoreError> {
+    let key_ref = provider.key_ref.clone();
+    let (api_key, _) = crate::blocking::run(move || Ok(load_api_key(key_ref.as_deref()))).await?;
+    Ok(api_key)
+}
+
+/// 鍵を付ける。認証不要のローカル推論サーバー向けに、鍵が空なら`Authorization`ヘッダーごと
+/// 付けない(`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
+fn with_api_key(
+    request: reqwest::RequestBuilder,
+    api_key: &SecretString,
+) -> reqwest::RequestBuilder {
+    let key = api_key.expose_secret();
+    if key.is_empty() {
+        request
+    } else {
+        request.bearer_auth(key)
     }
 }
 

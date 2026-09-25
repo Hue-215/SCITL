@@ -255,14 +255,7 @@ impl Settings {
             .detecting
             .try_begin(provider_id.to_string())
             .ok_or_else(|| invalid("already detecting capabilities for this provider"))?;
-        let provider = self
-            .current()
-            .config
-            .providers
-            .iter()
-            .find(|p| p.id == provider_id)
-            .cloned()
-            .ok_or_else(|| provider_not_found(provider_id))?;
+        let provider = self.provider(provider_id)?;
         if !providers::can_detect_capabilities(&provider) {
             return Err(invalid(
                 "capabilities can be detected only from servers on this machine or the local network",
@@ -271,6 +264,18 @@ impl Settings {
         let models = provider.models.iter().map(|m| m.name.clone()).collect();
         self.detect(&provider, models).await?;
         Ok(self.view())
+    }
+
+    /// 非同期の問い合わせに使う、ある時点のプロバイダー設定の複製。ロックを`.await`に
+    /// またがせないため、複製してから問い合わせる。
+    fn provider(&self, provider_id: &str) -> Result<ProviderConfig> {
+        self.current()
+            .config
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .cloned()
+            .ok_or_else(|| provider_not_found(provider_id))
     }
 
     /// 問い合わせた全モデルの結果を置き換える。サーバーが答えなかったモデルも「検出した

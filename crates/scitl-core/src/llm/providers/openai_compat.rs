@@ -60,16 +60,16 @@ pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
     crate::net::validate_external_url(&url).map_err(CoreError::ProviderConfig)
 }
 
-/// `base_url`と`chat/completions`を安全に連結する。文字列の`format!`連結は末尾スラッシュの
-/// 有無で壊れやすく(`//chat/completions`等)、`validate_base_url`が防ぐ意図(パスがクエリの
-/// 置き場所にならないこと)とも噛み合わないため`Url::join`を使う。
-fn completions_endpoint(base_url: &str) -> Result<reqwest::Url, CoreError> {
+/// `base_url`と`chat/completions`等のパスを安全に連結する。文字列の`format!`連結は末尾
+/// スラッシュの有無で壊れやすく(`//chat/completions`等)、`validate_base_url`が防ぐ意図
+/// (パスがクエリの置き場所にならないこと)とも噛み合わないため`Url::join`を使う。
+fn endpoint(base_url: &str, path: &str) -> Result<reqwest::Url, CoreError> {
     let mut url = reqwest::Url::parse(base_url)
         .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    url.join("chat/completions")
+    url.join(path)
         .map_err(|e| CoreError::ProviderConfig(format!("failed to build endpoint: {e}")))
 }
 
@@ -396,13 +396,8 @@ impl LlmAdapter for OpenAiCompatAdapter {
     ) -> Result<Vec<ResponseEvent>, CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
-        let endpoint = completions_endpoint(&self.base_url)?;
-        let mut request = self.client.post(endpoint);
-        // 認証不要のローカル推論サーバー向けに、鍵が空なら`Authorization`ヘッダーごと付けない
-        // (`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
-        if !self.api_key.expose_secret().is_empty() {
-            request = request.bearer_auth(self.api_key.expose_secret());
-        }
+        let endpoint = endpoint(&self.base_url, "chat/completions")?;
+        let request = super::with_api_key(self.client.post(endpoint), &self.api_key);
         let transport_error = |e| LlmError::from_transport(e, self.api_key.expose_secret());
         let response = request.json(&body).send().await.map_err(transport_error)?;
 
@@ -577,15 +572,15 @@ mod tests {
     }
 
     #[test]
-    fn completions_endpoint_joins_regardless_of_trailing_slash() {
+    fn endpoint_joins_regardless_of_trailing_slash() {
         assert_eq!(
-            completions_endpoint("https://api.openai.com/v1")
+            endpoint("https://api.openai.com/v1", "chat/completions")
                 .unwrap()
                 .as_str(),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            completions_endpoint("https://api.openai.com/v1/")
+            endpoint("https://api.openai.com/v1/", "chat/completions")
                 .unwrap()
                 .as_str(),
             "https://api.openai.com/v1/chat/completions"
