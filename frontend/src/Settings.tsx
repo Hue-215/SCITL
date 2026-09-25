@@ -598,7 +598,9 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
   const [query, setQuery] = useState('')
 
   const collapsible = models.length >= LIST_COLLAPSE_THRESHOLD
-  const needle = query.trim().toLowerCase()
+  // 検索欄は畳める件数のときだけ出す。削除で件数が減って欄が消えたら、打った語は消せない
+  // ので、欄が無いあいだは絞り込まない。
+  const needle = collapsible ? query.trim().toLowerCase() : ''
   const matched = needle ? models.filter((m) => m.label.toLowerCase().includes(needle)) : models
   // 折りたたんでいても、検索したら当たった行は出す(legacy/frontend.md 3節)。
   const shown = collapsible && !expanded && !needle ? [] : matched
