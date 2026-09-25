@@ -40,9 +40,13 @@ pub enum LlmError {
     EmptyResponse,
     #[error("the conversation exceeds the context length: {0}")]
     ContextExceeded(ErrorDetail),
-    /// 思考の強さの指定を受け付けなかった。思考に対応しないモデルに送った場合。
+    /// 思考の強さの指定そのものを受け付けなかった。思考に対応しないモデルに送った場合。
     #[error("the provider rejected the reasoning effort: {0}")]
     ReasoningEffortRejected(ErrorDetail),
+    /// 思考の強さの指定は受け付けるが、送った値を受け付けなかった。モデルごとに
+    /// 受け付ける強さが違う(`none`を持たない等)。
+    #[error("the provider rejected the reasoning effort value: {0}")]
+    ReasoningEffortValueRejected(ErrorDetail),
     #[error("authentication failed: {0}")]
     Auth(ErrorDetail),
     #[error("rate limited: {0}")]
