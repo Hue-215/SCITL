@@ -12,8 +12,6 @@ import {
   listProviderModels,
   removeModel,
   resetModelCapabilities,
-  setActiveModel,
-  setActiveProvider,
   setMcpServerEnabled,
   setMcpToolEnabled,
   setModelCapability,
@@ -155,7 +153,6 @@ export default function Settings({ onClose }: SettingsProps) {
                   runOrReportError(() => addProvider(name, format, baseUrl, apiKey))
                 }
                 onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
-                onSetActiveProvider={(id) => runOrReportError(() => setActiveProvider(id))}
                 onUpdateModels={runOrReportError}
               />
             ) : (
@@ -333,7 +330,6 @@ interface ProvidersTabProps {
     apiKey: string | null,
   ) => void
   onDeleteProvider: (providerId: string) => void
-  onSetActiveProvider: (providerId: string) => void
   // モデルの操作(追加・削除・表の各列)は種類が多いため、個別のコールバックを並べずに
   // 呼び出しごと受け取り、結果の反映とエラー表示を親に任せる。
   onUpdateModels: (action: () => Promise<SettingsView>) => Promise<void>
@@ -343,7 +339,6 @@ function ProvidersTab({
   settings,
   onAddProvider,
   onDeleteProvider,
-  onSetActiveProvider,
   onUpdateModels,
 }: ProvidersTabProps) {
   const [newModelByProvider, setNewModelByProvider] = useState<Record<string, string>>({})
@@ -355,13 +350,11 @@ function ProvidersTab({
           <ProviderCard
             key={provider.id}
             provider={provider}
-            active={settings.active_provider_id === provider.id}
             newModel={newModelByProvider[provider.id] ?? ''}
             onSetNewModel={(value) =>
               setNewModelByProvider((prev) => ({ ...prev, [provider.id]: value }))
             }
             onDeleteProvider={() => onDeleteProvider(provider.id)}
-            onSetActiveProvider={() => onSetActiveProvider(provider.id)}
             onUpdateModels={onUpdateModels}
           />
         ))}
@@ -375,21 +368,17 @@ function ProvidersTab({
 
 interface ProviderCardProps {
   provider: ProviderView
-  active: boolean
   newModel: string
   onSetNewModel: (value: string) => void
   onDeleteProvider: () => void
-  onSetActiveProvider: () => void
   onUpdateModels: (action: () => Promise<SettingsView>) => Promise<void>
 }
 
 function ProviderCard({
   provider,
-  active,
   newModel,
   onSetNewModel,
   onDeleteProvider,
-  onSetActiveProvider,
   onUpdateModels,
 }: ProviderCardProps) {
   const hasModel = provider.models.length > 0
@@ -431,16 +420,7 @@ function ProviderCard({
   return (
     <li className="provider-card">
       <div className="provider-card-header">
-        <label className="choice" title={hasModel ? undefined : 'モデルを1件以上登録すると選択できます'}>
-          <input
-            type="radio"
-            name="active-provider"
-            checked={active}
-            onChange={onSetActiveProvider}
-            disabled={!hasModel}
-          />
-          <strong>{provider.name}</strong>
-        </label>
+        <strong>{provider.name}</strong>
         <ConfirmButton
           label="削除"
           confirmTitle="プロバイダーを削除"
@@ -453,7 +433,7 @@ function ProviderCard({
       </p>
       {provider.error && (
         <p className="error">
-          {'このプロバイダーは使えません。削除するか、別のプロバイダーに切り替えてください。'}
+          {'このプロバイダーは使えません。削除するか、チャットで別のプロバイダーのモデルに切り替えてください。'}
           {`(${provider.error})`}
         </p>
       )}
@@ -461,7 +441,7 @@ function ProviderCard({
       {hasModel ? (
         <ModelTable provider={provider} onUpdate={onUpdateModels} />
       ) : (
-        <p className="list-empty">モデル未登録(登録するとアクティブに選択できます)</p>
+        <p className="list-empty">モデル未登録(登録するとチャットで選べます)</p>
       )}
       {hasModel && provider.can_detect_capabilities && (
         <button type="button" onClick={() => void detect()} disabled={detecting}>
@@ -641,7 +621,6 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
           <table className="model-table">
             <thead>
               <tr>
-                <th>使用</th>
                 <th>表示</th>
                 <th>モデル</th>
                 {CAPABILITY_COLUMNS.map(({ capability, label }) => (
@@ -657,7 +636,6 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
                   key={model.name}
                   providerId={provider.id}
                   model={model}
-                  active={provider.active_model === model.name}
                   onUpdate={onUpdate}
                 />
               ))}
@@ -675,11 +653,10 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
 interface ModelRowProps {
   providerId: string
   model: ModelView
-  active: boolean
   onUpdate: (action: () => Promise<SettingsView>) => void
 }
 
-function ModelRow({ providerId, model, active, onUpdate }: ModelRowProps) {
+function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
   const name = model.name
   // 欄には手動設定だけを出し、既定値はプレースホルダに回す。手動設定が既定値と同じなら
   // Rust側で外されるので、解決済みの値が既定値と違うことが手動設定があることと同じになる。
@@ -691,15 +668,6 @@ function ModelRow({ providerId, model, active, onUpdate }: ModelRowProps) {
 
   return (
     <tr className={model.visible ? undefined : 'model-hidden'}>
-      <td>
-        <input
-          type="radio"
-          name={`active-model-${providerId}`}
-          checked={active}
-          onChange={() => onUpdate(() => setActiveModel(providerId, name))}
-          aria-label={`${name}を使う`}
-        />
-      </td>
       <td>
         <input
           type="checkbox"

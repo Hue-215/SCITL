@@ -71,14 +71,6 @@ pub async fn delete_provider(
 }
 
 #[tauri::command]
-pub async fn set_active_provider(
-    state: State<'_, AppState>,
-    provider_id: String,
-) -> Result<SettingsView, String> {
-    with_settings(&state, move |s| s.set_active_provider(&provider_id)).await
-}
-
-#[tauri::command]
 pub async fn add_models(
     state: State<'_, AppState>,
     provider_id: String,
@@ -94,15 +86,6 @@ pub async fn remove_model(
     model: String,
 ) -> Result<SettingsView, String> {
     with_settings(&state, move |s| s.remove_model(&provider_id, &model)).await
-}
-
-#[tauri::command]
-pub async fn set_active_model(
-    state: State<'_, AppState>,
-    provider_id: String,
-    model: String,
-) -> Result<SettingsView, String> {
-    with_settings(&state, move |s| s.set_active_model(&provider_id, &model)).await
 }
 
 #[tauri::command]

@@ -456,15 +456,6 @@ impl Settings {
         Ok(view)
     }
 
-    pub fn set_active_provider(&self, provider_id: &str) -> Result<SettingsView> {
-        let mut draft = self.edit();
-        if !draft.config.providers.iter().any(|p| p.id == provider_id) {
-            return Err(provider_not_found(provider_id));
-        }
-        draft.config.active_provider_id = Some(provider_id.to_string());
-        draft.commit()
-    }
-
     /// 手動追加(1件)と、取得した一覧から選んだ分(複数件)の両方が通る。1件でも登録できない
     /// 名前があれば何も登録しない。モデルが無かったプロバイダーでは、最初の1件を
     /// アクティブにする。
@@ -502,16 +493,6 @@ impl Settings {
         let view = draft.commit()?;
         self.detected.forget(provider_id, model);
         Ok(view)
-    }
-
-    pub fn set_active_model(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
-        let mut draft = self.edit();
-        let provider = find_provider_mut(&mut draft.config, provider_id)?;
-        if provider.model(model).is_none() {
-            return Err(model_not_found(model));
-        }
-        provider.active_model = Some(model.to_string());
-        draft.commit()
     }
 
     /// チャット入力欄の下で選んだモデルに切り替える(Issue #64)。一覧はプロバイダーを跨ぐので、
@@ -1084,7 +1065,7 @@ name = "m"
         let id = add_local_provider(&settings, "A").providers[0].id.clone();
         settings.add_models(&id, &["m1"]).unwrap();
         settings.add_models(&id, &["m2"]).unwrap();
-        settings.set_active_model(&id, "m2").unwrap();
+        settings.select_chat_model(&id, "m2").unwrap();
 
         let view = settings.remove_model(&id, "m2").unwrap();
         assert_eq!(view.providers[0].active_model.as_deref(), Some("m1"));

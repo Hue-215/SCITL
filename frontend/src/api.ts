@@ -96,10 +96,6 @@ export function deleteProvider(providerId: string): Promise<SettingsView> {
   return invoke('delete_provider', { providerId })
 }
 
-export function setActiveProvider(providerId: string): Promise<SettingsView> {
-  return invoke('set_active_provider', { providerId })
-}
-
 // 1件でも登録できない名前があれば、1件も登録しない。
 export function addModels(providerId: string, models: string[]): Promise<SettingsView> {
   return invoke('add_models', { providerId, models })
@@ -113,10 +109,6 @@ export function listProviderModels(providerId: string): Promise<string[]> {
 
 export function removeModel(providerId: string, model: string): Promise<SettingsView> {
   return invoke('remove_model', { providerId, model })
-}
-
-export function setActiveModel(providerId: string, model: string): Promise<SettingsView> {
-  return invoke('set_active_model', { providerId, model })
 }
 
 export function setModelVisible(
