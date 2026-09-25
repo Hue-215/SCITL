@@ -55,6 +55,8 @@ pub const FALLBACK_CONTEXT_LENGTH: u32 = 4096;
 ///   登録しただけのモデルではアプリの中心の操作ができなくなるため
 /// - 思考はありとする。なしにすると、手動設定しない限り思考の強さを選べなくなるため。
 ///   思考の強さの指定を拒むAPIでは、その旨のエラー発言からモデル表での変更へ誘導する
+/// - 画像はなしとする。非対応のモデルに画像を送ると呼び出しごと失敗するが、送らない側に
+///   倒しても画像を添えられないだけで会話は続くため
 pub const DEFAULT_CAPABILITIES: ModelCapabilities = ModelCapabilities {
     image: false,
     tools: true,
