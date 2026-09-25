@@ -4,8 +4,8 @@
 use secrecy::SecretString;
 use tauri::State;
 
-use scitl_core::config::{ApiFormat, Capability};
-use scitl_core::settings::{NewProvider, SettingsView};
+use scitl_core::config::{ApiFormat, Capability, ReasoningEffort};
+use scitl_core::settings::{ChatModelsView, NewProvider, SettingsView};
 
 use super::with_settings;
 use crate::AppState;
@@ -168,4 +168,34 @@ pub async fn detect_model_capabilities(
         .detect_model_capabilities(&provider_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// チャット入力欄の下のモデル選択(Issue #64)。アクティブなモデルを推論サーバーに
+/// 問い合わせることがあるため非同期で、`with_settings`を通さない。
+#[tauri::command]
+pub async fn get_chat_models(state: State<'_, AppState>) -> Result<ChatModelsView, String> {
+    Ok(state.settings.chat_models().await)
+}
+
+/// 選び直した後の一覧は`get_chat_models`で引き直す(問い合わせを伴うため、保存とは分ける)。
+#[tauri::command]
+pub async fn select_chat_model(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+) -> Result<(), String> {
+    with_settings(&state, move |s| s.select_chat_model(&provider_id, &model)).await
+}
+
+#[tauri::command]
+pub async fn set_reasoning_effort(
+    state: State<'_, AppState>,
+    provider_id: String,
+    model: String,
+    effort: Option<ReasoningEffort>,
+) -> Result<(), String> {
+    with_settings(&state, move |s| {
+        s.set_reasoning_effort(&provider_id, &model, effort)
+    })
+    .await
 }

@@ -7,7 +7,8 @@
 use serde::Serialize;
 
 use crate::config::{
-    ApiFormat, Config, McpEndpoint, McpServerConfig, ModelConfig, DEFAULT_RESPONSE_TIMEOUT_SECS,
+    ApiFormat, Config, McpEndpoint, McpServerConfig, ModelConfig, ProviderConfig, ReasoningEffort,
+    DEFAULT_RESPONSE_TIMEOUT_SECS,
 };
 use crate::llm::providers;
 use crate::llm::{self, DetectedCapabilities, DetectedCatalog, ModelCapabilities};
@@ -119,6 +120,63 @@ pub struct SettingsView {
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
     pub mcp_servers: Vec<McpServerView>,
+}
+
+/// チャット入力欄の下のモデル選択・思考の強さ選択(Issue #64)。設定画面の[`SettingsView`]
+/// とは別に持ち、選ぶのに要るものだけを渡す。
+#[derive(Debug, Serialize)]
+pub struct ChatModelsView {
+    /// 一覧に出すモデル(設定画面で表示にしたもの)。プロバイダーの登録順、その中はモデルの
+    /// 登録順。
+    pub choices: Vec<ModelChoice>,
+    /// チャットで使うモデル。一覧から隠したモデルでも、使っていれば入る。
+    pub selected: Option<SelectedModel>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelChoice {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model: String,
+}
+
+impl ModelChoice {
+    fn of(provider: &ProviderConfig, model: &ModelConfig) -> Self {
+        Self {
+            provider_id: provider.id.clone(),
+            provider_name: provider.name.clone(),
+            model: model.name.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SelectedModel {
+    #[serde(flatten)]
+    pub choice: ModelChoice,
+    /// 思考に対応する(3層で解決済み)。対応しなければ思考の強さは選べない。
+    pub thinking: bool,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+pub(super) fn chat_models(config: &Config, detected: &DetectedCatalog) -> ChatModelsView {
+    ChatModelsView {
+        choices: config
+            .providers
+            .iter()
+            .flat_map(|p| {
+                p.models
+                    .iter()
+                    .filter(|m| m.visible)
+                    .map(|m| ModelChoice::of(p, m))
+            })
+            .collect(),
+        selected: config.active_model().map(|(p, m)| SelectedModel {
+            choice: ModelChoice::of(p, m),
+            thinking: llm::resolve_capabilities(m, detected.get(&p.id, &m.name).as_ref()).thinking,
+            reasoning_effort: m.reasoning_effort,
+        }),
+    }
 }
 
 /// 設定の問題(`settings`モジュール冒頭)。
