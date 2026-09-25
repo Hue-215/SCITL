@@ -379,8 +379,7 @@ mod tests {
         }
     }
 
-    /// 読み込み中・認証の失敗は「このサーバーではない」と区別する。取り違えると、
-    /// 検出できないサーバーとして覚えられ、問い合わせ直されない。
+    /// 読み込み中・認証の失敗は「このサーバーではない」と区別する(理由は`Probe::send`)。
     #[tokio::test]
     async fn servers_that_cannot_answer_now_are_errors() {
         for route in [
