@@ -13,6 +13,7 @@ use crate::llm::{
     ToolCallRequest, ToolSchema,
 };
 use crate::mcp::McpSessions;
+use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::turn_error::{self, TurnFailure};
@@ -395,12 +396,23 @@ async fn run_tool_rounds(
             system_prompt_text.push_str(ROUND_LIMIT_NOTE);
         }
 
-        let mut messages_to_send = Vec::with_capacity(1 + history.len() + round_trip.len());
-        messages_to_send.push(ChatMessage::System(system_prompt_text));
-        messages_to_send.extend(history.iter().cloned());
+        let offered: &[ToolSchema] = if final_call { &[] } else { &exposed_tools };
+        let system = ChatMessage::System(system_prompt_text);
+        // システムプロンプトとこのラウンドまでの往復はラウンドごとに伸びるので、間引きも
+        // ラウンドごとにやり直す。添付の実データは、見積もりを狂わせないよう間引きの後で埋める
+        // (legacy/backend.md 4節手順2)。
+        let kept = trim_history(
+            &history,
+            ctx.capabilities.context_length,
+            std::iter::once(&system).chain(&round_trip),
+            offered,
+        );
+
+        let mut messages_to_send = Vec::with_capacity(1 + kept.len() + round_trip.len());
+        messages_to_send.push(system);
+        messages_to_send.extend(kept.iter().cloned());
         messages_to_send.extend(round_trip.iter().cloned());
 
-        let offered: &[ToolSchema] = if final_call { &[] } else { &exposed_tools };
         let events = match adapter
             .send(&messages_to_send, offered, ctx.reasoning_effort)
             .await
