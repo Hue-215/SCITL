@@ -22,13 +22,13 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::config::{
-    self, validate_mcp_server_name, ApiFormat, Config, GeneralConfig, McpEndpoint, McpServerConfig,
-    ProviderConfig, SecretRef, ToolConfig,
+    self, validate_mcp_server_name, ApiFormat, Capability, Config, GeneralConfig, McpEndpoint,
+    McpServerConfig, ModelConfig, ModelOverrides, ProviderConfig, SecretRef, ToolConfig,
 };
 use crate::db::error::{CoreError, Result};
 use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};
-use crate::llm::LlmAdapter;
+use crate::llm::{self, LlmAdapter};
 use crate::mcp::{self, ToolCatalog};
 use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext, TurnFailure};
 use crate::secrets;
@@ -350,10 +350,10 @@ impl Settings {
         }
         let mut draft = self.edit();
         let provider = find_provider_mut(&mut draft.config, provider_id)?;
-        if provider.models.iter().any(|m| m == model) {
+        if provider.model(model).is_some() {
             return Err(invalid(format!("model already registered: {model}")));
         }
-        provider.models.push(model.to_string());
+        provider.models.push(ModelConfig::new(model.to_string()));
         if provider.active_model.is_none() {
             provider.active_model = Some(model.to_string());
         }
@@ -364,9 +364,9 @@ impl Settings {
     pub fn remove_model(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let provider = find_provider_mut(&mut draft.config, provider_id)?;
-        provider.models.retain(|m| m != model);
+        provider.models.retain(|m| m.name != model);
         if provider.active_model.as_deref() == Some(model) {
-            provider.active_model = provider.models.first().cloned();
+            provider.active_model = provider.models.first().map(|m| m.name.clone());
         }
         draft.commit()
     }
@@ -374,10 +374,62 @@ impl Settings {
     pub fn set_active_model(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let provider = find_provider_mut(&mut draft.config, provider_id)?;
-        if !provider.models.iter().any(|m| m == model) {
-            return Err(invalid(format!("model not registered: {model}")));
+        if provider.model(model).is_none() {
+            return Err(model_not_found(model));
         }
         provider.active_model = Some(model.to_string());
+        draft.commit()
+    }
+
+    /// チャットのモデル一覧に出すかどうか。
+    pub fn set_model_visible(
+        &self,
+        provider_id: &str,
+        model: &str,
+        visible: bool,
+    ) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        find_model_mut(&mut draft.config, provider_id, model)?.visible = visible;
+        draft.commit()
+    }
+
+    /// 手動設定より下の層と同じ値にしたら、手動設定を外す(architecture.md 3節)。
+    pub fn set_model_capability(
+        &self,
+        provider_id: &str,
+        model: &str,
+        capability: Capability,
+        supported: bool,
+    ) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        let entry = find_model_mut(&mut draft.config, provider_id, model)?;
+        let fallback = llm::default_capabilities(&entry.name).flag(capability);
+        *entry.overrides.flag_mut(capability) = (supported != fallback).then_some(supported);
+        draft.commit()
+    }
+
+    /// `None`(空欄)は手動設定を外す。下の層と同じ値の扱いは[`Self::set_model_capability`]と同じ。
+    pub fn set_model_context_length(
+        &self,
+        provider_id: &str,
+        model: &str,
+        context_length: Option<u32>,
+    ) -> Result<SettingsView> {
+        if context_length == Some(0) {
+            return Err(invalid("context length must be 1 or greater"));
+        }
+        let mut draft = self.edit();
+        let entry = find_model_mut(&mut draft.config, provider_id, model)?;
+        let fallback = llm::default_capabilities(&entry.name).context_length;
+        entry.overrides.context_length = context_length.filter(|n| Some(*n) != fallback);
+        draft.commit()
+    }
+
+    /// 能力の手動設定(コンテキスト長を含む)をすべて外す。表示/非表示は能力ではないので残す。
+    pub fn reset_model_capabilities(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        find_model_mut(&mut draft.config, provider_id, model)?.overrides =
+            ModelOverrides::default();
         draft.commit()
     }
 
@@ -618,6 +670,18 @@ fn find_provider_mut<'a>(
         .ok_or_else(|| provider_not_found(provider_id))
 }
 
+fn find_model_mut<'a>(
+    config: &'a mut Config,
+    provider_id: &str,
+    model: &str,
+) -> Result<&'a mut ModelConfig> {
+    find_provider_mut(config, provider_id)?
+        .models
+        .iter_mut()
+        .find(|m| m.name == model)
+        .ok_or_else(|| model_not_found(model))
+}
+
 fn find_mcp_server_mut<'a>(
     config: &'a mut Config,
     server_id: &str,
@@ -631,6 +695,10 @@ fn find_mcp_server_mut<'a>(
 
 fn provider_not_found(provider_id: &str) -> CoreError {
     invalid(format!("provider not found: {provider_id}"))
+}
+
+fn model_not_found(model: &str) -> CoreError {
+    invalid(format!("model not registered: {model}"))
 }
 
 fn mcp_server_not_found(server_id: &str) -> CoreError {
@@ -690,7 +758,12 @@ mod tests {
         );
 
         let reloaded = config::load(&path).unwrap();
-        assert_eq!(reloaded.providers[0].models, vec!["m1", "m2"]);
+        let names: Vec<_> = reloaded.providers[0]
+            .models
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(names, ["m1", "m2"]);
     }
 
     #[test]
@@ -826,7 +899,9 @@ id = "broken"
 name = "Broken"
 api_format = "open_ai_compat"
 base_url = "http://example.com/v1"
-models = ["m"]
+
+[[providers.models]]
+name = "m"
 "#,
         )
         .unwrap();
@@ -870,6 +945,65 @@ models = ["m"]
         assert!(Arc::ptr_eq(&before, &ready_adapter(&settings)));
 
         settings.add_model(&id, "m1").unwrap();
-        assert!(!Arc::ptr_eq(&before, &ready_adapter(&settings)));
+        let after_model = ready_adapter(&settings);
+        assert!(!Arc::ptr_eq(&before, &after_model));
+
+        // 表示と能力はアダプタの入力ではない。
+        settings.set_model_visible(&id, "m1", false).unwrap();
+        settings
+            .set_model_capability(&id, "m1", Capability::Image, true)
+            .unwrap();
+        settings
+            .set_model_context_length(&id, "m1", Some(4096))
+            .unwrap();
+        assert!(Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
+    }
+
+    #[test]
+    fn capability_overrides_are_kept_only_while_they_differ_from_the_default() {
+        let (settings, path) = temp_settings();
+        let id = add_local_provider(&settings, "Local").providers[0]
+            .id
+            .clone();
+        settings.add_model(&id, "m").unwrap();
+        let fallback = llm::default_capabilities("m");
+
+        let view = settings
+            .set_model_capability(&id, "m", Capability::Tools, !fallback.tools)
+            .unwrap();
+        let model = &view.providers[0].models[0];
+        assert_eq!(model.capabilities.tools, !fallback.tools);
+        assert!(model.overridden);
+
+        // 初期値と同じ値に戻したら、手動設定は残らない。
+        let view = settings
+            .set_model_capability(&id, "m", Capability::Tools, fallback.tools)
+            .unwrap();
+        assert!(!view.providers[0].models[0].overridden);
+
+        settings
+            .set_model_capability(&id, "m", Capability::Thinking, !fallback.thinking)
+            .unwrap();
+        let view = settings
+            .set_model_context_length(&id, "m", Some(8192))
+            .unwrap();
+        let model = &view.providers[0].models[0];
+        assert_eq!(model.capabilities.context_length, Some(8192));
+        assert!(settings
+            .set_model_context_length(&id, "m", Some(0))
+            .is_err());
+
+        let saved = &config::load(&path).unwrap().providers[0].models[0];
+        assert_eq!(saved.overrides.thinking, Some(!fallback.thinking));
+        assert_eq!(saved.overrides.context_length, Some(8192));
+
+        settings.set_model_visible(&id, "m", false).unwrap();
+        let view = settings.reset_model_capabilities(&id, "m").unwrap();
+        let model = &view.providers[0].models[0];
+        assert!(!model.overridden);
+        assert_eq!(model.capabilities, fallback);
+        assert!(!model.visible, "表示/非表示は能力ではないので戻さない");
+
+        assert!(settings.set_model_visible(&id, "missing", true).is_err());
     }
 }

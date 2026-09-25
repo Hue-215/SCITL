@@ -1,9 +1,11 @@
+mod capabilities;
 mod error;
 mod prompt;
 pub mod providers;
 
 use serde::{Deserialize, Serialize};
 
+pub use capabilities::{default_capabilities, resolve_capabilities, ModelCapabilities};
 pub use error::{ErrorDetail, LlmError};
 pub use prompt::{user_message_format_note, PromptText};
 

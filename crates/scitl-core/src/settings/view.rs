@@ -7,8 +7,9 @@
 use serde::Serialize;
 
 use crate::config::{
-    ApiFormat, Config, McpEndpoint, McpServerConfig, DEFAULT_RESPONSE_TIMEOUT_SECS,
+    ApiFormat, Config, McpEndpoint, McpServerConfig, ModelConfig, DEFAULT_RESPONSE_TIMEOUT_SECS,
 };
+use crate::llm::{self, ModelCapabilities};
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
 use crate::text;
@@ -20,11 +21,23 @@ pub struct ProviderView {
     pub name: String,
     pub api_format: ApiFormat,
     pub base_url: String,
-    pub models: Vec<String>,
+    pub models: Vec<ModelView>,
     pub active_model: Option<String>,
     pub has_api_key: bool,
     /// このプロバイダーをアクティブにしているが、組み立てられない理由(Issue #155)。
     pub error: Option<String>,
+}
+
+/// モデル表の1行(Issue #65)。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
+#[derive(Debug, Serialize)]
+pub struct ModelView {
+    pub name: String,
+    pub visible: bool,
+    pub capabilities: ModelCapabilities,
+    /// 手動設定が無いときのコンテキスト長。入力欄のプレースホルダに出す。
+    pub default_context_length: Option<u32>,
+    /// 能力に手動設定がある(「初期値に戻す」を出す)。
+    pub overridden: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,7 +151,7 @@ pub(super) fn build(
                 name: p.name.clone(),
                 api_format: p.api_format,
                 base_url: p.base_url.clone(),
-                models: p.models.clone(),
+                models: p.models.iter().map(model_view).collect(),
                 active_model: p.active_model.clone(),
                 has_api_key: p.key_ref.is_some(),
                 error: problems
@@ -153,6 +166,16 @@ pub(super) fn build(
             .iter()
             .map(|s| mcp_server_view(s, catalog))
             .collect(),
+    }
+}
+
+fn model_view(m: &ModelConfig) -> ModelView {
+    ModelView {
+        name: m.name.clone(),
+        visible: m.visible,
+        capabilities: llm::resolve_capabilities(m),
+        default_context_length: llm::default_capabilities(&m.name).context_length,
+        overridden: !m.overrides.is_empty(),
     }
 }
 
