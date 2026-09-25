@@ -90,12 +90,33 @@ export interface ToolSettings {
   default_total_timeout_secs: number
 }
 
+// crates/scitl-core/src/config.rs の Capability。
+export type Capability = 'image' | 'tools' | 'thinking'
+
+// crates/scitl-core/src/llm/capabilities.rs の ModelCapabilities。解決済みの値。
+export interface ModelCapabilities {
+  image: boolean
+  tools: boolean
+  thinking: boolean
+  context_length: number | null
+}
+
+// crates/scitl-core/src/settings/view.rs の ModelView。
+export interface ModelView {
+  name: string
+  visible: boolean
+  capabilities: ModelCapabilities
+  default_context_length: number | null
+  // 能力に手動設定がある(「初期値に戻す」を出す)。
+  overridden: boolean
+}
+
 export interface ProviderView {
   id: string
   name: string
   api_format: ApiFormat
   base_url: string
-  models: string[]
+  models: ModelView[]
   active_model: string | null
   has_api_key: boolean
   // このプロバイダーをアクティブにしているが、組み立てられない理由。

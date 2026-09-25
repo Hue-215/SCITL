@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
+  Capability,
   LinkInspection,
   Message,
   ResponseEvent,
@@ -107,6 +108,35 @@ export function removeModel(providerId: string, model: string): Promise<Settings
 
 export function setActiveModel(providerId: string, model: string): Promise<SettingsView> {
   return invoke('set_active_model', { providerId, model })
+}
+
+export function setModelVisible(
+  providerId: string,
+  model: string,
+  visible: boolean,
+): Promise<SettingsView> {
+  return invoke('set_model_visible', { providerId, model, visible })
+}
+
+export function setModelCapability(
+  providerId: string,
+  model: string,
+  capability: Capability,
+  supported: boolean,
+): Promise<SettingsView> {
+  return invoke('set_model_capability', { providerId, model, capability, supported })
+}
+
+export function setModelContextLength(
+  providerId: string,
+  model: string,
+  contextLength: number | null,
+): Promise<SettingsView> {
+  return invoke('set_model_context_length', { providerId, model, contextLength })
+}
+
+export function resetModelCapabilities(providerId: string, model: string): Promise<SettingsView> {
+  return invoke('reset_model_capabilities', { providerId, model })
 }
 
 export type NewMcpEndpoint =
