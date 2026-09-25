@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import {
   addMcpServer,
-  addModel,
+  addModels,
   addProvider,
   deleteMcpServer,
   deleteProvider,
@@ -450,7 +450,7 @@ function ProviderCard({
           // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
           // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
           void onUpdateModels(async () => {
-            const added = await addModel(provider.id, model)
+            const added = await addModels(provider.id, [model])
             if (!provider.can_detect_capabilities) return added
             return detectModelCapabilities(provider.id).catch(() => added)
           })

@@ -79,12 +79,12 @@ pub async fn set_active_provider(
 }
 
 #[tauri::command]
-pub async fn add_model(
+pub async fn add_models(
     state: State<'_, AppState>,
     provider_id: String,
-    model: String,
+    models: Vec<String>,
 ) -> Result<SettingsView, String> {
-    with_settings(&state, move |s| s.add_model(&provider_id, &model)).await
+    with_settings(&state, move |s| s.add_models(&provider_id, &models)).await
 }
 
 #[tauri::command]

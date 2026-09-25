@@ -51,7 +51,7 @@ fn main() {
             commands::settings::add_provider,
             commands::settings::delete_provider,
             commands::settings::set_active_provider,
-            commands::settings::add_model,
+            commands::settings::add_models,
             commands::settings::remove_model,
             commands::settings::set_active_model,
             commands::settings::set_model_visible,
