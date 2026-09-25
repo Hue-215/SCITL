@@ -28,8 +28,8 @@ pub struct ProviderConfig {
     pub name: String,
     pub api_format: ApiFormat,
     pub base_url: String,
-    /// このプロバイダーで使えるモデルの一覧。手動追加・削除する(設定画面「APIプロバイダー」
-    /// タブ)。API問い合わせによる一括取得は別Issueで扱う。
+    /// 登録したモデルの一覧(設定画面「APIプロバイダー」タブ)。名前を打って1件ずつ、または
+    /// プロバイダーから取得した一覧から選んで登録する(一括で登録しない理由はarchitecture.md 3節)。
     #[serde(default)]
     pub models: Vec<ModelConfig>,
     /// `models`のうちチャットで実際に使うモデル。`models`に無い値は無効。

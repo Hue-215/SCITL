@@ -118,16 +118,42 @@ struct ListedModel {
 }
 
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
-/// ここで判定し、残りは状態コードによる共通の分類に任せる。
-fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> LlmError {
+/// ここで判定し、残りは状態コードによる共通の分類に任せる。`reasoning_effort_sent`は
+/// このリクエストで思考の強さを指定したか。
+fn http_error(
+    status: reqwest::StatusCode,
+    body: &str,
+    api_key: &str,
+    reasoning_effort_sent: bool,
+) -> LlmError {
     let detail = || ErrorDetail::http(status, body, api_key);
-    match ErrorBody::parse(body) {
-        Some(error) if error.is_context_exceeded() => LlmError::ContextExceeded(detail()),
-        Some(error) if error.rejects_reasoning_effort() => {
-            LlmError::ReasoningEffortRejected(detail())
-        }
-        _ => LlmError::from_status(status, body, api_key),
+    let Some(error) = ErrorBody::parse(body) else {
+        return LlmError::from_status(status, body, api_key);
+    };
+    if error.is_context_exceeded() {
+        return LlmError::ContextExceeded(detail());
     }
+    // 送っていない指定を拒まれた(ゲートウェイが既定で足した等)なら、モデル表での変更では
+    // 直らない。認証や回数制限は、本文に引数名があっても状態コードによる分類を優先する。
+    let rejectable = reasoning_effort_sent
+        && matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+        );
+    match error.reasoning_effort_rejection().filter(|_| rejectable) {
+        Some(Rejection::Parameter) => LlmError::ReasoningEffortRejected(detail()),
+        Some(Rejection::Value) => LlmError::ReasoningEffortValueRejected(detail()),
+        None => LlmError::from_status(status, body, api_key),
+    }
+}
+
+/// 思考の強さの指定を、何として拒んだか。直し方が違う(思考のチェックを外すか、
+/// 強さを変えるか)ので分ける。
+enum Rejection {
+    /// 引数そのものを受け付けない(思考に対応しないモデル)。
+    Parameter,
+    /// 引数は受け付けるが、送った値(`none`等)を受け付けない。
+    Value,
 }
 
 /// エラー応答の本文のうち、種類の判定に使う項目。OpenAI互換を名乗るサーバーでも書き方は
@@ -171,11 +197,22 @@ impl ErrorBody {
             || self.message_contains(&["context length", "context size"])
     }
 
-    /// 思考に対応しないモデルへ`reasoning_effort`を送った。OpenAIは`param`で指し、
-    /// `param`を埋めないサーバーも文面には引数名を書く。
-    fn rejects_reasoning_effort(&self) -> bool {
-        self.param.as_deref() == Some("reasoning_effort")
-            || self.message_contains(&["reasoning_effort"])
+    /// `reasoning_effort`を拒んだか。OpenAIは`param`で指し、`param`を埋めないサーバーも
+    /// 文面には引数名を書く。値だけを拒んだ場合、OpenAIは`unsupported_value`を返し、
+    /// ほかのサーバーも文面に「value」と書く。
+    fn reasoning_effort_rejection(&self) -> Option<Rejection> {
+        let names_it = self.param.as_deref() == Some("reasoning_effort")
+            || self.message_contains(&["reasoning_effort"]);
+        if !names_it {
+            return None;
+        }
+        let value =
+            self.code.as_deref() == Some("unsupported_value") || self.message_contains(&["value"]);
+        Some(if value {
+            Rejection::Value
+        } else {
+            Rejection::Parameter
+        })
     }
 
     fn message_contains(&self, needles: &[&str]) -> bool {
@@ -193,8 +230,7 @@ struct RequestBody<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<RequestTool>,
     /// OpenAIの`reasoning_effort`。互換を名乗るサーバーにも同じ名前で受けるものが多い。
-    /// 指定を拒むサーバーの失敗は[`LlmError::ReasoningEffortRejected`]にする(モデル表で
-    /// 思考のチェックを外せば送らなくなる)。
+    /// 拒まれたときの見分け方は[`http_error`]。
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
     stream: bool,
@@ -448,7 +484,8 @@ impl LlmAdapter for OpenAiCompatAdapter {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(http_error(status, &text, self.api_key.expose_secret()).into());
+            let key = self.api_key.expose_secret();
+            return Err(http_error(status, &text, key, reasoning_effort.is_some()).into());
         }
 
         let parsed: CompletionResponse = response.json().await.map_err(transport_error)?;
@@ -663,8 +700,9 @@ mod tests {
         );
     }
 
+    /// 思考の強さを指定したリクエストが400で返った。
     fn bad_request(body: &str) -> LlmError {
-        http_error(reqwest::StatusCode::BAD_REQUEST, body, "")
+        http_error(reqwest::StatusCode::BAD_REQUEST, body, "", true)
     }
 
     #[test]
@@ -719,6 +757,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tells_a_rejected_value_from_a_rejected_parameter() {
+        for body in [
+            r#"{"error":{"message":"Unsupported value: 'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium', and 'high'.","type":"invalid_request_error","param":"reasoning_effort","code":"unsupported_value"}}"#,
+            r#"{"error":{"message":"Invalid value for reasoning_effort: none","param":null,"code":null}}"#,
+        ] {
+            assert!(matches!(
+                bad_request(body),
+                LlmError::ReasoningEffortValueRejected(_)
+            ));
+        }
+    }
+
+    /// 強さを送っていない、または400系の入力の誤り以外なら、本文に引数名があっても
+    /// 状態コードによる分類に落ちる。
+    #[test]
+    fn reasoning_effort_in_the_body_alone_does_not_mean_it_was_rejected() {
+        let body = r#"{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model.","param":"reasoning_effort","code":"unsupported_parameter"}}"#;
+        assert!(matches!(
+            http_error(reqwest::StatusCode::BAD_REQUEST, body, "", false),
+            LlmError::Http(_)
+        ));
+        assert!(matches!(
+            http_error(reqwest::StatusCode::TOO_MANY_REQUESTS, body, "", true),
+            LlmError::RateLimit(_)
+        ));
+    }
+
     /// 本文で判定できなければ、状態コードによる分類に落ちる。
     #[test]
     fn other_error_bodies_fall_back_to_the_status_code() {
@@ -728,7 +794,7 @@ mod tests {
         ));
         assert!(matches!(bad_request("not json"), LlmError::Http(_)));
         assert!(matches!(
-            http_error(reqwest::StatusCode::UNAUTHORIZED, "", ""),
+            http_error(reqwest::StatusCode::UNAUTHORIZED, "", "", true),
             LlmError::Auth(_)
         ));
     }
@@ -737,7 +803,7 @@ mod tests {
     fn context_exceeded_keeps_the_sanitized_body_as_detail() {
         let body = r#"{"error":{"code":"context_length_exceeded","message":"sk-secret"}}"#;
         let LlmError::ContextExceeded(detail) =
-            http_error(reqwest::StatusCode::BAD_REQUEST, body, "sk-secret")
+            http_error(reqwest::StatusCode::BAD_REQUEST, body, "sk-secret", true)
         else {
             panic!("expected LlmError::ContextExceeded");
         };

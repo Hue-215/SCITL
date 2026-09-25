@@ -39,7 +39,14 @@ pub enum TurnFailure {
     ThinkingUnsupported {
         detail: String,
     },
+    /// 選んだ思考の強さを、モデルが受け付けなかった。
+    ThinkingEffortUnsupported {
+        detail: String,
+    },
     ToolRoundLimit,
+    /// ツールに対応しないモデルとして扱っている(ツールを渡していない)のに、モデルが
+    /// ツールを呼んできた。手動設定で対応を外したか、能力の判定がモデルの実物と違う。
+    ToolsDisabled,
     /// 1ターン内のツール実行に使える合計時間を使い切った(Issue #71)。
     ToolTimeout,
     /// APIキー未設定・不正のどちらも実際の呼び出しがHTTP 401/403を返してここに落ちる
@@ -76,7 +83,9 @@ impl TurnFailure {
             TurnFailure::EmptyResponse => "empty_response",
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
             TurnFailure::ThinkingUnsupported { .. } => "thinking_unsupported",
+            TurnFailure::ThinkingEffortUnsupported { .. } => "thinking_effort_unsupported",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
+            TurnFailure::ToolsDisabled => "tools_disabled",
             TurnFailure::ToolTimeout => "tool_timeout",
             TurnFailure::Auth { .. } => "auth",
             TurnFailure::RateLimit { .. } => "rate_limit",
@@ -131,6 +140,17 @@ impl TurnFailure {
                  モデル一覧で、このモデルの「思考」のチェックを外してください。"
                     .to_string()
             }
+            TurnFailure::ThinkingEffortUnsupported { .. } => {
+                "このモデルは選んだ思考の強さを受け付けませんでした。チャット入力欄の下で、\
+                 思考の強さを別の値に変えてください。"
+                    .to_string()
+            }
+            TurnFailure::ToolsDisabled => {
+                "このモデルはツールに対応しないものとして扱っているため、モデルが求めたツールの\
+                 呼び出しを実行しませんでした。このモデルがツールに対応するなら、設定画面\
+                 「APIプロバイダー」のモデル一覧で「ツール」にチェックを入れてください。"
+                    .to_string()
+            }
             TurnFailure::ToolRoundLimit => {
                 "ツールの呼び出しが上限回数に達したため、応答の生成を打ち切りました。\
                  設定画面「ツール/MCP」で上限を変更できます。"
@@ -165,6 +185,7 @@ impl TurnFailure {
             | TurnFailure::InvalidResponse { detail }
             | TurnFailure::ContextExceeded { detail, .. }
             | TurnFailure::ThinkingUnsupported { detail }
+            | TurnFailure::ThinkingEffortUnsupported { detail }
             | TurnFailure::Auth { detail }
             | TurnFailure::RateLimit { detail }
             | TurnFailure::Provider { detail }
@@ -174,6 +195,7 @@ impl TurnFailure {
             | TurnFailure::NoModel
             | TurnFailure::EmptyResponse
             | TurnFailure::ToolRoundLimit
+            | TurnFailure::ToolsDisabled
             | TurnFailure::ToolTimeout
             | TurnFailure::ProviderConfig => None,
         }
@@ -249,6 +271,9 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
         LlmError::ReasoningEffortRejected(detail) => TurnFailure::ThinkingUnsupported {
             detail: detail.to_string(),
         },
+        LlmError::ReasoningEffortValueRejected(detail) => TurnFailure::ThinkingEffortUnsupported {
+            detail: detail.to_string(),
+        },
         LlmError::Auth(detail) => TurnFailure::Auth {
             detail: detail.to_string(),
         },
@@ -289,6 +314,10 @@ mod tests {
                 LlmError::ReasoningEffortRejected(detail("x")),
                 "thinking_unsupported",
             ),
+            (
+                LlmError::ReasoningEffortValueRejected(detail("x")),
+                "thinking_effort_unsupported",
+            ),
             (LlmError::Auth(detail("x")), "auth"),
             (LlmError::RateLimit(detail("x")), "rate_limit"),
             (LlmError::Http(detail("x")), "provider"),
@@ -307,6 +336,7 @@ mod tests {
             LlmError::InvalidResponse(detail("upstream overloaded")),
             LlmError::ContextExceeded(detail("upstream overloaded")),
             LlmError::ReasoningEffortRejected(detail("upstream overloaded")),
+            LlmError::ReasoningEffortValueRejected(detail("upstream overloaded")),
             LlmError::Auth(detail("upstream overloaded")),
             LlmError::RateLimit(detail("upstream overloaded")),
             LlmError::Http(detail("upstream overloaded")),

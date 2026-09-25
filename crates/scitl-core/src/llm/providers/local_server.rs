@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -40,8 +41,8 @@ pub fn is_detectable(base_url: &str) -> bool {
 }
 
 /// `models`の能力をサーバーに問い合わせる。`Ok(None)`は「能力を問い合わせられる
-/// サーバーではない」、`Err`は「サーバーに繋がらない」。サーバーが知らないモデルは
-/// 結果に含めない。
+/// サーバーではない」、`Err`は「サーバーに繋がらない、または今は答えられない」。
+/// サーバーが知らないモデルは結果に含めない。
 pub async fn detect(
     base_url: &str,
     api_key: &SecretString,
@@ -125,8 +126,10 @@ impl Probe<'_> {
             .map_err(|e| CoreError::ProviderConfig(format!("failed to build endpoint: {e}")))
     }
 
-    /// 繋がらなければ`Err`。繋がったが成功しない、または期待した形でなければ
-    /// 「このサーバーではない」として`None`。
+    /// その経路が無いと答えた、または期待した形でなければ「このサーバーではない」として
+    /// `None`。繋がらない、またはそれ以外の失敗(読み込み中の503、認証の401等)は`Err`。
+    /// 一時的な失敗を「このサーバーではない」と取り違えると、検出できないサーバーとして
+    /// 覚えられ、問い合わせ直されない(`settings`)。
     async fn send<T: DeserializeOwned>(
         &self,
         request: reqwest::RequestBuilder,
@@ -135,8 +138,16 @@ impl Probe<'_> {
         let key = self.api_key.expose_secret();
         let transport_error = |e| CoreError::Llm(LlmError::from_transport(e, key));
         let response = request.send().await.map_err(transport_error)?;
-        if !response.status().is_success() {
+        let status = response.status();
+        if matches!(
+            status,
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
+        ) {
             return Ok(None);
+        }
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(LlmError::from_status(status, &text, key).into());
         }
         let body = response.bytes().await.map_err(transport_error)?;
         Ok(serde_json::from_slice(&body).ok())
@@ -275,11 +286,16 @@ mod tests {
 
     use super::*;
 
-    /// 要求の1行目(`GET /props HTTP/1.1`等)から応答の状態と本文を決める、最小限の
-    /// HTTPサーバー。接続ごとに1要求だけ受けて閉じる。受けた要求の1行目を返す。
-    fn spawn_server(
-        route: fn(&str) -> Option<&'static str>,
-    ) -> (String, std::sync::mpsc::Receiver<String>) {
+    /// 最小限のサーバーが返すもの。
+    enum Reply {
+        Json(&'static str),
+        /// 本文の無い応答の状態行(`404 Not Found`等)。
+        Status(&'static str),
+    }
+
+    /// 要求の1行目(`GET /props HTTP/1.1`等)から応答を決める、最小限のHTTPサーバー。
+    /// 接続ごとに1要求だけ受けて閉じる。受けた要求の1行目を返す。
+    fn spawn_server(route: fn(&str) -> Reply) -> (String, std::sync::mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -291,14 +307,14 @@ mod tests {
                 let request = String::from_utf8_lossy(&buf[..n]).to_string();
                 let line = request.lines().next().unwrap_or_default().to_string();
                 let response = match route(&line) {
-                    Some(body) => format!(
+                    Reply::Json(body) => format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
                     ),
-                    None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
-                             Connection: close\r\n\r\n"
-                        .to_string(),
+                    Reply::Status(status) => format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    ),
                 };
                 let _ = stream.write_all(response.as_bytes());
                 let _ = tx.send(line);
@@ -314,11 +330,11 @@ mod tests {
     #[tokio::test]
     async fn detects_through_ollama_endpoints() {
         let (base_url, requests) = spawn_server(|line| match line {
-            l if l.starts_with("GET /api/version ") => Some(r#"{"version": "0.9.0"}"#),
-            l if l.starts_with("POST /api/show ") => {
-                Some(r#"{"parameters": "num_ctx 8192", "capabilities": ["completion", "vision"]}"#)
-            }
-            _ => None,
+            l if l.starts_with("GET /api/version ") => Reply::Json(r#"{"version": "0.9.0"}"#),
+            l if l.starts_with("POST /api/show ") => Reply::Json(
+                r#"{"parameters": "num_ctx 8192", "capabilities": ["completion", "vision"]}"#,
+            ),
+            _ => Reply::Status("404 Not Found"),
         });
 
         let found = detect(&base_url, &no_key(), &["gemma3:4b".to_string()])
@@ -350,11 +366,30 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_servers_are_not_detectable() {
-        let (base_url, _) = spawn_server(|_| None);
-        let found = detect(&base_url, &no_key(), &["m".to_string()])
-            .await
-            .unwrap();
-        assert!(found.is_none());
+        // 独自APIの経路が無いことの答え方はサーバーによって違う。
+        for status in [
+            |_: &str| Reply::Status("404 Not Found"),
+            |_: &str| Reply::Status("405 Method Not Allowed"),
+        ] {
+            let (base_url, _) = spawn_server(status);
+            let found = detect(&base_url, &no_key(), &["m".to_string()])
+                .await
+                .unwrap();
+            assert!(found.is_none());
+        }
+    }
+
+    /// 読み込み中・認証の失敗は「このサーバーではない」と区別する(理由は`Probe::send`)。
+    #[tokio::test]
+    async fn servers_that_cannot_answer_now_are_errors() {
+        for route in [
+            |_: &str| Reply::Status("503 Service Unavailable"),
+            |_: &str| Reply::Status("401 Unauthorized"),
+        ] {
+            let (base_url, _) = spawn_server(route);
+            let result = detect(&base_url, &no_key(), &["m".to_string()]).await;
+            assert!(result.is_err());
+        }
     }
 
     #[tokio::test]

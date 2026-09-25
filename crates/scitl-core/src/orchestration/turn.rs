@@ -460,9 +460,15 @@ async fn run_tool_rounds(
             .await?;
             return Ok(all_events);
         }
-        // ツールを渡していないのに呼んできた。実行はせず、上限到達として終える。
+        // ツールを渡していないのに呼んできた。実行はせず、ツールを渡さなかった理由
+        // (上限に達した・ツールに対応しないモデル)のエラーで終える。
         if final_call {
-            return fail_turn(db, attempt, TurnFailure::ToolRoundLimit).await;
+            let failure = if tools_available {
+                TurnFailure::ToolRoundLimit
+            } else {
+                TurnFailure::ToolsDisabled
+            };
+            return fail_turn(db, attempt, failure).await;
         }
 
         // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。

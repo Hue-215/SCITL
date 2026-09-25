@@ -111,6 +111,7 @@ WebViewはOSのテーマでフォーム部品を描く。既定に頼らない(`
 | 部品 | 扱い |
 |---|---|
 | `button` / `input`(text等) / `select` / `textarea` | `appearance: none`(`-webkit-` 併記)で自前描画。`font: inherit` が無いとOS既定フォントになる |
+| `input[type=search]` | 他の `input` と同じく自前描画。WebKitが描く消去ボタン(`::-webkit-search-cancel-button`)と装飾は色を渡せないため消す |
 | `input[type=radio]` / `[type=checkbox]` | ネイティブ描画のまま。色は `accent-color` でテーマに追従させ、全要素の角丸リセットからは `border-radius: revert` で外す |
 | `select` の▼ | `appearance: none` で消えるため、グラデーションの三角形で自前描画(色トークンを渡せるよう、SVGのdata URIではなく `currentColor` を使う) |
 | 開いた `select` の一覧 | OSが描く。CSSからは色しか渡せず、形は変えられない |
@@ -125,7 +126,8 @@ WebKitGTK固有の挙動は、Chromiumでの確認では分からない。次の
 `min()` 内のパーセント混在計算, `padding-inline`, `aspect-ratio`, `field-sizing`。
 
 確認が済んだものは、**どのバージョンで見たかを併記して残す**(次に同じ調べ直しをしないため)。
-`field-sizing: content` は WebKitGTK 2.52.6 で対応を確認済み(Issue #96)。ただし配布先の
+`field-sizing: content` は WebKitGTK 2.52.6 で対応を確認済み(Issue #96)。検索欄の消去ボタンを
+消す指定(`::-webkit-search-cancel-button`)も同じ版で効くことを確認済み(Issue #195)。ただし配布先の
 WebKitGTKはOSのものを使うため、対応していない環境では指定が無視される点に注意する。
 複数行入力欄の場合、自動伸長が効かず `rows` 既定の2行分の高さ(`min-height`と
 `max-height`で挟まれた範囲に収まる)で固定される。#96 で `resize` を切っているため、

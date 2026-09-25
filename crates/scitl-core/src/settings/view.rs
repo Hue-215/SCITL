@@ -35,7 +35,11 @@ pub struct ProviderView {
 /// モデル表の1行(Issue #65)。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
 #[derive(Debug, Serialize)]
 pub struct ModelView {
+    /// 登録した名前。操作の鍵として送り返すだけで、画面には描かない(描くのは`label`)。
     pub name: String,
+    /// 画面に出す名前。プロバイダーの一覧から選んだ名前はサーバーが書いた文字列なので、
+    /// 見えない文字を除いた写しを渡す(architecture.md 10節)。
+    pub label: String,
     pub visible: bool,
     pub capabilities: ModelCapabilities,
     /// 手動設定が無いとき(自動検出 → 既定値)のコンテキスト長。入力欄のプレースホルダに出す。
@@ -137,7 +141,9 @@ pub struct ChatModelsView {
 pub struct ModelChoice {
     pub provider_id: String,
     pub provider_name: String,
+    /// 選ぶときに送り返す名前。画面に出すのは`label`([`ModelView`]と同じ)。
     pub model: String,
+    pub label: String,
 }
 
 impl ModelChoice {
@@ -146,6 +152,7 @@ impl ModelChoice {
             provider_id: provider.id.clone(),
             provider_name: provider.name.clone(),
             model: model.name.clone(),
+            label: model_label(&model.name),
         }
     }
 }
@@ -236,9 +243,32 @@ pub(super) fn build(
     }
 }
 
+/// プロバイダーの一覧から取得したモデル1件(Issue #33)。
+#[derive(Debug, Serialize)]
+pub struct AvailableModel {
+    /// サーバーが返したままの名前。登録するときに送り返す。
+    pub name: String,
+    pub label: String,
+}
+
+pub(super) fn available_models(names: Vec<String>) -> Vec<AvailableModel> {
+    names
+        .into_iter()
+        .map(|name| AvailableModel {
+            label: model_label(&name),
+            name,
+        })
+        .collect()
+}
+
+fn model_label(name: &str) -> String {
+    text::display_label(name, MAX_LABEL_CHARS)
+}
+
 fn model_view(m: &ModelConfig, detected: Option<&DetectedCapabilities>) -> ModelView {
     ModelView {
         name: m.name.clone(),
+        label: model_label(&m.name),
         visible: m.visible,
         capabilities: llm::resolve_capabilities(m, detected),
         default_context_length: llm::fallback_capabilities(detected).context_length,
@@ -285,14 +315,14 @@ fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView 
     }
 }
 
-/// ツール名・説明を画面に出すときの上限文字数。
-const MAX_TOOL_LABEL_CHARS: usize = 100;
+/// サーバーが書いた名前(ツール名・モデル名)と説明を画面に出すときの上限文字数。
+const MAX_LABEL_CHARS: usize = 100;
 const MAX_TOOL_DESCRIPTION_CHARS: usize = 2000;
 
 fn mcp_tool_view(server_name: &str, name: &str, description: Option<&str>) -> McpToolView {
     McpToolView {
         name: name.to_string(),
-        label: text::display_label(name, MAX_TOOL_LABEL_CHARS),
+        label: text::display_label(name, MAX_LABEL_CHARS),
         description: description.map(|d| text::display_block(d, MAX_TOOL_DESCRIPTION_CHARS)),
         exposable: external::exposed_name(server_name, name).is_some(),
     }
@@ -341,5 +371,35 @@ mod tests {
         assert_eq!(view.tools.len(), 2);
         assert_eq!(view.tools[1].name, "gone");
         assert!(view.tools[1].description.is_none());
+    }
+
+    #[test]
+    fn model_names_show_a_visible_copy_and_keep_the_raw_name_as_the_key() {
+        let raw = "\u{202E}lmaet-model\u{200B}";
+        let listed = available_models(vec![raw.to_string()]);
+        assert_eq!(listed[0].name, raw);
+        assert_eq!(listed[0].label, "lmaet-model");
+
+        let model = ModelConfig::new(raw.to_string());
+        let row = model_view(&model, None);
+        assert_eq!(
+            (row.name.as_str(), row.label.as_str()),
+            (raw, "lmaet-model")
+        );
+
+        let provider = ProviderConfig {
+            id: "p".to_string(),
+            name: "Local".to_string(),
+            api_format: ApiFormat::OpenAiCompat,
+            base_url: "http://localhost:1234/v1".to_string(),
+            models: vec![model.clone()],
+            active_model: None,
+            key_ref: None,
+        };
+        let choice = ModelChoice::of(&provider, &model);
+        assert_eq!(
+            (choice.model.as_str(), choice.label.as_str()),
+            (raw, "lmaet-model")
+        );
     }
 }

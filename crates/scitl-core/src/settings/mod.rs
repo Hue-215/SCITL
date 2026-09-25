@@ -35,7 +35,7 @@ use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext, Tu
 use crate::secrets;
 use crate::tools::external;
 
-pub use view::{ChatModelsView, SettingsView};
+pub use view::{AvailableModel, ChatModelsView, SettingsView};
 
 /// プロバイダー追加フォームからの入力。
 pub struct NewProvider {
@@ -269,9 +269,11 @@ impl Settings {
     /// プロバイダーが提供するモデル名を問い合わせる(Issue #33)。登録済みのものも含めて
     /// 名前順に返し、設定には書かない。どれを登録するかは利用者が選び、[`Self::add_models`]で
     /// 登録する(一括で登録しない理由はarchitecture.md 3節)。
-    pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<String>> {
+    pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<AvailableModel>> {
         let provider = self.provider(provider_id)?;
-        providers::list_models(&provider).await
+        Ok(view::available_models(
+            providers::list_models(&provider).await?,
+        ))
     }
 
     /// 非同期の問い合わせに使う、ある時点のプロバイダー設定の複製。ロックを`.await`に
@@ -287,7 +289,8 @@ impl Settings {
     }
 
     /// 問い合わせた全モデルの結果を置き換える。サーバーが答えなかったモデルも「検出した
-    /// 項目なし」として覚え、ターンのたびに問い合わせ直さない。
+    /// 項目なし」として覚え、ターンのたびに問い合わせ直さない。問い合わせに失敗したら
+    /// 何も置き換えない(一時的な失敗で、取れていた結果を空にしない)。
     async fn detect(&self, provider: &ProviderConfig, models: Vec<String>) -> Result<()> {
         let mut found = providers::detect_capabilities(provider, &models)
             .await?

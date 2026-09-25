@@ -23,12 +23,14 @@ import {
 } from './api'
 import type {
   ApiFormat,
+  AvailableModel,
   Capability,
   McpServerView,
   ModelView,
   ProviderView,
   SettingsView,
 } from './types'
+import { matchQuery, noMatchText } from './search'
 import { ConfirmButton } from './Dialog'
 
 interface SettingsProps {
@@ -213,7 +215,8 @@ function usePositiveIntegerInput(value: number | null, onSave: (value: number | 
   }, [value])
 
   const save = () => {
-    const trimmed = text.trim()
+    // IMEを切り忘れて打った全角の数字も受け付ける。
+    const trimmed = text.normalize('NFKC').trim()
     const parsed = trimmed === '' ? null : Number(trimmed)
     if (parsed !== null && (!Number.isInteger(parsed) || parsed <= 0)) {
       setInvalid(true)
@@ -384,7 +387,7 @@ function ProviderCard({
   const hasModel = provider.models.length > 0
   const [detecting, setDetecting] = useState(false)
   // 取得したモデル名。設定には書かないので、カードを閉じれば(設定画面を離れれば)捨てる。
-  const [available, setAvailable] = useState<string[] | null>(null)
+  const [available, setAvailable] = useState<AvailableModel[] | null>(null)
   const [listing, setListing] = useState(false)
   // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように。MCPの
   // ツール一覧の取得と同じ扱い)。
@@ -483,8 +486,9 @@ function ProviderCard({
 }
 
 interface ModelPickerProps {
-  // プロバイダーから取得したモデル名(登録済みのものを含む)。
-  available: string[]
+  // プロバイダーから取得したモデル(登録済みのものを含む)。
+  available: AvailableModel[]
+  // 登録済みのモデル名。取得したモデルとは名前(label ではなく name)で照らし合わせる。
   registered: string[]
   onAdd: (models: string[]) => Promise<void>
   onClose: () => void
@@ -497,11 +501,10 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
 
-  const candidates = available.filter((name) => !registered.includes(name))
-  const needle = query.trim().toLowerCase()
-  const matched = needle ? candidates.filter((n) => n.toLowerCase().includes(needle)) : candidates
+  const candidates = available.filter((m) => !registered.includes(m.name))
+  const { matched, searching } = matchQuery(candidates, query, (m) => m.label)
   // 追加や別の操作で登録済みになったものは、選択から外れたものとして数える。
-  const chosen = selected.filter((name) => candidates.includes(name))
+  const chosen = selected.filter((name) => candidates.some((m) => m.name === name))
 
   const toggle = (name: string, checked: boolean) =>
     setSelected((prev) => (checked ? [...prev, name] : prev.filter((n) => n !== name)))
@@ -509,7 +512,7 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
   const submit = async () => {
     setAdding(true)
     // 候補の並び(名前順)で登録する。選んだ順にすると、表の並びが操作の順に左右される。
-    await onAdd(candidates.filter((name) => chosen.includes(name)))
+    await onAdd(candidates.filter((m) => chosen.includes(m.name)).map((m) => m.name))
     setSelected([])
     setAdding(false)
   }
@@ -530,27 +533,29 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
             />
             <button
               type="button"
-              onClick={() => setSelected((prev) => [...new Set([...prev, ...matched])])}
-              disabled={matched.every((name) => chosen.includes(name))}
+              onClick={() =>
+                setSelected((prev) => [...new Set([...prev, ...matched.map((m) => m.name)])])
+              }
+              disabled={matched.every((m) => chosen.includes(m.name))}
             >
-              {needle ? '一致したものをすべて選択' : 'すべて選択'}
+              {searching ? '一致したものをすべて選択' : 'すべて選択'}
             </button>
           </div>
           <ul className="model-list model-picker-options">
-            {matched.map((name) => (
-              <li key={name} className="model-row">
+            {matched.map((m) => (
+              <li key={m.name} className="model-row">
                 <label className="choice">
                   <input
                     type="checkbox"
-                    checked={chosen.includes(name)}
-                    onChange={(e) => toggle(name, e.target.checked)}
+                    checked={chosen.includes(m.name)}
+                    onChange={(e) => toggle(m.name, e.target.checked)}
                   />
-                  {name}
+                  {m.label}
                 </label>
               </li>
             ))}
             {matched.length === 0 && (
-              <li className="list-empty">「{query.trim()}」に一致するモデルはありません。</li>
+              <li className="list-empty">{noMatchText(query, 'モデル')}</li>
             )}
           </ul>
         </>
@@ -592,10 +597,11 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
   const [query, setQuery] = useState('')
 
   const collapsible = models.length >= LIST_COLLAPSE_THRESHOLD
-  const needle = query.trim().toLowerCase()
-  const matched = needle ? models.filter((m) => m.name.toLowerCase().includes(needle)) : models
+  // 検索欄は畳める件数のときだけ出す。削除で件数が減って欄が消えたら、打った語は消せない
+  // ので、欄が無いあいだは絞り込まない。
+  const { matched, searching } = matchQuery(models, collapsible ? query : '', (m) => m.label)
   // 折りたたんでいても、検索したら当たった行は出す(legacy/frontend.md 3節)。
-  const shown = collapsible && !expanded && !needle ? [] : matched
+  const shown = collapsible && !expanded && !searching ? [] : matched
 
   return (
     <>
@@ -643,8 +649,8 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
           </table>
         </div>
       )}
-      {needle && matched.length === 0 && (
-        <p className="list-empty">「{query.trim()}」に一致するモデルはありません。</p>
+      {searching && matched.length === 0 && (
+        <p className="list-empty">{noMatchText(query, 'モデル')}</p>
       )}
     </>
   )
@@ -657,7 +663,7 @@ interface ModelRowProps {
 }
 
 function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
-  const name = model.name
+  const { name, label: shown } = model
   // 欄には手動設定だけを出し、既定値はプレースホルダに回す。手動設定が既定値と同じなら
   // Rust側で外されるので、解決済みの値が既定値と違うことが手動設定があることと同じになる。
   const resolvedLength = model.capabilities.context_length
@@ -676,10 +682,10 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
             const visible = e.target.checked
             onUpdate(() => setModelVisible(providerId, name, visible))
           }}
-          aria-label={`${name}をチャットのモデル一覧に出す`}
+          aria-label={`${shown}をチャットのモデル一覧に出す`}
         />
       </td>
-      <td className="model-name">{name}</td>
+      <td className="model-name">{shown}</td>
       {CAPABILITY_COLUMNS.map(({ capability, label }) => (
         <td key={capability}>
           <span className="model-capability">
@@ -690,7 +696,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
                 const supported = e.target.checked
                 onUpdate(() => setModelCapability(providerId, name, capability, supported))
               }}
-              aria-label={`${name}の${label}対応`}
+              aria-label={`${shown}の${label}対応`}
             />
             {capability === 'tools' && !model.capabilities.tools && (
               <span
@@ -710,9 +716,11 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
           {...contextLength.inputProps}
           className="model-context-length"
           placeholder={`既定 ${model.default_context_length}`}
-          aria-label={`${name}のコンテキスト長`}
-          title={contextLength.invalid ? POSITIVE_INTEGER_ERROR : undefined}
+          aria-label={`${shown}のコンテキスト長`}
         />
+        {contextLength.invalid && (
+          <p className="error model-context-length-error">{POSITIVE_INTEGER_ERROR}</p>
+        )}
       </td>
       <td>
         <span className="model-actions">
@@ -721,7 +729,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
               type="button"
               className="icon-button"
               onClick={() => onUpdate(() => resetModelCapabilities(providerId, name))}
-              aria-label={`${name}の能力を初期値に戻す`}
+              aria-label={`${shown}の能力を初期値に戻す`}
               title="能力を初期値に戻す"
             >
               ↺
@@ -731,7 +739,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
             type="button"
             className="icon-button"
             onClick={() => onUpdate(() => removeModel(providerId, name))}
-            aria-label={`${name}を削除`}
+            aria-label={`${shown}を削除`}
             title="削除"
           >
             ×
