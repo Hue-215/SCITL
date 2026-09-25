@@ -808,10 +808,19 @@ option {
   width: 100%;
 }
 
-/* 行と列は位置で揃って読めるので、基盤層の罫線(Markdownの表向け)は引かない。 */
+/* 基盤層の罫線(Markdownの表向け)のうち、列の区切りと見出しの下だけを残す。
+   行は位置で揃って読めるので横線は要らず、外枠はカードの枠と二重になる。 */
 .model-table th,
 .model-table td {
   border: 0;
+}
+
+.model-table :is(th, td) + :is(th, td) {
+  border-left: var(--border-width) solid var(--color-border);
+}
+
+.model-table thead th {
+  border-bottom: var(--border-width) solid var(--color-border);
 }
 
 .model-table th {
