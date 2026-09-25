@@ -1097,6 +1097,35 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
     assert_eq!(tool_execution_count(&messages), 4);
 }
 
+/// ツールに対応しないモデルがツールを呼んできたら、上限到達ではなく、ツールを渡して
+/// いない理由のエラー発言にする(上限の設定を変えても直らないため)。
+#[tokio::test]
+async fn tool_calls_from_a_model_without_tool_support_are_not_a_round_limit() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.tools = false;
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            ..context(&AlwaysToolCallAdapter)
+        },
+        task_id,
+        "工程を追加して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("tools_disabled"));
+    assert_eq!(tool_execution_count(&messages), 0);
+}
+
 /// 設定したラウンド数の上限がそのまま効く(Issue #71)。`turn.rs`が定数ではなく
 /// 渡された値を見ていることを、実際に回った回数で確かめる。
 #[tokio::test]
