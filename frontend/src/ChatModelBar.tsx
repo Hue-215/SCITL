@@ -9,10 +9,10 @@ const EFFORT_LABELS: Record<ReasoningEffort, string> = {
   medium: '中',
   high: '高',
 }
-const EFFORT_OPTIONS: DropdownOption[] = Object.entries(EFFORT_LABELS).map(([key, label]) => ({
-  key,
-  label,
-}))
+// 一覧はボタンの上に開くので、ボタンに近い下ほど弱くする(上から高・中・低・オフ)。
+const EFFORT_OPTIONS: DropdownOption[] = Object.entries(EFFORT_LABELS)
+  .reverse()
+  .map(([key, label]) => ({ key, label }))
 
 // モデルはプロバイダーを跨いで並ぶので、組を1つの鍵にする。
 function choiceKey(choice: ModelChoice): string {
