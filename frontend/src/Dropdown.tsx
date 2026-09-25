@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { isCommitEnter } from './keyboard'
+import { matchQuery } from './search'
 
 export interface DropdownOption {
   key: string
@@ -87,12 +88,6 @@ type DropdownListProps = Pick<
   'options' | 'selectedKey' | 'onSelect' | 'searchPlaceholder' | 'emptyText' | 'align'
 > & { onClose: () => void }
 
-function matches(option: DropdownOption, query: string): boolean {
-  const q = query.trim().toLowerCase()
-  if (!q) return true
-  return `${option.label} ${option.detail ?? ''}`.toLowerCase().includes(q)
-}
-
 // 開いている間だけ存在する。検索語は開くたびに空から始まる。
 function DropdownList({
   options,
@@ -107,7 +102,7 @@ function DropdownList({
   const listRef = useRef<HTMLUListElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const visible = options.filter((o) => matches(o, query))
+  const { matched: visible } = matchQuery(options, query, (o) => `${o.label} ${o.detail ?? ''}`)
 
   // 選択中の項目が一覧の中ほどに見えるようにする。scrollIntoViewは祖先の
   // (overflow: hiddenの)入れ物までスクロールさせうるため、一覧の中だけを動かす。

@@ -30,6 +30,7 @@ import type {
   ProviderView,
   SettingsView,
 } from './types'
+import { matchQuery, noMatchText } from './search'
 import { ConfirmButton } from './Dialog'
 
 interface SettingsProps {
@@ -501,10 +502,7 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
   const [adding, setAdding] = useState(false)
 
   const candidates = available.filter((m) => !registered.includes(m.name))
-  const needle = query.trim().toLowerCase()
-  const matched = needle
-    ? candidates.filter((m) => m.label.toLowerCase().includes(needle))
-    : candidates
+  const { matched, searching } = matchQuery(candidates, query, (m) => m.label)
   // 追加や別の操作で登録済みになったものは、選択から外れたものとして数える。
   const chosen = selected.filter((name) => candidates.some((m) => m.name === name))
 
@@ -540,7 +538,7 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
               }
               disabled={matched.every((m) => chosen.includes(m.name))}
             >
-              {needle ? '一致したものをすべて選択' : 'すべて選択'}
+              {searching ? '一致したものをすべて選択' : 'すべて選択'}
             </button>
           </div>
           <ul className="model-list model-picker-options">
@@ -557,7 +555,7 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
               </li>
             ))}
             {matched.length === 0 && (
-              <li className="list-empty">「{query.trim()}」に一致するモデルはありません。</li>
+              <li className="list-empty">{noMatchText(query, 'モデル')}</li>
             )}
           </ul>
         </>
@@ -601,10 +599,9 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
   const collapsible = models.length >= LIST_COLLAPSE_THRESHOLD
   // 検索欄は畳める件数のときだけ出す。削除で件数が減って欄が消えたら、打った語は消せない
   // ので、欄が無いあいだは絞り込まない。
-  const needle = collapsible ? query.trim().toLowerCase() : ''
-  const matched = needle ? models.filter((m) => m.label.toLowerCase().includes(needle)) : models
+  const { matched, searching } = matchQuery(models, collapsible ? query : '', (m) => m.label)
   // 折りたたんでいても、検索したら当たった行は出す(legacy/frontend.md 3節)。
-  const shown = collapsible && !expanded && !needle ? [] : matched
+  const shown = collapsible && !expanded && !searching ? [] : matched
 
   return (
     <>
@@ -652,8 +649,8 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
           </table>
         </div>
       )}
-      {needle && matched.length === 0 && (
-        <p className="list-empty">「{query.trim()}」に一致するモデルはありません。</p>
+      {searching && matched.length === 0 && (
+        <p className="list-empty">{noMatchText(query, 'モデル')}</p>
       )}
     </>
   )
