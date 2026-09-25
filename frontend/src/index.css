@@ -151,6 +151,15 @@ input:not([type='radio']):not([type='checkbox']) {
   padding: var(--space-2);
 }
 
+/* 検索欄の消去ボタンと虫眼鏡の装飾は、WebKitがOSの部品で描き、色を渡せない。
+   ほかの欄と見た目をそろえるため消す(語は他の欄と同じく手で消す)。 */
+input[type='search']::-webkit-search-cancel-button,
+input[type='search']::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 /* 受け付けられない入力は欄そのものにも示す。誤りの一文を欄の近くに置けないとき
    (表のセル等)でも、どの欄が誤っているか分かるように。 */
 select[aria-invalid='true'],
