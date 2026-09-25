@@ -6,8 +6,8 @@ pub mod providers;
 use serde::{Deserialize, Serialize};
 
 pub use capabilities::{
-    default_capabilities, fallback_capabilities, resolve_capabilities, DetectedCapabilities,
-    DetectedCatalog, ModelCapabilities, FALLBACK_CONTEXT_LENGTH,
+    fallback_capabilities, resolve_capabilities, DetectedCapabilities, DetectedCatalog,
+    ModelCapabilities, DEFAULT_CAPABILITIES, FALLBACK_CONTEXT_LENGTH,
 };
 pub use error::{ErrorDetail, LlmError};
 pub use prompt::{user_message_format_note, PromptText};

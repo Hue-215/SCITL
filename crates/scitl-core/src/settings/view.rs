@@ -241,7 +241,7 @@ fn model_view(m: &ModelConfig, detected: Option<&DetectedCapabilities>) -> Model
         name: m.name.clone(),
         visible: m.visible,
         capabilities: llm::resolve_capabilities(m, detected),
-        default_context_length: llm::fallback_capabilities(&m.name, detected).context_length,
+        default_context_length: llm::fallback_capabilities(detected).context_length,
         overridden: !m.overrides.is_empty(),
     }
 }

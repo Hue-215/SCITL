@@ -76,36 +76,70 @@ fn completions_endpoint(base_url: &str) -> Result<reqwest::Url, CoreError> {
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
 /// ここで判定し、残りは状態コードによる共通の分類に任せる。
 fn http_error(status: reqwest::StatusCode, body: &str, api_key: &str) -> LlmError {
-    if is_context_exceeded(body) {
-        LlmError::ContextExceeded(ErrorDetail::http(status, body, api_key))
-    } else {
-        LlmError::from_status(status, body, api_key)
+    let detail = || ErrorDetail::http(status, body, api_key);
+    match ErrorBody::parse(body) {
+        Some(error) if error.is_context_exceeded() => LlmError::ContextExceeded(detail()),
+        Some(error) if error.rejects_reasoning_effort() => {
+            LlmError::ReasoningEffortRejected(detail())
+        }
+        _ => LlmError::from_status(status, body, api_key),
     }
 }
 
-/// OpenAI互換を名乗るサーバーでも、コンテキスト超過の書き方はそれぞれ違う。知っている
-/// 書き方を並べ、外れたものは状態コードによる分類に落ちる。
-fn is_context_exceeded(body: &str) -> bool {
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
-        return false;
-    };
-    // 多くは`{"error": {...}}`で包むが、包まずに返すサーバーもある。
-    let error = match parsed.get("error") {
-        Some(error) if error.is_object() => error,
-        _ => &parsed,
-    };
-    let field = |name: &str| error.get(name).and_then(serde_json::Value::as_str);
-    // `{"error": "..."}`と文面だけで返すサーバーもある。
-    let message = field("message").or_else(|| parsed.get("error")?.as_str());
-    // OpenAI
-    field("code") == Some("context_length_exceeded")
-        // llama.cpp(llama-server)
-        || field("type") == Some("exceed_context_size_error")
-        // 専用のコードを持たないサーバー(vLLM等)は文面でしか分からない
-        || message.is_some_and(|m| {
-            let m = m.to_lowercase();
-            m.contains("context length") || m.contains("context size")
+/// エラー応答の本文のうち、種類の判定に使う項目。OpenAI互換を名乗るサーバーでも書き方は
+/// それぞれ違うため、知っている書き方を並べ、外れたものは状態コードによる分類に落ちる。
+struct ErrorBody {
+    code: Option<String>,
+    kind: Option<String>,
+    param: Option<String>,
+    message: Option<String>,
+}
+
+impl ErrorBody {
+    fn parse(body: &str) -> Option<Self> {
+        let parsed = serde_json::from_str::<serde_json::Value>(body).ok()?;
+        // 多くは`{"error": {...}}`で包むが、包まずに返すサーバーもある。
+        let error = match parsed.get("error") {
+            Some(error) if error.is_object() => error,
+            _ => &parsed,
+        };
+        let field = |name: &str| {
+            error
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        Some(Self {
+            code: field("code"),
+            kind: field("type"),
+            param: field("param"),
+            // `{"error": "..."}`と文面だけで返すサーバーもある。
+            message: field("message").or_else(|| parsed.get("error")?.as_str().map(str::to_string)),
         })
+    }
+
+    fn is_context_exceeded(&self) -> bool {
+        // OpenAI
+        self.code.as_deref() == Some("context_length_exceeded")
+            // llama.cpp(llama-server)
+            || self.kind.as_deref() == Some("exceed_context_size_error")
+            // 専用のコードを持たないサーバー(vLLM等)は文面でしか分からない
+            || self.message_contains(&["context length", "context size"])
+    }
+
+    /// 思考に対応しないモデルへ`reasoning_effort`を送った。OpenAIは`param`で指し、
+    /// `param`を埋めないサーバーも文面には引数名を書く。
+    fn rejects_reasoning_effort(&self) -> bool {
+        self.param.as_deref() == Some("reasoning_effort")
+            || self.message_contains(&["reasoning_effort"])
+    }
+
+    fn message_contains(&self, needles: &[&str]) -> bool {
+        self.message.as_deref().is_some_and(|m| {
+            let m = m.to_lowercase();
+            needles.iter().any(|n| m.contains(n))
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -115,8 +149,8 @@ struct RequestBody<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<RequestTool>,
     /// OpenAIの`reasoning_effort`。互換を名乗るサーバーにも同じ名前で受けるものが多い。
-    /// 指定を拒むサーバーでは、その失敗がエラー発言に残る(モデル表で思考のチェックを
-    /// 外せば送らなくなる)。
+    /// 指定を拒むサーバーの失敗は[`LlmError::ReasoningEffortRejected`]にする(モデル表で
+    /// 思考のチェックを外せば送らなくなる)。
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
     stream: bool,
@@ -598,6 +632,19 @@ mod tests {
             r#"{"error":"the request exceeds the available context size"}"#,
         ] {
             assert!(matches!(bad_request(body), LlmError::ContextExceeded(_)));
+        }
+    }
+
+    #[test]
+    fn recognizes_a_rejected_reasoning_effort() {
+        for body in [
+            r#"{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model.","type":"invalid_request_error","param":"reasoning_effort","code":"unsupported_parameter"}}"#,
+            r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort","type":"invalid_request_error","param":null,"code":null}}"#,
+        ] {
+            assert!(matches!(
+                bad_request(body),
+                LlmError::ReasoningEffortRejected(_)
+            ));
         }
     }
 

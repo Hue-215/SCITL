@@ -7,8 +7,8 @@ use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    default_capabilities, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    ResponseEvent, ToolArguments, ToolSchema,
+    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, ResponseEvent,
+    ToolArguments, ToolSchema, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -460,7 +460,7 @@ fn context_without_provider() -> TurnContext<'static> {
     TurnContext {
         adapter: Err(TurnFailure::NoProvider),
         prompts: SystemPrompts::default(),
-        capabilities: default_capabilities(""),
+        capabilities: DEFAULT_CAPABILITIES,
         reasoning_effort: None,
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
@@ -1950,7 +1950,7 @@ async fn models_without_tool_support_are_called_once_without_tools() {
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
     let adapter = ToolsWhileOfferedAdapter::new();
-    let mut capabilities = default_capabilities("");
+    let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.tools = false;
 
     run_turn(

@@ -35,6 +35,10 @@ pub enum TurnFailure {
         limit_configured: bool,
         detail: String,
     },
+    /// 思考に対応しないモデルに思考の強さを送り、APIが拒んだ。
+    ThinkingUnsupported {
+        detail: String,
+    },
     ToolRoundLimit,
     /// 1ターン内のツール実行に使える合計時間を使い切った(Issue #71)。
     ToolTimeout,
@@ -71,6 +75,7 @@ impl TurnFailure {
             TurnFailure::InvalidResponse { .. } => "invalid_response",
             TurnFailure::EmptyResponse => "empty_response",
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
+            TurnFailure::ThinkingUnsupported { .. } => "thinking_unsupported",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
             TurnFailure::ToolTimeout => "tool_timeout",
             TurnFailure::Auth { .. } => "auth",
@@ -121,6 +126,11 @@ impl TurnFailure {
                         .to_string()
                 }
             }
+            TurnFailure::ThinkingUnsupported { .. } => {
+                "このモデルは思考の強さの指定を受け付けませんでした。設定画面「APIプロバイダー」の\
+                 モデル一覧で、このモデルの「思考」のチェックを外してください。"
+                    .to_string()
+            }
             TurnFailure::ToolRoundLimit => {
                 "ツールの呼び出しが上限回数に達したため、応答の生成を打ち切りました。\
                  設定画面「ツール/MCP」で上限を変更できます。"
@@ -154,6 +164,7 @@ impl TurnFailure {
             | TurnFailure::ConnectionFailed { detail }
             | TurnFailure::InvalidResponse { detail }
             | TurnFailure::ContextExceeded { detail, .. }
+            | TurnFailure::ThinkingUnsupported { detail }
             | TurnFailure::Auth { detail }
             | TurnFailure::RateLimit { detail }
             | TurnFailure::Provider { detail }
@@ -235,6 +246,9 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
             limit_configured: false,
             detail: detail.to_string(),
         },
+        LlmError::ReasoningEffortRejected(detail) => TurnFailure::ThinkingUnsupported {
+            detail: detail.to_string(),
+        },
         LlmError::Auth(detail) => TurnFailure::Auth {
             detail: detail.to_string(),
         },
@@ -271,6 +285,10 @@ mod tests {
             (LlmError::InvalidResponse(detail("x")), "invalid_response"),
             (LlmError::EmptyResponse, "empty_response"),
             (LlmError::ContextExceeded(detail("x")), "context_exceeded"),
+            (
+                LlmError::ReasoningEffortRejected(detail("x")),
+                "thinking_unsupported",
+            ),
             (LlmError::Auth(detail("x")), "auth"),
             (LlmError::RateLimit(detail("x")), "rate_limit"),
             (LlmError::Http(detail("x")), "provider"),
@@ -288,6 +306,7 @@ mod tests {
             LlmError::Connection(detail("upstream overloaded")),
             LlmError::InvalidResponse(detail("upstream overloaded")),
             LlmError::ContextExceeded(detail("upstream overloaded")),
+            LlmError::ReasoningEffortRejected(detail("upstream overloaded")),
             LlmError::Auth(detail("upstream overloaded")),
             LlmError::RateLimit(detail("upstream overloaded")),
             LlmError::Http(detail("upstream overloaded")),
