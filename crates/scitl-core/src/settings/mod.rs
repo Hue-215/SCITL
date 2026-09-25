@@ -28,7 +28,7 @@ use crate::config::{
 use crate::db::error::{CoreError, Result};
 use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};
-use crate::llm::{self, LlmAdapter};
+use crate::llm::{self, DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::{self, ToolCatalog};
 use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext, TurnFailure};
 use crate::secrets;
@@ -110,6 +110,8 @@ pub struct Snapshot {
     pub config: Arc<Config>,
     /// 使えるアダプタ、または使えない理由(ターンはこの理由のエラー発言で終わる)。
     adapter: std::result::Result<SharedAdapter, TurnFailure>,
+    /// アクティブなモデルの能力(3層で解決済み)。
+    capabilities: ModelCapabilities,
     mcp_tools: Arc<ToolCatalog>,
 }
 
@@ -124,6 +126,7 @@ impl Snapshot {
                 base: self.config.general.system_prompt.as_deref(),
                 task_chat: self.config.general.task_chat_system_prompt.as_deref(),
             },
+            capabilities: self.capabilities,
             mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
             limits: ToolLimits::from_config(&self.config.tools),
             generating,
@@ -145,6 +148,11 @@ pub struct Settings {
     mcp_tools: Arc<ToolCatalog>,
     /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。
     fetching: InFlightSet<String>,
+    /// モデル能力の自動検出の結果(能力解決の3層の真ん中)。`mcp_tools`と同じく
+    /// アプリ起動中だけ保持する(理由は[`DetectedCatalog`])。
+    detected: DetectedCatalog,
+    /// [`Self::detect_model_capabilities`]の同時実行を1プロバイダーにつき1本に絞る。
+    detecting: InFlightSet<String>,
 }
 
 impl Settings {
@@ -176,6 +184,8 @@ impl Settings {
             writer: Mutex::new(()),
             mcp_tools: Arc::new(ToolCatalog::new()),
             fetching: InFlightSet::new(),
+            detected: DetectedCatalog::new(),
+            detecting: InFlightSet::new(),
         }
     }
 
@@ -187,11 +197,94 @@ impl Settings {
             (None, AdapterState::NoProvider) => Err(TurnFailure::NoProvider),
             (None, AdapterState::Broken(_)) => Err(TurnFailure::ProviderConfig),
         };
+        let capabilities = self.active_model_capabilities(&current.config);
         Snapshot {
             config: current.config,
             adapter,
+            capabilities,
             mcp_tools: Arc::clone(&self.mcp_tools),
         }
+    }
+
+    /// ターンの開始に使う[`Self::snapshot`]。アクティブなモデルの能力をまだ推論サーバーに
+    /// 問い合わせていなければ、先に問い合わせる(アプリ起動後の最初のターンだけ)。
+    ///
+    /// 問い合わせに失敗してもターンは止めない。サーバーに繋がらないならターン自体が
+    /// 失敗して理由がエラー発言に残り、繋がるなら既定値の層で進められるため。失敗は
+    /// 覚えないので、次のターンで問い合わせ直す。
+    pub async fn snapshot_for_turn(&self) -> Snapshot {
+        let config = self.current().config;
+        let target = config.active_provider().and_then(|p| {
+            let model = p.resolved_model()?;
+            (providers::can_detect_capabilities(p) && self.detected.get(&p.id, model).is_none())
+                .then(|| (p.clone(), model.to_string()))
+        });
+        if let Some((provider, model)) = target {
+            if let Err(e) = self.detect(&provider, vec![model]).await {
+                eprintln!(
+                    "failed to detect model capabilities from '{}': {e}",
+                    provider.name
+                );
+            }
+        }
+        self.snapshot()
+    }
+
+    /// プロバイダーの全モデルの能力を推論サーバーに問い合わせ直す(設定画面)。
+    pub async fn detect_model_capabilities(&self, provider_id: &str) -> Result<SettingsView> {
+        let _in_flight = self
+            .detecting
+            .try_begin(provider_id.to_string())
+            .ok_or_else(|| invalid("already detecting capabilities for this provider"))?;
+        let provider = self
+            .current()
+            .config
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .cloned()
+            .ok_or_else(|| provider_not_found(provider_id))?;
+        if !providers::can_detect_capabilities(&provider) {
+            return Err(invalid(
+                "capabilities can be detected only from servers on this machine or the local network",
+            ));
+        }
+        let models = provider.models.iter().map(|m| m.name.clone()).collect();
+        self.detect(&provider, models).await?;
+        Ok(self.view())
+    }
+
+    /// 問い合わせた全モデルの結果を置き換える。サーバーが答えなかったモデルも「検出した
+    /// 項目なし」として覚え、ターンのたびに問い合わせ直さない。
+    async fn detect(&self, provider: &ProviderConfig, models: Vec<String>) -> Result<()> {
+        let mut found = providers::detect_capabilities(provider, &models)
+            .await?
+            .unwrap_or_default();
+        for model in models {
+            let detected = found.remove(&model).unwrap_or_default();
+            self.detected.store(&provider.id, &model, detected);
+        }
+        Ok(())
+    }
+
+    /// アクティブなモデルが無ければ、名前の分からないモデルとして既定値を返す(その場合
+    /// ターンはアダプタの段階で失敗するので、この値は使われない)。
+    fn active_model_capabilities(&self, config: &Config) -> ModelCapabilities {
+        config
+            .active_provider()
+            .and_then(|p| {
+                let model = p.model(p.resolved_model()?)?;
+                Some(llm::resolve_capabilities(
+                    model,
+                    self.detected.get(&p.id, &model.name).as_ref(),
+                ))
+            })
+            .unwrap_or_else(|| llm::default_capabilities(""))
+    }
+
+    /// 手動設定より下の層(自動検出 → 既定値)で決まる値。
+    fn fallback_capabilities(&self, provider_id: &str, model: &str) -> ModelCapabilities {
+        llm::fallback_capabilities(model, self.detected.get(provider_id, model).as_ref())
     }
 
     pub fn view(&self) -> SettingsView {
@@ -203,6 +296,7 @@ impl Settings {
         view::build(
             config,
             &self.mcp_tools,
+            &self.detected,
             view::Problems {
                 config_error: self.config_error.as_deref(),
                 active_provider_error: adapter.broken_reason(),
@@ -327,6 +421,7 @@ impl Settings {
         }
 
         let view = draft.commit()?;
+        self.detected.forget_provider(provider_id);
         if let Some(key_ref) = &removed.key_ref {
             delete_secret(key_ref, "provider API key");
         }
@@ -368,7 +463,9 @@ impl Settings {
         if provider.active_model.as_deref() == Some(model) {
             provider.active_model = provider.models.first().map(|m| m.name.clone());
         }
-        draft.commit()
+        let view = draft.commit()?;
+        self.detected.forget(provider_id, model);
+        Ok(view)
     }
 
     pub fn set_active_model(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
@@ -401,9 +498,11 @@ impl Settings {
         capability: Capability,
         supported: bool,
     ) -> Result<SettingsView> {
+        let fallback = self
+            .fallback_capabilities(provider_id, model)
+            .flag(capability);
         let mut draft = self.edit();
         let entry = find_model_mut(&mut draft.config, provider_id, model)?;
-        let fallback = llm::default_capabilities(&entry.name).flag(capability);
         *entry.overrides.flag_mut(capability) = (supported != fallback).then_some(supported);
         draft.commit()
     }
@@ -418,10 +517,12 @@ impl Settings {
         if context_length == Some(0) {
             return Err(invalid("context length must be 1 or greater"));
         }
+        let fallback = self
+            .fallback_capabilities(provider_id, model)
+            .context_length;
         let mut draft = self.edit();
         let entry = find_model_mut(&mut draft.config, provider_id, model)?;
-        let fallback = llm::default_capabilities(&entry.name).context_length;
-        entry.overrides.context_length = context_length.filter(|n| Some(*n) != fallback);
+        entry.overrides.context_length = context_length.filter(|n| *n != fallback);
         draft.commit()
     }
 
@@ -988,7 +1089,7 @@ name = "m"
             .set_model_context_length(&id, "m", Some(8192))
             .unwrap();
         let model = &view.providers[0].models[0];
-        assert_eq!(model.capabilities.context_length, Some(8192));
+        assert_eq!(model.capabilities.context_length, 8192);
         assert!(settings
             .set_model_context_length(&id, "m", Some(0))
             .is_err());
@@ -1005,5 +1106,47 @@ name = "m"
         assert!(!model.visible, "表示/非表示は能力ではないので戻さない");
 
         assert!(settings.set_model_visible(&id, "missing", true).is_err());
+    }
+
+    /// 自動検出の結果は、手動設定を外す基準と、ターンに渡す能力の両方に効く。
+    #[test]
+    fn detected_capabilities_are_the_layer_below_manual_settings() {
+        let (settings, _path) = temp_settings();
+        let id = add_local_provider(&settings, "Local").providers[0]
+            .id
+            .clone();
+        settings.add_model(&id, "m").unwrap();
+        settings.detected.store(
+            &id,
+            "m",
+            llm::DetectedCapabilities {
+                tools: Some(false),
+                context_length: Some(16_384),
+                ..Default::default()
+            },
+        );
+
+        let view = settings.view();
+        assert!(view.providers[0].can_detect_capabilities);
+        let model = &view.providers[0].models[0];
+        assert!(!model.capabilities.tools);
+        assert_eq!(model.default_context_length, 16_384);
+        assert!(!model.overridden);
+        assert!(!settings.snapshot().capabilities.tools);
+
+        // 検出した値と同じにしたら手動設定は残らず、既定値と同じでも違えば残る。
+        let view = settings
+            .set_model_context_length(&id, "m", Some(16_384))
+            .unwrap();
+        assert!(!view.providers[0].models[0].overridden);
+        let view = settings
+            .set_model_capability(&id, "m", Capability::Tools, true)
+            .unwrap();
+        assert!(view.providers[0].models[0].overridden);
+        assert!(settings.snapshot().capabilities.tools);
+
+        // モデルを消したら結果も捨てる。
+        settings.remove_model(&id, "m").unwrap();
+        assert!(settings.detected.get(&id, "m").is_none());
     }
 }

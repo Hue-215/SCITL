@@ -7,8 +7,8 @@ use scitl_core::db;
 use scitl_core::db::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, ResponseEvent,
-    ToolArguments, ToolSchema,
+    default_capabilities, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
+    ResponseEvent, ToolArguments, ToolSchema,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -449,6 +449,7 @@ fn context_without_provider() -> TurnContext<'static> {
     TurnContext {
         adapter: Err(TurnFailure::NoProvider),
         prompts: SystemPrompts::default(),
+        capabilities: default_capabilities(""),
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
         generating: Box::leak(Box::new(InFlightSet::new())),
@@ -1926,4 +1927,38 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     let reply = messages.last().unwrap();
     assert_eq!(reply.role, "assistant");
     assert_eq!(reply.content, "ここまでの結果でお答えします");
+}
+
+/// ツールに対応しないモデルには、ツールを渡さずに1回だけ呼び、注意書きを添える
+/// (Issue #69、legacy/backend.md 4節手順2)。上限到達の一節は添えない。
+#[tokio::test]
+async fn models_without_tool_support_are_called_once_without_tools() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ToolsWhileOfferedAdapter::new();
+    let mut capabilities = default_capabilities("");
+    capabilities.tools = false;
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            ..context(&adapter)
+        },
+        task_id,
+        "工程を追加して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(adapter.offered.into_inner().unwrap(), vec![0]);
+    let prompts = adapter.system_prompts.into_inner().unwrap();
+    assert!(prompts[0].contains("Tools are not available"));
+    assert!(!prompts[0].contains("tool call limit"));
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    assert_eq!(tool_execution_count(&messages), 0);
+    assert_eq!(messages.last().unwrap().role, "assistant");
 }

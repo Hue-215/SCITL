@@ -58,6 +58,7 @@ fn main() {
             commands::settings::set_model_capability,
             commands::settings::set_model_context_length,
             commands::settings::reset_model_capabilities,
+            commands::settings::detect_model_capabilities,
             commands::mcp::add_mcp_server,
             commands::mcp::delete_mcp_server,
             commands::mcp::set_mcp_server_enabled,

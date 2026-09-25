@@ -6,6 +6,7 @@ import {
   addProvider,
   deleteMcpServer,
   deleteProvider,
+  detectModelCapabilities,
   fetchMcpTools,
   getSettings,
   removeModel,
@@ -334,7 +335,7 @@ interface ProvidersTabProps {
   onSetActiveProvider: (providerId: string) => void
   // モデルの操作(追加・削除・表の各列)は種類が多いため、個別のコールバックを並べずに
   // 呼び出しごと受け取り、結果の反映とエラー表示を親に任せる。
-  onUpdateModels: (action: () => Promise<SettingsView>) => void
+  onUpdateModels: (action: () => Promise<SettingsView>) => Promise<void>
 }
 
 function ProvidersTab({
@@ -378,7 +379,7 @@ interface ProviderCardProps {
   onSetNewModel: (value: string) => void
   onDeleteProvider: () => void
   onSetActiveProvider: () => void
-  onUpdateModels: (action: () => Promise<SettingsView>) => void
+  onUpdateModels: (action: () => Promise<SettingsView>) => Promise<void>
 }
 
 function ProviderCard({
@@ -391,6 +392,13 @@ function ProviderCard({
   onUpdateModels,
 }: ProviderCardProps) {
   const hasModel = provider.models.length > 0
+  const [detecting, setDetecting] = useState(false)
+
+  const detect = async () => {
+    setDetecting(true)
+    await onUpdateModels(() => detectModelCapabilities(provider.id))
+    setDetecting(false)
+  }
 
   return (
     <li className="provider-card">
@@ -427,6 +435,11 @@ function ProviderCard({
       ) : (
         <p className="list-empty">モデル未登録(登録するとアクティブに選択できます)</p>
       )}
+      {hasModel && provider.can_detect_capabilities && (
+        <button type="button" onClick={() => void detect()} disabled={detecting}>
+          {detecting ? '検出中…' : '能力をサーバーから検出'}
+        </button>
+      )}
 
       <form
         className="model-add-form"
@@ -434,7 +447,13 @@ function ProviderCard({
           e.preventDefault()
           const model = newModel.trim()
           if (!model) return
-          onUpdateModels(() => addModel(provider.id, model))
+          // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
+          // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
+          void onUpdateModels(async () => {
+            const added = await addModel(provider.id, model)
+            if (!provider.can_detect_capabilities) return added
+            return detectModelCapabilities(provider.id).catch(() => added)
+          })
           onSetNewModel('')
         }}
       >
@@ -597,11 +616,7 @@ function ModelRow({ providerId, model, active, onUpdate }: ModelRowProps) {
         <input
           {...contextLength.inputProps}
           className="model-context-length"
-          placeholder={
-            model.default_context_length === null
-              ? '未設定'
-              : `既定 ${model.default_context_length}`
-          }
+          placeholder={`既定 ${model.default_context_length}`}
           aria-label={`${name}のコンテキスト長`}
           title={contextLength.invalid ? POSITIVE_INTEGER_ERROR : undefined}
         />
