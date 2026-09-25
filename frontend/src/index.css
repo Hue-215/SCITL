@@ -808,6 +808,12 @@ option {
   width: 100%;
 }
 
+/* 行と列は位置で揃って読めるので、基盤層の罫線(Markdownの表向け)は引かない。 */
+.model-table th,
+.model-table td {
+  border: 0;
+}
+
 .model-table th {
   font-size: var(--font-size-sm);
   font-weight: 400;
