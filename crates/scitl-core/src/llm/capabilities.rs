@@ -40,6 +40,9 @@ pub fn default_capabilities(_model_name: &str) -> ModelCapabilities {
 }
 
 /// 手動設定 → 手動設定より下の層([`default_capabilities`])の順に解決する。
+///
+/// コンテキスト長の`0`は未設定として扱う。設定画面からは入らないが、手で編集した
+/// `config.toml`が同じ経路を通るため(`GeneralConfig::response_timeout`と同じ扱い)。
 pub fn resolve_capabilities(model: &ModelConfig) -> ModelCapabilities {
     let fallback = default_capabilities(&model.name);
     let manual = &model.overrides;
@@ -47,7 +50,10 @@ pub fn resolve_capabilities(model: &ModelConfig) -> ModelCapabilities {
         image: manual.image.unwrap_or(fallback.image),
         tools: manual.tools.unwrap_or(fallback.tools),
         thinking: manual.thinking.unwrap_or(fallback.thinking),
-        context_length: manual.context_length.or(fallback.context_length),
+        context_length: manual
+            .context_length
+            .filter(|n| *n > 0)
+            .or(fallback.context_length),
     }
 }
 
@@ -68,5 +74,11 @@ mod tests {
         assert!(!resolved.tools);
         assert_eq!(resolved.thinking, default_capabilities("m").thinking);
         assert_eq!(resolved.context_length, Some(4096));
+
+        model.overrides.context_length = Some(0);
+        assert_eq!(
+            resolve_capabilities(&model).context_length,
+            default_capabilities("m").context_length
+        );
     }
 }
