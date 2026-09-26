@@ -43,7 +43,7 @@ export function groupMessages(messages: Message[]): DisplayItem[] {
 /// 1ターン分のentriesのうち、実際に見える返信の吹き出しになる行(最終行)。
 /// 内部ツール実行を除く最後の行(通常応答 or エラー発言)。
 ///
-/// 最終行が`kind='normal'`であることは`list_for_task`が保証する。通常発言が1行も残らない
+/// 最終行が`kind='normal'`であることは`list_for_chat`が保証する。通常発言が1行も残らない
 /// ターン(編集で破棄されたターン)はクエリの時点で会話から外れるため、ここへ届かない
 /// (Issue #95)。破棄されたかどうかの判定を表示側にも持たせると同じ判断が2箇所に分かれる
 /// ので、ここでは判定しない(../../docs/spec/principles.md 5節)。
