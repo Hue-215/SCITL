@@ -1,4 +1,5 @@
 import type { Html, Image, ImageReference, Nodes, Parent, PhrasingContent, Root } from 'mdast'
+import { t } from './i18n'
 
 // Markdownの構文木から、描画時に外部へのアクセスや生のHTML解釈を起こしうる要素を
 // 取り除く remark プラグイン(principles.md 4節「画像の自動取得を防ぐ」)。
@@ -12,12 +13,11 @@ import type { Html, Image, ImageReference, Nodes, Parent, PhrasingContent, Root 
 // 描画側(react-markdown)は元々HTMLを解釈しない設定で使うが、画像はHTMLを経由せずに
 // 描画されるため、ここで構文木の段階で潰す。CSPの img-src と合わせた多層防御。
 
-const IMAGE_FALLBACK_LABEL = '画像'
 const RAW_TAG = /<img\b[^>]*>|<br\s*\/?>/gi
 
 function imageLabel(alt: string | null | undefined): string {
   const text = alt?.trim()
-  return `🖼 ${text || IMAGE_FALLBACK_LABEL}`
+  return `🖼 ${text || t('markdown.image_fallback')}`
 }
 
 function htmlAttr(tag: string, name: string): string | undefined {

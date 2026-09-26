@@ -10,6 +10,7 @@ use crate::config::{
     ApiFormat, Config, McpEndpoint, McpServerConfig, ModelConfig, ProviderConfig, ReasoningEffort,
     DEFAULT_RESPONSE_TIMEOUT_SECS,
 };
+use crate::i18n::Language;
 use crate::llm::providers;
 use crate::llm::{self, DetectedCapabilities, DetectedCatalog, ModelCapabilities};
 use crate::mcp::ToolCatalog;
@@ -102,6 +103,8 @@ pub struct GeneralSettingsView {
     pub task_chat_system_prompt: Option<String>,
     pub response_timeout_secs: Option<u64>,
     pub default_response_timeout_secs: u64,
+    /// 未設定なら既定の言語に解決した値。画面は「未設定」を扱わない。
+    pub language: Language,
 }
 
 /// ツール呼び出しの上限(Issue #71)。設定値そのもの(未設定は`None`)に加え、未設定時に
@@ -205,6 +208,7 @@ pub(super) fn build(
             task_chat_system_prompt: config.general.task_chat_system_prompt.clone(),
             response_timeout_secs: config.general.response_timeout_secs,
             default_response_timeout_secs: DEFAULT_RESPONSE_TIMEOUT_SECS,
+            language: config.general.language(),
         },
         tools: ToolSettingsView {
             max_rounds_per_turn: config.tools.max_rounds_per_turn,

@@ -69,6 +69,9 @@ export interface PendingEntry {
   content: string
 }
 
+// crates/scitl-core/src/i18n.rs の Language。
+export type Language = 'ja' | 'en'
+
 // crates/scitl-core/src/settings/view.rs の型と一致させる。
 export type ApiFormat = 'open_ai_compat'
 
@@ -78,6 +81,8 @@ export interface GeneralSettings {
   response_timeout_secs: number | null
   // 未設定時に実際に使われる値(ToolSettingsのdefault_*と同じ扱い)。
   default_response_timeout_secs: number
+  // 保存した表示言語(未設定なら既定の言語に解決済み)。画面は起動時の言語で描かれている。
+  language: Language
 }
 
 // ツール呼び出しの上限(Issue #71)。default_*は未設定時に実際に使われる値で、

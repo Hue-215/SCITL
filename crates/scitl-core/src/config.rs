@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::db::error::CoreError;
+use crate::i18n::Language;
 
 /// 対応するプロバイダーAPIの方言。現状はOpenAI互換チャットコンプリーションAPIのみ
 /// (architecture.md 2節)。将来プロバイダーを追加する際はここにバリアントを足す。
@@ -153,6 +154,9 @@ pub struct GeneralConfig {
     /// 応答タイムアウト(秒)。未設定は[`DEFAULT_RESPONSE_TIMEOUT_SECS`]。値の解釈は
     /// [`Self::response_timeout`]に閉じる。
     pub response_timeout_secs: Option<u64>,
+    /// 表示言語。未設定は[`Language::DEFAULT`]。値の解釈は[`Self::language`]に閉じる。
+    /// 知らない値が書かれていると、他の列挙と同じく設定ファイル全体を読めない扱いになる。
+    pub language: Option<Language>,
 }
 
 impl GeneralConfig {
@@ -166,6 +170,10 @@ impl GeneralConfig {
                 .filter(|s| *s > 0)
                 .unwrap_or(DEFAULT_RESPONSE_TIMEOUT_SECS),
         )
+    }
+
+    pub fn language(&self) -> Language {
+        self.language.unwrap_or(Language::DEFAULT)
     }
 }
 
@@ -563,6 +571,7 @@ name = "gpt-4o-mini"
         let config = load(&path).unwrap();
         assert_eq!(config.general.system_prompt.as_deref(), Some("base"));
         assert!(config.general.task_chat_system_prompt.is_none());
+        assert_eq!(config.general.language(), Language::DEFAULT);
         // `[tools]`節ごと無いTOMLも読める(`#[serde(default)]`)。
         assert!(config.tools.max_rounds_per_turn.is_none());
         assert!(config.tools.total_timeout_secs.is_none());

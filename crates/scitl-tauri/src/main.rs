@@ -47,6 +47,8 @@ fn main() {
             commands::chat::delete_task_chat_message,
             commands::settings::get_settings,
             commands::settings::update_general_settings,
+            commands::settings::get_display_language,
+            commands::settings::update_language,
             commands::settings::update_tool_settings,
             commands::settings::add_provider,
             commands::settings::delete_provider,

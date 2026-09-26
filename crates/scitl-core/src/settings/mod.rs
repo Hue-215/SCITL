@@ -22,11 +22,11 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::config::{
-    self, validate_mcp_server_name, ApiFormat, Capability, Config, GeneralConfig, McpEndpoint,
-    McpServerConfig, ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort, SecretRef,
-    ToolConfig,
+    self, validate_mcp_server_name, ApiFormat, Capability, Config, McpEndpoint, McpServerConfig,
+    ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort, SecretRef, ToolConfig,
 };
 use crate::db::error::{CoreError, Result};
+use crate::i18n::Language;
 use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};
 use crate::llm::{self, DetectedCatalog, LlmAdapter, ModelCapabilities};
@@ -355,7 +355,8 @@ impl Settings {
         }
     }
 
-    /// 空文字のプロンプトは未設定として保存する。
+    /// 空文字のプロンプトは未設定として保存する。表示言語は[`Self::update_language`]が
+    /// 別に持つので、ここでは変えない。
     pub fn update_general(
         &self,
         system_prompt: Option<String>,
@@ -367,11 +368,22 @@ impl Settings {
             return Err(invalid("response timeout must be 1 second or greater"));
         }
         let mut draft = self.edit();
-        draft.config.general = GeneralConfig {
-            system_prompt: system_prompt.filter(|s| !s.is_empty()),
-            task_chat_system_prompt: task_chat_system_prompt.filter(|s| !s.is_empty()),
-            response_timeout_secs,
-        };
+        let general = &mut draft.config.general;
+        general.system_prompt = system_prompt.filter(|s| !s.is_empty());
+        general.task_chat_system_prompt = task_chat_system_prompt.filter(|s| !s.is_empty());
+        general.response_timeout_secs = response_timeout_secs;
+        draft.commit()
+    }
+
+    /// 保存した表示言語。画面は起動時に1度だけ読み、切り替えは再起動で反映する
+    /// (legacy/frontend.md 2節)。
+    pub fn display_language(&self) -> Language {
+        self.current().config.general.language()
+    }
+
+    pub fn update_language(&self, language: Language) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        draft.config.general.language = Some(language);
         draft.commit()
     }
 
@@ -1080,6 +1092,20 @@ name = "m"
         assert!(settings.update_general(None, None, Some(0)).is_err());
         assert!(settings.update_tools(Some(0), None).is_err());
         assert!(settings.update_tools(None, Some(0)).is_err());
+    }
+
+    #[test]
+    fn language_is_saved_apart_from_the_other_general_settings() {
+        let (settings, path) = temp_settings();
+        assert_eq!(settings.display_language(), Language::DEFAULT);
+
+        settings.update_language(Language::En).unwrap();
+        // プロンプト欄を保存しても、表示言語は変えない。
+        let view = settings
+            .update_general(Some("prompt".to_string()), None, None)
+            .unwrap();
+        assert_eq!(view.general.language, Language::En);
+        assert_eq!(Settings::load(path).display_language(), Language::En);
     }
 
     #[test]

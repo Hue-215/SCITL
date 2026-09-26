@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getChatModels, selectChatModel, setReasoningEffort } from './api'
+import { failureText, getChatModels, selectChatModel, setReasoningEffort } from './api'
 import Dropdown, { type DropdownOption } from './Dropdown'
+import { t, type MessageKey } from './i18n'
 import type { ChatModelsView, ModelChoice, ReasoningEffort } from './types'
 
-const EFFORT_LABELS: Record<ReasoningEffort, string> = {
-  off: 'オフ',
-  low: '低',
-  medium: '中',
-  high: '高',
+const EFFORT_LABELS: Record<ReasoningEffort, MessageKey> = {
+  off: 'select.effort.off',
+  low: 'select.effort.low',
+  medium: 'select.effort.medium',
+  high: 'select.effort.high',
 }
+
 // 一覧はボタンの上に開くので、ボタンに近い下ほど弱くする(上から高・中・低・オフ)。
-const EFFORT_OPTIONS: DropdownOption[] = Object.entries(EFFORT_LABELS)
-  .reverse()
-  .map(([key, label]) => ({ key, label }))
+function effortOptions(): DropdownOption[] {
+  return Object.entries(EFFORT_LABELS)
+    .reverse()
+    .map(([key, label]) => ({ key, label: t(label) }))
+}
 
 // モデルはプロバイダーを跨いで並ぶので、組を1つの鍵にする。
 function choiceKey(choice: ModelChoice): string {
@@ -29,7 +33,7 @@ export default function ChatModelBar({ onError }: { onError: (message: string) =
     try {
       setView(await getChatModels())
     } catch (e) {
-      onError(String(e))
+      onError(failureText(e))
     }
   }, [onError])
 
@@ -41,7 +45,7 @@ export default function ChatModelBar({ onError }: { onError: (message: string) =
     try {
       await update()
     } catch (e) {
-      onError(String(e))
+      onError(failureText(e))
     }
     await reload()
   }
@@ -59,8 +63,15 @@ export default function ChatModelBar({ onError }: { onError: (message: string) =
         <Dropdown
           open={open === 'model'}
           onOpenChange={toggle('model')}
-          label={selected ? selected.label : 'モデル未選択'}
-          title={selected ? `${selected.label}(${selected.provider_name})` : undefined}
+          label={selected ? selected.label : t('select.model_unset')}
+          title={
+            selected
+              ? t('select.model_tooltip', {
+                  model: selected.label,
+                  provider: selected.provider_name,
+                })
+              : undefined
+          }
           disabled={view === null}
           options={choices.map((c) => ({
             key: choiceKey(c),
@@ -72,8 +83,8 @@ export default function ChatModelBar({ onError }: { onError: (message: string) =
             const choice = choices.find((c) => choiceKey(c) === key)
             if (choice) void change(() => selectChatModel(choice.provider_id, choice.model))
           }}
-          searchPlaceholder="モデルを検索"
-          emptyText="選べるモデルがありません。設定の「APIプロバイダー」で追加・表示できます"
+          searchPlaceholder={t('select.model_search_hint')}
+          emptyText={t('select.models_empty')}
           align="start"
         />
         <Dropdown
@@ -81,14 +92,20 @@ export default function ChatModelBar({ onError }: { onError: (message: string) =
           onOpenChange={toggle('effort')}
           label={
             !selected
-              ? '思考'
-              : `思考: ${selected.thinking ? EFFORT_LABELS[selected.reasoning_effort] : '非対応'}`
+              ? t('select.thinking_label')
+              : t('select.thinking_effort_label', {
+                  effort: selected.thinking
+                    ? t(EFFORT_LABELS[selected.reasoning_effort])
+                    : t('select.thinking_unsupported'),
+                })
           }
           title={
-            selected && !selected.thinking ? 'このモデルは思考に対応していません' : '思考の強さ'
+            selected && !selected.thinking
+              ? t('select.thinking_unsupported_tooltip')
+              : t('select.thinking_tooltip')
           }
           disabled={!selected?.thinking}
-          options={EFFORT_OPTIONS}
+          options={effortOptions()}
           selectedKey={selected?.reasoning_effort ?? null}
           onSelect={(key) => {
             if (!selected) return

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { t } from './i18n'
 import { taskName } from './taskName'
 import type { TaskSummary } from './types'
 
@@ -12,10 +13,14 @@ interface SidebarProps {
 }
 
 function taskLabel(task: TaskSummary): string {
-  const progress =
-    task.steps_total > 0 ? `${task.steps_done}/${task.steps_total}完了` : '工程なし'
-  const deadline = task.deadline ?? '締切未設定'
-  return `${taskName(task)} · ${deadline} · ${progress}`
+  const steps =
+    task.steps_total > 0
+      ? t('sidebar.steps_progress', { done: task.steps_done, total: task.steps_total })
+      : t('sidebar.steps_none')
+  const deadline = t('sidebar.deadline_prefix', {
+    deadline: task.deadline ?? t('sidebar.deadline_unset'),
+  })
+  return t('sidebar.task_label', { title: taskName(task), deadline, steps })
 }
 
 function TaskList({
@@ -63,14 +68,14 @@ export default function Sidebar({
     <nav className="sidebar">
       <div className="sidebar-general-row">
         <button type="button" className="sidebar-general" disabled>
-          総合
+          {t('sidebar.general_chat')}
         </button>
         <button
           type="button"
           className="icon-button"
           onClick={onOpenSettings}
-          aria-label="設定"
-          title="設定"
+          aria-label={t('sidebar.settings_tooltip')}
+          title={t('sidebar.settings_tooltip')}
         >
           ⚙
         </button>
@@ -87,7 +92,8 @@ export default function Sidebar({
               className="list-row sidebar-archived-toggle"
               onClick={() => setArchivedOpen((open) => !open)}
             >
-              アーカイブ済み({archived.length}){archivedOpen ? ' ▲' : ' ▼'}
+              {t('sidebar.archived_label', { count: archived.length })}
+              {archivedOpen ? ' ▲' : ' ▼'}
             </button>
             {archivedOpen && (
               <TaskList tasks={archived} selectedTaskId={selectedTaskId} onSelect={onSelect} />
@@ -97,7 +103,7 @@ export default function Sidebar({
       </div>
 
       <button type="button" className="sidebar-add" onClick={onAddTask} disabled={adding}>
-        + 新規タスク
+        + {t('sidebar.new_task_button')}
       </button>
     </nav>
   )

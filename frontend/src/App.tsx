@@ -3,6 +3,7 @@ import {
   createTask,
   deleteTaskChatMessage,
   editTaskChatMessage,
+  failureText,
   getTaskDetail,
   listTaskMessages,
   listTasks,
@@ -10,6 +11,7 @@ import {
   sendTaskChatMessage,
 } from './api'
 import ChatModelBar from './ChatModelBar'
+import { formatDateTime, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
@@ -21,15 +23,21 @@ import { useStickToBottom } from './useStickToBottom'
 import { useTaskRequests } from './useTaskRequests'
 import { isCommitEnter } from './keyboard'
 
-function formatTime(createdAt: string): string {
-  return new Date(createdAt).toLocaleString()
-}
-
 // Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
 // 表示はSCITL自身の文言(とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
-function EntryBody({ role, content }: { role: string; content: string }) {
+// エラー発言は、ターンの中でも外でもここで表示言語の文言に替える。
+function EntryBody({
+  role,
+  content,
+  errorKind = null,
+}: {
+  role: string
+  content: string
+  errorKind?: string | null
+}) {
   if (role === 'user' || role === 'assistant') return <Markdown text={content} />
-  return <span className="entry-content">{content}</span>
+  const text = role === 'error' ? turnErrorText(errorKind, content) : content
+  return <span className="entry-content">{text}</span>
 }
 
 export default function App() {
@@ -64,7 +72,7 @@ export default function App() {
       setError(null)
       return summaries
     } catch (e) {
-      setError(String(e))
+      setError(failureText(e))
       return []
     }
   }, [])
@@ -100,7 +108,7 @@ export default function App() {
         setEditingId(null)
         reloaded(id)
       } catch (e) {
-        if (selectedRef.current === id) setError(String(e))
+        if (selectedRef.current === id) setError(failureText(e))
       }
     },
     [reloaded],
@@ -126,7 +134,7 @@ export default function App() {
       selectTask(created.id)
       setError(null)
     } catch (e) {
-      setError(String(e))
+      setError(failureText(e))
     } finally {
       setAdding(false)
     }
@@ -148,7 +156,7 @@ export default function App() {
       id,
       [
         { role: 'user', content: text },
-        { role: 'pending', content: '応答待ち…' },
+        { role: 'pending', content: t('chat.pending_reply') },
       ],
       () => sendTaskChatMessage(id, text),
       settle,
@@ -181,7 +189,7 @@ export default function App() {
       id,
       [
         { role: 'user', content: text },
-        { role: 'pending', content: '応答待ち…' },
+        { role: 'pending', content: t('chat.pending_reply') },
       ],
       () => editTaskChatMessage(id, messageId, text),
       settle,
@@ -195,7 +203,7 @@ export default function App() {
     hideSuperseded(messageId, messages.find((m) => m.id === messageId)?.turn_id ?? null)
     await requests.run(
       id,
-      [{ role: 'pending', content: '応答待ち…' }],
+      [{ role: 'pending', content: t('chat.pending_reply') }],
       () => retryTaskChatMessage(id, messageId),
       settle,
     )
@@ -241,7 +249,7 @@ export default function App() {
 
       <main>
         <header className="chat-header">
-          <h1>{task ? taskName(task) : 'SCITL'}</h1>
+          <h1>{task ? taskName(task) : t('common.app_name')}</h1>
           {task?.description && <p>{task.description}</p>}
         </header>
 
@@ -257,7 +265,7 @@ export default function App() {
                 return (
                   <li key={message.id} className="entry entry-tool">
                     <ExternalToolLine message={message} />
-                    <time className="entry-time">{formatTime(message.created_at)}</time>
+                    <time className="entry-time">{formatDateTime(message.created_at)}</time>
                   </li>
                 )
               }
@@ -287,10 +295,10 @@ export default function App() {
                     />
                     <div className="entry-actions">
                       <button type="button" onClick={() => setEditingId(null)}>
-                        キャンセル
+                        {t('common.cancel')}
                       </button>
                       <button type="button" onClick={() => void submitEdit(message.id)}>
-                        送信
+                        {t('chat.send_button')}
                       </button>
                     </div>
                   </li>
@@ -299,8 +307,12 @@ export default function App() {
 
               return (
                 <li key={message.id} className={`entry entry-${message.role}`}>
-                  <EntryBody role={message.role} content={message.content} />
-                  <time className="entry-time">{formatTime(message.created_at)}</time>
+                  <EntryBody
+                    role={message.role}
+                    content={message.content}
+                    errorKind={message.error_kind}
+                  />
+                  <time className="entry-time">{formatDateTime(message.created_at)}</time>
                   {canEditOrDelete && (
                     <div className="entry-actions">
                       <button
@@ -311,14 +323,14 @@ export default function App() {
                           setEditDraft(message.content)
                         }}
                       >
-                        編集
+                        {t('chat.edit_button')}
                       </button>
                       <button
                         type="button"
                         disabled={disableActions}
                         onClick={() => void remove(message.id)}
                       >
-                        削除
+                        {t('common.delete')}
                       </button>
                     </div>
                   )}
@@ -339,16 +351,20 @@ export default function App() {
               <li key={`turn-${item.turnId}`} className="turn-group">
                 <ThinkingTools entries={item.entries} />
                 <div className={`entry entry-${finalMessage.role}`}>
-                  <EntryBody role={finalMessage.role} content={finalMessage.content} />
+                  <EntryBody
+                    role={finalMessage.role}
+                    content={finalMessage.content}
+                    errorKind={finalMessage.error_kind}
+                  />
                   {/* プロバイダーが書いた文字列のため、Markdown描画(#39)の対象にせず
                       プレーンテキストのまま出す(Issue #159) */}
                   {finalMessage.error_detail && (
                     <details className="entry-error-detail">
-                      <summary>詳細を表示</summary>
+                      <summary>{t('chat.error_detail_summary')}</summary>
                       <pre>{finalMessage.error_detail}</pre>
                     </details>
                   )}
-                  <time className="entry-time">{formatTime(finalMessage.created_at)}</time>
+                  <time className="entry-time">{formatDateTime(finalMessage.created_at)}</time>
                   {canRetryOrDelete && (
                     <div className="entry-actions">
                       <button
@@ -356,14 +372,14 @@ export default function App() {
                         disabled={disableActions}
                         onClick={() => void retry(finalMessage.id)}
                       >
-                        再試行
+                        {t('chat.retry_button')}
                       </button>
                       <button
                         type="button"
                         disabled={disableActions}
                         onClick={() => void remove(finalMessage.id)}
                       >
-                        削除
+                        {t('common.delete')}
                       </button>
                     </div>
                   )}
@@ -401,10 +417,10 @@ export default function App() {
               }
             }}
             disabled={disableActions}
-            placeholder="タスクについて話しかける"
+            placeholder={t('chat.input_hint')}
           />
           <button type="submit" disabled={disableActions || !draft.trim()}>
-            送信
+            {t('chat.send_button')}
           </button>
         </form>
 

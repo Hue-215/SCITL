@@ -7,6 +7,7 @@ import {
   deleteMcpServer,
   deleteProvider,
   detectModelCapabilities,
+  failureText,
   fetchMcpTools,
   getSettings,
   listProviderModels,
@@ -18,6 +19,7 @@ import {
   setModelContextLength,
   setModelVisible,
   updateGeneralSettings,
+  updateLanguage,
   updateToolSettings,
   type NewMcpEndpoint,
 } from './api'
@@ -25,13 +27,15 @@ import type {
   ApiFormat,
   AvailableModel,
   Capability,
+  Language,
   McpServerView,
   ModelView,
   ProviderView,
   SettingsView,
 } from './types'
-import { matchQuery, noMatchText } from './search'
+import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
+import { currentLanguage, languageName, LANGUAGES, t, type MessageKey } from './i18n'
 
 interface SettingsProps {
   onClose: () => void
@@ -43,8 +47,13 @@ const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
 
 // httpの許可範囲(crates/scitl-core/src/net.rsのclassify_host)が変わったときに
 // 片方だけ直し忘れないよう、URLを入力させる箇所で共通のヒント文を使う。
-function httpPlainTextHint(secretLabel: string): string {
-  return `httpsを推奨します。httpはループバックまたはプライベートIPアドレス(LAN内等)への接続のみ許可され、通信は暗号化されません。${secretLabel}も平文で流れます。`
+function httpPlainTextHint(secret: string): string {
+  return t('settings.http_warning', { secret })
+}
+
+// 検索欄のあるモデルの一覧(登録済みの表・取得したモデルの候補)で、絞り込んだ結果が空のときの一文。
+function noModelMatchText(query: string): string {
+  return t('settings.model.no_match', { query: query.trim() })
 }
 
 // 設定画面(legacy/frontend.md 2〜4節)。
@@ -58,7 +67,7 @@ export default function Settings({ onClose }: SettingsProps) {
       setSettings(await getSettings())
       setError(null)
     } catch (e) {
-      setError(String(e))
+      setError(failureText(e))
     }
   }
 
@@ -78,7 +87,7 @@ export default function Settings({ onClose }: SettingsProps) {
       setSettings(await action())
       setError(null)
     } catch (e) {
-      setError(String(e))
+      setError(failureText(e))
     }
   }
 
@@ -89,12 +98,12 @@ export default function Settings({ onClose }: SettingsProps) {
           type="button"
           className="icon-button settings-back"
           onClick={onClose}
-          aria-label="戻る"
-          title="戻る"
+          aria-label={t('settings.back_tooltip')}
+          title={t('settings.back_tooltip')}
         >
           ←
         </button>
-        <h1>設定</h1>
+        <h1>{t('settings.heading')}</h1>
       </header>
 
       <div className="settings-body">
@@ -104,21 +113,21 @@ export default function Settings({ onClose }: SettingsProps) {
             className={tab === 'general' ? 'settings-tab selected' : 'settings-tab'}
             onClick={() => selectTab('general')}
           >
-            一般
+            {t('settings.nav.general')}
           </button>
           <button
             type="button"
             className={tab === 'providers' ? 'settings-tab selected' : 'settings-tab'}
             onClick={() => selectTab('providers')}
           >
-            APIプロバイダー
+            {t('settings.nav.provider')}
           </button>
           <button
             type="button"
             className={tab === 'mcp' ? 'settings-tab selected' : 'settings-tab'}
             onClick={() => selectTab('mcp')}
           >
-            ツール/MCP
+            {t('settings.nav.tools')}
           </button>
         </nav>
 
@@ -126,15 +135,13 @@ export default function Settings({ onClose }: SettingsProps) {
           <div className="settings-column">
             {settings?.config_error && (
               <p className="error">
-                {'設定ファイルを読み込めなかったため、空の設定で起動しています。'}
-                {'ファイルを直してアプリを再起動するまで、設定は保存されません。'}
-                {`(${settings.config_error})`}
+                {t('settings.config_unreadable', { error: settings.config_error })}
               </p>
             )}
             {error && <p className="error">{error}</p>}
 
             {settings === null ? (
-              <p>読み込み中…</p>
+              <p>{t('common.loading')}</p>
             ) : tab === 'general' ? (
               <GeneralTab
                 settings={settings}
@@ -147,6 +154,7 @@ export default function Settings({ onClose }: SettingsProps) {
                     }),
                   )
                 }
+                onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
               />
             ) : tab === 'providers' ? (
               <ProvidersTab
@@ -199,8 +207,6 @@ interface NumberFieldProps {
   onSave: (value: number | null) => void
 }
 
-const POSITIVE_INTEGER_ERROR = '1以上の整数を入力してください'
-
 // フォーカスを外すと自動保存する数値入力(legacy/frontend.md 2節・4節)。入力中は自身の
 // stateだけを更新し、blur時にのみ親へ確定した値を渡す。入力チェック(空欄は未設定、
 // それ以外は1以上の整数)をこの1箇所に閉じ、設定欄(NumberField)とモデル表の
@@ -246,9 +252,9 @@ function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldPr
   return (
     <label className="settings-field">
       <span>{label}</span>
-      <input {...inputProps} placeholder={`未設定(既定値 ${defaultValue})`} />
+      <input {...inputProps} placeholder={t('settings.unset_default_hint', { value: defaultValue })} />
       {hint && <p className="settings-hint">{hint}</p>}
-      {invalid && <p className="error">{POSITIVE_INTEGER_ERROR}</p>}
+      {invalid && <p className="error">{t('errors.positive_integer')}</p>}
     </label>
   )
 }
@@ -260,11 +266,12 @@ interface GeneralTabProps {
     taskChatSystemPrompt: string | null,
     responseTimeoutSecs: number | null,
   ) => void
+  onSaveLanguage: (language: Language) => void
 }
 
 // フォーカスを外すと自動保存(legacy/frontend.md 2節)。入力中は自身のstateだけを更新し、
 // blur時にのみ親へ確定した値を渡す。
-function GeneralTab({ settings, onSave }: GeneralTabProps) {
+function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
   const [systemPrompt, setSystemPrompt] = useState(settings.general.system_prompt ?? '')
   const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
     settings.general.task_chat_system_prompt ?? '',
@@ -278,7 +285,25 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
   return (
     <div className="settings-panel">
       <label className="settings-field">
-        <span>システムプロンプト</span>
+        <span>{t('settings.general.language_label')}</span>
+        <select
+          value={settings.general.language}
+          onChange={(e) => onSaveLanguage(e.target.value as Language)}
+        >
+          {LANGUAGES.map((language) => (
+            <option key={language} value={language}>
+              {languageName(language)}
+            </option>
+          ))}
+        </select>
+        {/* 画面は起動時の言語で描かれているので、保存した言語と違う間だけ出す */}
+        {settings.general.language !== currentLanguage() && (
+          <p className="settings-hint">{t('settings.general.language_restart_note')}</p>
+        )}
+      </label>
+
+      <label className="settings-field">
+        <span>{t('settings.general.system_prompt_label')}</span>
         <textarea
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
@@ -293,16 +318,16 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
       </label>
 
       <NumberField
-        label="応答タイムアウト(秒)"
+        label={t('settings.general.timeout_label')}
         value={settings.general.response_timeout_secs}
         defaultValue={settings.general.default_response_timeout_secs}
         onSave={(secs) => onSave(systemPrompt || null, taskChatSystemPrompt || null, secs)}
       />
 
       <details className="settings-advanced">
-        <summary>高度な設定</summary>
+        <summary>{t('settings.general.advanced_settings')}</summary>
         <label className="settings-field">
-          <span>タスクチャット用のシステムプロンプト</span>
+          <span>{t('settings.general.task_chat_prompt_label')}</span>
           <textarea
             value={taskChatSystemPrompt}
             onChange={(e) => setTaskChatSystemPrompt(e.target.value)}
@@ -314,10 +339,7 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
               )
             }
           />
-          <p className="settings-hint">
-            総合チャットには無い、工程の追加・更新・削除など個別タスクの操作に関する指示は
-            こちらに書く(上のシステムプロンプトの後ろに追加される)。
-          </p>
+          <p className="settings-hint">{t('settings.general.task_chat_prompt_caption')}</p>
         </label>
       </details>
     </div>
@@ -361,7 +383,9 @@ function ProvidersTab({
             onUpdateModels={onUpdateModels}
           />
         ))}
-        {settings.providers.length === 0 && <li className="list-empty">プロバイダーが未登録です。</li>}
+        {settings.providers.length === 0 && (
+          <li className="list-empty">{t('settings.provider.none_registered')}</li>
+        )}
       </ul>
 
       <AddProviderForm onAdd={onAddProvider} />
@@ -414,7 +438,7 @@ function ProviderCard({
     try {
       setAvailable(await listProviderModels(provider.id))
     } catch (e) {
-      setListError(String(e))
+      setListError(t('common.fetch_failed', { error: failureText(e) }))
     } finally {
       setListing(false)
     }
@@ -425,30 +449,35 @@ function ProviderCard({
       <div className="provider-card-header">
         <strong>{provider.name}</strong>
         <ConfirmButton
-          label="削除"
-          confirmTitle="プロバイダーを削除"
-          confirmMessage={`プロバイダー「${provider.name}」を削除しますか?保存済みのAPIキーも同時に削除されます。`}
+          label={t('common.delete')}
+          confirmTitle={t('settings.provider.delete_provider_dialog_title')}
+          confirmMessage={t('settings.provider.delete_provider_dialog_message', {
+            name: provider.name,
+          })}
+          confirmLabel={t('common.delete')}
           onConfirm={onDeleteProvider}
         />
       </div>
       <p className="provider-card-meta">
-        {provider.base_url} · {provider.has_api_key ? 'APIキー設定済み' : 'APIキー未設定'}
+        {t('settings.provider.meta', {
+          url: provider.base_url,
+          api_key: provider.has_api_key
+            ? t('settings.provider.api_key_set')
+            : t('settings.provider.api_key_unset'),
+        })}
       </p>
       {provider.error && (
-        <p className="error">
-          {'このプロバイダーは使えません。削除するか、チャットで別のプロバイダーのモデルに切り替えてください。'}
-          {`(${provider.error})`}
-        </p>
+        <p className="error">{t('settings.provider.unusable', { error: provider.error })}</p>
       )}
 
       {hasModel ? (
         <ModelTable provider={provider} onUpdate={onUpdateModels} />
       ) : (
-        <p className="list-empty">モデル未登録(登録するとチャットで選べます)</p>
+        <p className="list-empty">{t('settings.model.none_registered')}</p>
       )}
       {hasModel && provider.can_detect_capabilities && (
         <button type="button" onClick={() => void detect()} disabled={detecting}>
-          {detecting ? '検出中…' : '能力をサーバーから検出'}
+          {detecting ? t('settings.model.detecting') : t('settings.model.detect_button')}
         </button>
       )}
 
@@ -465,11 +494,11 @@ function ProviderCard({
         <input
           value={newModel}
           onChange={(e) => onSetNewModel(e.target.value)}
-          placeholder="モデル名を入力して追加"
+          placeholder={t('settings.model.add_model_hint')}
         />
-        <button type="submit">追加</button>
+        <button type="submit">{t('common.add')}</button>
         <button type="button" onClick={() => void listModels()} disabled={listing}>
-          {listing ? '取得中…' : 'モデル一覧を取得'}
+          {listing ? t('common.fetching') : t('settings.model.fetch_models_button')}
         </button>
       </form>
       {listError && <p className="error">{listError}</p>}
@@ -520,7 +549,9 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
   return (
     <div className="model-picker">
       {candidates.length === 0 ? (
-        <p className="list-empty">取得した{available.length}件のモデルはすべて登録済みです。</p>
+        <p className="list-empty">
+          {t('settings.model.picker_all_registered', { count: available.length })}
+        </p>
       ) : (
         <>
           <div className="model-table-toolbar">
@@ -528,8 +559,8 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={`${candidates.length}件の未登録モデルから検索`}
-              aria-label="取得したモデルを検索"
+              placeholder={t('settings.model.picker_search_hint', { count: candidates.length })}
+              aria-label={t('settings.model.picker_search_label')}
             />
             <button
               type="button"
@@ -538,7 +569,9 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
               }
               disabled={matched.every((m) => chosen.includes(m.name))}
             >
-              {searching ? '一致したものをすべて選択' : 'すべて選択'}
+              {searching
+                ? t('settings.model.picker_select_matched')
+                : t('settings.model.picker_select_all')}
             </button>
           </div>
           <ul className="model-list model-picker-options">
@@ -554,9 +587,7 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
                 </label>
               </li>
             ))}
-            {matched.length === 0 && (
-              <li className="list-empty">{noMatchText(query, 'モデル')}</li>
-            )}
+            {matched.length === 0 && <li className="list-empty">{noModelMatchText(query)}</li>}
           </ul>
         </>
       )}
@@ -567,21 +598,43 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
             onClick={() => void submit()}
             disabled={chosen.length === 0 || adding}
           >
-            {adding ? '追加中…' : `選択した${chosen.length}件を追加`}
+            {adding
+              ? t('common.adding')
+              : t('settings.model.picker_add_selected', { count: chosen.length })}
           </button>
         )}
         <button type="button" onClick={onClose}>
-          閉じる
+          {t('common.close')}
         </button>
       </div>
     </div>
   )
 }
 
-const CAPABILITY_COLUMNS: { capability: Capability; label: string }[] = [
-  { capability: 'image', label: '画像' },
-  { capability: 'tools', label: 'ツール' },
-  { capability: 'thinking', label: '思考' },
+// 列見出しは表に収まる短い語にするので、チェックボックスの説明は見出しとは別の1文にする
+// (見出しの語を文に差し込むと、言語によっては文にならない)。
+interface CapabilityColumn {
+  capability: Capability
+  label: MessageKey
+  checkboxLabel: MessageKey
+}
+
+const CAPABILITY_COLUMNS: CapabilityColumn[] = [
+  {
+    capability: 'image',
+    label: 'settings.model.cap_vision_label',
+    checkboxLabel: 'settings.model.cap_vision_checkbox_label',
+  },
+  {
+    capability: 'tools',
+    label: 'settings.model.cap_tools_label',
+    checkboxLabel: 'settings.model.cap_tools_checkbox_label',
+  },
+  {
+    capability: 'thinking',
+    label: 'settings.model.cap_reasoning_label',
+    checkboxLabel: 'settings.model.cap_reasoning_checkbox_label',
+  },
 ]
 
 interface ModelTableProps {
@@ -608,8 +661,7 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
       {collapsible && (
         <div className="model-table-toolbar">
           <CollapseToggle
-            count={models.length}
-            noun="モデル"
+            showLabel={t('settings.model.show_all', { count: models.length })}
             expanded={expanded}
             onToggle={() => setExpanded((v) => !v)}
           />
@@ -617,8 +669,8 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="モデル名で検索"
-            aria-label="モデル名で検索"
+            placeholder={t('settings.model.search_hint')}
+            aria-label={t('settings.model.search_hint')}
           />
         </div>
       )}
@@ -627,13 +679,13 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
           <table className="model-table">
             <thead>
               <tr>
-                <th>表示</th>
-                <th>モデル</th>
+                <th>{t('settings.model.col_visible')}</th>
+                <th>{t('settings.model.col_model')}</th>
                 {CAPABILITY_COLUMNS.map(({ capability, label }) => (
-                  <th key={capability}>{label}</th>
+                  <th key={capability}>{t(label)}</th>
                 ))}
-                <th>コンテキスト長</th>
-                <th aria-label="操作" />
+                <th>{t('settings.model.col_context_length')}</th>
+                <th aria-label={t('settings.model.col_actions')} />
               </tr>
             </thead>
             <tbody>
@@ -649,9 +701,7 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
           </table>
         </div>
       )}
-      {searching && matched.length === 0 && (
-        <p className="list-empty">{noMatchText(query, 'モデル')}</p>
-      )}
+      {searching && matched.length === 0 && <p className="list-empty">{noModelMatchText(query)}</p>}
     </>
   )
 }
@@ -682,11 +732,11 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
             const visible = e.target.checked
             onUpdate(() => setModelVisible(providerId, name, visible))
           }}
-          aria-label={`${shown}をチャットのモデル一覧に出す`}
+          aria-label={t('settings.model.visible_checkbox_label', { model: shown })}
         />
       </td>
       <td className="model-name">{shown}</td>
-      {CAPABILITY_COLUMNS.map(({ capability, label }) => (
+      {CAPABILITY_COLUMNS.map(({ capability, checkboxLabel }) => (
         <td key={capability}>
           <span className="model-capability">
             <input
@@ -696,14 +746,14 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
                 const supported = e.target.checked
                 onUpdate(() => setModelCapability(providerId, name, capability, supported))
               }}
-              aria-label={`${shown}の${label}対応`}
+              aria-label={t(checkboxLabel, { model: shown })}
             />
             {capability === 'tools' && !model.capabilities.tools && (
               <span
                 className="model-warning"
                 role="img"
-                aria-label={TOOLS_OFF_WARNING}
-                title={TOOLS_OFF_WARNING}
+                aria-label={t('settings.model.tools_warning_tooltip')}
+                title={t('settings.model.tools_warning_tooltip')}
               >
                 ⚠
               </span>
@@ -715,11 +765,13 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
         <input
           {...contextLength.inputProps}
           className="model-context-length"
-          placeholder={`既定 ${model.default_context_length}`}
-          aria-label={`${shown}のコンテキスト長`}
+          placeholder={t('settings.model.context_length_default_hint', {
+            value: model.default_context_length,
+          })}
+          aria-label={t('settings.model.context_length_label', { model: shown })}
         />
         {contextLength.invalid && (
-          <p className="error model-context-length-error">{POSITIVE_INTEGER_ERROR}</p>
+          <p className="error model-context-length-error">{t('errors.positive_integer')}</p>
         )}
       </td>
       <td>
@@ -729,8 +781,8 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
               type="button"
               className="icon-button"
               onClick={() => onUpdate(() => resetModelCapabilities(providerId, name))}
-              aria-label={`${shown}の能力を初期値に戻す`}
-              title="能力を初期値に戻す"
+              aria-label={t('settings.model.reset_caps_label', { model: shown })}
+              title={t('settings.model.reset_caps_tooltip')}
             >
               ↺
             </button>
@@ -739,8 +791,8 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
             type="button"
             className="icon-button"
             onClick={() => onUpdate(() => removeModel(providerId, name))}
-            aria-label={`${shown}を削除`}
-            title="削除"
+            aria-label={t('settings.model.delete_model_label', { model: shown })}
+            title={t('common.delete')}
           >
             ×
           </button>
@@ -750,21 +802,18 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
   )
 }
 
-const TOOLS_OFF_WARNING =
-  'ツール呼び出しに対応しないモデルでは、タスクや工程の更新ができなくなります'
-
 interface CollapseToggleProps {
-  count: number
-  noun: string
+  // 畳んでいるときの文言(何を何件表示するか)。
+  showLabel: string
   expanded: boolean
   onToggle: () => void
 }
 
 // 件数の多い一覧(モデル表・MCPのツール一覧)を既定で畳むための開閉ボタン。
-function CollapseToggle({ count, noun, expanded, onToggle }: CollapseToggleProps) {
+function CollapseToggle({ showLabel, expanded, onToggle }: CollapseToggleProps) {
   return (
     <button type="button" onClick={onToggle} aria-expanded={expanded}>
-      {expanded ? '折りたたむ' : `${count}件の${noun}を表示`}
+      {expanded ? t('common.collapse') : showLabel}
     </button>
   )
 }
@@ -793,13 +842,13 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
         setApiKey('')
       }}
     >
-      <h2>プロバイダーを追加</h2>
+      <h2>{t('settings.provider.add_provider_heading')}</h2>
       <label className="settings-field">
-        <span>表示名</span>
+        <span>{t('settings.provider.display_name_hint')}</span>
         <input value={name} onChange={(e) => setName(e.target.value)} required />
       </label>
       <label className="settings-field">
-        <span>API形式</span>
+        <span>{t('settings.provider.api_format_field_label')}</span>
         <select
           value={apiFormat}
           onChange={(e) => {
@@ -808,30 +857,33 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
             setBaseUrl(DEFAULT_BASE_URL_BY_FORMAT[format])
           }}
         >
-          <option value="open_ai_compat">OpenAI互換</option>
+          <option value="open_ai_compat">{t('settings.provider.formats.open_ai_compat')}</option>
         </select>
       </label>
       <label className="settings-field">
-        <span>ベースURL</span>
+        <span>{t('settings.provider.base_url_label')}</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
-        <p className="settings-hint">{httpPlainTextHint('APIキー')}</p>
+        <p className="settings-hint">
+          {httpPlainTextHint(t('settings.provider.api_key_secret'))}
+        </p>
       </label>
       <label className="settings-field">
-        <span>APIキー</span>
+        <span>{t('settings.provider.api_key_hint')}</span>
         <input
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          placeholder="ローカル推論サーバー等では省略可"
+          placeholder={t('settings.provider.api_key_placeholder')}
         />
       </label>
-      <button type="submit">追加</button>
+      <button type="submit">{t('common.add')}</button>
     </form>
   )
 }
 
 // 「1行1件、KEY=VALUE」形式のテキストをパースする(legacy/frontend.md 4節)。
-// エラーは行ごとに個別指摘する。
+// エラーは行ごとに個別指摘する。行は前後の空白を除いてから見るので、`=`が先頭でなければ
+// キーは空にならない。
 function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
   const pairs: [string, string][] = []
   const errors: string[] = []
@@ -840,21 +892,22 @@ function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: 
     if (trimmed === '') return
     const eq = trimmed.indexOf('=')
     if (eq <= 0) {
-      errors.push(`${i + 1}行目: "キー=値"の形式で入力してください`)
+      errors.push(
+        t('settings.tools.kv_line_invalid', {
+          line_no: i + 1,
+          line: trimmed,
+          sample: t('settings.tools.kv_sample'),
+        }),
+      )
       return
     }
-    const key = trimmed.slice(0, eq).trim()
-    const value = trimmed.slice(eq + 1).trim()
-    if (key === '') {
-      errors.push(`${i + 1}行目: キーが空です`)
-      return
-    }
-    pairs.push([key, value])
+    pairs.push([trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim()])
   })
   return { pairs, errors }
 }
 
-const MCP_NAME_PATTERN = /^[A-Za-z0-9_]{1,16}$/
+const MCP_NAME_MAX_LENGTH = 16
+const MCP_NAME_PATTERN = new RegExp(`^[A-Za-z0-9_]{1,${MCP_NAME_MAX_LENGTH}}$`)
 
 interface McpTabProps {
   settings: SettingsView
@@ -877,10 +930,7 @@ function McpTab({
 }: McpTabProps) {
   return (
     <div className="settings-panel">
-      <p className="settings-hint">
-        登録したサーバーのツール説明はそのままモデルに渡ります。信頼できるサーバーだけを
-        登録してください。
-      </p>
+      <p className="settings-hint">{t('settings.tools.intro')}</p>
 
       <ul className="provider-list">
         {settings.mcp_servers.map((server) => (
@@ -893,7 +943,9 @@ function McpTab({
             onFetchTools={() => onFetchTools(server.id)}
           />
         ))}
-        {settings.mcp_servers.length === 0 && <li className="list-empty">サーバーが未登録です。</li>}
+        {settings.mcp_servers.length === 0 && (
+          <li className="list-empty">{t('settings.tools.none_registered')}</li>
+        )}
       </ul>
 
       <AddMcpServerForm existingNames={settings.mcp_servers.map((s) => s.name)} onAdd={onAddServer} />
@@ -903,18 +955,18 @@ function McpTab({
           別の話なので、追加フォームと同じ形の仕切り線で切る。 */}
       <section className="settings-section settings-section-break">
         <NumberField
-          label="1ターンあたりの最大ツール呼び出し回数"
+          label={t('settings.tools.max_rounds_label')}
           value={settings.tools.max_rounds_per_turn}
           defaultValue={settings.tools.default_max_rounds_per_turn}
-          hint="ツールを実行するモデルとの往復の回数。1回の往復でツールを複数呼ぶこともある。使い切ったら、ツールを使わずに返信させるため、もう一度だけモデルを呼ぶ。"
+          hint={t('settings.tools.max_rounds_caption')}
           onSave={(rounds) => onSaveLimits(rounds, settings.tools.total_timeout_secs)}
         />
 
         <NumberField
-          label="ツール呼び出し全体のタイムアウト(秒)"
+          label={t('settings.tools.timeout_label')}
           value={settings.tools.total_timeout_secs}
           defaultValue={settings.tools.default_total_timeout_secs}
-          hint="1ターン内のツール実行に使える時間の合計。モデルの応答待ちは含まない。"
+          hint={t('settings.tools.timeout_caption')}
           onSave={(secs) => onSaveLimits(settings.tools.max_rounds_per_turn, secs)}
         />
       </section>
@@ -951,7 +1003,7 @@ function McpServerCard({
     try {
       await onFetchTools()
     } catch (e) {
-      setError(String(e))
+      setError(t('common.fetch_failed', { error: failureText(e) }))
     } finally {
       setLoading(false)
     }
@@ -959,11 +1011,16 @@ function McpServerCard({
 
   const endpointSummary =
     server.endpoint.transport === 'stdio'
-      ? `標準入出力: ${[server.endpoint.command, ...server.endpoint.args].join(' ')}`
-      : `streamable HTTP: ${server.endpoint.url}`
+      ? t('settings.tools.endpoint_stdio', {
+          command: [server.endpoint.command, ...server.endpoint.args].join(' '),
+        })
+      : t('settings.tools.endpoint_http', { url: server.endpoint.url })
   const secretNames =
     server.endpoint.transport === 'stdio' ? server.endpoint.env_names : server.endpoint.header_names
-  const secretLabel = server.endpoint.transport === 'stdio' ? '環境変数' : 'ヘッダー'
+  const secretLabel =
+    server.endpoint.transport === 'stdio'
+      ? t('settings.tools.env_names_label')
+      : t('settings.tools.header_names_label')
 
   const fetched = server.tools_fetched
   const collapsible = tools.length >= LIST_COLLAPSE_THRESHOLD
@@ -981,9 +1038,10 @@ function McpServerCard({
           <strong>{server.name}</strong>
         </label>
         <ConfirmButton
-          label="削除"
-          confirmTitle="サーバーを削除"
-          confirmMessage={`サーバー「${server.name}」を削除しますか?保存済みの秘密情報も同時に削除されます。`}
+          label={t('settings.tools.unregister_button')}
+          confirmTitle={t('settings.tools.delete_server_dialog_title')}
+          confirmMessage={t('settings.tools.delete_server_dialog_message', { id: server.name })}
+          confirmLabel={t('settings.tools.unregister_button')}
           onConfirm={onDelete}
         />
       </div>
@@ -991,25 +1049,25 @@ function McpServerCard({
       <p className="provider-card-meta">{endpointSummary}</p>
       {secretNames.length > 0 && (
         <p className="provider-card-meta">
-          {secretLabel}: {secretNames.join(', ')}(値は安全な場所に保存されています)
+          {t('settings.tools.secret_names_display', {
+            label: secretLabel,
+            names: secretNames.join(', '),
+          })}
         </p>
       )}
 
       {tools.length === 0 ? (
         <p className="list-empty">
-          {fetched ? 'ツールがありません。' : 'ツール一覧は未取得です。'}
+          {fetched ? t('settings.tools.tools_none') : t('settings.tools.tools_none_fetched')}
         </p>
       ) : (
         <>
           {!fetched && (
-            <p className="list-empty">
-              ツール一覧は未取得です。有効化済みのツールのみ表示しています。
-            </p>
+            <p className="list-empty">{t('settings.tools.tools_enabled_only')}</p>
           )}
           {collapsible && (
             <CollapseToggle
-              count={tools.length}
-              noun="ツール"
+              showLabel={t('settings.tools.show_all', { count: tools.length })}
               expanded={expanded}
               onToggle={() => setExpanded((v) => !v)}
             />
@@ -1030,9 +1088,7 @@ function McpServerCard({
                     {tool.label}
                   </label>
                   {!tool.exposable && (
-                    <span className="provider-card-meta">
-                      モデルに渡せない名前のため、有効にできません
-                    </span>
+                    <span className="provider-card-meta">{t('settings.tools.not_exposable')}</span>
                   )}
                 </li>
               )
@@ -1043,7 +1099,7 @@ function McpServerCard({
 
       {error && <p className="error">{error}</p>}
       <button type="button" onClick={handleFetchTools} disabled={loading}>
-        {loading ? '取得中…' : 'ツール一覧を取得'}
+        {loading ? t('common.fetching') : t('settings.tools.fetch_tools_button')}
       </button>
     </li>
   )
@@ -1077,14 +1133,16 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
     e.preventDefault()
     const trimmedName = name.trim()
     const validationErrors: string[] = []
-    if (!MCP_NAME_PATTERN.test(trimmedName)) {
-      validationErrors.push('識別子は16字以内の英数字とアンダースコアのみで入力してください')
+    if (trimmedName === '') {
+      validationErrors.push(t('settings.tools.id_required'))
+    } else if (!MCP_NAME_PATTERN.test(trimmedName)) {
+      validationErrors.push(t('settings.tools.id_invalid', { max: MCP_NAME_MAX_LENGTH }))
     } else if (existingNames.includes(trimmedName)) {
-      validationErrors.push(`識別子「${trimmedName}」は既に使われています`)
+      validationErrors.push(t('settings.tools.id_duplicate', { id: trimmedName }))
     }
 
     if (transport === 'stdio') {
-      if (!command.trim()) validationErrors.push('コマンドを入力してください')
+      if (!command.trim()) validationErrors.push(t('settings.tools.command_required'))
       const args = argsText
         .split('\n')
         .map((s) => s.trim())
@@ -1098,7 +1156,7 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
       setErrors([])
       onAdd(trimmedName, { transport: 'stdio', command: command.trim(), args, env: pairs })
     } else {
-      if (!url.trim()) validationErrors.push('URLを入力してください')
+      if (!url.trim()) validationErrors.push(t('settings.tools.url_required'))
       const { pairs, errors: headerErrors } = parseKeyValueLines(headersText)
       validationErrors.push(...headerErrors)
       if (validationErrors.length > 0) {
@@ -1113,52 +1171,61 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
 
   return (
     <form className="provider-add-form settings-section-break" onSubmit={submit}>
-      <h2>サーバーを追加</h2>
+      <h2>{t('settings.tools.add_server_heading')}</h2>
       <label className="settings-field">
-        <span>識別子(16字以内、英数字とアンダースコアのみ)</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={16} required />
+        <span>{t('settings.tools.server_id_hint', { max: MCP_NAME_MAX_LENGTH })}</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={MCP_NAME_MAX_LENGTH}
+          required
+        />
       </label>
       <label className="settings-field">
-        <span>接続方式</span>
+        <span>{t('settings.tools.transport_label')}</span>
         <select
           value={transport}
           onChange={(e) => setTransport(e.target.value as 'stdio' | 'streamable_http')}
         >
-          <option value="stdio">標準入出力(コマンド実行)</option>
-          <option value="streamable_http">streamable HTTP</option>
+          <option value="stdio">{t('settings.tools.transport_stdio')}</option>
+          <option value="streamable_http">{t('settings.tools.transport_http')}</option>
         </select>
       </label>
 
       {transport === 'stdio' ? (
         <>
           <label className="settings-field">
-            <span>コマンド</span>
+            <span>{t('settings.tools.command_hint')}</span>
             <input value={command} onChange={(e) => setCommand(e.target.value)} required />
           </label>
           <label className="settings-field">
-            <span>引数(1行に1つ)</span>
+            <span>{t('settings.tools.args_hint')}</span>
             <textarea value={argsText} onChange={(e) => setArgsText(e.target.value)} />
           </label>
           <label className="settings-field">
-            <span>環境変数(1行1件、キー=値)</span>
+            <span>
+              {t('settings.tools.env_hint', { sample: t('settings.tools.kv_sample') })}
+            </span>
             <textarea value={envText} onChange={(e) => setEnvText(e.target.value)} />
-            <p className="settings-hint">値は安全な場所(秘密情報ストア)に保存されます。</p>
+            <p className="settings-hint">{t('settings.tools.secret_helper')}</p>
           </label>
-          <p className="settings-hint">
-            この方式はアプリと同じ権限でコマンドを実行します。信頼できるコマンドだけを登録してください。
-          </p>
+          <p className="settings-hint">{t('settings.tools.stdio_warning')}</p>
         </>
       ) : (
         <>
           <label className="settings-field">
-            <span>URL</span>
+            <span>{t('settings.tools.url_hint')}</span>
             <input value={url} onChange={(e) => setUrl(e.target.value)} required />
-            <p className="settings-hint">{httpPlainTextHint('ヘッダーの値(認証情報を含む)')}</p>
+            <p className="settings-hint">
+              {httpPlainTextHint(t('settings.tools.header_secret'))}
+            </p>
           </label>
           <label className="settings-field">
-            <span>ヘッダー(1行1件、キー=値)</span>
+            <span>
+              {t('settings.tools.headers_hint', { sample: t('settings.tools.kv_sample') })}
+            </span>
             <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
-            <p className="settings-hint">値は安全な場所(秘密情報ストア)に保存されます。</p>
+            <p className="settings-hint">{t('settings.tools.secret_helper')}</p>
           </label>
         </>
       )}
@@ -1168,7 +1235,7 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
           {e}
         </p>
       ))}
-      <button type="submit">追加</button>
+      <button type="submit">{t('common.add')}</button>
     </form>
   )
 }

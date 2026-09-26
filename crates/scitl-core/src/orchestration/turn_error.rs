@@ -1,11 +1,16 @@
 //! LLM呼び出しの失敗をユーザー向けのエラー発言に変換する(Issue #40)。
-//! 種別コード・文言・`CoreError`からの分類をここ1箇所に閉じる(`principles.md` 5節)。
+//! 種別コードと`CoreError`からの分類をここ1箇所に閉じる(`principles.md` 5節)。文言は
+//! 言語ファイルの`turn_error.{種別コード}`にあり、画面は種別コードから表示言語の文言を引く。
 
 use crate::db::error::CoreError;
+use crate::i18n::{self, Language};
 use crate::llm::{LlmError, Readiness};
 
 /// エラー発言としてDBに保存する1件分。`kind()`が`messages.error_kind`、
 /// `user_message()`が`messages.content`、`detail()`が`messages.error_detail`に入る。
+///
+/// 文言は種別コードだけで決まる(行ごとの値を持たない)。画面が保存済みの行から
+/// 同じ文言を引き直せるのは、このためである。
 ///
 /// 詳細を持つかどうかはバリアントの形で決まる(Issue #159)。持てるのは、アダプタが
 /// サニタイズした詳細(`llm::ErrorDetail`)と、秘密情報を含まない識別子だけ。鍵ストア・
@@ -29,10 +34,9 @@ pub enum TurnFailure {
         detail: String,
     },
     EmptyResponse,
-    /// 上限が未設定なら設定を促すヒントを文言に加える(`legacy/backend.md` 4節手順6)。
-    /// `config.rs`に上限の項目自体が無いため、#40時点では常に`false`。
+    /// 文言はコンテキスト長の設定を促す(`legacy/backend.md` 4節手順6)。設定すると
+    /// 履歴の間引き(`orchestration::history_trim`)がその長さに収めるため。
     ContextExceeded {
-        limit_configured: bool,
         detail: String,
     },
     /// 思考に対応しないモデルに思考の強さを送り、APIが拒んだ。
@@ -95,86 +99,10 @@ impl TurnFailure {
         }
     }
 
+    /// `messages.content`に入れる英語の定型文言。エクスポートとアプリの外で読むためのもので、
+    /// 画面は`kind()`から表示言語の文言を引く(`data-model.md` messages)。
     pub fn user_message(&self) -> String {
-        match self {
-            TurnFailure::NoProvider => {
-                "LLMプロバイダーが設定されていません。設定画面で追加してください。".to_string()
-            }
-            TurnFailure::SettingsUnreadable => {
-                "設定ファイルを読み込めませんでした。設定画面で詳細を確認してください。".to_string()
-            }
-            TurnFailure::NoModel => {
-                "モデルが選択されていません。設定画面でモデルを選択してください。".to_string()
-            }
-            TurnFailure::ResponseTimeout { .. } => {
-                "LLMプロバイダーの応答が時間内に届きませんでした。設定画面「一般」の\
-                 応答タイムアウトで待ち時間を変更できます。"
-                    .to_string()
-            }
-            TurnFailure::ConnectionFailed { .. } => {
-                "LLMプロバイダーとの通信に失敗しました。接続先のサーバーが動いているか、\
-                 ネットワークの状態を確認してください。"
-                    .to_string()
-            }
-            TurnFailure::InvalidResponse { .. } => {
-                "LLMプロバイダーの応答を解釈できませんでした。設定画面で接続先のURLを\
-                 確認してください。"
-                    .to_string()
-            }
-            TurnFailure::EmptyResponse => {
-                "モデルからの応答が空でした。もう一度お試しください。".to_string()
-            }
-            TurnFailure::ContextExceeded {
-                limit_configured, ..
-            } => {
-                if *limit_configured {
-                    "会話がコンテキストの上限を超えました。".to_string()
-                } else {
-                    "会話がコンテキストの上限を超えた可能性があります。設定画面でコンテキスト\
-                     上限を設定すると、次回から早めに警告できます。"
-                        .to_string()
-                }
-            }
-            TurnFailure::ThinkingUnsupported { .. } => {
-                "このモデルは思考の強さの指定を受け付けませんでした。設定画面「APIプロバイダー」の\
-                 モデル一覧で、このモデルの「思考」のチェックを外してください。"
-                    .to_string()
-            }
-            TurnFailure::ThinkingEffortUnsupported { .. } => {
-                "このモデルは選んだ思考の強さを受け付けませんでした。チャット入力欄の下で、\
-                 思考の強さを別の値に変えてください。"
-                    .to_string()
-            }
-            TurnFailure::ToolsDisabled => {
-                "このモデルはツールに対応しないものとして扱っているため、モデルが求めたツールの\
-                 呼び出しを実行しませんでした。このモデルがツールに対応するなら、設定画面\
-                 「APIプロバイダー」のモデル一覧で「ツール」にチェックを入れてください。"
-                    .to_string()
-            }
-            TurnFailure::ToolRoundLimit => {
-                "ツールの呼び出しが上限回数に達したため、応答の生成を打ち切りました。\
-                 設定画面「ツール/MCP」で上限を変更できます。"
-                    .to_string()
-            }
-            TurnFailure::ToolTimeout => {
-                "ツールの実行時間が上限に達したため、応答の生成を打ち切りました。\
-                 設定画面「ツール/MCP」で上限を変更できます。"
-                    .to_string()
-            }
-            TurnFailure::Auth { .. } => {
-                "APIキーが未設定か正しくないか、権限がありません。設定画面でAPIキーを\
-                 確認してください。"
-                    .to_string()
-            }
-            TurnFailure::RateLimit { .. } => {
-                "APIの利用制限に達しました。しばらく待ってから再度お試しください。".to_string()
-            }
-            TurnFailure::ProviderConfig => {
-                "プロバイダーの設定に問題があります。設定画面を確認してください。".to_string()
-            }
-            TurnFailure::Provider { .. } => "LLMプロバイダーがエラーを返しました。".to_string(),
-            TurnFailure::Unexpected { .. } => "予期しないエラーが発生しました。".to_string(),
-        }
+        i18n::text(Language::En, &message_key(self.kind())).to_string()
     }
 
     /// 画面の「詳細を表示」専用。`content`(定型文言)には混ぜない。
@@ -183,7 +111,7 @@ impl TurnFailure {
             TurnFailure::ResponseTimeout { detail }
             | TurnFailure::ConnectionFailed { detail }
             | TurnFailure::InvalidResponse { detail }
-            | TurnFailure::ContextExceeded { detail, .. }
+            | TurnFailure::ContextExceeded { detail }
             | TurnFailure::ThinkingUnsupported { detail }
             | TurnFailure::ThinkingEffortUnsupported { detail }
             | TurnFailure::Auth { detail }
@@ -200,6 +128,11 @@ impl TurnFailure {
             | TurnFailure::ProviderConfig => None,
         }
     }
+}
+
+/// 種別コードに対応する言語ファイルのキー。
+fn message_key(kind: &str) -> String {
+    format!("turn_error.{kind}")
 }
 
 /// アダプタが構成不足で呼び出しに進めない場合の分類。準備が整っていれば`None`。
@@ -265,7 +198,6 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
         },
         LlmError::EmptyResponse => TurnFailure::EmptyResponse,
         LlmError::ContextExceeded(detail) => TurnFailure::ContextExceeded {
-            limit_configured: false,
             detail: detail.to_string(),
         },
         LlmError::ReasoningEffortRejected(detail) => TurnFailure::ThinkingUnsupported {
@@ -348,16 +280,118 @@ mod tests {
         }
     }
 
-    /// 応答タイムアウトは設定で延ばせると伝える。接続の失敗の文言では、タイムアウトの
-    /// 設定を案内しない。
+    /// 全種別。網羅的な`match`を置き、種別を足したらここがコンパイルエラーになるようにする。
+    fn every_failure() -> Vec<TurnFailure> {
+        let detail = || "x".to_string();
+        let all = vec![
+            TurnFailure::NoProvider,
+            TurnFailure::SettingsUnreadable,
+            TurnFailure::NoModel,
+            TurnFailure::ResponseTimeout { detail: detail() },
+            TurnFailure::ConnectionFailed { detail: detail() },
+            TurnFailure::InvalidResponse { detail: detail() },
+            TurnFailure::EmptyResponse,
+            TurnFailure::ContextExceeded { detail: detail() },
+            TurnFailure::ThinkingUnsupported { detail: detail() },
+            TurnFailure::ThinkingEffortUnsupported { detail: detail() },
+            TurnFailure::ToolRoundLimit,
+            TurnFailure::ToolsDisabled,
+            TurnFailure::ToolTimeout,
+            TurnFailure::Auth { detail: detail() },
+            TurnFailure::RateLimit { detail: detail() },
+            TurnFailure::ProviderConfig,
+            TurnFailure::Provider { detail: detail() },
+            TurnFailure::Unexpected { detail: detail() },
+        ];
+        for failure in &all {
+            match failure {
+                TurnFailure::NoProvider
+                | TurnFailure::SettingsUnreadable
+                | TurnFailure::NoModel
+                | TurnFailure::ResponseTimeout { .. }
+                | TurnFailure::ConnectionFailed { .. }
+                | TurnFailure::InvalidResponse { .. }
+                | TurnFailure::EmptyResponse
+                | TurnFailure::ContextExceeded { .. }
+                | TurnFailure::ThinkingUnsupported { .. }
+                | TurnFailure::ThinkingEffortUnsupported { .. }
+                | TurnFailure::ToolRoundLimit
+                | TurnFailure::ToolsDisabled
+                | TurnFailure::ToolTimeout
+                | TurnFailure::Auth { .. }
+                | TurnFailure::RateLimit { .. }
+                | TurnFailure::ProviderConfig
+                | TurnFailure::Provider { .. }
+                | TurnFailure::Unexpected { .. } => {}
+            }
+        }
+        all
+    }
+
+    /// 画面は保存済みの行の種別コードから文言を引き直すため、文言は行ごとの値を持てない。
     #[test]
-    fn response_timeout_points_at_the_setting() {
-        let failure = llm(LlmError::Timeout(detail("x")));
-        assert!(failure.user_message().contains("「一般」"));
-        assert!(failure.user_message().contains("応答タイムアウト"));
-        assert!(!llm(LlmError::Connection(detail("x")))
-            .user_message()
-            .contains("タイムアウト"));
+    fn every_failure_has_a_message_without_placeholders() {
+        for failure in every_failure() {
+            let key = message_key(failure.kind());
+            for lang in Language::ALL {
+                let text = i18n::text(lang, &key);
+                assert_ne!(text, key, "{} has no message", failure.kind());
+                assert!(!text.contains('{'), "{key} must not take placeholders");
+            }
+        }
+    }
+
+    /// 設定の直し方を案内する文言は、案内先の画面の名前をそのまま含む。画面の名前を
+    /// 変えたときに、文言の側だけ古い名前のまま残るのを防ぐ。
+    #[test]
+    fn messages_name_the_settings_they_point_to() {
+        let cases = [
+            (
+                TurnFailure::ResponseTimeout { detail: "x".into() },
+                &["settings.nav.general"][..],
+            ),
+            (
+                TurnFailure::ContextExceeded { detail: "x".into() },
+                &["settings.nav.provider"],
+            ),
+            (
+                TurnFailure::ThinkingUnsupported { detail: "x".into() },
+                &[
+                    "settings.nav.provider",
+                    "settings.model.cap_reasoning_label",
+                ],
+            ),
+            (
+                TurnFailure::ToolsDisabled,
+                &["settings.nav.provider", "settings.model.cap_tools_label"],
+            ),
+            (TurnFailure::ToolRoundLimit, &["settings.nav.tools"]),
+            (TurnFailure::ToolTimeout, &["settings.nav.tools"]),
+        ];
+        for (failure, names) in cases {
+            let key = message_key(failure.kind());
+            for lang in Language::ALL {
+                let text = i18n::text(lang, &key);
+                for name in names {
+                    let name = i18n::text(lang, name);
+                    assert!(
+                        text.contains(name),
+                        "{}: {text:?} does not mention {name:?}",
+                        lang.code()
+                    );
+                }
+            }
+        }
+    }
+
+    /// 保存する文言は英語(エクスポートの固定文言は英語で統一する。principles.md 7節)。
+    #[test]
+    fn stored_message_is_english() {
+        assert_eq!(
+            TurnFailure::EmptyResponse.user_message(),
+            i18n::text(Language::En, "turn_error.empty_response")
+        );
+        assert!(TurnFailure::EmptyResponse.user_message().is_ascii());
     }
 
     /// ヘッダーに載せられない鍵は設定の不備として伝え、詳細は持たせない。
@@ -411,13 +445,9 @@ mod tests {
         assert!(!failure.user_message().contains("42"));
     }
 
-    /// 上限に達したときの2種類は、どちらも「設定で変えられる」と伝える(Issue #71。
-    /// 変える手段が無いという元の不満がここに出るため)。
+    /// 上限に達したときの2種類は別の種別にする(文言がそれぞれの上限を案内するため)。
     #[test]
-    fn tool_limit_failures_point_at_the_setting() {
-        for failure in [TurnFailure::ToolRoundLimit, TurnFailure::ToolTimeout] {
-            assert!(failure.user_message().contains("ツール/MCP"));
-        }
+    fn tool_limit_failures_are_distinct_kinds() {
         assert_ne!(
             TurnFailure::ToolRoundLimit.kind(),
             TurnFailure::ToolTimeout.kind()
@@ -444,6 +474,6 @@ mod tests {
             "",
         ));
         assert_eq!(failure.kind(), "auth");
-        assert!(failure.user_message().contains("未設定"));
+        assert!(failure.user_message().contains("missing"));
     }
 }

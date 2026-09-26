@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { t } from './i18n'
 
 interface DialogProps {
   title: string
@@ -78,7 +79,8 @@ export default function Dialog({ title, onClose, children, width }: DialogProps)
 interface ConfirmDialogProps {
   title: string
   message: string
-  confirmLabel?: string
+  // 何をするボタンかを操作ごとに書く(「削除」「登録を解除」)。
+  confirmLabel: string
   onConfirm: () => void
   onCancel: () => void
 }
@@ -88,7 +90,7 @@ interface ConfirmDialogProps {
 export function ConfirmDialog({
   title,
   message,
-  confirmLabel = '実行',
+  confirmLabel,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -97,7 +99,7 @@ export function ConfirmDialog({
       <p>{message}</p>
       <div className="dialog-actions">
         <button type="button" onClick={onCancel}>
-          キャンセル
+          {t('common.cancel')}
         </button>
         <button type="button" className="danger" onClick={onConfirm}>
           {confirmLabel}
@@ -111,7 +113,7 @@ interface ConfirmButtonProps {
   label: string
   confirmTitle: string
   confirmMessage: string
-  confirmLabel?: string
+  confirmLabel: string
   onConfirm: () => void
 }
 

@@ -5,6 +5,7 @@ use secrecy::SecretString;
 use tauri::State;
 
 use scitl_core::config::{ApiFormat, Capability, ReasoningEffort};
+use scitl_core::i18n::Language;
 use scitl_core::settings::{AvailableModel, ChatModelsView, NewProvider, SettingsView};
 
 use super::with_settings;
@@ -31,6 +32,20 @@ pub async fn update_general_settings(
         )
     })
     .await
+}
+
+/// 画面が起動時に1度だけ読む表示言語。`get_settings`と同じく、I/Oを伴わないので同期のまま。
+#[tauri::command]
+pub fn get_display_language(state: State<'_, AppState>) -> Language {
+    state.settings.display_language()
+}
+
+#[tauri::command]
+pub async fn update_language(
+    state: State<'_, AppState>,
+    language: Language,
+) -> Result<SettingsView, String> {
+    with_settings(&state, move |s| s.update_language(language)).await
 }
 
 #[tauri::command]
