@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
-    "lint": "oxlint",
+    "lint": "oxlint && node scripts/check-ui-text.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
