@@ -6,7 +6,9 @@ use tauri::State;
 
 use scitl_core::config::{ApiFormat, Capability, ReasoningEffort};
 use scitl_core::i18n::Language;
-use scitl_core::settings::{AvailableModel, ChatModelsView, NewProvider, SettingsView};
+use scitl_core::settings::{
+    AvailableModel, ChatModelsView, GeneralUpdate, NewProvider, SettingsView,
+};
 
 use super::with_settings;
 use crate::AppState;
@@ -22,16 +24,16 @@ pub async fn update_general_settings(
     state: State<'_, AppState>,
     system_prompt: Option<String>,
     task_chat_system_prompt: Option<String>,
+    task_opening_message: Option<String>,
     response_timeout_secs: Option<u64>,
 ) -> Result<SettingsView, String> {
-    with_settings(&state, move |s| {
-        s.update_general(
-            system_prompt,
-            task_chat_system_prompt,
-            response_timeout_secs,
-        )
-    })
-    .await
+    let update = GeneralUpdate {
+        system_prompt,
+        task_chat_system_prompt,
+        task_opening_message,
+        response_timeout_secs,
+    };
+    with_settings(&state, move |s| s.update_general(update)).await
 }
 
 /// 画面が起動時に1度だけ読む表示言語。`get_settings`と同じく、I/Oを伴わないので同期のまま。

@@ -14,7 +14,10 @@ use crate::i18n::Language;
 use crate::llm::providers;
 use crate::llm::{self, DetectedCapabilities, DetectedCatalog, ModelCapabilities};
 use crate::mcp::ToolCatalog;
-use crate::orchestration::{DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
+use crate::orchestration::{
+    default_opening_message, default_task_chat_prompt, DEFAULT_MAX_ROUNDS_PER_TURN,
+    DEFAULT_TOTAL_TIMEOUT_SECS,
+};
 use crate::text;
 use crate::tools::external;
 
@@ -95,12 +98,16 @@ pub struct McpServerView {
     pub tools_fetched: bool,
 }
 
-/// 一般設定。応答タイムアウトは`ToolSettingsView`と同じく、設定値(未設定は`None`)と
+/// 一般設定。既定値を持つものは`ToolSettingsView`と同じく、設定値(未設定は`None`)と
 /// 未設定時に実際に使われる既定値の両方を渡す(既定値をTS側に書き写さない理由も同じ)。
 #[derive(Debug, Serialize)]
 pub struct GeneralSettingsView {
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
+    /// 表示言語の既定の文面(`default_task_opening_message`も同じ)。
+    pub default_task_chat_system_prompt: &'static str,
+    pub task_opening_message: Option<String>,
+    pub default_task_opening_message: &'static str,
     pub response_timeout_secs: Option<u64>,
     pub default_response_timeout_secs: u64,
     /// 未設定なら既定の言語に解決した値。画面は「未設定」を扱わない。
@@ -206,6 +213,9 @@ pub(super) fn build(
         general: GeneralSettingsView {
             system_prompt: config.general.system_prompt.clone(),
             task_chat_system_prompt: config.general.task_chat_system_prompt.clone(),
+            default_task_chat_system_prompt: default_task_chat_prompt(config.general.language()),
+            task_opening_message: config.general.task_opening_message.clone(),
+            default_task_opening_message: default_opening_message(config.general.language()),
             response_timeout_secs: config.general.response_timeout_secs,
             default_response_timeout_secs: DEFAULT_RESPONSE_TIMEOUT_SECS,
             language: config.general.language(),

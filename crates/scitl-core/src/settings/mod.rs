@@ -32,7 +32,8 @@ use crate::llm::providers::{self, SharedAdapter};
 use crate::llm::{self, DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::{self, ToolCatalog};
 use crate::orchestration::{
-    McpAccess, SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure,
+    default_opening_message, default_task_chat_prompt, McpAccess, SystemPrompts, ToolLimits,
+    TurnContext, TurnEvents, TurnFailure,
 };
 use crate::secrets;
 use crate::tools::external;
@@ -45,6 +46,20 @@ pub struct NewProvider {
     pub api_format: ApiFormat,
     pub base_url: String,
     pub api_key: Option<SecretString>,
+}
+
+/// 設定画面「一般」タブの入力(表示言語を除く)。プロンプトは`Option<String>`が並ぶので、
+/// 位置引数にせず名前で渡す。
+pub struct GeneralUpdate {
+    pub system_prompt: Option<String>,
+    pub task_chat_system_prompt: Option<String>,
+    pub task_opening_message: Option<String>,
+    pub response_timeout_secs: Option<u64>,
+}
+
+/// 空と既定の文面は未設定([`Settings::update_general`])。
+fn unless_default(value: Option<String>, default: &str) -> Option<String> {
+    value.filter(|v| !v.is_empty() && v != default)
 }
 
 /// サーバー追加フォームからの入力。接続方式ごとに必要な値だけを受け取る
@@ -129,10 +144,7 @@ impl Snapshot {
                 Ok(adapter) => Ok(adapter.as_ref() as &dyn LlmAdapter),
                 Err(failure) => Err(failure.clone()),
             },
-            prompts: SystemPrompts {
-                base: self.config.general.system_prompt.as_deref(),
-                task_chat: self.config.general.task_chat_system_prompt.as_deref(),
-            },
+            prompts: SystemPrompts::for_task_chat(&self.config.general),
             capabilities: self.capabilities,
             reasoning_effort: self
                 .config
@@ -362,23 +374,28 @@ impl Settings {
         }
     }
 
-    /// 空文字のプロンプトは未設定として保存する。表示言語は[`Self::update_language`]が
-    /// 別に持つので、ここでは変えない。
-    pub fn update_general(
-        &self,
-        system_prompt: Option<String>,
-        task_chat_system_prompt: Option<String>,
-        response_timeout_secs: Option<u64>,
-    ) -> Result<SettingsView> {
+    /// 空文字のプロンプトは未設定として保存する。既定の文面を持つもの(タスクチャット用・
+    /// 開始の発言)は、既定の文面と同じ値も未設定にする。画面は未設定のとき既定の文面を
+    /// 表示して、そのまま送り返してくる。保存してしまうと、既定の文面を改めても追従しない。
+    /// 表示言語は[`Self::update_language`]が別に持つので、ここでは変えない。
+    pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
         // `0`は画面側でも弾くが、UIの入力チェックはセキュリティ境界ではない。
-        if response_timeout_secs == Some(0) {
+        if update.response_timeout_secs == Some(0) {
             return Err(invalid("response timeout must be 1 second or greater"));
         }
         let mut draft = self.edit();
         let general = &mut draft.config.general;
-        general.system_prompt = system_prompt.filter(|s| !s.is_empty());
-        general.task_chat_system_prompt = task_chat_system_prompt.filter(|s| !s.is_empty());
-        general.response_timeout_secs = response_timeout_secs;
+        general.system_prompt = update.system_prompt.filter(|s| !s.is_empty());
+        let language = general.language();
+        general.task_chat_system_prompt = unless_default(
+            update.task_chat_system_prompt,
+            default_task_chat_prompt(language),
+        );
+        general.task_opening_message = unless_default(
+            update.task_opening_message,
+            default_opening_message(language),
+        );
+        general.response_timeout_secs = update.response_timeout_secs;
         draft.commit()
     }
 
@@ -1097,9 +1114,52 @@ name = "m"
     #[test]
     fn rejects_zero_limits_and_timeout() {
         let (settings, _) = temp_settings();
-        assert!(settings.update_general(None, None, Some(0)).is_err());
+        assert!(settings
+            .update_general(general_update(None, Some(0)))
+            .is_err());
         assert!(settings.update_tools(Some(0), None).is_err());
         assert!(settings.update_tools(None, Some(0)).is_err());
+    }
+
+    fn general_update(
+        system_prompt: Option<&str>,
+        response_timeout_secs: Option<u64>,
+    ) -> GeneralUpdate {
+        GeneralUpdate {
+            system_prompt: system_prompt.map(str::to_string),
+            task_chat_system_prompt: None,
+            task_opening_message: None,
+            response_timeout_secs,
+        }
+    }
+
+    #[test]
+    fn prompts_equal_to_their_defaults_are_saved_as_unset() {
+        let (settings, _) = temp_settings();
+        let view = settings
+            .update_general(GeneralUpdate {
+                task_chat_system_prompt: Some(
+                    default_task_chat_prompt(Language::DEFAULT).to_string(),
+                ),
+                task_opening_message: Some(default_opening_message(Language::DEFAULT).to_string()),
+                ..general_update(None, None)
+            })
+            .unwrap();
+        assert!(view.general.task_chat_system_prompt.is_none());
+        assert!(view.general.task_opening_message.is_none());
+
+        let view = settings
+            .update_general(GeneralUpdate {
+                task_chat_system_prompt: Some("custom".to_string()),
+                task_opening_message: Some(String::new()),
+                ..general_update(None, None)
+            })
+            .unwrap();
+        assert_eq!(
+            view.general.task_chat_system_prompt.as_deref(),
+            Some("custom")
+        );
+        assert!(view.general.task_opening_message.is_none());
     }
 
     #[test]
@@ -1110,7 +1170,7 @@ name = "m"
         settings.update_language(Language::En).unwrap();
         // プロンプト欄を保存しても、表示言語は変えない。
         let view = settings
-            .update_general(Some("prompt".to_string()), None, None)
+            .update_general(general_update(Some("prompt"), None))
             .unwrap();
         assert_eq!(view.general.language, Language::En);
         assert_eq!(Settings::load(path).display_language(), Language::En);
@@ -1122,7 +1182,7 @@ name = "m"
         // 保存先をディレクトリにして書き込みを失敗させる。
         std::fs::create_dir_all(&path).unwrap();
         assert!(settings
-            .update_general(Some("prompt".to_string()), None, None)
+            .update_general(general_update(Some("prompt"), None))
             .is_err());
         assert!(settings.current().config.general.system_prompt.is_none());
     }
@@ -1189,7 +1249,7 @@ name = "m"
             Err(TurnFailure::SettingsUnreadable)
         ));
         let err = settings
-            .update_general(Some("prompt".to_string()), None, None)
+            .update_general(general_update(Some("prompt"), None))
             .unwrap_err();
         assert!(matches!(err, CoreError::InvalidSettings(_)));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "providers = [");

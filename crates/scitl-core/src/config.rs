@@ -150,7 +150,12 @@ pub struct GeneralConfig {
     /// タスクチャットでは公開ツールが異なるため(docs/spec/rebuild/tools.md 5節)、
     /// 工程ツールの使い分けのようなタスクチャット固有の指示は`system_prompt`とは
     /// 別に持つ(docs/spec/legacy/data-model.md 3節「システムプロンプト3種」)。
+    /// 未設定は表示言語の既定の文面で、解釈は`orchestration::SystemPrompts::for_task_chat`に
+    /// 閉じる。
     pub task_chat_system_prompt: Option<String>,
+    /// 新規タスクで聞き取りを始めるとき、ユーザーの代わりに送る発言(Issue #76)。未設定は
+    /// 表示言語の既定の文面で、解釈は`orchestration::opening_message`に閉じる。
+    pub task_opening_message: Option<String>,
     /// 応答タイムアウト(秒)。未設定は[`DEFAULT_RESPONSE_TIMEOUT_SECS`]。値の解釈は
     /// [`Self::response_timeout`]に閉じる。
     pub response_timeout_secs: Option<u64>,
