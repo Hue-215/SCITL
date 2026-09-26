@@ -211,7 +211,10 @@ pub async fn delete_message(
 
 /// 会話の行を1行も書かないうちに、同じ会話の応答生成が走っていないかを確かめる
 /// ([`TurnContext::generating`])。返ったガードを持っている間、その会話は生成中になる。
-fn begin_generating(generating: &InFlightSet<Chat>, chat: Chat) -> Result<InFlight<'_, Chat>> {
+pub(super) fn begin_generating(
+    generating: &InFlightSet<Chat>,
+    chat: Chat,
+) -> Result<InFlight<'_, Chat>> {
     generating.try_begin(chat).ok_or(CoreError::ChatBusy(chat))
 }
 

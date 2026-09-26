@@ -91,14 +91,16 @@ pub struct TaskListItem {
     pub fallback_label: Option<String>,
 }
 
-/// 画面のヘッダー向けのタスク詳細。`TaskListItem`と同じフォールバックを添え、一覧と
-/// ヘッダーで未設定時の呼び方を揃える。`Task`そのものには足さない:`Task`はモデルへ渡す
+/// 画面のヘッダー向けのタスク詳細。`TaskListItem`と同じ工程の数とフォールバックを添え、
+/// 一覧とヘッダーで進捗と未設定時の呼び方を揃える。`Task`そのものには足さない:`Task`はモデルへ渡す
 /// `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する
 /// (docs/spec/rebuild/tools.md「モデルには `title: null` をそのまま見せる」)。
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskDetailView {
     #[serde(flatten)]
     pub task: Task,
+    pub steps_done: i64,
+    pub steps_total: i64,
     /// `TaskListItem::fallback_label`と同じ。
     pub fallback_label: Option<String>,
 }
@@ -113,18 +115,21 @@ const FIRST_USER_MESSAGE: &str = "(SELECT m.content FROM messages m
                   ORDER BY m.created_at ASC, m.id ASC
                   LIMIT 1)";
 
+/// タスク`t`の工程の完了数と総数を引く相関サブクエリ。一覧とヘッダーで数え方を
+/// 食い違わせないため、ここだけに書く。
+const STEPS_DONE: &str = "(SELECT COUNT(*) FROM task_steps s
+                  WHERE s.task_id = t.id AND s.deleted_at IS NULL AND s.done_at IS NOT NULL)";
+const STEPS_TOTAL: &str = "(SELECT COUNT(*) FROM task_steps s
+                  WHERE s.task_id = t.id AND s.deleted_at IS NULL)";
+
 /// 削除済み(deleted_at)を除く全タスクを作成日時昇順で返す。アーカイブ済みと未アーカイブの
 /// 振り分けはフロントエンド側(archived_atの有無)で行う。
 pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT t.id, t.title, t.deadline, t.archived_at,
-                COUNT(s.id) FILTER (WHERE s.done_at IS NOT NULL) AS steps_done,
-                COUNT(s.id) AS steps_total,
-                {FIRST_USER_MESSAGE} AS first_user_message
+                {STEPS_DONE}, {STEPS_TOTAL}, {FIRST_USER_MESSAGE}
          FROM tasks t
-         LEFT JOIN task_steps s ON s.task_id = t.id AND s.deleted_at IS NULL
          WHERE t.deleted_at IS NULL
-         GROUP BY t.id
          ORDER BY t.created_at ASC"
     ))?;
     let rows = stmt
@@ -171,13 +176,18 @@ pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
 /// 画面のヘッダー向け。存在しない・削除済みなら`get_task`と同じく`TaskNotFound`。
 pub fn get_task_detail_view(conn: &Connection, task_id: i64) -> Result<TaskDetailView> {
     let task = get_task(conn, task_id)?;
-    let first_user_message: Option<String> = conn.query_row(
-        &format!("SELECT {FIRST_USER_MESSAGE} FROM tasks t WHERE t.id = ?1"),
-        [task_id],
-        |row| row.get(0),
-    )?;
+    let (steps_done, steps_total, first_user_message): (i64, i64, Option<String>) = conn
+        .query_row(
+            &format!(
+            "SELECT {STEPS_DONE}, {STEPS_TOTAL}, {FIRST_USER_MESSAGE} FROM tasks t WHERE t.id = ?1"
+        ),
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
     Ok(TaskDetailView {
         task,
+        steps_done,
+        steps_total,
         fallback_label: first_user_message.as_deref().and_then(fallback_label),
     })
 }
@@ -253,7 +263,8 @@ const MAX_TITLE_CHARS: usize = 40;
 /// 書き込みの唯一の経路である`update_task`に集約する(docs/spec/principles.md 5節)。
 /// 制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、連続空白を1つに
 /// まとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので省略の印は付けない。
-fn sanitize_title(raw: &str) -> String {
+/// 画面からの変更は、これで空になるタイトルを書く前に断る(`orchestration::operations`)。
+pub(crate) fn sanitize_title(raw: &str) -> String {
     let squeezed = collapse_whitespace(raw);
     let trimmed =
         squeezed.trim_matches(|c: char| matches!(c, '"' | '\'' | '「' | '」' | '『' | '』'));
@@ -317,14 +328,17 @@ fn fallback_label(first_user_message: &str) -> Option<String> {
 /// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない
 /// (docs/spec/rebuild/data-model.md「論理削除の伝播について」)。ツールには非公開
 /// (docs/spec/rebuild/tools.md 2節「意図的に非公開」)、画面・CLIからのみ呼ぶ。
-pub fn delete_task(conn: &Connection, task_id: i64) -> Result<()> {
-    get_task(conn, task_id)?;
-    let now = now_iso8601();
-    conn.execute(
-        "UPDATE tasks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
-        rusqlite::params![now, task_id],
-    )?;
-    Ok(())
+/// 削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる値はここで取る)。
+pub fn delete_task(conn: &Connection, task_id: i64) -> Result<Task> {
+    conn.query_row(
+        "UPDATE tasks SET deleted_at = ?1, updated_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL
+         RETURNING id, title, description, deadline, archived_at, deleted_at, created_at, updated_at",
+        rusqlite::params![now_iso8601(), task_id],
+        row_to_task,
+    )
+    .optional()?
+    .ok_or(CoreError::TaskNotFound(task_id))
 }
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
@@ -802,6 +816,25 @@ mod tests {
     }
 
     #[test]
+    fn detail_view_counts_steps_like_the_list() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        let steps = db::task_steps::add_steps(
+            &conn,
+            id,
+            &["a".to_string(), "b".to_string(), "c".to_string()],
+        )
+        .unwrap();
+        db::task_steps::update_step(&conn, steps[0].id, None, Some(true)).unwrap();
+        db::task_steps::delete_step(&conn, steps[1].id).unwrap();
+
+        let view = get_task_detail_view(&conn, id).unwrap();
+        let item = &list_tasks(&conn).unwrap()[0];
+        assert_eq!((view.steps_done, view.steps_total), (1, 2));
+        assert_eq!((item.summary.steps_done, item.summary.steps_total), (1, 2));
+    }
+
+    #[test]
     fn detail_view_of_deleted_task_is_not_found() {
         let conn = db::open_in_memory().unwrap();
         let id = seed_task(&conn);
@@ -825,10 +858,17 @@ mod tests {
         )
         .unwrap();
 
-        delete_task(&conn, id).unwrap();
+        let deleted = delete_task(&conn, id).unwrap();
 
+        assert!(deleted.deleted_at.is_some());
+        assert_eq!(deleted.updated_at, deleted.deleted_at.clone().unwrap());
         assert!(matches!(
             get_task(&conn, id).unwrap_err(),
+            CoreError::TaskNotFound(_)
+        ));
+        // 2回目は削除済みなので見つからない(削除日時を上書きしない)。
+        assert!(matches!(
+            delete_task(&conn, id).unwrap_err(),
             CoreError::TaskNotFound(_)
         ));
         let deleted_at: Option<String> = conn

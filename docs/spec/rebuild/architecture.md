@@ -20,7 +20,7 @@ SCITL-2.0/
 │   │       ├── db/                 # tasks/steps/messages(/attachments)のrepository
 │   │       ├── llm/                # types(イベント列), adapter trait, 失敗の種類, providers/
 │   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
-│   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), turn_event.rs(途中経過の通知), state_prompt.rs(最新状態)
+│   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), turn_event.rs(途中経過の通知), state_prompt.rs(最新状態), operations.rs(応答生成以外の経路での操作と記録)
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(5節)
 │   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
