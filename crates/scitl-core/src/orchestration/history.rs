@@ -78,7 +78,7 @@ fn replied_turns(stored: &[Message]) -> HashSet<String> {
 /// ラウンドの区切りは記録に無いが、状態系を抜いた時点で元の形には戻らないので、
 /// 1呼び出しにつき1組とする。
 fn fact_round_trip(m: &Message, replied_turns: &HashSet<String>) -> Option<[ChatMessage; 2]> {
-    // `turn_id`を持たないのは外部のLLMがMCP経由でSCITLを操作した記録で、このモデルの
+    // `turn_id`を持たないのは応答生成以外の経路(画面・MCP等)での操作の記録で、このモデルの
     // 呼び出しではない(data-model.md「ターン境界」)。
     if !replied_turns.contains(m.turn_id.as_deref()?) {
         return None;
@@ -139,7 +139,7 @@ mod tests {
 
     use super::*;
     use crate::db;
-    use crate::db::messages::{Kind, NewMessage, Role};
+    use crate::db::messages::{Kind, NewMessage, OperationSource, Origin, Role};
 
     const OPENING: &str = "開始の発言";
 
@@ -178,8 +178,13 @@ mod tests {
                     role,
                     content,
                     kind,
-                    source: turn.is_none().then_some("mcp"),
-                    turn,
+                    origin: match turn {
+                        Some((turn_id, attempt_no)) => Origin::Turn {
+                            turn_id,
+                            attempt_no,
+                        },
+                        None => Origin::Operation(OperationSource::Ui),
+                    },
                     error_kind: error,
                     error_detail: None,
                     reasoning: None,
@@ -196,8 +201,7 @@ mod tests {
                     role: Role::User,
                     content: text,
                     kind: Kind::Normal,
-                    source: None,
-                    turn: None,
+                    origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -308,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_out_records_made_through_mcp_by_an_outside_model() {
+    fn leaves_out_operation_records_outside_a_turn() {
         let f = Fixture::new();
         f.record(None, Some(ToolKind::Fact), json!({ "text": "x" }));
         f.user("u");
@@ -423,8 +427,7 @@ mod tests {
                 role: Role::User,
                 content: "今週は何をする?",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,

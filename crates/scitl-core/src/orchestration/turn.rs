@@ -6,7 +6,7 @@ use serde_json::json;
 use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
-use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Role};
+use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
 use crate::db::tasks::{self, Task};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::{InFlight, InFlightSet};
@@ -46,8 +46,7 @@ pub async fn run_turn(
                 role: Role::User,
                 content: &user_text,
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -141,8 +140,7 @@ pub async fn edit_user_message(
                     role: Role::User,
                     content: &new_text,
                     kind: Kind::Normal,
-                    source: None,
-                    turn: None,
+                    origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -213,10 +211,7 @@ pub async fn delete_message(
 
 /// 会話の行を1行も書かないうちに、同じ会話の応答生成が走っていないかを確かめる
 /// ([`TurnContext::generating`])。返ったガードを持っている間、その会話は生成中になる。
-fn begin_generating(
-    generating: &InFlightSet<Chat>,
-    chat: Chat,
-) -> Result<InFlight<'_, Chat>> {
+fn begin_generating(generating: &InFlightSet<Chat>, chat: Chat) -> Result<InFlight<'_, Chat>> {
     generating.try_begin(chat).ok_or(CoreError::ChatBusy(chat))
 }
 
@@ -343,11 +338,10 @@ impl Attempt {
                 role,
                 content,
                 kind,
-                // 外部サーバーのツールを呼んだ記録もこのターンに属する。`source`は逆向き
-                // (外部のLLMがMCP経由でSCITLを操作した)専用の印であり、ここでは付けない
-                // (data-model.md「ターン境界」の3分類)。
-                source: None,
-                turn: Some((&self.turn_id, self.attempt_no)),
+                origin: Origin::Turn {
+                    turn_id: &self.turn_id,
+                    attempt_no: self.attempt_no,
+                },
                 error_kind: error.map(|(kind, _)| kind),
                 error_detail: error.and_then(|(_, detail)| detail),
                 reasoning,

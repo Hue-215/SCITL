@@ -71,15 +71,43 @@ impl Kind {
     }
 }
 
-/// `docs/spec/rebuild/data-model.md`「ターン境界」の3分類。
-/// ユーザー発言・外部経由の記録は`None`、SCITL自身の応答生成に属する行は`Some`。
+/// 行の出どころ(`docs/spec/rebuild/data-model.md`「ターン境界」の3分類)。`source`と
+/// `turn_id`/`attempt_no`の組み合わせはこれだけから決まり、取り違えた組み合わせは書けない。
+/// 操作の記録が実行記録であることまでは型で縛らず、DBのトリガー(`0004_message_origin.sql`)が
+/// 止める。
+#[derive(Debug, Clone, Copy)]
+pub enum Origin<'a> {
+    User,
+    /// SCITLの応答生成の1試行に属する行。応答生成の途中で外部のツールサーバーを呼んだ記録も
+    /// ここに入る(`source`は「外部と通信した」印ではない)。
+    Turn {
+        turn_id: &'a str,
+        attempt_no: i64,
+    },
+    /// 応答生成以外の経路での操作の記録。
+    Operation(OperationSource),
+}
+
+/// 応答生成以外の経路の印(`messages.source`)。CLI(#23)・MCP(#73)を実装したら値を足す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationSource {
+    Ui,
+}
+
+impl OperationSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ui => "ui",
+        }
+    }
+}
+
 pub struct NewMessage<'a> {
     pub task_id: Option<i64>,
     pub role: Role,
     pub content: &'a str,
     pub kind: Kind,
-    pub source: Option<&'a str>,
-    pub turn: Option<(&'a str, i64)>,
+    pub origin: Origin<'a>,
     /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
     pub error_kind: Option<&'a str>,
     /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
@@ -107,9 +135,13 @@ pub struct Message {
 }
 
 pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
-    let (turn_id, attempt_no) = match msg.turn {
-        Some((id, attempt)) => (Some(id), Some(attempt)),
-        None => (None, None),
+    let (source, turn_id, attempt_no) = match msg.origin {
+        Origin::User => (None, None, None),
+        Origin::Turn {
+            turn_id,
+            attempt_no,
+        } => (None, Some(turn_id), Some(attempt_no)),
+        Origin::Operation(source) => (Some(source.as_str()), None, None),
     };
     conn.execute(
         "INSERT INTO messages
@@ -120,7 +152,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
             msg.role.as_str(),
             msg.content,
             msg.kind.as_str(),
-            msg.source,
+            source,
             msg.reasoning,
             msg.error_kind,
             msg.error_detail,
@@ -135,7 +167,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// 1つの会話の発言取得(支配的クエリ)。
 /// ターンを持つ行は`turn_id`ごとの最新試行のみに絞り、さらに**通常発言が1行も生き残って
 /// いないターン(破棄されたターン)を丸ごと除く**(data-model.md「ターン境界」—
-/// 外部経由の記録はturn_idを持たないため常に残る)。
+/// 応答生成以外の経路での操作の記録はturn_idを持たないため常に残る)。
 ///
 /// 後者はIssue #95。編集・再試行のカスケードは`kind='normal'`しか論理削除しないため
 /// (ツール実行記録は保全する。data-model.md)、破棄されたターンのツール実行記録だけが
@@ -259,7 +291,8 @@ pub enum Opener {
 /// タスクの会話を始めた側。まだ1行も無ければ`None`。
 ///
 /// 論理削除した行も含めた最初の行で決める。最初のユーザー発言を消しても編集で置き換えても
-/// 行は残るので、答えが変わらない。外部(MCP)経由の記録はこの会話の発言ではないので見ない。
+/// 行は残るので、答えが変わらない。応答生成以外の経路での操作の記録はこの会話の発言ではないので
+/// 見ない。
 pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
     let role: Option<String> = conn
         .query_row(
@@ -319,8 +352,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -335,8 +367,10 @@ mod tests {
                 role: Role::Error,
                 content: "モデルからの応答が空でした",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: Some("empty_response"),
                 error_detail: None,
                 reasoning: None,
@@ -351,8 +385,10 @@ mod tests {
                 role: Role::Assistant,
                 content: "再試行後の応答",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 2)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 2,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -366,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn external_records_without_turn_are_always_shown() {
+    fn operation_records_without_turn_are_always_shown() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
 
@@ -377,8 +413,7 @@ mod tests {
                 role: Role::Tool,
                 content: "{}",
                 kind: Kind::ToolExecution,
-                source: Some("mcp:external-client"),
-                turn: None,
+                origin: Origin::Operation(OperationSource::Ui),
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -388,7 +423,64 @@ mod tests {
 
         let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].source.as_deref(), Some("mcp:external-client"));
+        assert_eq!(messages[0].source.as_deref(), Some("ui"));
+    }
+
+    #[test]
+    fn only_operation_records_outside_a_turn_carry_a_source() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let insert = |role, kind, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role,
+                    content: "{}",
+                    kind,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+        };
+        let raw = |source: Option<&str>, turn_id: Option<&str>| {
+            conn.execute(
+                "INSERT INTO messages (task_id, role, content, kind, source, turn_id, attempt_no, created_at)
+                 VALUES (?1, 'tool', '{}', 'tool_execution', ?2, ?3, ?4, '2026-01-01T00:00:00Z')",
+                rusqlite::params![task_id, source, turn_id, turn_id.map(|_| 1)],
+            )
+        };
+
+        let record = insert(
+            Role::Tool,
+            Kind::ToolExecution,
+            Origin::Operation(OperationSource::Ui),
+        )
+        .unwrap();
+        // 経路の印を発言に付けることはできない(CLIからの発言もただのユーザー発言)。
+        assert!(insert(
+            Role::User,
+            Kind::Normal,
+            Origin::Operation(OperationSource::Ui)
+        )
+        .is_err());
+        // ターンの記録に印を付けること、印の無い記録をターンの外に書くことはできない。
+        assert!(raw(Some("ui"), Some("turn-1")).is_err());
+        assert!(raw(None, None).is_err());
+        assert!(conn
+            .execute(
+                "UPDATE messages SET turn_id = 'turn-1', attempt_no = 1 WHERE id = ?1",
+                [record]
+            )
+            .is_err());
+        // 論理削除は印に関わらない。
+        conn.execute(
+            "UPDATE messages SET deleted_at = '2026-01-01T00:00:00Z' WHERE id = ?1",
+            [record],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -403,8 +495,10 @@ mod tests {
                     role,
                     content,
                     kind,
-                    source: None,
-                    turn: Some(("turn-1", 1)),
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no: 1,
+                    },
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -432,8 +526,10 @@ mod tests {
                 role: Role::Error,
                 content: "APIキーが設定されていません",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: Some("no_api_key"),
                 error_detail: Some("HTTP 401: invalid key"),
                 reasoning: None,
@@ -465,8 +561,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: Some("HTTP 500: boom"),
                 reasoning: None,
@@ -481,8 +576,7 @@ mod tests {
                 role: Role::Error,
                 content: "LLMプロバイダーとの通信に失敗しました。",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some(""),
                 reasoning: None,
@@ -497,8 +591,7 @@ mod tests {
                 role: Role::Error,
                 content: "LLMプロバイダーとの通信に失敗しました。",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some("HTTP 500: boom"),
                 reasoning: None,
@@ -525,8 +618,7 @@ mod tests {
                 role: Role::Error,
                 content: "壊れた呼び出し",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -550,8 +642,7 @@ mod tests {
                 role: Role::User,
                 content: "工程を作って",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -568,8 +659,10 @@ mod tests {
                     role: Role::Tool,
                     content: r#"{"tool":"add_steps"}"#,
                     kind: Kind::ToolExecution,
-                    source: None,
-                    turn: Some(("turn-1", attempt)),
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no: attempt,
+                    },
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -583,8 +676,10 @@ mod tests {
                     role: Role::Assistant,
                     content: "追加しました",
                     kind: Kind::Normal,
-                    source: None,
-                    turn: Some(("turn-1", attempt)),
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no: attempt,
+                    },
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -626,8 +721,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -660,8 +754,10 @@ mod tests {
                 role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -692,8 +788,7 @@ mod tests {
                 role: Role::User,
                 content: "工程を追加して",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -708,8 +803,10 @@ mod tests {
                 role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -724,8 +821,10 @@ mod tests {
                 role: Role::Assistant,
                 content: "追加しました",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -780,8 +879,10 @@ mod tests {
                 role: Role::Assistant,
                 content: "1回目の応答",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -807,8 +908,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -824,7 +924,7 @@ mod tests {
     #[test]
     fn opener_is_decided_by_the_first_row_even_after_it_is_deleted() {
         let conn = db::open_in_memory().unwrap();
-        let insert = |task_id, role, turn, source| {
+        let insert = |task_id, role, origin| {
             insert_message(
                 &conn,
                 NewMessage {
@@ -836,8 +936,7 @@ mod tests {
                     } else {
                         Kind::Normal
                     },
-                    source,
-                    turn,
+                    origin,
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -848,16 +947,20 @@ mod tests {
 
         let by_user = seed_task(&conn);
         assert_eq!(opener(&conn, by_user).unwrap(), None);
-        let first = insert(by_user, Role::User, None, None);
-        insert(by_user, Role::Assistant, Some(("turn-1", 1)), None);
+        let turn = |turn_id| Origin::Turn {
+            turn_id,
+            attempt_no: 1,
+        };
+        let first = insert(by_user, Role::User, Origin::User);
+        insert(by_user, Role::Assistant, turn("turn-1"));
         soft_delete_message(&conn, first).unwrap();
         assert_eq!(opener(&conn, by_user).unwrap(), Some(Opener::User));
 
         let by_reply = seed_task(&conn);
-        // 外部経由の記録は会話の発言ではない。
-        insert(by_reply, Role::Tool, None, Some("mcp:external-client"));
-        let reply = insert(by_reply, Role::Assistant, Some(("turn-2", 1)), None);
-        insert(by_reply, Role::User, None, None);
+        // 応答生成以外の経路での操作の記録は会話の発言ではない。
+        insert(by_reply, Role::Tool, Origin::Operation(OperationSource::Ui));
+        let reply = insert(by_reply, Role::Assistant, turn("turn-2"));
+        insert(by_reply, Role::User, Origin::User);
         soft_delete_normal_from(&conn, Chat::Task(by_reply), reply).unwrap();
         assert_eq!(opener(&conn, by_reply).unwrap(), Some(Opener::Reply));
     }
@@ -873,8 +976,7 @@ mod tests {
                     role: Role::User,
                     content,
                     kind: Kind::Normal,
-                    source: None,
-                    turn: None,
+                    origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
