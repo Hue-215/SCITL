@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
+use serde::Serialize;
 use serde_json::json;
 use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Kind, Message, NewMessage, Role};
+use crate::db::tasks::{self, Task};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
@@ -50,6 +52,59 @@ pub async fn run_turn(
                 reasoning: None,
             },
         )?;
+        Ok(())
+    })
+    .await?;
+
+    generate_turn_response(db, ctx, Attempt::first(task_id)).await
+}
+
+/// [`create_task`]の結果。
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TaskCreation {
+    Created {
+        task: Task,
+    },
+    /// チャットを使えないので作らなかった。`error_kind`はエラー発言と同じ種別コードで、
+    /// 画面は同じ文言を出す。
+    Unavailable {
+        error_kind: &'static str,
+    },
+}
+
+/// 新規タスクの作成(Issue #76)。作ったタスクでは続けて[`open_task_chat`]で聞き取りを
+/// 始めるので、チャットを使えない(モデル未選択等)ならタスクを作らずに理由を返す
+/// (legacy/frontend.md 1節)。作ってしまうと、聞き取りが始まらずエラー発言だけのタスクが残る。
+pub async fn create_task(db: SharedConnection, ctx: &TurnContext<'_>) -> Result<TaskCreation> {
+    if let Err(failure) = ready_adapter(ctx) {
+        return Ok(TaskCreation::Unavailable {
+            error_kind: failure.kind(),
+        });
+    }
+    let task = with_conn(db, tasks::create_task).await?;
+    Ok(TaskCreation::Created { task })
+}
+
+/// 聞き取りの開始(Issue #76)。ユーザーの発言なしに、開始の発言
+/// ([`TurnContext::opening_message`])への返信として最初のターンを生成する。開始の発言は
+/// 保存せず、以降のターンも`history::build_history`が履歴の先頭に補う
+/// (architecture.md 3節「聞き取りの開始」)。
+///
+/// まだ1行も発言の無いタスクでだけ行う。
+pub async fn open_task_chat(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    task_id: i64,
+) -> Result<()> {
+    let _generating = begin_generating(ctx.generating, task_id)?;
+    with_conn(db.clone(), move |conn| {
+        tasks::get_task(conn, task_id)?;
+        if messages::opener(conn, task_id)?.is_some() {
+            return Err(CoreError::InvalidMessageOperation(
+                "the conversation has already started".to_string(),
+            ));
+        }
         Ok(())
     })
     .await?;
@@ -208,13 +263,10 @@ async fn generate_turn_response(
     ctx: &TurnContext<'_>,
     attempt: Attempt,
 ) -> Result<()> {
-    let adapter = match &ctx.adapter {
-        Ok(adapter) => *adapter,
-        Err(failure) => return fail_turn(db, &attempt, failure.clone()).await,
+    let adapter = match ready_adapter(ctx) {
+        Ok(adapter) => adapter,
+        Err(failure) => return fail_turn(db, &attempt, failure).await,
     };
-    if let Some(failure) = turn_error::from_readiness(adapter.readiness()) {
-        return fail_turn(db, &attempt, failure).await;
-    }
 
     let mut sessions = McpSessions::new();
     // ツールに対応しないモデルには外部ツールも渡さないので、外部サーバーにも繋がない。
@@ -229,6 +281,17 @@ async fn generate_turn_response(
     match result {
         Err(e) => fail_turn(db, &attempt, turn_error::classify(&e)).await,
         done => done,
+    }
+}
+
+/// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
+fn ready_adapter<'a>(
+    ctx: &TurnContext<'a>,
+) -> std::result::Result<&'a dyn LlmAdapter, TurnFailure> {
+    let adapter = ctx.adapter.clone()?;
+    match turn_error::from_readiness(adapter.readiness()) {
+        Some(failure) => Err(failure),
+        None => Ok(adapter),
     }
 }
 
@@ -341,8 +404,9 @@ async fn run_tool_rounds(
     let tools_available = ctx.capabilities.tools;
     // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
+    let opening = ctx.opening_message.to_string();
     let history = with_conn(db.clone(), move |conn| {
-        build_history(conn, task_id, tools_available)
+        build_history(conn, task_id, tools_available, &opening)
     })
     .await?;
     let mut exposed_tools = Vec::new();

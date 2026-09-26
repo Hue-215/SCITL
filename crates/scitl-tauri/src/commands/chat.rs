@@ -2,7 +2,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use scitl_core::orchestration::{
-    delete_message, edit_user_message, retry_reply, run_turn, TurnEvent,
+    self, delete_message, edit_user_message, retry_reply, run_turn, TurnEvent,
 };
 
 use super::with_db;
@@ -39,6 +39,25 @@ pub async fn send_task_chat_message(
         &snapshot.turn_context(&state.generating, &events),
         task_id,
         text,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 聞き取りの開始(Issue #76)。作ったばかりのタスクで、ユーザーの発言なしにモデルの返信から
+/// 会話を始める。
+#[tauri::command]
+pub async fn open_task_chat(
+    state: State<'_, AppState>,
+    task_id: i64,
+    on_event: Channel<TurnEvent>,
+) -> Result<(), String> {
+    let snapshot = state.settings.snapshot_for_turn().await;
+    let events = forward(&on_event);
+    orchestration::open_task_chat(
+        state.db.clone(),
+        &snapshot.turn_context(&state.generating, &events),
+        task_id,
     )
     .await
     .map_err(|e| e.to_string())

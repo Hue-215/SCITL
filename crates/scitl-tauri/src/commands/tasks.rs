@@ -1,5 +1,7 @@
 use tauri::State;
 
+use scitl_core::orchestration::{self, discard_events, TaskCreation};
+
 use super::with_db;
 use crate::AppState;
 
@@ -25,11 +27,17 @@ pub async fn list_tasks(
     with_db(&state, scitl_core::db::tasks::list_tasks).await
 }
 
-/// 新規タスク追加ボタン。ユーザーの発言なしにAI側が聞き取りを開始する挙動(legacy/frontend.md
-/// 1節)は、この後にフロントエンドが最初のダミー発言を送る形で実現する(別Issue)。
+/// 新規タスク追加ボタン。作れたら、画面は続けて`open_task_chat`で聞き取りを始める
+/// (legacy/frontend.md 1節)。チャットを使えない間は作らずに理由を返す。
 #[tauri::command]
-pub async fn create_task(
-    state: State<'_, AppState>,
-) -> Result<scitl_core::db::tasks::Task, String> {
-    with_db(&state, scitl_core::db::tasks::create_task).await
+pub async fn create_task(state: State<'_, AppState>) -> Result<TaskCreation, String> {
+    // 使えるかどうかは設定だけで決まるので、推論サーバーへ問い合わせる`snapshot_for_turn`は
+    // 使わない。
+    let snapshot = state.settings.snapshot();
+    orchestration::create_task(
+        state.db.clone(),
+        &snapshot.turn_context(&state.generating, &discard_events),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }

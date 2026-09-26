@@ -12,8 +12,9 @@ use scitl_core::llm::{
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
-    delete_message, discard_events, edit_user_message, retry_reply, run_turn, McpAccess,
-    SystemPrompts, ToolLimits, TurnContext, TurnEvent, TurnFailure,
+    create_task, delete_message, discard_events, edit_user_message, open_task_chat, retry_reply,
+    run_turn, McpAccess, SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent,
+    TurnFailure,
 };
 use serde_json::json;
 
@@ -423,13 +424,29 @@ impl LlmAdapter for UnreadyAdapter {
 /// 「渡された文言をそのまま最終応答として返す」だけの単純なものにする。
 struct TextAdapter {
     replies: Mutex<Vec<String>>,
+    sent_messages: Mutex<Vec<Vec<ChatMessage>>>,
 }
 
 impl TextAdapter {
     fn one(text: &str) -> Self {
+        Self::many(&[text])
+    }
+
+    fn many(texts: &[&str]) -> Self {
         TextAdapter {
-            replies: Mutex::new(vec![text.to_string()]),
+            replies: Mutex::new(texts.iter().map(|t| t.to_string()).collect()),
+            sent_messages: Mutex::new(Vec::new()),
         }
+    }
+
+    /// 各呼び出しで送られた発言列から、システムプロンプトを除いたもの。
+    fn sent_histories(self) -> Vec<Vec<ChatMessage>> {
+        self.sent_messages
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .map(|mut messages| messages.split_off(1))
+            .collect()
     }
 }
 
@@ -441,11 +458,12 @@ impl LlmAdapter for TextAdapter {
 
     async fn send(
         &self,
-        _messages: &[ChatMessage],
+        messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<(), CoreError> {
+        self.sent_messages.lock().unwrap().push(messages.to_vec());
         let text = self.replies.lock().unwrap().remove(0);
         emit(
             on_event,
@@ -518,6 +536,14 @@ impl LlmAdapter for ReasoningAdapter {
     }
 }
 
+/// 聞き取りを始めるときの発言(`TurnContext::opening_message`)。
+const OPENING: &str = "新しいタスクを追加したい";
+
+fn opening_message() -> ChatMessage {
+    // 実際に送られた発言ではないので、送信日時を付けない。
+    ChatMessage::User(PromptText::user_message(OPENING, None))
+}
+
 /// プロバイダー未選択・既定のプロンプト・外部ツール無し・既定の上限の文脈。
 /// 生成中の集合は呼ぶたびに新しく作る(テストは並行に走り、タスクIDが重なるため)。
 /// テストの間だけ使うものなので、寿命を合わせる手間を省いてリークさせる。
@@ -525,6 +551,7 @@ fn context_without_provider() -> TurnContext<'static> {
     TurnContext {
         adapter: Err(TurnFailure::NoProvider),
         prompts: SystemPrompts::default(),
+        opening_message: OPENING,
         capabilities: DEFAULT_CAPABILITIES,
         reasoning_effort: None,
         mcp: McpAccess::none(),
@@ -2015,9 +2042,7 @@ async fn a_turn_is_rejected_while_the_same_task_is_generating() {
     let other_task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
     // 断られた1回は`send`まで届かないので、成功する2回ぶんだけ返信を持たせる。
-    let adapter = TextAdapter {
-        replies: Mutex::new(vec!["応答".to_string(); 2]),
-    };
+    let adapter = TextAdapter::many(&["応答"; 2]);
     let generating = InFlightSet::new();
     let ctx = TurnContext {
         generating: &generating,
@@ -2202,4 +2227,117 @@ async fn models_without_tool_support_are_called_once_without_tools() {
     let messages = db::messages::list_for_task(&conn, task_id).unwrap();
     assert_eq!(tool_execution_count(&messages), 0);
     assert_eq!(messages.last().unwrap().role, "assistant");
+}
+
+fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<String> {
+    let conn = db.lock().unwrap();
+    db::messages::list_for_task(&conn, task_id)
+        .unwrap()
+        .into_iter()
+        .map(|m| m.role)
+        .collect()
+}
+
+/// 聞き取りの開始(Issue #76)。開始の発言は保存せず、以降のターンでも履歴の先頭に補う。
+#[tokio::test]
+async fn open_task_chat_answers_the_opening_message_without_saving_it() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::many(&["どんなタスクですか", "締切はいつですか"]);
+
+    open_task_chat(db.clone(), &context(&adapter), task_id)
+        .await
+        .unwrap();
+    assert_eq!(roles(&db, task_id), vec!["assistant"]);
+
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        task_id,
+        "レポート".to_string(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(roles(&db, task_id), vec!["assistant", "user", "assistant"]);
+
+    let histories = adapter.sent_histories();
+    assert_eq!(histories[0], vec![opening_message()]);
+    assert_eq!(histories[1].len(), 3);
+    assert_eq!(histories[1][0], opening_message());
+    assert!(matches!(
+        &histories[1][1],
+        ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか"
+    ));
+    assert!(matches!(&histories[1][2], ChatMessage::User(_)));
+}
+
+#[tokio::test]
+async fn retrying_the_opening_reply_answers_the_opening_message_again() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    open_task_chat(db.clone(), &context_without_provider(), task_id)
+        .await
+        .unwrap();
+    let error_id = {
+        let conn = db.lock().unwrap();
+        db::messages::list_for_task(&conn, task_id).unwrap()[0].id
+    };
+
+    let adapter = TextAdapter::one("どんなタスクですか");
+    retry_reply(db.clone(), &context(&adapter), task_id, error_id)
+        .await
+        .unwrap();
+
+    assert_eq!(roles(&db, task_id), vec!["assistant"]);
+    assert_eq!(adapter.sent_histories(), vec![vec![opening_message()]]);
+}
+
+#[tokio::test]
+async fn open_task_chat_is_refused_once_the_conversation_has_started() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("はい")),
+        task_id,
+        "レポート".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let err = open_task_chat(db.clone(), &context(&TextAdapter::one("x")), task_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::InvalidMessageOperation(_)));
+    assert_eq!(roles(&db, task_id), vec!["user", "assistant"]);
+}
+
+/// チャットを使えない間はタスクを作らない(legacy/frontend.md 1節)。
+#[tokio::test]
+async fn create_task_is_refused_while_the_chat_cannot_run() {
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+
+    let unready = UnreadyAdapter(Readiness::NoModel);
+    for (ctx, expected) in [
+        (context_without_provider(), "no_provider"),
+        (context(&unready), "no_model"),
+    ] {
+        match create_task(db.clone(), &ctx).await.unwrap() {
+            TaskCreation::Unavailable { error_kind } => assert_eq!(error_kind, expected),
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+    assert!(db::tasks::list_tasks(&db.lock().unwrap())
+        .unwrap()
+        .is_empty());
+
+    let adapter = TextAdapter::one("x");
+    match create_task(db.clone(), &context(&adapter)).await.unwrap() {
+        TaskCreation::Created { task } => assert!(task.title.is_none()),
+        other => panic!("expected Created, got {other:?}"),
+    }
 }

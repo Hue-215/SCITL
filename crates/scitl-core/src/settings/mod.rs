@@ -32,7 +32,7 @@ use crate::llm::providers::{self, SharedAdapter};
 use crate::llm::{self, DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::{self, ToolCatalog};
 use crate::orchestration::{
-    default_opening_message, default_task_chat_prompt, McpAccess, SystemPrompts, ToolLimits,
+    self, default_opening_message, default_task_chat_prompt, McpAccess, SystemPrompts, ToolLimits,
     TurnContext, TurnEvents, TurnFailure,
 };
 use crate::secrets;
@@ -145,6 +145,7 @@ impl Snapshot {
                 Err(failure) => Err(failure.clone()),
             },
             prompts: SystemPrompts::for_task_chat(&self.config.general),
+            opening_message: orchestration::opening_message(&self.config.general),
             capabilities: self.capabilities,
             reasoning_effort: self
                 .config

@@ -216,6 +216,38 @@ pub fn soft_delete_normal_from(conn: &Connection, task_id: i64, from_id: i64) ->
     Ok(())
 }
 
+/// タスクの会話を始めた側(Issue #76)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opener {
+    User,
+    /// ユーザー発言より先に、SCITLの応答生成が始まった(聞き取りの開始)。
+    Reply,
+}
+
+/// タスクの会話を始めた側。まだ1行も無ければ`None`。
+///
+/// 論理削除した行も含めた最初の行で決める。最初のユーザー発言を消しても編集で置き換えても
+/// 行は残るので、答えが変わらない。外部(MCP)経由の記録はこの会話の発言ではないので見ない。
+pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
+    let role: Option<String> = conn
+        .query_row(
+            "SELECT role FROM messages
+             WHERE task_id = ?1 AND (role = 'user' OR turn_id IS NOT NULL)
+             ORDER BY created_at ASC, id ASC
+             LIMIT 1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(role.map(|role| {
+        if role == Role::User.as_str() {
+            Opener::User
+        } else {
+            Opener::Reply
+        }
+    }))
+}
+
 /// 指定`turn_id`の次の試行番号を採番する。論理削除済みの試行も`MAX`の対象に含める
 /// (物理削除しない方針と同様、番号を使い回さず単調増加させることで、削除された古い
 /// 試行の記録と新しい試行が`attempt_no`の面でも混同されないようにするため)。
@@ -753,5 +785,46 @@ mod tests {
         assert!(find_message(&conn, id).unwrap().is_some());
         soft_delete_message(&conn, id).unwrap();
         assert!(find_message(&conn, id).unwrap().is_none());
+    }
+
+    #[test]
+    fn opener_is_decided_by_the_first_row_even_after_it_is_deleted() {
+        let conn = db::open_in_memory().unwrap();
+        let insert = |task_id, role, turn, source| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role,
+                    content: if role == Role::Tool { "{}" } else { "本文" },
+                    kind: if role == Role::Tool {
+                        Kind::ToolExecution
+                    } else {
+                        Kind::Normal
+                    },
+                    source,
+                    turn,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+
+        let by_user = seed_task(&conn);
+        assert_eq!(opener(&conn, by_user).unwrap(), None);
+        let first = insert(by_user, Role::User, None, None);
+        insert(by_user, Role::Assistant, Some(("turn-1", 1)), None);
+        soft_delete_message(&conn, first).unwrap();
+        assert_eq!(opener(&conn, by_user).unwrap(), Some(Opener::User));
+
+        let by_reply = seed_task(&conn);
+        // 外部経由の記録は会話の発言ではない。
+        insert(by_reply, Role::Tool, None, Some("mcp:external-client"));
+        let reply = insert(by_reply, Role::Assistant, Some(("turn-2", 1)), None);
+        insert(by_reply, Role::User, None, None);
+        soft_delete_normal_from(&conn, by_reply, reply).unwrap();
+        assert_eq!(opener(&conn, by_reply).unwrap(), Some(Opener::Reply));
     }
 }
