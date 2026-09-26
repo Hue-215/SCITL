@@ -78,6 +78,10 @@ export function getDisplayLanguage(): Promise<Language> {
   return invoke('get_display_language')
 }
 
+export function updateLanguage(language: Language): Promise<SettingsView> {
+  return invoke('update_language', { language })
+}
+
 // systemPrompt/taskChatSystemPromptはどちらも`string | null`で並ぶため、位置引数だと
 // 呼び出し側での取り違えに気付きにくい(docs/spec/rebuild/tools.md 1節が修正した
 // 「対象タスクの取り違え」と同種の事故)。名前で縛るためオブジェクト引数にする。

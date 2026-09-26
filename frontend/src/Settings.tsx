@@ -19,6 +19,7 @@ import {
   setModelContextLength,
   setModelVisible,
   updateGeneralSettings,
+  updateLanguage,
   updateToolSettings,
   type NewMcpEndpoint,
 } from './api'
@@ -26,6 +27,7 @@ import type {
   ApiFormat,
   AvailableModel,
   Capability,
+  Language,
   McpServerView,
   ModelView,
   ProviderView,
@@ -33,7 +35,7 @@ import type {
 } from './types'
 import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
-import { t, type MessageKey } from './i18n'
+import { currentLanguage, languageName, LANGUAGES, t, type MessageKey } from './i18n'
 
 interface SettingsProps {
   onClose: () => void
@@ -152,6 +154,7 @@ export default function Settings({ onClose }: SettingsProps) {
                     }),
                   )
                 }
+                onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
               />
             ) : tab === 'providers' ? (
               <ProvidersTab
@@ -263,11 +266,12 @@ interface GeneralTabProps {
     taskChatSystemPrompt: string | null,
     responseTimeoutSecs: number | null,
   ) => void
+  onSaveLanguage: (language: Language) => void
 }
 
 // フォーカスを外すと自動保存(legacy/frontend.md 2節)。入力中は自身のstateだけを更新し、
 // blur時にのみ親へ確定した値を渡す。
-function GeneralTab({ settings, onSave }: GeneralTabProps) {
+function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
   const [systemPrompt, setSystemPrompt] = useState(settings.general.system_prompt ?? '')
   const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
     settings.general.task_chat_system_prompt ?? '',
@@ -280,6 +284,24 @@ function GeneralTab({ settings, onSave }: GeneralTabProps) {
 
   return (
     <div className="settings-panel">
+      <label className="settings-field">
+        <span>{t('settings.general.language_label')}</span>
+        <select
+          value={settings.general.language}
+          onChange={(e) => onSaveLanguage(e.target.value as Language)}
+        >
+          {LANGUAGES.map((language) => (
+            <option key={language} value={language}>
+              {languageName(language)}
+            </option>
+          ))}
+        </select>
+        {/* 画面は起動時の言語で描かれているので、保存した言語と違う間だけ出す */}
+        {settings.general.language !== currentLanguage() && (
+          <p className="settings-hint">{t('settings.general.language_restart_note')}</p>
+        )}
+      </label>
+
       <label className="settings-field">
         <span>{t('settings.general.system_prompt_label')}</span>
         <textarea
