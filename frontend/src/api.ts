@@ -4,6 +4,7 @@ import type {
   AvailableModel,
   Capability,
   ChatModelsView,
+  Language,
   LinkInspection,
   Message,
   ReasoningEffort,
@@ -16,6 +17,14 @@ import type {
 
 // フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
 // docs/spec/rebuild/architecture.md 7節。
+
+/**
+ * コマンドの失敗を画面に出す文字列にする唯一の入口。今はcoreのエラー文(英語の診断文)を
+ * そのまま返し、表示言語には訳していない(Issue #199)。
+ */
+export function failureText(e: unknown): string {
+  return String(e)
+}
 export function getTaskDetail(taskId: number): Promise<TaskDetail> {
   return invoke('get_task_detail', { taskId })
 }
@@ -62,6 +71,11 @@ export function deleteTaskChatMessage(taskId: number, messageId: number): Promis
 
 export function getSettings(): Promise<SettingsView> {
   return invoke('get_settings')
+}
+
+// 起動時に1度だけ読む(切り替えは再起動で反映する)。
+export function getDisplayLanguage(): Promise<Language> {
+  return invoke('get_display_language')
 }
 
 // systemPrompt/taskChatSystemPromptはどちらも`string | null`で並ぶため、位置引数だと

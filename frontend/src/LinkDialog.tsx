@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { inspectLink, openConfirmedLink } from './api'
+import { failureText, inspectLink, openConfirmedLink } from './api'
 import Dialog from './Dialog'
+import { t } from './i18n'
 import type { LinkInspection } from './types'
 
 interface LinkDialogProps {
@@ -21,7 +22,7 @@ export default function LinkDialog({ url, onClose }: LinkDialogProps) {
         if (!cancelled) setInspection(result)
       })
       .catch((e) => {
-        if (!cancelled) setError(String(e))
+        if (!cancelled) setError(failureText(e))
       })
     return () => {
       cancelled = true
@@ -33,7 +34,7 @@ export default function LinkDialog({ url, onClose }: LinkDialogProps) {
       await openConfirmedLink(url)
       onClose()
     } catch (e) {
-      setError(String(e))
+      setError(failureText(e))
     }
   }
 
@@ -41,42 +42,44 @@ export default function LinkDialog({ url, onClose }: LinkDialogProps) {
   const hasWarning = !!inspection?.real_url || !!inspection?.userinfo_host
 
   return (
-    <Dialog title="外部サイトへ移動" onClose={onClose}>
+    <Dialog title={t('link.dialog_title')} onClose={onClose}>
       <p className="link-dialog-url">{inspection?.url ?? url}</p>
       {inspection?.real_url && (
         <div className="link-dialog-warning">
-          <h3>警告: 特殊文字を含むドメイン</h3>
-          <p>特殊文字を含むドメインにアクセスします。URLを再度確認してください。</p>
-          <p className="link-dialog-url">移動先URL: {inspection.real_url}</p>
+          <h3>{t('link.special_char_title')}</h3>
+          <p>{t('link.special_char_body')}</p>
+          <p className="link-dialog-url">
+            {t('link.real_url_label', { url: inspection.real_url })}
+          </p>
         </div>
       )}
       {inspection?.userinfo_host && (
         <div className="link-dialog-warning">
-          <h3>警告: @を含むURL</h3>
-          <p>URLに@が含まれています。意図しないドメインにアクセスする可能性があります。</p>
-          <p className="link-dialog-url">移動先ドメイン: {inspection.userinfo_host}</p>
+          <h3>{t('link.userinfo_title')}</h3>
+          <p>{t('link.userinfo_body')}</p>
+          <p className="link-dialog-url">
+            {t('link.userinfo_domain_label', { domain: inspection.userinfo_host })}
+          </p>
         </div>
       )}
       {verdict?.kind === 'unreadable' && (
-        <p className="link-dialog-warning">URLを解釈できませんでした。</p>
+        <p className="link-dialog-warning">{t('link.unreadable')}</p>
       )}
       {verdict?.kind === 'scheme_blocked' && (
         <p className="link-dialog-warning">
-          SCITLは"{verdict.scheme}:" のリンクに対応しません。
+          {t('link.scheme_blocked', { scheme: verdict.scheme })}
         </p>
       )}
-      {verdict?.kind === 'mail' && <p>メールを開きます</p>}
-      {verdict?.kind === 'web' && !hasWarning && (
-        <p>SCITL外部のサイトに移動します。URLが意図したものか確認してください。</p>
-      )}
+      {verdict?.kind === 'mail' && <p>{t('link.mailto_note')}</p>}
+      {verdict?.kind === 'web' && !hasWarning && <p>{t('link.generic_warning')}</p>}
       {error && <p className="link-dialog-warning">{error}</p>}
       <div className="dialog-actions">
         <button type="button" onClick={onClose}>
-          キャンセル
+          {t('common.cancel')}
         </button>
         {inspection?.can_open && (
           <button type="button" onClick={() => void open()}>
-            開く
+            {t('link.open')}
           </button>
         )}
       </div>

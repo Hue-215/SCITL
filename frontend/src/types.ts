@@ -69,6 +69,9 @@ export interface PendingEntry {
   content: string
 }
 
+// crates/scitl-core/src/i18n.rs の Language。
+export type Language = 'ja' | 'en'
+
 // crates/scitl-core/src/settings/view.rs の型と一致させる。
 export type ApiFormat = 'open_ai_compat'
 

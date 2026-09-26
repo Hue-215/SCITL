@@ -13,8 +13,3 @@ export function matchQuery<T>(
     searching: true,
   }
 }
-
-// 絞り込んだ結果が空のときの一文。
-export function noMatchText(query: string, noun: string): string {
-  return `「${query.trim()}」に一致する${noun}はありません。`
-}

@@ -1,3 +1,4 @@
+import { t } from './i18n'
 import {
   buildThoughtItems,
   isErrorResult,
@@ -23,9 +24,9 @@ import type { Message } from './types'
 function ToolCallDetail({ content }: { content: ToolExecutionContent }) {
   return (
     <div className="tool-call-detail">
-      <p className="tool-call-label">引数</p>
+      <p className="tool-call-label">{t('chat.tool_detail_args')}</p>
       <pre>{JSON.stringify(content.arguments ?? {}, null, 2)}</pre>
-      <p className="tool-call-label">結果</p>
+      <p className="tool-call-label">{t('chat.tool_detail_result')}</p>
       <pre>{JSON.stringify(content.result ?? null, null, 2)}</pre>
     </div>
   )
@@ -40,7 +41,10 @@ export function ThinkingTools({ entries }: { entries: Message[] }) {
   return (
     <details className="thinking-tools">
       <summary>
-        思考・ツール({items.length}件){hasError && <span className="thinking-tools-error">・エラーあり</span>}
+        {t('chat.thinking_tools_count', { count: items.length })}
+        {hasError && (
+          <span className="thinking-tools-error">{t('chat.thinking_tools_has_error')}</span>
+        )}
       </summary>
       <ol className="thinking-tools-list">
         {items.map((item) =>
@@ -52,8 +56,8 @@ export function ThinkingTools({ entries }: { entries: Message[] }) {
             <li key={`tool-${item.id}`}>
               <details className="tool-call">
                 <summary>
-                  {item.content.tool ?? '不明なツール'}()
-                  {item.isError && <span className="thinking-tools-error">・エラー</span>}
+                  {item.content.tool ?? t('chat.tool_unknown')}()
+                  {item.isError && <span className="thinking-tools-error">{t('chat.tool_error')}</span>}
                 </summary>
                 <ToolCallDetail content={item.content} />
               </details>
@@ -73,9 +77,9 @@ export function ExternalToolLine({ message }: { message: Message }) {
   return (
     <details className="external-tool-line">
       <summary>
-        <span className="external-tool-name">{content.tool ?? '不明なツール'}()</span>
-        {isError && <span className="thinking-tools-error">・エラー</span>}
-        <span className="external-tool-label">MCP</span>
+        <span className="external-tool-name">{content.tool ?? t('chat.tool_unknown')}()</span>
+        {isError && <span className="thinking-tools-error">{t('chat.tool_error')}</span>}
+        <span className="external-tool-label">{t('chat.tool_external_label')}</span>
       </summary>
       <ToolCallDetail content={content} />
     </details>

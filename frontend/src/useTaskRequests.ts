@@ -1,4 +1,6 @@
 import { useCallback, useState } from 'react'
+import { failureText } from './api'
+import { t } from './i18n'
 import type { PendingEntry } from './types'
 
 // タスクに対するコマンド(送信・編集・再試行・削除)の実行中の状態と失敗を、タスクごとに持つ
@@ -53,7 +55,10 @@ export function useTaskRequests(): TaskRequests {
     try {
       await command()
     } catch (e) {
-      setFailures((prev) => ({ ...prev, [taskId]: `操作に失敗しました: ${String(e)}` }))
+      setFailures((prev) => ({
+        ...prev,
+        [taskId]: t('chat.command_failed', { error: failureText(e) }),
+      }))
     }
     await settle(taskId)
     setPending((prev) => without(prev, taskId))
