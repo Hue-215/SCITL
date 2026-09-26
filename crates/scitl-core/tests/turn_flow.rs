@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use scitl_core::config::{McpEndpoint, McpServerConfig, ReasoningEffort};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
+use scitl_core::db::messages::Chat;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
     ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, ResponseEvent,
@@ -622,13 +623,13 @@ async fn run_turn_continues_when_an_mcp_server_cannot_be_reached() {
             mcp: McpAccess::new(&servers, &catalog),
             ..context(&adapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "タイトルを「買い物」にして".to_string(),
     )
     .await
     .unwrap();
 
-    let messages = db::messages::list_for_task(&db.lock().unwrap(), task_id).unwrap();
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
     assert!(reply_of(&messages).contains("更新しました"));
     // 取得できなかったサーバーはキャッシュにも載せない(次のターンでもう一度試す)。
     assert!(catalog.get("srv").is_none());
@@ -646,7 +647,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "タイトルを「買い物」にして".to_string(),
     )
     .await
@@ -656,7 +657,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
     let task = db::tasks::get_task(&conn, task_id).unwrap();
     assert_eq!(task.title.as_deref(), Some("買い物"));
 
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let roles_kinds: Vec<_> = messages
         .iter()
         .map(|m| (m.role.as_str(), m.kind.as_str()))
@@ -691,7 +692,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
             events: &record,
             ..context(&adapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "タイトルを「買い物」にして".to_string(),
     )
     .await
@@ -715,7 +716,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
         vec!["tool_call", "done", "tool_executed", "text_delta", "done"]
     );
 
-    let messages = db::messages::list_for_task(&db.lock().unwrap(), task_id).unwrap();
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
     let saved = messages
         .iter()
         .find(|m| m.kind == "tool_execution")
@@ -748,7 +749,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
             prompts: prompts_config,
             ..context(&adapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
@@ -799,7 +800,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     // DBには実行記録(tool_execution)と最終応答(normal)だけが残る。往復用の
     // assistant(tool_calls)/toolはDBの行としては存在しない(このターン限りのため)。
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let roles_kinds: Vec<_> = messages
         .iter()
         .map(|m| (m.role.as_str(), m.kind.as_str()))
@@ -827,9 +828,14 @@ async fn state_tool_results_stay_in_their_own_turn() {
     let db = Arc::new(Mutex::new(conn));
 
     for text in ["工程を足して", "ありがとう"] {
-        run_turn(db.clone(), &context(&adapter), task_id, text.to_string())
-            .await
-            .unwrap();
+        run_turn(
+            db.clone(),
+            &context(&adapter),
+            Chat::Task(task_id),
+            text.to_string(),
+        )
+        .await
+        .unwrap();
     }
 
     let sent = adapter.sent_messages.lock().unwrap();
@@ -842,7 +848,7 @@ async fn state_tool_results_stay_in_their_own_turn() {
         .any(|m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())));
 
     let conn = db.lock().unwrap();
-    let record = db::messages::list_for_task(&conn, task_id)
+    let record = db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .into_iter()
         .find(|m| m.kind == "tool_execution")
@@ -865,14 +871,19 @@ async fn history_carries_send_time_beside_the_user_text() {
     let db = Arc::new(Mutex::new(conn));
 
     for text in ["工程を追加して", "ありがとう"] {
-        run_turn(db.clone(), &context(&adapter), task_id, text.to_string())
-            .await
-            .unwrap();
+        run_turn(
+            db.clone(),
+            &context(&adapter),
+            Chat::Task(task_id),
+            text.to_string(),
+        )
+        .await
+        .unwrap();
     }
 
     let stored_user_times: Vec<String> = {
         let conn = db.lock().unwrap();
-        db::messages::list_for_task(&conn, task_id)
+        db::messages::list_for_chat(&conn, Chat::Task(task_id))
             .unwrap()
             .into_iter()
             .filter(|m| m.role == "user")
@@ -924,7 +935,7 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "工程を追加してタイトルも変えて".to_string(),
     )
     .await
@@ -937,7 +948,7 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
     assert_eq!(steps.len(), 1);
 
     // 2件とも実行記録が残る(1つ目で上書きされて取りこぼされない)。
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let tool_execution_count = messages
         .iter()
         .filter(|m| m.kind == "tool_execution")
@@ -962,7 +973,7 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "1番目の工程を完了にして".to_string(),
     )
     .await
@@ -975,7 +986,7 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     assert!(sent.get("error").is_some(), "got {sent}");
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let roles_kinds: Vec<_> = messages
         .iter()
         .map(|m| (m.role.as_str(), m.kind.as_str()))
@@ -1016,7 +1027,7 @@ async fn reserved_tags_in_tool_results_are_neutralized_only_on_the_way_to_the_mo
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "工程を足して".to_string(),
     )
     .await
@@ -1044,7 +1055,7 @@ async fn reserved_tags_in_tool_results_are_neutralized_only_on_the_way_to_the_mo
     );
 
     let conn = db.lock().unwrap();
-    let record = db::messages::list_for_task(&conn, task_id)
+    let record = db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .into_iter()
         .find(|m| m.kind == "tool_execution")
@@ -1070,7 +1081,7 @@ async fn run_turn_reports_malformed_tool_arguments_to_the_model_without_running_
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "タイトルを変えて".to_string(),
     )
     .await
@@ -1086,7 +1097,7 @@ async fn run_turn_reports_malformed_tool_arguments_to_the_model_without_running_
         db::tasks::get_task(&conn, task_id).unwrap().title,
         title_before
     );
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let record = messages
         .iter()
         .find(|m| m.kind == "tool_execution")
@@ -1161,13 +1172,13 @@ async fn run_narrating_turn(final_text: Option<&'static str>) -> Vec<db::message
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
     .unwrap();
     let conn = db.lock().unwrap();
-    db::messages::list_for_task(&conn, task_id).unwrap()
+    db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap()
 }
 
 /// ツールを呼んだラウンドの本文は捨てず、ターンの返信の一部として最終行に残る(Issue #131)。
@@ -1208,14 +1219,14 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
     run_turn(
         db.clone(),
         &context(&FailingAdapter),
-        task_id,
+        Chat::Task(task_id),
         "こんにちは".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("auth"));
     // 詳細は定型文言とは別の列に持つ(Issue #159)。
@@ -1236,14 +1247,14 @@ async fn run_turn_persists_error_message_for_empty_response() {
     run_turn(
         db.clone(),
         &context(&EmptyResponseAdapter),
-        task_id,
+        Chat::Task(task_id),
         "こんにちは".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("empty_response"));
 }
@@ -1259,14 +1270,14 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
     run_turn(
         db.clone(),
         &context(&AlwaysToolCallAdapter),
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(
         error_message.error_kind.as_deref(),
@@ -1293,14 +1304,14 @@ async fn tool_calls_from_a_model_without_tool_support_are_not_a_round_limit() {
             capabilities,
             ..context(&AlwaysToolCallAdapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("tools_disabled"));
     assert_eq!(tool_execution_count(&messages), 0);
@@ -1323,14 +1334,14 @@ async fn run_turn_honors_the_configured_max_tool_rounds() {
             },
             ..context(&AlwaysToolCallAdapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(tool_execution_count(&messages), 2);
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(
@@ -1358,14 +1369,14 @@ async fn run_turn_persists_error_message_when_the_tool_time_budget_is_exhausted(
             },
             ..context(&AlwaysToolCallAdapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("tool_timeout"));
     // 最初のツールを実行しきる前に打ち切るので、実行記録は残らない。
@@ -1390,14 +1401,14 @@ async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
             },
             ..context(&AlwaysToolCallAdapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("tool_timeout"));
     // 1回目は最後まで走る(途中で打ち切らないので、実行記録が必ず残る)。
@@ -1422,14 +1433,14 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
     run_turn(
         db.clone(),
         &context_without_provider(),
-        task_id,
+        Chat::Task(task_id),
         "こんにちは".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("no_provider"));
 }
@@ -1448,14 +1459,14 @@ async fn run_turn_persists_the_reason_the_adapter_cannot_be_used() {
             adapter: Err(TurnFailure::SettingsUnreadable),
             ..context_without_provider()
         },
-        task_id,
+        Chat::Task(task_id),
         "こんにちは".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(
         error_message.error_kind.as_deref(),
@@ -1474,14 +1485,14 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
     run_turn(
         db.clone(),
         &context(&UnreadyAdapter(Readiness::NoModel)),
-        task_id,
+        Chat::Task(task_id),
         "こんにちは".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == "error").unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("no_model"));
 }
@@ -1498,7 +1509,7 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
     run_turn(
         db.clone(),
         &context(&FailingAdapter),
-        task_id,
+        Chat::Task(task_id),
         "1回目".to_string(),
     )
     .await
@@ -1508,9 +1519,14 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
         calls: AtomicUsize::new(0),
         sent_messages: Mutex::new(Vec::new()),
     };
-    run_turn(db.clone(), &context(&adapter), task_id, "2回目".to_string())
-        .await
-        .unwrap();
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        "2回目".to_string(),
+    )
+    .await
+    .unwrap();
 
     let rounds = adapter.sent_messages.into_inner().unwrap();
     let first_round = &rounds[0];
@@ -1546,7 +1562,7 @@ async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("古い返信")),
-        task_id,
+        Chat::Task(task_id),
         long_text,
     )
     .await
@@ -1556,9 +1572,14 @@ async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
         calls: AtomicUsize::new(0),
         sent_messages: Mutex::new(Vec::new()),
     };
-    run_turn(db.clone(), &context(&adapter), task_id, "2回目".to_string())
-        .await
-        .unwrap();
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        "2回目".to_string(),
+    )
+    .await
+    .unwrap();
 
     let rounds = adapter.sent_messages.into_inner().unwrap();
     assert_eq!(rounds.len(), 2);
@@ -1588,7 +1609,7 @@ async fn edit_user_message_truncates_and_regenerates() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答A")),
-        task_id,
+        Chat::Task(task_id),
         "元の質問".to_string(),
     )
     .await
@@ -1596,14 +1617,14 @@ async fn edit_user_message_truncates_and_regenerates() {
 
     let user_message_id = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
     edit_user_message(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         user_message_id,
         "編集後の質問".to_string(),
     )
@@ -1611,7 +1632,7 @@ async fn edit_user_message_truncates_and_regenerates() {
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
     assert_eq!(contents, vec!["編集後の質問", "応答B"]);
 
@@ -1636,7 +1657,7 @@ async fn failed_edit_leaves_the_conversation_untouched() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答A")),
-        task_id,
+        Chat::Task(task_id),
         "元の質問".to_string(),
     )
     .await
@@ -1651,14 +1672,14 @@ async fn failed_edit_leaves_the_conversation_untouched() {
              BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
         )
         .unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
     let result = edit_user_message(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         user_message_id,
         "編集後の質問".to_string(),
     )
@@ -1666,7 +1687,7 @@ async fn failed_edit_leaves_the_conversation_untouched() {
     assert!(result.is_err());
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
     assert_eq!(contents, vec!["元の質問", "応答A"]);
 }
@@ -1685,7 +1706,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答A")),
-        task_id,
+        Chat::Task(task_id),
         "最初の質問".to_string(),
     )
     .await
@@ -1697,7 +1718,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
         &context(&FakeAdapter {
             calls: AtomicUsize::new(0),
         }),
-        task_id,
+        Chat::Task(task_id),
         "タイトル決めて".to_string(),
     )
     .await
@@ -1705,7 +1726,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
 
     let target_id = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages
             .iter()
             .find(|m| m.content == "タイトル決めて")
@@ -1716,7 +1737,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
     edit_user_message(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         target_id,
         "編集後の質問".to_string(),
     )
@@ -1724,7 +1745,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
 
     // 編集後の発言は「応答A」の直後、つまり編集前と同じ位置。破棄されたターンの
@@ -1761,14 +1782,14 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let by_kind: Vec<_> = messages
         .iter()
         .map(|m| (m.role.as_str(), m.kind.as_str(), m.reasoning.as_deref()))
@@ -1814,7 +1835,7 @@ async fn edit_user_message_rejects_assistant_target() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答A")),
-        task_id,
+        Chat::Task(task_id),
         "質問".to_string(),
     )
     .await
@@ -1822,14 +1843,14 @@ async fn edit_user_message_rejects_assistant_target() {
 
     let assistant_message_id = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages.iter().find(|m| m.role == "assistant").unwrap().id
     };
 
     let result = edit_user_message(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         assistant_message_id,
         "書き換え".to_string(),
     )
@@ -1848,7 +1869,7 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答A")),
-        task_id,
+        Chat::Task(task_id),
         "質問".to_string(),
     )
     .await
@@ -1856,7 +1877,7 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
 
     let (assistant_message_id, original_turn_id) = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         let m = messages.iter().find(|m| m.role == "assistant").unwrap();
         (m.id, m.turn_id.clone().unwrap())
     };
@@ -1864,14 +1885,14 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     retry_reply(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         assistant_message_id,
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, "user");
     assert_eq!(messages[1].content, "応答B");
@@ -1892,7 +1913,7 @@ async fn retry_reply_rejects_user_target() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答A")),
-        task_id,
+        Chat::Task(task_id),
         "質問".to_string(),
     )
     .await
@@ -1900,14 +1921,14 @@ async fn retry_reply_rejects_user_target() {
 
     let user_message_id = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
     let result = retry_reply(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         user_message_id,
     )
     .await;
@@ -1925,7 +1946,7 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     run_turn(
         db.clone(),
         &context(&EmptyResponseAdapter),
-        task_id,
+        Chat::Task(task_id),
         "質問".to_string(),
     )
     .await
@@ -1933,7 +1954,7 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
 
     let (error_message_id, original_turn_id) = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         let m = messages.iter().find(|m| m.role == "error").unwrap();
         (m.id, m.turn_id.clone().unwrap())
     };
@@ -1941,14 +1962,14 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     retry_reply(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         error_message_id,
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
     assert_eq!(roles, vec!["user", "assistant"]);
     assert_eq!(messages[1].content, "応答B");
@@ -1970,7 +1991,7 @@ async fn delete_message_removes_an_error_reply() {
     run_turn(
         db.clone(),
         &context(&EmptyResponseAdapter),
-        task_id,
+        Chat::Task(task_id),
         "質問".to_string(),
     )
     .await
@@ -1978,16 +1999,21 @@ async fn delete_message_removes_an_error_reply() {
 
     let error_message_id = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages.iter().find(|m| m.role == "error").unwrap().id
     };
 
-    delete_message(db.clone(), &InFlightSet::new(), task_id, error_message_id)
-        .await
-        .unwrap();
+    delete_message(
+        db.clone(),
+        &InFlightSet::new(),
+        Chat::Task(task_id),
+        error_message_id,
+    )
+    .await
+    .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
     assert_eq!(contents, vec!["質問"]);
 }
@@ -2002,7 +2028,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答1")),
-        task_id,
+        Chat::Task(task_id),
         "1回目".to_string(),
     )
     .await
@@ -2010,7 +2036,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答2")),
-        task_id,
+        Chat::Task(task_id),
         "2回目".to_string(),
     )
     .await
@@ -2018,16 +2044,21 @@ async fn delete_message_removes_only_the_target_without_cascade() {
 
     let first_user_id = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
-    delete_message(db.clone(), &InFlightSet::new(), task_id, first_user_id)
-        .await
-        .unwrap();
+    delete_message(
+        db.clone(),
+        &InFlightSet::new(),
+        Chat::Task(task_id),
+        first_user_id,
+    )
+    .await
+    .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
     // カスケードしないため、1回目の応答・2回目のやり取りはそのまま残る。
     assert_eq!(contents, vec!["応答1", "2回目", "応答2"]);
@@ -2049,26 +2080,42 @@ async fn a_turn_is_rejected_while_the_same_task_is_generating() {
         ..context(&adapter)
     };
 
-    let in_progress = generating.try_begin(task_id).unwrap();
-    let result = run_turn(db.clone(), &ctx, task_id, "こんにちは".to_string()).await;
-    assert!(matches!(result, Err(CoreError::TaskBusy(id)) if id == task_id));
+    let in_progress = generating.try_begin(Chat::Task(task_id)).unwrap();
+    let result = run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        "こんにちは".to_string(),
+    )
+    .await;
+    assert!(matches!(result, Err(CoreError::ChatBusy(chat)) if chat == Chat::Task(task_id)));
     {
         let conn = db.lock().unwrap();
-        assert!(db::messages::list_for_task(&conn, task_id)
+        assert!(db::messages::list_for_chat(&conn, Chat::Task(task_id))
             .unwrap()
             .is_empty());
     }
 
-    run_turn(db.clone(), &ctx, other_task_id, "こんにちは".to_string())
-        .await
-        .unwrap();
+    run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(other_task_id),
+        "こんにちは".to_string(),
+    )
+    .await
+    .unwrap();
 
     drop(in_progress);
-    run_turn(db.clone(), &ctx, task_id, "こんにちは".to_string())
-        .await
-        .unwrap();
+    run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        "こんにちは".to_string(),
+    )
+    .await
+    .unwrap();
     assert!(
-        generating.try_begin(task_id).is_some(),
+        generating.try_begin(Chat::Task(task_id)).is_some(),
         "ターンが終われば生成中は外れる"
     );
 }
@@ -2083,25 +2130,33 @@ async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答")),
-        task_id,
+        Chat::Task(task_id),
         "質問".to_string(),
     )
     .await
     .unwrap();
     let user_message_id = {
         let conn = db.lock().unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         messages.iter().find(|m| m.role == "user").unwrap().id
     };
 
     let generating = InFlightSet::new();
-    let _in_progress = generating.try_begin(task_id).unwrap();
-    let result = delete_message(db.clone(), &generating, task_id, user_message_id).await;
+    let _in_progress = generating.try_begin(Chat::Task(task_id)).unwrap();
+    let result = delete_message(
+        db.clone(),
+        &generating,
+        Chat::Task(task_id),
+        user_message_id,
+    )
+    .await;
 
-    assert!(matches!(result, Err(CoreError::TaskBusy(id)) if id == task_id));
+    assert!(matches!(result, Err(CoreError::ChatBusy(chat)) if chat == Chat::Task(task_id)));
     let conn = db.lock().unwrap();
     assert_eq!(
-        db::messages::list_for_task(&conn, task_id).unwrap().len(),
+        db::messages::list_for_chat(&conn, Chat::Task(task_id))
+            .unwrap()
+            .len(),
         2
     );
 }
@@ -2117,7 +2172,7 @@ async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("応答A")),
-        task_id,
+        Chat::Task(task_id),
         "質問".to_string(),
     )
     .await
@@ -2132,7 +2187,7 @@ async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
              BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
         )
         .unwrap();
-        let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         let reply = messages.iter().find(|m| m.role == "assistant").unwrap();
         (reply.id, reply.turn_id.clone().unwrap())
     };
@@ -2140,14 +2195,14 @@ async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
     retry_reply(
         db.clone(),
         &context(&TextAdapter::one("応答B")),
-        task_id,
+        Chat::Task(task_id),
         reply_id,
     )
     .await
     .unwrap();
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
     assert_eq!(roles, vec!["user", "error"]);
     assert_eq!(messages[1].turn_id.as_deref(), Some(turn_id.as_str()));
@@ -2173,7 +2228,7 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
             },
             ..context(&adapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
@@ -2188,7 +2243,7 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     assert!(prompts[2].contains("tool call limit"));
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(tool_execution_count(&messages), 2);
     let reply = messages.last().unwrap();
     assert_eq!(reply.role, "assistant");
@@ -2212,7 +2267,7 @@ async fn models_without_tool_support_are_called_once_without_tools() {
             capabilities,
             ..context(&adapter)
         },
-        task_id,
+        Chat::Task(task_id),
         "工程を追加して".to_string(),
     )
     .await
@@ -2224,14 +2279,14 @@ async fn models_without_tool_support_are_called_once_without_tools() {
     assert!(!prompts[0].contains("tool call limit"));
 
     let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_task(&conn, task_id).unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(tool_execution_count(&messages), 0);
     assert_eq!(messages.last().unwrap().role, "assistant");
 }
 
 fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<String> {
     let conn = db.lock().unwrap();
-    db::messages::list_for_task(&conn, task_id)
+    db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .into_iter()
         .map(|m| m.role)
@@ -2254,7 +2309,7 @@ async fn open_task_chat_answers_the_opening_message_without_saving_it() {
     run_turn(
         db.clone(),
         &context(&adapter),
-        task_id,
+        Chat::Task(task_id),
         "レポート".to_string(),
     )
     .await
@@ -2283,13 +2338,18 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
         .unwrap();
     let error_id = {
         let conn = db.lock().unwrap();
-        db::messages::list_for_task(&conn, task_id).unwrap()[0].id
+        db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap()[0].id
     };
 
     let adapter = TextAdapter::one("どんなタスクですか");
-    retry_reply(db.clone(), &context(&adapter), task_id, error_id)
-        .await
-        .unwrap();
+    retry_reply(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        error_id,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(roles(&db, task_id), vec!["assistant"]);
     assert_eq!(adapter.sent_histories(), vec![vec![opening_message()]]);
@@ -2303,7 +2363,7 @@ async fn open_task_chat_is_refused_once_the_conversation_has_started() {
     run_turn(
         db.clone(),
         &context(&TextAdapter::one("はい")),
-        task_id,
+        Chat::Task(task_id),
         "レポート".to_string(),
     )
     .await
@@ -2340,4 +2400,165 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
         TaskCreation::Created { task } => assert!(task.title.is_none()),
         other => panic!("expected Created, got {other:?}"),
     }
+}
+
+/// 1回目に`calls`のツールを呼び、2回目に本文を返す。各ラウンドで渡されたツール名と
+/// 発言列を記録する。
+struct ScriptedToolsAdapter {
+    calls: Vec<(&'static str, serde_json::Value)>,
+    round: AtomicUsize,
+    offered: Mutex<Vec<Vec<String>>>,
+    sent: Mutex<Vec<Vec<ChatMessage>>>,
+}
+
+impl ScriptedToolsAdapter {
+    fn new(calls: Vec<(&'static str, serde_json::Value)>) -> Self {
+        Self {
+            calls,
+            round: AtomicUsize::new(0),
+            offered: Mutex::new(Vec::new()),
+            sent: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for ScriptedToolsAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
+        self.offered
+            .lock()
+            .unwrap()
+            .push(tools.iter().map(|t| t.name().to_string()).collect());
+        self.sent.lock().unwrap().push(messages.to_vec());
+        if self.round.fetch_add(1, Ordering::SeqCst) == 0 {
+            let mut events: Vec<_> = self
+                .calls
+                .iter()
+                .enumerate()
+                .map(|(i, (name, arguments))| ResponseEvent::ToolCall {
+                    id: Some(format!("call_{i}")),
+                    name: name.to_string(),
+                    arguments: arguments.clone().into(),
+                })
+                .collect();
+            events.push(ResponseEvent::Done {
+                finish_reason: FinishReason::ToolCall,
+            });
+            emit(on_event, events)
+        } else {
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::TextDelta {
+                        text: "確認しました".to_string(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    },
+                ],
+            )
+        }
+    }
+}
+
+/// 総合チャット(Issue #43)。発言はどのタスクにも属さず、モデルには読み取り専用の
+/// ツールとタスク一覧だけを渡す。更新系のツールを呼ばれても実行しない
+/// (docs/spec/rebuild/tools.md 5節)。
+#[tokio::test]
+async fn the_general_chat_reads_tasks_but_cannot_change_them() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedToolsAdapter::new(vec![
+        ("get_task_detail", json!({ "task_id": task_id })),
+        ("update_task", json!({ "title": "書き換え" })),
+    ]);
+
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::General,
+        "今週やることは?".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let offered = adapter.offered.lock().unwrap();
+    assert_eq!(offered[0], vec!["get_task_list", "get_task_detail"]);
+    let system = system_prompt_content(&adapter.sent.lock().unwrap()[0][0]).to_string();
+    assert!(system.contains("current tasks (not archived)"));
+    assert!(!system.contains("current task state"));
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::General).unwrap();
+    assert!(messages.iter().all(|m| m.task_id.is_none()));
+    assert_eq!(reply_of(&messages), "確認しました");
+    let results: Vec<serde_json::Value> = messages
+        .iter()
+        .filter(|m| m.kind == "tool_execution")
+        .map(|m| serde_json::from_str::<serde_json::Value>(&m.content).unwrap()["result"].clone())
+        .collect();
+    assert_eq!(results[0]["task"]["id"], task_id);
+    assert_eq!(results[1]["error"], "unknown tool: update_task");
+    assert!(db::tasks::get_task(&conn, task_id).unwrap().title.is_none());
+    assert!(db::messages::list_for_chat(&conn, Chat::Task(task_id))
+        .unwrap()
+        .is_empty());
+}
+
+/// 総合チャットの応答生成も1本に絞るが、タスクの会話は妨げない。
+#[tokio::test]
+async fn the_general_chat_and_a_task_generate_independently() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::one("応答");
+    let generating = InFlightSet::new();
+    let ctx = TurnContext {
+        generating: &generating,
+        ..context(&adapter)
+    };
+
+    let _in_progress = generating.try_begin(Chat::General).unwrap();
+    let result = run_turn(db.clone(), &ctx, Chat::General, "質問".to_string()).await;
+    assert!(matches!(result, Err(CoreError::ChatBusy(Chat::General))));
+    run_turn(db.clone(), &ctx, Chat::Task(task_id), "質問".to_string())
+        .await
+        .unwrap();
+}
+
+/// 削除済みのタスクには発言を書かない(Issue #75)。削除とターンが行き違っても、
+/// ユーザー発言だけが残ってエラー発言が付く形にならない。
+#[tokio::test]
+async fn a_turn_on_a_deleted_task_writes_nothing() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    db::tasks::delete_task(&conn, task_id).unwrap();
+    let db = Arc::new(Mutex::new(conn));
+
+    let result = run_turn(
+        db.clone(),
+        &context(&TextAdapter::one("応答")),
+        Chat::Task(task_id),
+        "質問".to_string(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(CoreError::TaskNotFound(id)) if id == task_id));
+    let written: i64 = db
+        .lock()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(written, 0);
 }

@@ -1,6 +1,7 @@
 mod history;
 mod history_trim;
 mod mcp_access;
+pub mod operations;
 mod prompt_defaults;
 mod state_prompt;
 mod tool_limits;

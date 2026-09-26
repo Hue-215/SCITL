@@ -164,7 +164,7 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::MessageNotFound(_) => unexpected("message_not_found"),
         CoreError::InvalidMessageOperation(_) => unexpected("invalid_message_operation"),
         // ターンの行を書く前に返すので、ターンの経路には来ない。
-        CoreError::TaskBusy(_) => unexpected("task_busy"),
+        CoreError::ChatBusy(_) => unexpected("chat_busy"),
         CoreError::UnknownArgument(_) => unexpected("unknown_argument"),
         CoreError::UnknownTool(_) => unexpected("unknown_tool"),
         CoreError::Internal(_) => unexpected("internal"),

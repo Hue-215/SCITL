@@ -15,6 +15,7 @@ const INIT_SQL: &str = include_str!("../../../../migrations/0001_init.sql");
 const TOOL_EXECUTION_ROLE_SQL: &str =
     include_str!("../../../../migrations/0002_tool_execution_role.sql");
 const ERROR_DETAIL_SQL: &str = include_str!("../../../../migrations/0003_error_detail.sql");
+const MESSAGE_ORIGIN_SQL: &str = include_str!("../../../../migrations/0004_message_origin.sql");
 
 /// 非同期層から使うDBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を
 /// 非同期関数のawaitをまたいで持たせられない(architecture.md 4節)。触るときは[`with_conn`]を通す。
@@ -60,6 +61,7 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
         M::up(INIT_SQL),
         M::up(TOOL_EXECUTION_ROLE_SQL),
         M::up(ERROR_DETAIL_SQL),
+        M::up(MESSAGE_ORIGIN_SQL),
     ])
 });
 

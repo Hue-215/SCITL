@@ -6,7 +6,7 @@ use serde_json::json;
 use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
-use crate::db::messages::{self, Kind, Message, NewMessage, Role};
+use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
 use crate::db::tasks::{self, Task};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::{InFlight, InFlightSet};
@@ -28,25 +28,25 @@ use crate::tools::{self, external::ExternalToolset, ToolKind};
 /// までを1つの関数に閉じる(docs/spec/principles.md 5節)。
 ///
 /// ユーザー発言を保存したあとの失敗は、`Err`で上位に返さずエラー発言として保存し
-/// `Ok`で返す([`generate_turn_response`])。`Err`になるのは、そのタスクが既に応答を
-/// 生成中のときと、発言やエラー発言自体を書けないときだけ。
+/// `Ok`で返す([`generate_turn_response`])。`Err`になるのは、その会話が既に応答を
+/// 生成中のとき、タスクが無い(削除済みを含む)とき、発言やエラー発言自体を書けないときだけ。
 pub async fn run_turn(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
-    task_id: i64,
+    chat: Chat,
     user_text: String,
 ) -> Result<()> {
-    let _generating = begin_generating(ctx.generating, task_id)?;
+    let _generating = begin_generating(ctx.generating, chat)?;
     with_conn(db.clone(), move |conn| {
+        require_chat(conn, chat)?;
         messages::insert_message(
             conn,
             NewMessage {
-                task_id: Some(task_id),
+                task_id: chat.task_id(),
                 role: Role::User,
                 content: &user_text,
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -56,7 +56,7 @@ pub async fn run_turn(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(task_id)).await
+    generate_turn_response(db, ctx, Attempt::first(chat)).await
 }
 
 /// [`create_task`]の結果。
@@ -97,9 +97,10 @@ pub async fn open_task_chat(
     ctx: &TurnContext<'_>,
     task_id: i64,
 ) -> Result<()> {
-    let _generating = begin_generating(ctx.generating, task_id)?;
+    let chat = Chat::Task(task_id);
+    let _generating = begin_generating(ctx.generating, chat)?;
     with_conn(db.clone(), move |conn| {
-        tasks::get_task(conn, task_id)?;
+        require_chat(conn, chat)?;
         if messages::opener(conn, task_id)?.is_some() {
             return Err(CoreError::InvalidMessageOperation(
                 "the conversation has already started".to_string(),
@@ -109,7 +110,7 @@ pub async fn open_task_chat(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(task_id)).await
+    generate_turn_response(db, ctx, Attempt::first(chat)).await
 }
 
 /// 編集(ユーザー発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言をすべて
@@ -120,28 +121,26 @@ pub async fn open_task_chat(
 pub async fn edit_user_message(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
-    task_id: i64,
+    chat: Chat,
     message_id: i64,
     new_text: String,
 ) -> Result<()> {
-    let _generating = begin_generating(ctx.generating, task_id)?;
+    let _generating = begin_generating(ctx.generating, chat)?;
     with_conn(db.clone(), move |conn| {
-        let target = messages::find_message(conn, message_id)?
-            .ok_or(CoreError::MessageNotFound(message_id))?;
-        validate_target(&target, task_id, &["user"])?;
+        let target = find_in_chat(conn, chat, message_id)?;
+        expect_normal(&target, &["user"])?;
 
         // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
         in_transaction(conn, |conn| {
-            messages::soft_delete_normal_from(conn, task_id, message_id)?;
+            messages::soft_delete_normal_from(conn, chat, target.id)?;
             messages::insert_message(
                 conn,
                 NewMessage {
-                    task_id: Some(task_id),
+                    task_id: chat.task_id(),
                     role: Role::User,
                     content: &new_text,
                     kind: Kind::Normal,
-                    source: None,
-                    turn: None,
+                    origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -152,7 +151,7 @@ pub async fn edit_user_message(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(task_id)).await
+    generate_turn_response(db, ctx, Attempt::first(chat)).await
 }
 
 /// 再試行(ターンの返信のみ、Issue #41・#130)。対象の発言以降(自身を含む)の通常発言を
@@ -166,14 +165,13 @@ pub async fn edit_user_message(
 pub async fn retry_reply(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
-    task_id: i64,
+    chat: Chat,
     message_id: i64,
 ) -> Result<()> {
-    let _generating = begin_generating(ctx.generating, task_id)?;
+    let _generating = begin_generating(ctx.generating, chat)?;
     let attempt = with_conn(db.clone(), move |conn| {
-        let target = messages::find_message(conn, message_id)?
-            .ok_or(CoreError::MessageNotFound(message_id))?;
-        validate_target(&target, task_id, &["assistant", "error"])?;
+        let target = find_in_chat(conn, chat, message_id)?;
+        expect_normal(&target, &["assistant", "error"])?;
         let turn_id = target.turn_id.clone().ok_or_else(|| {
             CoreError::InvalidMessageOperation("reply has no turn_id to retry".to_string())
         })?;
@@ -181,9 +179,9 @@ pub async fn retry_reply(
         // 採番を削除より先に済ませ、削除をこのクロージャ最後の書き込みにする。削除のあとで
         // 失敗すると、エラー発言を残さないまま返信だけが会話から消える。
         let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
-        messages::soft_delete_normal_from(conn, task_id, message_id)?;
+        messages::soft_delete_normal_from(conn, chat, message_id)?;
         Ok(Attempt {
-            task_id,
+            chat,
             turn_id,
             attempt_no,
         })
@@ -196,43 +194,55 @@ pub async fn retry_reply(
 /// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
 /// カスケードはしない(対象の1件だけを消す。編集・再試行のカスケード削除とは別の操作)。
 /// 対象はユーザー発言とターンの返信(`db::messages::soft_delete_message`が検証する)。
-/// 生成中のタスクでは断る。生成中のターンが読んだ履歴と、DBの発言が食い違うため。
+/// 生成中の会話では断る。生成中のターンが読んだ履歴と、DBの発言が食い違うため。
 pub async fn delete_message(
     db: SharedConnection,
-    generating: &InFlightSet<i64>,
-    task_id: i64,
+    generating: &InFlightSet<Chat>,
+    chat: Chat,
     message_id: i64,
 ) -> Result<()> {
-    let _generating = begin_generating(generating, task_id)?;
+    let _generating = begin_generating(generating, chat)?;
     with_conn(db, move |conn| {
-        let target = messages::find_message(conn, message_id)?
-            .ok_or(CoreError::MessageNotFound(message_id))?;
-        if target.task_id != Some(task_id) {
-            return Err(CoreError::InvalidMessageOperation(
-                "message does not belong to this task".to_string(),
-            ));
-        }
-        messages::soft_delete_message(conn, message_id)
+        let target = find_in_chat(conn, chat, message_id)?;
+        messages::soft_delete_message(conn, target.id)
     })
     .await
 }
 
-/// 会話の行を1行も書かないうちに、同じタスクの応答生成が走っていないかを確かめる
-/// ([`TurnContext::generating`])。返ったガードを持っている間、そのタスクは生成中になる。
-fn begin_generating(generating: &InFlightSet<i64>, task_id: i64) -> Result<InFlight<'_, i64>> {
-    generating
-        .try_begin(task_id)
-        .ok_or(CoreError::TaskBusy(task_id))
+/// 会話の行を1行も書かないうちに、同じ会話の応答生成が走っていないかを確かめる
+/// ([`TurnContext::generating`])。返ったガードを持っている間、その会話は生成中になる。
+pub(super) fn begin_generating(
+    generating: &InFlightSet<Chat>,
+    chat: Chat,
+) -> Result<InFlight<'_, Chat>> {
+    generating.try_begin(chat).ok_or(CoreError::ChatBusy(chat))
 }
 
-/// `edit_user_message`/`retry_reply`共通の対象検証。役割・種別・所属タスクを
-/// 1箇所で確認する(`docs/spec/principles.md` 5節)。
-fn validate_target(target: &Message, task_id: i64, expected_roles: &[&str]) -> Result<()> {
-    if target.task_id != Some(task_id) {
-        return Err(CoreError::InvalidMessageOperation(
-            "message does not belong to this task".to_string(),
-        ));
+/// 会話に行を書く前に、タスクが存在し削除されていないかを確かめる。削除と操作が
+/// 行き違うと、外部キーは通るので削除済みのタスクに行が書かれてしまう。
+fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
+    if let Chat::Task(task_id) = chat {
+        tasks::get_task(conn, task_id)?;
     }
+    Ok(())
+}
+
+/// 編集・再試行・削除の対象を引き、その会話の発言であることを1箇所で確認する
+/// (`docs/spec/principles.md` 5節)。
+fn find_in_chat(conn: &Connection, chat: Chat, message_id: i64) -> Result<Message> {
+    require_chat(conn, chat)?;
+    let target =
+        messages::find_message(conn, message_id)?.ok_or(CoreError::MessageNotFound(message_id))?;
+    if target.task_id != chat.task_id() {
+        return Err(CoreError::InvalidMessageOperation(format!(
+            "message does not belong to {chat}"
+        )));
+    }
+    Ok(target)
+}
+
+/// `edit_user_message`/`retry_reply`共通の役割・種別の確認。
+fn expect_normal(target: &Message, expected_roles: &[&str]) -> Result<()> {
     if target.kind != "normal" || !expected_roles.contains(&target.role.as_str()) {
         return Err(CoreError::InvalidMessageOperation(format!(
             "target must be a normal {} message",
@@ -271,7 +281,7 @@ async fn generate_turn_response(
     let mut sessions = McpSessions::new();
     // ツールに対応しないモデルには外部ツールも渡さないので、外部サーバーにも繋がない。
     let external = if ctx.capabilities.tools {
-        prepare_external_tools(&ctx.mcp, &mut sessions).await
+        prepare_external_tools(&ctx.mcp, attempt.chat, &mut sessions).await
     } else {
         ExternalToolset::default()
     };
@@ -299,16 +309,16 @@ fn ready_adapter<'a>(
 /// そのまま持つ。
 #[derive(Clone)]
 struct Attempt {
-    task_id: i64,
+    chat: Chat,
     turn_id: String,
     attempt_no: i64,
 }
 
 impl Attempt {
     /// 新しいターンの最初の試行。以降の再試行は`retry_reply`が`next_attempt_no`で採番する。
-    fn first(task_id: i64) -> Self {
+    fn first(chat: Chat) -> Self {
         Self {
-            task_id,
+            chat,
             turn_id: Ulid::new().to_string(),
             attempt_no: 1,
         }
@@ -327,15 +337,14 @@ impl Attempt {
         messages::insert_message(
             conn,
             NewMessage {
-                task_id: Some(self.task_id),
+                task_id: self.chat.task_id(),
                 role,
                 content,
                 kind,
-                // 外部サーバーのツールを呼んだ記録もこのターンに属する。`source`は逆向き
-                // (外部のLLMがMCP経由でSCITLを操作した)専用の印であり、ここでは付けない
-                // (data-model.md「ターン境界」の3分類)。
-                source: None,
-                turn: Some((&self.turn_id, self.attempt_no)),
+                origin: Origin::Turn {
+                    turn_id: &self.turn_id,
+                    attempt_no: self.attempt_no,
+                },
                 error_kind: error.map(|(kind, _)| kind),
                 error_detail: error.and_then(|(_, detail)| detail),
                 reasoning,
@@ -346,12 +355,15 @@ impl Attempt {
 
 /// このターンでモデルへ公開する外部ツールを決める。ツールを1つも有効化していない
 /// サーバーには接続しない(ユーザーが有効化していない以上、繋ぐ理由が無い)。
+/// 総合チャットにも公開する(tools.md 5節。権限の分離はSCITL自身のタスクへの書き込みの話で、
+/// 外部ツールの安全性の境界はユーザーが信頼して登録したこと)。
 ///
 /// 一覧はキャッシュ(Issue #104)を優先し、無ければ取得してキャッシュに載せる。
 /// 接続・取得に失敗したサーバーはこのターンでは公開しない。ここでターン全体を失敗させると、
 /// 外部サーバーが1つ落ちているだけでチャットが使えなくなるため(principles.md 3節)。
 async fn prepare_external_tools(
     mcp: &McpAccess<'_>,
+    chat: Chat,
     sessions: &mut McpSessions,
 ) -> ExternalToolset {
     let mut fetched = Vec::new();
@@ -379,7 +391,7 @@ async fn prepare_external_tools(
             }
         }
     }
-    ExternalToolset::build(fetched, &tools::task_chat_tool_names())
+    ExternalToolset::build(fetched, &tools::names(chat))
 }
 
 /// ツールの上限に達したあとの最後の呼び出しで、システムプロンプトの末尾に足す一節。
@@ -397,7 +409,7 @@ async fn run_tool_rounds(
     external: &ExternalToolset,
     sessions: &mut McpSessions,
 ) -> Result<()> {
-    let task_id = attempt.task_id;
+    let chat = attempt.chat;
     // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
     // 衝突の排除は`ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
     // (対応しないモデルにツールを渡すと、リクエストごと拒否するサーバーがある)。
@@ -406,12 +418,12 @@ async fn run_tool_rounds(
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
     let opening = ctx.opening_message.to_string();
     let history = with_conn(db.clone(), move |conn| {
-        build_history(conn, task_id, tools_available, &opening)
+        build_history(conn, chat, tools_available, &opening)
     })
     .await?;
     let mut exposed_tools = Vec::new();
     if tools_available {
-        exposed_tools.extend(tools::task_chat_tools());
+        exposed_tools.extend(tools::schemas(chat));
         exposed_tools.extend(external.schemas());
     }
 
@@ -452,7 +464,7 @@ async fn run_tool_rounds(
                     base: base_owned.as_deref(),
                     task_chat: task_chat_owned.as_deref(),
                 };
-                build_system_prompt(conn, task_id, &prompts, tools_available)
+                build_system_prompt(conn, chat, &prompts, tools_available)
             }
         })
         .await?;
@@ -576,7 +588,7 @@ async fn run_tool_rounds(
             }
             let started = Instant::now();
             let (result, tool_kind) =
-                execute_call(db.clone(), task_id, &ctx.mcp, external, sessions, &call).await?;
+                execute_call(db.clone(), chat, &ctx.mcp, external, sessions, &call).await?;
             tool_time_used = tool_time_used.saturating_add(started.elapsed());
 
             // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
@@ -641,7 +653,7 @@ async fn run_tool_rounds(
 /// 接続先が無い)は`None`で、次ターン以降の履歴に載らない。
 async fn execute_call(
     db: SharedConnection,
-    task_id: i64,
+    chat: Chat,
     mcp: &McpAccess<'_>,
     external: &ExternalToolset,
     sessions: &mut McpSessions,
@@ -663,9 +675,9 @@ async fn execute_call(
         let name = call.name.clone();
         let arguments = arguments.clone();
         return with_conn(db, move |conn| {
-            let result = tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
+            let result = tools::execute(conn, chat, &name, &arguments)
                 .unwrap_or_else(|e| json!({ "error": e.to_string() }));
-            Ok((result, tools::task_chat_tool_kind(&name)))
+            Ok((result, tools::kind(chat, &name)))
         })
         .await;
     };

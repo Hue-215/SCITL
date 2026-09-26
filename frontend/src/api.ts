@@ -3,6 +3,7 @@ import type {
   ApiFormat,
   AvailableModel,
   Capability,
+  Chat,
   ChatModelsView,
   Language,
   LinkInspection,
@@ -37,6 +38,20 @@ export function createTask(): Promise<TaskCreation> {
   return invoke('create_task')
 }
 
+// ヘッダーからのタスク操作(Issue #75)。変更と会話ログへの記録はRust側が一緒に書く。
+// どれも応答を生成中のタスクでは断られる。
+export function renameTask(taskId: number, title: string): Promise<void> {
+  return invoke('rename_task', { taskId, title })
+}
+
+export function setTaskArchived(taskId: number, archived: boolean): Promise<void> {
+  return invoke('set_task_archived', { taskId, archived })
+}
+
+export function deleteTask(taskId: number): Promise<void> {
+  return invoke('delete_task', { taskId })
+}
+
 // 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける
 // (architecture.md 3節)。経路(Channel)はコマンドの呼び出しごとに作るので、届いた
 // イベントがどのタスクのものかは呼び出し側が知っている。
@@ -47,44 +62,39 @@ export function openTaskChat(
   return invoke('open_task_chat', { taskId, onEvent: new Channel(onEvent) })
 }
 
-export function sendTaskChatMessage(
-  taskId: number,
+export function sendChatMessage(
+  chat: Chat,
   text: string,
   onEvent: (event: TurnEvent) => void,
 ): Promise<void> {
-  return invoke('send_task_chat_message', { taskId, text, onEvent: new Channel(onEvent) })
+  return invoke('send_chat_message', { chat, text, onEvent: new Channel(onEvent) })
 }
 
-export function listTaskMessages(taskId: number): Promise<Message[]> {
-  return invoke('list_task_messages', { taskId })
+export function listChatMessages(chat: Chat): Promise<Message[]> {
+  return invoke('list_chat_messages', { chat })
 }
 
 // 編集・再試行・削除(Issue #41)。いずれも対象は`messageId`で指定し、
-// タスクの取り違え防止のため`taskId`も渡す(tools.md 1節と同じ理由)。
-export function editTaskChatMessage(
-  taskId: number,
+// 会話の取り違え防止のため`chat`も渡す(tools.md 1節と同じ理由)。
+export function editChatMessage(
+  chat: Chat,
   messageId: number,
   text: string,
   onEvent: (event: TurnEvent) => void,
 ): Promise<void> {
-  return invoke('edit_task_chat_message', {
-    taskId,
-    messageId,
-    text,
-    onEvent: new Channel(onEvent),
-  })
+  return invoke('edit_chat_message', { chat, messageId, text, onEvent: new Channel(onEvent) })
 }
 
-export function retryTaskChatMessage(
-  taskId: number,
+export function retryChatMessage(
+  chat: Chat,
   messageId: number,
   onEvent: (event: TurnEvent) => void,
 ): Promise<void> {
-  return invoke('retry_task_chat_message', { taskId, messageId, onEvent: new Channel(onEvent) })
+  return invoke('retry_chat_message', { chat, messageId, onEvent: new Channel(onEvent) })
 }
 
-export function deleteTaskChatMessage(taskId: number, messageId: number): Promise<void> {
-  return invoke('delete_task_chat_message', { taskId, messageId })
+export function deleteChatMessage(chat: Chat, messageId: number): Promise<void> {
+  return invoke('delete_chat_message', { chat, messageId })
 }
 
 export function getSettings(): Promise<SettingsView> {

@@ -1,7 +1,39 @@
+use std::fmt;
+
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{now_iso8601, CoreError, Result};
+
+/// 発言が属する会話。`messages.task_id`がNULLなら総合チャット(data-model.md messages)。
+/// `Option<i64>`で持たないのは、渡し忘れの`None`が総合チャットへの書き込みに化けるのを
+/// 型で防ぐため(tools.md 1節が修正した「対象の取り違え」と同種の事故)。
+/// 画面とは`{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "task_id", rename_all = "snake_case")]
+pub enum Chat {
+    General,
+    Task(i64),
+}
+
+impl Chat {
+    /// `messages.task_id`の値。
+    pub fn task_id(self) -> Option<i64> {
+        match self {
+            Self::General => None,
+            Self::Task(id) => Some(id),
+        }
+    }
+}
+
+impl fmt::Display for Chat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::General => f.write_str("the general chat"),
+            Self::Task(id) => write!(f, "task {id}"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,15 +71,43 @@ impl Kind {
     }
 }
 
-/// `docs/spec/rebuild/data-model.md`「ターン境界」の3分類。
-/// ユーザー発言・外部経由の記録は`None`、SCITL自身の応答生成に属する行は`Some`。
+/// 行の出どころ(`docs/spec/rebuild/data-model.md`「ターン境界」の3分類)。`source`と
+/// `turn_id`/`attempt_no`の組み合わせはこれだけから決まり、取り違えた組み合わせは書けない。
+/// 操作の記録が実行記録であることまでは型で縛らず、DBのトリガー(`0004_message_origin.sql`)が
+/// 止める。
+#[derive(Debug, Clone, Copy)]
+pub enum Origin<'a> {
+    User,
+    /// SCITLの応答生成の1試行に属する行。応答生成の途中で外部のツールサーバーを呼んだ記録も
+    /// ここに入る(`source`は「外部と通信した」印ではない)。
+    Turn {
+        turn_id: &'a str,
+        attempt_no: i64,
+    },
+    /// 応答生成以外の経路での操作の記録。
+    Operation(OperationSource),
+}
+
+/// 応答生成以外の経路の印(`messages.source`)。CLI(#23)・MCP(#73)を実装したら値を足す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationSource {
+    Ui,
+}
+
+impl OperationSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ui => "ui",
+        }
+    }
+}
+
 pub struct NewMessage<'a> {
     pub task_id: Option<i64>,
     pub role: Role,
     pub content: &'a str,
     pub kind: Kind,
-    pub source: Option<&'a str>,
-    pub turn: Option<(&'a str, i64)>,
+    pub origin: Origin<'a>,
     /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
     pub error_kind: Option<&'a str>,
     /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
@@ -75,9 +135,13 @@ pub struct Message {
 }
 
 pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
-    let (turn_id, attempt_no) = match msg.turn {
-        Some((id, attempt)) => (Some(id), Some(attempt)),
-        None => (None, None),
+    let (source, turn_id, attempt_no) = match msg.origin {
+        Origin::User => (None, None, None),
+        Origin::Turn {
+            turn_id,
+            attempt_no,
+        } => (None, Some(turn_id), Some(attempt_no)),
+        Origin::Operation(source) => (Some(source.as_str()), None, None),
     };
     conn.execute(
         "INSERT INTO messages
@@ -88,7 +152,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
             msg.role.as_str(),
             msg.content,
             msg.kind.as_str(),
-            msg.source,
+            source,
             msg.reasoning,
             msg.error_kind,
             msg.error_detail,
@@ -100,20 +164,20 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     Ok(conn.last_insert_rowid())
 }
 
-/// タスクチャンネル分の発言取得(支配的クエリ)。
+/// 1つの会話の発言取得(支配的クエリ)。
 /// ターンを持つ行は`turn_id`ごとの最新試行のみに絞り、さらに**通常発言が1行も生き残って
 /// いないターン(破棄されたターン)を丸ごと除く**(data-model.md「ターン境界」—
-/// 外部経由の記録はturn_idを持たないため常に残る)。
+/// 応答生成以外の経路での操作の記録はturn_idを持たないため常に残る)。
 ///
 /// 後者はIssue #95。編集・再試行のカスケードは`kind='normal'`しか論理削除しないため
 /// (ツール実行記録は保全する。data-model.md)、破棄されたターンのツール実行記録だけが
 /// 残る。これを会話に並べると、直後に挿入される編集後の発言がその下に来て新規送信と
 /// 見分けが付かなくなる。記録はDBに残したまま、この支配的クエリの時点で会話から外す。
-pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
+pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
         "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
          FROM messages
-         WHERE task_id = ?1
+         WHERE task_id IS ?1
            AND deleted_at IS NULL
            AND (
              turn_id IS NULL
@@ -134,7 +198,7 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
          ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt
-        .query_map([task_id], message_from_row)?
+        .query_map([chat.task_id()], message_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -153,7 +217,7 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     .map_err(Into::into)
 }
 
-/// `SELECT`の列の並びは`list_for_task`・`find_message`で共通。
+/// `SELECT`の列の並びは`list_for_chat`・`find_message`で共通。
 fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
     Ok(Message {
         id: row.get(0)?,
@@ -174,7 +238,7 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
 /// 削除(共通)の唯一の入口。対象はユーザー発言とターンの返信(アシスタント発言・
 /// エラー発言)の通常発言のみ
 /// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない」)。
-/// 返信を消したターンは通常発言が残らないため、`list_for_task`がターンごと会話から外す。
+/// 返信を消したターンは通常発言が残らないため、`list_for_chat`がターンごと会話から外す。
 /// 確認ダイアログを挟まない即時の論理削除で、`deleted_at`を立てるだけの取り消し可能な
 /// 操作にする(`deleted_at`をNULLに戻せば復元できる。復元UIは本Issueの範囲外)。
 pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
@@ -203,15 +267,15 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
 /// (会話の整合性より実行記録の保全を優先する)」)。
 ///
 /// この呼び出しの後、対象のターンには通常発言が1行も残らず、ツール実行記録だけが浮く。
-/// 会話としては破棄されたターンなので、`list_for_task`が表示から外す(Issue #95。
+/// 会話としては破棄されたターンなので、`list_for_chat`が表示から外す(Issue #95。
 /// `soft_delete_normal_from_cascades_but_spares_tool_execution_rows`で、DBには残り
 /// 会話には出ないことを確認している)。**保全と表示を切り離すのがここの要点**で、
 /// 記録の側を消して辻褄を合わせてはならない。
-pub fn soft_delete_normal_from(conn: &Connection, task_id: i64, from_id: i64) -> Result<()> {
+pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
-         WHERE task_id = ?2 AND id >= ?3 AND kind = 'normal' AND deleted_at IS NULL",
-        rusqlite::params![now_iso8601(), task_id, from_id],
+         WHERE task_id IS ?2 AND id >= ?3 AND kind = 'normal' AND deleted_at IS NULL",
+        rusqlite::params![now_iso8601(), chat.task_id(), from_id],
     )?;
     Ok(())
 }
@@ -227,7 +291,8 @@ pub enum Opener {
 /// タスクの会話を始めた側。まだ1行も無ければ`None`。
 ///
 /// 論理削除した行も含めた最初の行で決める。最初のユーザー発言を消しても編集で置き換えても
-/// 行は残るので、答えが変わらない。外部(MCP)経由の記録はこの会話の発言ではないので見ない。
+/// 行は残るので、答えが変わらない。応答生成以外の経路での操作の記録はこの会話の発言ではないので
+/// 見ない。
 pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
     let role: Option<String> = conn
         .query_row(
@@ -287,8 +352,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -303,8 +367,10 @@ mod tests {
                 role: Role::Error,
                 content: "モデルからの応答が空でした",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: Some("empty_response"),
                 error_detail: None,
                 reasoning: None,
@@ -319,8 +385,10 @@ mod tests {
                 role: Role::Assistant,
                 content: "再試行後の応答",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 2)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 2,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -328,13 +396,13 @@ mod tests {
         )
         .unwrap();
 
-        let messages = list_for_task(&conn, task_id).unwrap();
+        let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
         assert_eq!(contents, vec!["こんにちは", "再試行後の応答"]);
     }
 
     #[test]
-    fn external_records_without_turn_are_always_shown() {
+    fn operation_records_without_turn_are_always_shown() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
 
@@ -345,8 +413,7 @@ mod tests {
                 role: Role::Tool,
                 content: "{}",
                 kind: Kind::ToolExecution,
-                source: Some("mcp:external-client"),
-                turn: None,
+                origin: Origin::Operation(OperationSource::Ui),
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -354,9 +421,66 @@ mod tests {
         )
         .unwrap();
 
-        let messages = list_for_task(&conn, task_id).unwrap();
+        let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].source.as_deref(), Some("mcp:external-client"));
+        assert_eq!(messages[0].source.as_deref(), Some("ui"));
+    }
+
+    #[test]
+    fn only_operation_records_outside_a_turn_carry_a_source() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let insert = |role, kind, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id: Some(task_id),
+                    role,
+                    content: "{}",
+                    kind,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+        };
+        let raw = |source: Option<&str>, turn_id: Option<&str>| {
+            conn.execute(
+                "INSERT INTO messages (task_id, role, content, kind, source, turn_id, attempt_no, created_at)
+                 VALUES (?1, 'tool', '{}', 'tool_execution', ?2, ?3, ?4, '2026-01-01T00:00:00Z')",
+                rusqlite::params![task_id, source, turn_id, turn_id.map(|_| 1)],
+            )
+        };
+
+        let record = insert(
+            Role::Tool,
+            Kind::ToolExecution,
+            Origin::Operation(OperationSource::Ui),
+        )
+        .unwrap();
+        // 経路の印を発言に付けることはできない(CLIからの発言もただのユーザー発言)。
+        assert!(insert(
+            Role::User,
+            Kind::Normal,
+            Origin::Operation(OperationSource::Ui)
+        )
+        .is_err());
+        // ターンの記録に印を付けること、印の無い記録をターンの外に書くことはできない。
+        assert!(raw(Some("ui"), Some("turn-1")).is_err());
+        assert!(raw(None, None).is_err());
+        assert!(conn
+            .execute(
+                "UPDATE messages SET turn_id = 'turn-1', attempt_no = 1 WHERE id = ?1",
+                [record]
+            )
+            .is_err());
+        // 論理削除は印に関わらない。
+        conn.execute(
+            "UPDATE messages SET deleted_at = '2026-01-01T00:00:00Z' WHERE id = ?1",
+            [record],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -371,8 +495,10 @@ mod tests {
                     role,
                     content,
                     kind,
-                    source: None,
-                    turn: Some(("turn-1", 1)),
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no: 1,
+                    },
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -400,8 +526,10 @@ mod tests {
                 role: Role::Error,
                 content: "APIキーが設定されていません",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: Some("no_api_key"),
                 error_detail: Some("HTTP 401: invalid key"),
                 reasoning: None,
@@ -409,7 +537,7 @@ mod tests {
         )
         .unwrap();
 
-        let messages = list_for_task(&conn, task_id).unwrap();
+        let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "error");
         assert_eq!(messages[0].error_kind.as_deref(), Some("no_api_key"));
@@ -433,8 +561,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: Some("HTTP 500: boom"),
                 reasoning: None,
@@ -449,8 +576,7 @@ mod tests {
                 role: Role::Error,
                 content: "LLMプロバイダーとの通信に失敗しました。",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some(""),
                 reasoning: None,
@@ -465,8 +591,7 @@ mod tests {
                 role: Role::Error,
                 content: "LLMプロバイダーとの通信に失敗しました。",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some("HTTP 500: boom"),
                 reasoning: None,
@@ -493,8 +618,7 @@ mod tests {
                 role: Role::Error,
                 content: "壊れた呼び出し",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -518,8 +642,7 @@ mod tests {
                 role: Role::User,
                 content: "工程を作って",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -536,8 +659,10 @@ mod tests {
                     role: Role::Tool,
                     content: r#"{"tool":"add_steps"}"#,
                     kind: Kind::ToolExecution,
-                    source: None,
-                    turn: Some(("turn-1", attempt)),
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no: attempt,
+                    },
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -551,8 +676,10 @@ mod tests {
                     role: Role::Assistant,
                     content: "追加しました",
                     kind: Kind::Normal,
-                    source: None,
-                    turn: Some(("turn-1", attempt)),
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no: attempt,
+                    },
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -562,10 +689,10 @@ mod tests {
         }
 
         // 前方のユーザー発言を編集した場合のカスケード。通常発言は全試行分が消える。
-        soft_delete_normal_from(&conn, task_id, user_id).unwrap();
+        soft_delete_normal_from(&conn, Chat::Task(task_id), user_id).unwrap();
 
         // 旧試行・最新試行のどちらのツール実行記録も会話には出ない。
-        let remaining = list_for_task(&conn, task_id).unwrap();
+        let remaining = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert!(
             remaining.is_empty(),
             "unexpected remaining rows: {remaining:?}"
@@ -594,8 +721,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -605,7 +731,9 @@ mod tests {
 
         soft_delete_message(&conn, id).unwrap();
 
-        assert!(list_for_task(&conn, task_id).unwrap().is_empty());
+        assert!(list_for_chat(&conn, Chat::Task(task_id))
+            .unwrap()
+            .is_empty());
         // 物理削除ではないことを確認する(deleted_atを無視すれば行は残っている)。
         let deleted_at: Option<String> = conn
             .query_row("SELECT deleted_at FROM messages WHERE id = ?1", [id], |r| {
@@ -626,8 +754,10 @@ mod tests {
                 role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -658,8 +788,7 @@ mod tests {
                 role: Role::User,
                 content: "工程を追加して",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -674,8 +803,10 @@ mod tests {
                 role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -690,8 +821,10 @@ mod tests {
                 role: Role::Assistant,
                 content: "追加しました",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -700,13 +833,13 @@ mod tests {
         .unwrap();
 
         // ユーザー発言以降(自身を含む)をすべて論理削除する = 編集操作のカスケードと同じ形。
-        soft_delete_normal_from(&conn, task_id, user_id).unwrap();
+        soft_delete_normal_from(&conn, Chat::Task(task_id), user_id).unwrap();
 
         // kind='normal'の行(ユーザー発言・アシスタント発言)はすべて消える。ツール実行記録は
         // `soft_delete_normal_from`の対象外なので`deleted_at`が立たないが、通常発言が1行も
-        // 残らないターンは会話としては破棄されているため、`list_for_task`は丸ごと外す
+        // 残らないターンは会話としては破棄されているため、`list_for_chat`は丸ごと外す
         // (Issue #95)。保全(DBに残る)と表示(会話に出ない)を切り離すのがこのテストの要点。
-        let remaining = list_for_task(&conn, task_id).unwrap();
+        let remaining = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert!(
             remaining.is_empty(),
             "unexpected remaining rows: {remaining:?}"
@@ -746,8 +879,10 @@ mod tests {
                 role: Role::Assistant,
                 content: "1回目の応答",
                 kind: Kind::Normal,
-                source: None,
-                turn: Some(("turn-1", 1)),
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -773,8 +908,7 @@ mod tests {
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
-                source: None,
-                turn: None,
+                origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
                 reasoning: None,
@@ -790,7 +924,7 @@ mod tests {
     #[test]
     fn opener_is_decided_by_the_first_row_even_after_it_is_deleted() {
         let conn = db::open_in_memory().unwrap();
-        let insert = |task_id, role, turn, source| {
+        let insert = |task_id, role, origin| {
             insert_message(
                 &conn,
                 NewMessage {
@@ -802,8 +936,7 @@ mod tests {
                     } else {
                         Kind::Normal
                     },
-                    source,
-                    turn,
+                    origin,
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -814,17 +947,79 @@ mod tests {
 
         let by_user = seed_task(&conn);
         assert_eq!(opener(&conn, by_user).unwrap(), None);
-        let first = insert(by_user, Role::User, None, None);
-        insert(by_user, Role::Assistant, Some(("turn-1", 1)), None);
+        let turn = |turn_id| Origin::Turn {
+            turn_id,
+            attempt_no: 1,
+        };
+        let first = insert(by_user, Role::User, Origin::User);
+        insert(by_user, Role::Assistant, turn("turn-1"));
         soft_delete_message(&conn, first).unwrap();
         assert_eq!(opener(&conn, by_user).unwrap(), Some(Opener::User));
 
         let by_reply = seed_task(&conn);
-        // 外部経由の記録は会話の発言ではない。
-        insert(by_reply, Role::Tool, None, Some("mcp:external-client"));
-        let reply = insert(by_reply, Role::Assistant, Some(("turn-2", 1)), None);
-        insert(by_reply, Role::User, None, None);
-        soft_delete_normal_from(&conn, by_reply, reply).unwrap();
+        // 応答生成以外の経路での操作の記録は会話の発言ではない。
+        insert(by_reply, Role::Tool, Origin::Operation(OperationSource::Ui));
+        let reply = insert(by_reply, Role::Assistant, turn("turn-2"));
+        insert(by_reply, Role::User, Origin::User);
+        soft_delete_normal_from(&conn, Chat::Task(by_reply), reply).unwrap();
         assert_eq!(opener(&conn, by_reply).unwrap(), Some(Opener::Reply));
+    }
+    #[test]
+    fn general_and_task_chats_do_not_see_each_others_messages() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let insert = |task_id: Option<i64>, content| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id,
+                    role: Role::User,
+                    content,
+                    kind: Kind::Normal,
+                    origin: Origin::User,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let general_first = insert(None, "総合1");
+        insert(Some(task_id), "タスク");
+        insert(None, "総合2");
+
+        let contents = |chat| -> Vec<String> {
+            list_for_chat(&conn, chat)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.content)
+                .collect()
+        };
+        assert_eq!(contents(Chat::General), vec!["総合1", "総合2"]);
+        assert_eq!(contents(Chat::Task(task_id)), vec!["タスク"]);
+
+        // 編集のカスケードも会話の中に留まる。
+        soft_delete_normal_from(&conn, Chat::General, general_first).unwrap();
+        assert!(contents(Chat::General).is_empty());
+        assert_eq!(contents(Chat::Task(task_id)), vec!["タスク"]);
+    }
+
+    #[test]
+    fn chat_is_exchanged_as_a_tagged_object() {
+        assert_eq!(
+            serde_json::to_value(Chat::General).unwrap(),
+            serde_json::json!({ "kind": "general" })
+        );
+        assert_eq!(
+            serde_json::to_value(Chat::Task(3)).unwrap(),
+            serde_json::json!({ "kind": "task", "task_id": 3 })
+        );
+        let general: Chat =
+            serde_json::from_value(serde_json::json!({ "kind": "general" })).unwrap();
+        assert_eq!(general, Chat::General);
+        // nullや数値だけでは総合チャットにもタスクにもならない。
+        assert!(serde_json::from_value::<Chat>(serde_json::json!(null)).is_err());
+        assert!(serde_json::from_value::<Chat>(serde_json::json!(3)).is_err());
+        assert!(serde_json::from_value::<Chat>(serde_json::json!({ "kind": "task" })).is_err());
     }
 }

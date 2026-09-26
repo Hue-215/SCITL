@@ -2,6 +2,7 @@
 //! 1つの型にまとめて渡す(principles.md 5節)。
 
 use crate::config::ReasoningEffort;
+use crate::db::messages::Chat;
 use crate::in_flight::InFlightSet;
 use crate::llm::{LlmAdapter, ModelCapabilities};
 use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnEvents, TurnFailure};
@@ -23,9 +24,9 @@ pub struct TurnContext<'a> {
     pub reasoning_effort: Option<ReasoningEffort>,
     pub mcp: McpAccess<'a>,
     pub limits: ToolLimits,
-    /// 応答を生成中のタスク。アプリの起動中ずっと同じ集合を渡す。同じタスクで2つの
+    /// 応答を生成中の会話。アプリの起動中ずっと同じ集合を渡す。同じ会話で2つの
     /// ターンが並ぶと、発言と実行記録の行が混ざり合うため、ターンの入口で1本に絞る。
-    pub generating: &'a InFlightSet<i64>,
+    pub generating: &'a InFlightSet<Chat>,
     /// ターンの途中経過の受け口([`crate::orchestration::TurnEvent`])。
     pub events: TurnEvents<'a>,
 }

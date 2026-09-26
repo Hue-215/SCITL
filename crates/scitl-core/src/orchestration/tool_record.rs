@@ -1,14 +1,15 @@
-//! ツール実行記録(`kind='tool_execution'`の行)の`content`の形。書き込み(`turn`)と
-//! 読み戻し(`history`)、実行を画面へ知らせるイベント(`turn_event`)で同じ形を使うため、
-//! ここに1つだけ置く(principles.md 5節)。
+//! ツール実行記録(`kind='tool_execution'`の行)の`content`の形。書き込み(`turn`・
+//! `operations`)と読み戻し(`history`)、実行を画面へ知らせるイベント(`turn_event`)で
+//! 同じ形を使うため、ここに1つだけ置く(principles.md 5節)。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::tools::ToolKind;
 
-/// フィールドをcoreの外に開かないのは、記録を作るのがターンの処理だけだから
-/// (外へは直列化した形で渡るだけ)。
+/// フィールドをcoreの外に開かないのは、記録を作るのがcoreの中(ターンの処理と、応答生成以外の
+/// 経路での操作)だけだから(外へは直列化した形で渡るだけ)。操作の記録は`tool_kind`・
+/// `call_id`を持たない(data-model.md「応答生成以外の経路での操作の記録」)。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolExecutionRecord {
     pub(crate) tool: String,

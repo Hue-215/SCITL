@@ -1,26 +1,20 @@
 import { useState } from 'react'
+import { GENERAL_CHAT, taskChat } from './chat'
 import { t } from './i18n'
-import { taskName } from './taskName'
-import type { TaskSummary } from './types'
+import { taskName, taskProgress } from './taskName'
+import type { Chat, TaskSummary } from './types'
 
 interface SidebarProps {
   tasks: TaskSummary[]
-  selectedTaskId: number | null
-  onSelect: (taskId: number) => void
+  selected: Chat
+  onSelect: (chat: Chat) => void
   onAddTask: () => void
   adding: boolean
   onOpenSettings: () => void
 }
 
 function taskLabel(task: TaskSummary): string {
-  const steps =
-    task.steps_total > 0
-      ? t('sidebar.steps_progress', { done: task.steps_done, total: task.steps_total })
-      : t('sidebar.steps_none')
-  const deadline = t('sidebar.deadline_prefix', {
-    deadline: task.deadline ?? t('sidebar.deadline_unset'),
-  })
-  return t('sidebar.task_label', { title: taskName(task), deadline, steps })
+  return t('sidebar.task_label', { title: taskName(task), ...taskProgress(task) })
 }
 
 function TaskList({
@@ -30,7 +24,7 @@ function TaskList({
 }: {
   tasks: TaskSummary[]
   selectedTaskId: number | null
-  onSelect: (taskId: number) => void
+  onSelect: (chat: Chat) => void
 }) {
   return (
     <ul className="sidebar-task-list">
@@ -39,7 +33,7 @@ function TaskList({
           <button
             type="button"
             className={task.id === selectedTaskId ? 'list-row selected' : 'list-row'}
-            onClick={() => onSelect(task.id)}
+            onClick={() => onSelect(taskChat(task.id))}
           >
             {taskLabel(task)}
           </button>
@@ -49,11 +43,11 @@ function TaskList({
   )
 }
 
-// サイドバー: 総合チャット行(固定・現時点では無効)・タスク一覧・アーカイブ折りたたみ・
-// 新規タスク追加ボタン(legacy/frontend.md 1節)。総合チャット自体は別Issue。
+// サイドバー: 総合チャット行(固定)・タスク一覧・アーカイブ折りたたみ・
+// 新規タスク追加ボタン(legacy/frontend.md 1節)。
 export default function Sidebar({
   tasks,
-  selectedTaskId,
+  selected,
   onSelect,
   onAddTask,
   adding,
@@ -63,11 +57,16 @@ export default function Sidebar({
 
   const active = tasks.filter((t) => t.archived_at === null)
   const archived = tasks.filter((t) => t.archived_at !== null)
+  const selectedTaskId = selected.kind === 'task' ? selected.task_id : null
 
   return (
     <nav className="sidebar">
       <div className="sidebar-general-row">
-        <button type="button" className="sidebar-general" disabled>
+        <button
+          type="button"
+          className={selected.kind === 'general' ? 'sidebar-general selected' : 'sidebar-general'}
+          onClick={() => onSelect(GENERAL_CHAT)}
+        >
           {t('sidebar.general_chat')}
         </button>
         <button
@@ -85,21 +84,20 @@ export default function Sidebar({
       <div className="sidebar-scroll">
         <TaskList tasks={active} selectedTaskId={selectedTaskId} onSelect={onSelect} />
 
-        {archived.length > 0 && (
-          <div className="sidebar-archived">
-            <button
-              type="button"
-              className="list-row sidebar-archived-toggle"
-              onClick={() => setArchivedOpen((open) => !open)}
-            >
-              {t('sidebar.archived_label', { count: archived.length })}
-              {archivedOpen ? ' ▲' : ' ▼'}
-            </button>
-            {archivedOpen && (
-              <TaskList tasks={archived} selectedTaskId={selectedTaskId} onSelect={onSelect} />
-            )}
-          </div>
-        )}
+        {/* 0件でも行は出す(legacy/frontend.md 1節)。アーカイブした行き先が常に見えるように */}
+        <div className="sidebar-archived">
+          <button
+            type="button"
+            className="list-row sidebar-archived-toggle"
+            onClick={() => setArchivedOpen((open) => !open)}
+          >
+            {t('sidebar.archived_label', { count: archived.length })}
+            {archivedOpen ? ' ▲' : ' ▼'}
+          </button>
+          {archivedOpen && (
+            <TaskList tasks={archived} selectedTaskId={selectedTaskId} onSelect={onSelect} />
+          )}
+        </div>
       </div>
 
       <button type="button" className="sidebar-add" onClick={onAddTask} disabled={adding}>

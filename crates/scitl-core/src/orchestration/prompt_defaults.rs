@@ -21,8 +21,9 @@ pub fn default_opening_message(language: Language) -> &'static str {
 }
 
 impl<'a> SystemPrompts<'a> {
-    /// タスクチャットで使う組。タスクチャット用が未設定なら既定の文面にする。
-    pub fn for_task_chat(general: &'a GeneralConfig) -> Self {
+    /// 設定から作る組。タスクチャット用が未設定なら既定の文面にする(総合チャットは
+    /// タスクチャット用を使わない。`state_prompt::build_system_prompt`)。
+    pub fn from_config(general: &'a GeneralConfig) -> Self {
         Self {
             base: general.system_prompt.as_deref(),
             task_chat: Some(or_default(
@@ -59,7 +60,7 @@ mod tests {
             ..GeneralConfig::default()
         };
         assert_eq!(
-            SystemPrompts::for_task_chat(&general).task_chat,
+            SystemPrompts::from_config(&general).task_chat,
             Some(default_task_chat_prompt(Language::En))
         );
         assert_eq!(
@@ -73,7 +74,7 @@ mod tests {
             ..GeneralConfig::default()
         };
         assert_eq!(
-            SystemPrompts::for_task_chat(&general).task_chat,
+            SystemPrompts::from_config(&general).task_chat,
             Some("custom")
         );
         assert_eq!(opening_message(&general), "hello");

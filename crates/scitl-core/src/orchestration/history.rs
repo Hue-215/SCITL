@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use rusqlite::Connection;
 
 use crate::db::error::Result;
-use crate::db::messages::{self, Message, Opener};
+use crate::db::messages::{self, Chat, Message, Opener};
 use crate::llm::{ChatMessage, PromptText, ToolArguments, ToolCallRequest};
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
 use crate::tools::ToolKind;
@@ -17,26 +17,29 @@ use crate::tools::ToolKind;
 ///
 /// エラー発言(`role='error'`)は除外する
 /// (`legacy/backend.md` 4節手順2「エラー発言・ツール実行記録はこのAPI送信用の履歴からは
-/// 除外する」)。表示・エクスポートには`list_for_task`経由で引き続き残る。
+/// 除外する」)。表示・エクスポートには`list_for_chat`経由で引き続き残る。
 ///
 /// ツール実行記録は、事実系の結果だけを呼び出しと結果の組にして送る(tools.md 4節)。
 /// `tools_available`が偽なら送らない。ツールに対応しないモデルには、`tool_calls`を含む
 /// 履歴ごと拒むサーバーがあるため。
 ///
-/// 聞き取りから始まった会話(`messages::Opener::Reply`)は、保存していない開始の発言
-/// (`opening`)を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
-/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。
+/// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
+/// 発言(`opening`)を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
+/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。総合チャットは聞き取りを
+/// 持たず、必ずユーザー発言から始まるので補わない。
 pub(super) fn build_history(
     conn: &Connection,
-    task_id: i64,
+    chat: Chat,
     tools_available: bool,
     opening: &str,
 ) -> Result<Vec<ChatMessage>> {
-    let stored = messages::list_for_task(conn, task_id)?;
+    let stored = messages::list_for_chat(conn, chat)?;
     let replied_turns = replied_turns(&stored);
     let mut history = Vec::with_capacity(stored.len() + 1);
-    if messages::opener(conn, task_id)? != Some(Opener::User) {
-        history.push(ChatMessage::User(PromptText::user_message(opening, None)));
+    if let Chat::Task(task_id) = chat {
+        if messages::opener(conn, task_id)? != Some(Opener::User) {
+            history.push(ChatMessage::User(PromptText::user_message(opening, None)));
+        }
     }
     for m in stored {
         if m.kind == "tool_execution" {
@@ -75,7 +78,7 @@ fn replied_turns(stored: &[Message]) -> HashSet<String> {
 /// ラウンドの区切りは記録に無いが、状態系を抜いた時点で元の形には戻らないので、
 /// 1呼び出しにつき1組とする。
 fn fact_round_trip(m: &Message, replied_turns: &HashSet<String>) -> Option<[ChatMessage; 2]> {
-    // `turn_id`を持たないのは外部のLLMがMCP経由でSCITLを操作した記録で、このモデルの
+    // `turn_id`を持たないのは応答生成以外の経路(画面・MCP等)での操作の記録で、このモデルの
     // 呼び出しではない(data-model.md「ターン境界」)。
     if !replied_turns.contains(m.turn_id.as_deref()?) {
         return None;
@@ -136,7 +139,7 @@ mod tests {
 
     use super::*;
     use crate::db;
-    use crate::db::messages::{Kind, NewMessage, Role};
+    use crate::db::messages::{Kind, NewMessage, OperationSource, Origin, Role};
 
     const OPENING: &str = "開始の発言";
 
@@ -175,8 +178,13 @@ mod tests {
                     role,
                     content,
                     kind,
-                    source: turn.is_none().then_some("mcp"),
-                    turn,
+                    origin: match turn {
+                        Some((turn_id, attempt_no)) => Origin::Turn {
+                            turn_id,
+                            attempt_no,
+                        },
+                        None => Origin::Operation(OperationSource::Ui),
+                    },
                     error_kind: error,
                     error_detail: None,
                     reasoning: None,
@@ -193,8 +201,7 @@ mod tests {
                     role: Role::User,
                     content: text,
                     kind: Kind::Normal,
-                    source: None,
-                    turn: None,
+                    origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
                     reasoning: None,
@@ -220,7 +227,13 @@ mod tests {
         }
 
         fn history(&self, tools_available: bool) -> Vec<ChatMessage> {
-            build_history(&self.conn, self.task_id, tools_available, OPENING).unwrap()
+            build_history(
+                &self.conn,
+                Chat::Task(self.task_id),
+                tools_available,
+                OPENING,
+            )
+            .unwrap()
         }
     }
 
@@ -299,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_out_records_made_through_mcp_by_an_outside_model() {
+    fn leaves_out_operation_records_outside_a_turn() {
         let f = Fixture::new();
         f.record(None, Some(ToolKind::Fact), json!({ "text": "x" }));
         f.user("u");
@@ -342,7 +355,7 @@ mod tests {
         f.user("u");
         f.record(Some("t1"), Some(ToolKind::Fact), json!({ "text": "古い" }));
         let first_reply = f.insert(Role::Assistant, Kind::Normal, "a", Some("t1"));
-        messages::soft_delete_normal_from(&f.conn, f.task_id, first_reply).unwrap();
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), first_reply).unwrap();
         f.insert_attempt(Role::Assistant, Kind::Normal, "b", "t1", 2);
         assert!(tool_contents(&f.history(true)).is_empty());
     }
@@ -353,7 +366,7 @@ mod tests {
         let user = f.user("u");
         f.record(Some("t1"), Some(ToolKind::Fact), json!({ "text": "古い" }));
         f.reply("t1", "a");
-        messages::soft_delete_normal_from(&f.conn, f.task_id, user).unwrap();
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), user).unwrap();
         f.user("編集後");
         assert!(tool_contents(&f.history(true)).is_empty());
     }
@@ -403,5 +416,28 @@ mod tests {
         assert!(history_call_id(123_456)
             .chars()
             .all(|c| c.is_ascii_alphanumeric()));
+    }
+    #[test]
+    fn general_chat_history_has_no_opening_message() {
+        let f = Fixture::new();
+        messages::insert_message(
+            &f.conn,
+            NewMessage {
+                task_id: None,
+                role: Role::User,
+                content: "今週は何をする?",
+                kind: Kind::Normal,
+                origin: Origin::User,
+                error_kind: None,
+                error_detail: None,
+                reasoning: None,
+            },
+        )
+        .unwrap();
+        f.user("タスクの発言");
+
+        let history = build_history(&f.conn, Chat::General, true, OPENING).unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(!history.contains(&opening_message()));
     }
 }
