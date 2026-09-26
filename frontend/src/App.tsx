@@ -17,7 +17,7 @@ import Settings from './Settings'
 import Sidebar from './Sidebar'
 import { taskName } from './taskName'
 import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
-import { finalEntryOf, groupMessages } from './thinking'
+import { buildThoughtItems, finalEntryOf, groupMessages } from './thinking'
 import type { Message, TaskDetail, TaskSummary } from './types'
 import { useStickToBottom } from './useStickToBottom'
 import { useTaskRequests } from './useTaskRequests'
@@ -219,11 +219,12 @@ export default function App() {
   }
 
   const pending = taskId === null ? [] : requests.pendingOf(taskId)
+  const live = taskId === null ? [] : requests.liveOf(taskId)
   const failure = taskId === null ? null : requests.failureOf(taskId)
 
-  // 会話欄の中身が変わるのは、発言の引き直し・楽観表示の出し入れ・失敗の表示のとき。
-  // 設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
-  useLayoutEffect(follow, [follow, messages, pending.length, failure, settingsOpen])
+  // 会話欄の中身が変わるのは、発言の引き直し・楽観表示の出し入れ・途中経過の到着・失敗の
+  // 表示のとき。設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
+  useLayoutEffect(follow, [follow, messages, pending.length, live.length, failure, settingsOpen])
 
   if (settingsOpen) {
     return (
@@ -349,7 +350,7 @@ export default function App() {
               (finalMessage.role === 'assistant' || finalMessage.role === 'error')
             return (
               <li key={`turn-${item.turnId}`} className="turn-group">
-                <ThinkingTools entries={item.entries} />
+                <ThinkingTools items={buildThoughtItems(item.entries)} />
                 <div className={`entry entry-${finalMessage.role}`}>
                   <EntryBody
                     role={finalMessage.role}
@@ -387,11 +388,22 @@ export default function App() {
               </li>
             )
           })}
-          {pending.map((entry, i) => (
-            <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
-              <EntryBody role={entry.role} content={entry.content} />
-            </li>
-          ))}
+          {pending.map((entry, i) =>
+            entry.role === 'pending' ? (
+              // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す(Issue #70)。
+              // 完了したら読み直したターンに置き換わる。
+              <li key={`pending-${i}`} className="turn-group">
+                <ThinkingTools items={live} />
+                <div className="entry entry-pending">
+                  <EntryBody role={entry.role} content={entry.content} />
+                </div>
+              </li>
+            ) : (
+              <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
+                <EntryBody role={entry.role} content={entry.content} />
+              </li>
+            ),
+          )}
           {/* コマンド自体の失敗。保存されたエラー発言と同じ見た目にする(Issue #152) */}
           {failure && (
             <li className="entry entry-error">

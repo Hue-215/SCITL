@@ -1,8 +1,8 @@
 import { t } from './i18n'
 import {
-  buildThoughtItems,
   isErrorResult,
   parseToolExecution,
+  type ThoughtItem,
   type ToolExecutionContent,
 } from './thinking'
 import type { Message } from './types'
@@ -10,6 +10,7 @@ import type { Message } from './types'
 // 「思考・ツール」の折りたたみ表示(Issue #42、docs/spec/legacy/frontend.md 1節)。
 // モデルの思考(reasoning)と内部ツール呼び出しを発生順に混在させて表示する。
 // 外部(MCP)経由のツール呼び出しはここに含めず、App.tsx側で独立した1行として扱う。
+// 保存済みのターンも、応答待ちの間の途中経過(Issue #70)もこれで描く。
 //
 // 表示専用のコンポーネントであり、モデルへの再送信経路には一切関与しない
 // (docs/spec/principles.md 3節「思考は履歴に送り返さない」。思考はAPIへ送る
@@ -32,8 +33,7 @@ function ToolCallDetail({ content }: { content: ToolExecutionContent }) {
   )
 }
 
-export function ThinkingTools({ entries }: { entries: Message[] }) {
-  const items = buildThoughtItems(entries)
+export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
   if (items.length === 0) return null
 
   const hasError = items.some((item) => item.kind === 'tool' && item.isError)
