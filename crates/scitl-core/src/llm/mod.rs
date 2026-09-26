@@ -17,9 +17,10 @@ pub use token_estimate::{estimate_message, estimate_tools};
 use crate::config::ReasoningEffort;
 use crate::db::error::CoreError;
 
-/// アダプタ層が上位に返す形は完成した応答1つではなくイベントの並び
+/// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び
 /// (docs/spec/principles.md 3節「応答はイベントの並びとして受け取る」、Issue #8)。
-/// ストリーミングしないプロバイダーも各イベントを1回ずつ返せば同じ経路に乗る。
+/// ストリーミングしないプロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る
+/// ([`LlmAdapter::send`])。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseEvent {

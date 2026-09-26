@@ -316,7 +316,9 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 - 応答の途中経過の通知は、コマンド引数の`ipc::Channel`で行い(3節)、グローバルなイベント
   (`emit`/`listen`)は使わない。`listen`には`core:event`の権限を足す必要があり、WebViewが
   聞けるイベントの範囲も広がる。Channelの大きなペイロードの取得(`plugin:__TAURI_CHANNEL__|fetch`)は
-  権限の検査の対象外で、capabilitiesを足さずに届く(Tauri 2.11で確認)
+  権限の検査の対象外で、capabilitiesを足さずに届く(Tauri 2.11で確認)。Tauriを更新して
+  これが通らなくなると、8KBを超える通知から先の途中経過がそのターンの間止まる(完了後の
+  読み直しでは出る)
 - Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「独自の判断で
   通信先を増やさない」)
 

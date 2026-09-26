@@ -1,4 +1,4 @@
-import type { Message, TurnEvent } from './types'
+import type { Message, ToolExecutionRecord, TurnEvent } from './types'
 
 // 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック(Issue #42)。
 // コンポーネント本体は./ThinkingTools.tsxに置き、こちらは純粋な変換関数のみを持つ
@@ -50,11 +50,8 @@ export function finalEntryOf(entries: Message[]): Message {
   return entries[entries.length - 1]
 }
 
-export interface ToolExecutionContent {
-  tool?: string
-  arguments?: unknown
-  result?: unknown
-}
+// 画面が読むツール実行記録の項目。保存済みの行は読めた形を保証しないので、どれも欠けうる。
+export type ToolExecutionContent = Partial<Pick<ToolExecutionRecord, 'tool' | 'arguments' | 'result'>>
 
 export function parseToolExecution(content: string): ToolExecutionContent {
   try {
@@ -126,6 +123,9 @@ export function appendTurnEvent(live: LiveThoughts, event: TurnEvent): LiveThoug
       return { ...live, reasoningOpen: false }
     case 'text_delta':
     case 'tool_call':
+      return live
+    // 型はRust側と手で合わせているので、知らない種類が届いても表示を保つ。
+    default:
       return live
   }
 }
