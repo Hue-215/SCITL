@@ -413,7 +413,7 @@ fn request_body<'a>(
             })
             .collect(),
         reasoning_effort: reasoning_effort.map(reasoning_effort_value),
-        // 非ストリーミングでも戻り値はイベント列に組み立て直す(`ResponseEvent`参照)。
+        // ストリーミングしなくても、応答はイベントに分けて渡す(`LlmAdapter::send`参照)。
         stream: false,
     }
 }
@@ -473,7 +473,8 @@ impl LlmAdapter for OpenAiCompatAdapter {
         messages: &[ChatMessage],
         tools: &[ToolSchema],
         reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
         let endpoint = endpoint(&self.base_url, "chat/completions")?;
@@ -496,22 +497,21 @@ impl LlmAdapter for OpenAiCompatAdapter {
             .next()
             .ok_or(LlmError::EmptyResponse)?;
 
-        let mut events = Vec::new();
         // 思考は生成順として本文・ツール呼び出しより先に置く(`principles.md` 3節
         // 「応答はイベントの並びとして受け取る」)。非ストリーミングAPIのため実際の生成順は
         // 観測できないが、モデルが思考してから本文/ツール呼び出しを出す一般的な順序に合わせる。
         if let Some(reasoning) = choice.message.reasoning_content {
             if !reasoning.is_empty() {
-                events.push(ResponseEvent::ReasoningDelta { text: reasoning });
+                on_event(ResponseEvent::ReasoningDelta { text: reasoning });
             }
         }
         if let Some(text) = choice.message.content {
             if !text.is_empty() {
-                events.push(ResponseEvent::TextDelta { text });
+                on_event(ResponseEvent::TextDelta { text });
             }
         }
         for call in choice.message.tool_calls {
-            events.push(ResponseEvent::ToolCall {
+            on_event(ResponseEvent::ToolCall {
                 id: call.id,
                 name: call.function.name,
                 arguments: ToolArguments::parse(call.function.arguments),
@@ -524,9 +524,9 @@ impl LlmAdapter for OpenAiCompatAdapter {
             Some("stop") | None => FinishReason::Stop,
             Some(_) => FinishReason::Stop,
         };
-        events.push(ResponseEvent::Done { finish_reason });
+        on_event(ResponseEvent::Done { finish_reason });
 
-        Ok(events)
+        Ok(())
     }
 }
 
@@ -577,7 +577,7 @@ mod tests {
         let adapter =
             OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", TEST_TIMEOUT)
                 .unwrap();
-        adapter.send(&[], &[], None).await.unwrap();
+        adapter.send(&[], &[], None, &mut |_| {}).await.unwrap();
         handle.join().unwrap()
     }
 
@@ -601,7 +601,11 @@ mod tests {
         let adapter =
             OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT)
                 .unwrap();
-        let events = adapter.send(&[], &[], None).await.unwrap();
+        let mut events = Vec::new();
+        adapter
+            .send(&[], &[], None, &mut |e| events.push(e))
+            .await
+            .unwrap();
         handle.join().unwrap();
 
         assert!(events.iter().any(|e| matches!(

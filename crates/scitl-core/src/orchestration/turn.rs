@@ -417,15 +417,18 @@ async fn run_tool_rounds(
         messages_to_send.extend(kept.iter().cloned());
         messages_to_send.extend(round_trip.iter().cloned());
 
-        let events = match adapter
-            .send(&messages_to_send, offered, ctx.reasoning_effort)
-            .await
-        {
-            Ok(events) => events,
-            Err(e) => {
-                return fail_turn(db, attempt, turn_error::classify(&e)).await;
-            }
-        };
+        let mut events = Vec::new();
+        let sent = adapter
+            .send(
+                &messages_to_send,
+                offered,
+                ctx.reasoning_effort,
+                &mut |event| events.push(event),
+            )
+            .await;
+        if let Err(e) = sent {
+            return fail_turn(db, attempt, turn_error::classify(&e)).await;
+        }
 
         let mut text = String::new();
         // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの

@@ -17,6 +17,15 @@ use scitl_core::orchestration::{
 };
 use serde_json::json;
 
+/// 決めておいたイベント列を1件ずつ渡す(ストリーミングしないアダプタと同じ渡し方)。
+fn emit(
+    on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    events: Vec<ResponseEvent>,
+) -> Result<(), CoreError> {
+    events.into_iter().for_each(on_event);
+    Ok(())
+}
+
 fn system_prompt_content(message: &ChatMessage) -> &str {
     match message {
         ChatMessage::System(content) => content,
@@ -43,30 +52,37 @@ impl LlmAdapter for RecordingAdapter {
         messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         self.sent_messages.lock().unwrap().push(messages.to_vec());
 
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(vec![
-                ResponseEvent::ToolCall {
-                    id: Some("call_1".to_string()),
-                    name: "add_steps".to_string(),
-                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::ToolCall,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::ToolCall {
+                        id: Some("call_1".to_string()),
+                        name: "add_steps".to_string(),
+                        arguments: json!({ "descriptions": ["買い出し"] }).into(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::ToolCall,
+                    },
+                ],
+            )
         } else {
-            Ok(vec![
-                ResponseEvent::TextDelta {
-                    text: "工程を追加しました".to_string(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::Stop,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::TextDelta {
+                        text: "工程を追加しました".to_string(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    },
+                ],
+            )
         }
     }
 }
@@ -88,28 +104,35 @@ impl LlmAdapter for FakeAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(vec![
-                ResponseEvent::ToolCall {
-                    id: Some("call_1".to_string()),
-                    name: "update_task".to_string(),
-                    arguments: json!({ "title": "買い物" }).into(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::ToolCall,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::ToolCall {
+                        id: Some("call_1".to_string()),
+                        name: "update_task".to_string(),
+                        arguments: json!({ "title": "買い物" }).into(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::ToolCall,
+                    },
+                ],
+            )
         } else {
-            Ok(vec![
-                ResponseEvent::TextDelta {
-                    text: "タイトルを更新しました".to_string(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::Stop,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::TextDelta {
+                        text: "タイトルを更新しました".to_string(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    },
+                ],
+            )
         }
     }
 }
@@ -143,7 +166,8 @@ impl LlmAdapter for FailingToolAdapter {
         messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         for message in messages {
             if let ChatMessage::Tool { content, .. } = message {
                 self.tool_results
@@ -155,21 +179,27 @@ impl LlmAdapter for FailingToolAdapter {
 
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(vec![
-                self.failing_call.clone(),
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::ToolCall,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    self.failing_call.clone(),
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::ToolCall,
+                    },
+                ],
+            )
         } else {
-            Ok(vec![
-                ResponseEvent::TextDelta {
-                    text: "その工程は見つかりませんでした".to_string(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::Stop,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::TextDelta {
+                        text: "その工程は見つかりませんでした".to_string(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    },
+                ],
+            )
         }
     }
 }
@@ -190,33 +220,40 @@ impl LlmAdapter for MultiToolCallAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(vec![
-                ResponseEvent::ToolCall {
-                    id: Some("call_1".to_string()),
-                    name: "add_steps".to_string(),
-                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
-                },
-                ResponseEvent::ToolCall {
-                    id: Some("call_2".to_string()),
-                    name: "update_task".to_string(),
-                    arguments: json!({ "title": "買い物" }).into(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::ToolCall,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::ToolCall {
+                        id: Some("call_1".to_string()),
+                        name: "add_steps".to_string(),
+                        arguments: json!({ "descriptions": ["買い出し"] }).into(),
+                    },
+                    ResponseEvent::ToolCall {
+                        id: Some("call_2".to_string()),
+                        name: "update_task".to_string(),
+                        arguments: json!({ "title": "買い物" }).into(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::ToolCall,
+                    },
+                ],
+            )
         } else {
-            Ok(vec![
-                ResponseEvent::TextDelta {
-                    text: "両方処理しました".to_string(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::Stop,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::TextDelta {
+                        text: "両方処理しました".to_string(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    },
+                ],
+            )
         }
     }
 }
@@ -235,7 +272,8 @@ impl LlmAdapter for FailingAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        _on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         Err(LlmError::from_status(reqwest::StatusCode::UNAUTHORIZED, "invalid api key", "").into())
     }
 }
@@ -254,10 +292,14 @@ impl LlmAdapter for EmptyResponseAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
-        Ok(vec![ResponseEvent::Done {
-            finish_reason: FinishReason::Stop,
-        }])
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
+        emit(
+            on_event,
+            vec![ResponseEvent::Done {
+                finish_reason: FinishReason::Stop,
+            }],
+        )
     }
 }
 
@@ -275,17 +317,21 @@ impl LlmAdapter for AlwaysToolCallAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
-        Ok(vec![
-            ResponseEvent::ToolCall {
-                id: Some("call_1".to_string()),
-                name: "add_steps".to_string(),
-                arguments: json!({ "descriptions": ["買い出し"] }).into(),
-            },
-            ResponseEvent::Done {
-                finish_reason: FinishReason::ToolCall,
-            },
-        ])
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
+        emit(
+            on_event,
+            vec![
+                ResponseEvent::ToolCall {
+                    id: Some("call_1".to_string()),
+                    name: "add_steps".to_string(),
+                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::ToolCall,
+                },
+            ],
+        )
     }
 }
 
@@ -316,32 +362,39 @@ impl LlmAdapter for ToolsWhileOfferedAdapter {
         messages: &[ChatMessage],
         tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         self.offered.lock().unwrap().push(tools.len());
         self.system_prompts
             .lock()
             .unwrap()
             .push(system_prompt_content(&messages[0]).to_string());
         if tools.is_empty() {
-            return Ok(vec![
-                ResponseEvent::TextDelta {
-                    text: "ここまでの結果でお答えします".to_string(),
+            return emit(
+                on_event,
+                vec![
+                    ResponseEvent::TextDelta {
+                        text: "ここまでの結果でお答えします".to_string(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    },
+                ],
+            );
+        }
+        emit(
+            on_event,
+            vec![
+                ResponseEvent::ToolCall {
+                    id: Some("call_1".to_string()),
+                    name: "add_steps".to_string(),
+                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
                 },
                 ResponseEvent::Done {
-                    finish_reason: FinishReason::Stop,
+                    finish_reason: FinishReason::ToolCall,
                 },
-            ]);
-        }
-        Ok(vec![
-            ResponseEvent::ToolCall {
-                id: Some("call_1".to_string()),
-                name: "add_steps".to_string(),
-                arguments: json!({ "descriptions": ["買い出し"] }).into(),
-            },
-            ResponseEvent::Done {
-                finish_reason: FinishReason::ToolCall,
-            },
-        ])
+            ],
+        )
     }
 }
 
@@ -359,7 +412,8 @@ impl LlmAdapter for UnreadyAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        _on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         panic!("readiness()がReadyでない場合、sendは呼ばれないはず");
     }
 }
@@ -390,14 +444,18 @@ impl LlmAdapter for TextAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         let text = self.replies.lock().unwrap().remove(0);
-        Ok(vec![
-            ResponseEvent::TextDelta { text },
-            ResponseEvent::Done {
-                finish_reason: FinishReason::Stop,
-            },
-        ])
+        emit(
+            on_event,
+            vec![
+                ResponseEvent::TextDelta { text },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                },
+            ],
+        )
     }
 }
 
@@ -420,35 +478,42 @@ impl LlmAdapter for ReasoningAdapter {
         messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         self.sent_messages.lock().unwrap().push(messages.to_vec());
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(vec![
-                ResponseEvent::ReasoningDelta {
-                    text: "工程を追加すべきか考える".to_string(),
-                },
-                ResponseEvent::ToolCall {
-                    id: Some("call_1".to_string()),
-                    name: "add_steps".to_string(),
-                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::ToolCall,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::ReasoningDelta {
+                        text: "工程を追加すべきか考える".to_string(),
+                    },
+                    ResponseEvent::ToolCall {
+                        id: Some("call_1".to_string()),
+                        name: "add_steps".to_string(),
+                        arguments: json!({ "descriptions": ["買い出し"] }).into(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::ToolCall,
+                    },
+                ],
+            )
         } else {
-            Ok(vec![
-                ResponseEvent::ReasoningDelta {
-                    text: "結果を報告する文面を考える".to_string(),
-                },
-                ResponseEvent::TextDelta {
-                    text: "工程を追加しました".to_string(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::Stop,
-                },
-            ])
+            emit(
+                on_event,
+                vec![
+                    ResponseEvent::ReasoningDelta {
+                        text: "結果を報告する文面を考える".to_string(),
+                    },
+                    ResponseEvent::TextDelta {
+                        text: "工程を追加しました".to_string(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    },
+                ],
+            )
         }
     }
 }
@@ -972,21 +1037,25 @@ impl LlmAdapter for NarratingToolAdapter {
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError> {
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            return Ok(vec![
-                ResponseEvent::TextDelta {
-                    text: "工程を追加しますね".to_string(),
-                },
-                ResponseEvent::ToolCall {
-                    id: Some("call_1".to_string()),
-                    name: "add_steps".to_string(),
-                    arguments: json!({ "descriptions": ["買い出し"] }).into(),
-                },
-                ResponseEvent::Done {
-                    finish_reason: FinishReason::ToolCall,
-                },
-            ]);
+            return emit(
+                on_event,
+                vec![
+                    ResponseEvent::TextDelta {
+                        text: "工程を追加しますね".to_string(),
+                    },
+                    ResponseEvent::ToolCall {
+                        id: Some("call_1".to_string()),
+                        name: "add_steps".to_string(),
+                        arguments: json!({ "descriptions": ["買い出し"] }).into(),
+                    },
+                    ResponseEvent::Done {
+                        finish_reason: FinishReason::ToolCall,
+                    },
+                ],
+            );
         }
         let mut events: Vec<_> = self
             .final_text
@@ -998,7 +1067,7 @@ impl LlmAdapter for NarratingToolAdapter {
         events.push(ResponseEvent::Done {
             finish_reason: FinishReason::Stop,
         });
-        Ok(events)
+        emit(on_event, events)
     }
 }
 
