@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { GENERAL_CHAT, taskChat } from './chat'
 import { t } from './i18n'
-import { taskName } from './taskName'
+import { taskName, taskProgress } from './taskName'
 import type { Chat, TaskSummary } from './types'
 
 interface SidebarProps {
@@ -14,14 +14,7 @@ interface SidebarProps {
 }
 
 function taskLabel(task: TaskSummary): string {
-  const steps =
-    task.steps_total > 0
-      ? t('sidebar.steps_progress', { done: task.steps_done, total: task.steps_total })
-      : t('sidebar.steps_none')
-  const deadline = t('sidebar.deadline_prefix', {
-    deadline: task.deadline ?? t('sidebar.deadline_unset'),
-  })
-  return t('sidebar.task_label', { title: taskName(task), deadline, steps })
+  return t('sidebar.task_label', { title: taskName(task), ...taskProgress(task) })
 }
 
 function TaskList({
@@ -91,21 +84,20 @@ export default function Sidebar({
       <div className="sidebar-scroll">
         <TaskList tasks={active} selectedTaskId={selectedTaskId} onSelect={onSelect} />
 
-        {archived.length > 0 && (
-          <div className="sidebar-archived">
-            <button
-              type="button"
-              className="list-row sidebar-archived-toggle"
-              onClick={() => setArchivedOpen((open) => !open)}
-            >
-              {t('sidebar.archived_label', { count: archived.length })}
-              {archivedOpen ? ' ▲' : ' ▼'}
-            </button>
-            {archivedOpen && (
-              <TaskList tasks={archived} selectedTaskId={selectedTaskId} onSelect={onSelect} />
-            )}
-          </div>
-        )}
+        {/* 0件でも行は出す(legacy/frontend.md 1節)。アーカイブした行き先が常に見えるように */}
+        <div className="sidebar-archived">
+          <button
+            type="button"
+            className="list-row sidebar-archived-toggle"
+            onClick={() => setArchivedOpen((open) => !open)}
+          >
+            {t('sidebar.archived_label', { count: archived.length })}
+            {archivedOpen ? ' ▲' : ' ▼'}
+          </button>
+          {archivedOpen && (
+            <TaskList tasks={archived} selectedTaskId={selectedTaskId} onSelect={onSelect} />
+          )}
+        </div>
       </div>
 
       <button type="button" className="sidebar-add" onClick={onAddTask} disabled={adding}>

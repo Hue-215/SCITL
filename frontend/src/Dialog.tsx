@@ -115,6 +115,7 @@ interface ConfirmButtonProps {
   confirmMessage: string
   confirmLabel: string
   onConfirm: () => void
+  disabled?: boolean
 }
 
 // 破壊的操作のトリガーボタン+確認ダイアログの組。「押すと開閉状態を持ち、確定したら
@@ -126,11 +127,12 @@ export function ConfirmButton({
   confirmMessage,
   confirmLabel,
   onConfirm,
+  disabled = false,
 }: ConfirmButtonProps) {
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button type="button" className="danger" onClick={() => setOpen(true)}>
+      <button type="button" className="danger" disabled={disabled} onClick={() => setOpen(true)}>
         {label}
       </button>
       {open && (

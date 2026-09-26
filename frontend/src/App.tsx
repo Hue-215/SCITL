@@ -2,14 +2,17 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import {
   createTask,
   deleteChatMessage,
+  deleteTask,
   editChatMessage,
   failureText,
   getTaskDetail,
   listChatMessages,
   listTasks,
   openTaskChat,
+  renameTask,
   retryChatMessage,
   sendChatMessage,
+  setTaskArchived,
 } from './api'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
 import ChatModelBar from './ChatModelBar'
@@ -17,8 +20,8 @@ import { formatDateTime, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
-import { taskName } from './taskName'
-import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
+import TaskHeader from './TaskHeader'
+import { OperationLine, ThinkingTools } from './ThinkingTools'
 import { buildThoughtItems, finalEntryOf, groupMessages } from './thinking'
 import type { Chat, Message, TaskDetail, TaskSummary } from './types'
 import { useChatRequests } from './useChatRequests'
@@ -243,6 +246,18 @@ export default function App() {
     await requests.run(target, [], () => deleteChatMessage(target, messageId), settle)
   }
 
+  // ヘッダーからのタスク操作(Issue #75)。発言の操作と同じく会話ごとの応答待ちに載せ、
+  // 実行中は他の操作を止め、失敗はその会話に残す。アーカイブ・削除のあとは総合チャットへ
+  // 戻る(legacy/frontend.md 1節)。その間に別の会話へ移っていたら、そのままにする。
+  const runTaskOperation = (taskId: number, operation: () => Promise<unknown>) => {
+    if (disableActions) return
+    const target = taskChat(taskId)
+    void requests.run(target, [], operation, settle)
+  }
+  const leaveIfShown = (taskId: number) => {
+    if (selectedRef.current === chatKey(taskChat(taskId))) selectChat(GENERAL_CHAT)
+  }
+
   const pending = requests.pendingOf(chat)
   const live = requests.liveOf(chat)
   const failure = requests.failureOf(chat)
@@ -274,16 +289,30 @@ export default function App() {
       />
 
       <main>
-        <header className="chat-header">
-          <h1>
-            {chat.kind === 'general'
-              ? t('chat.general_title')
-              : task
-                ? taskName(task)
-                : t('common.app_name')}
-          </h1>
-          {task?.description && <p>{task.description}</p>}
-        </header>
+        {task ? (
+          <TaskHeader
+            key={task.id}
+            task={task}
+            disabled={disableActions}
+            onRename={(title) => runTaskOperation(task.id, () => renameTask(task.id, title))}
+            onSetArchived={(archived) =>
+              runTaskOperation(task.id, async () => {
+                await setTaskArchived(task.id, archived)
+                if (archived) leaveIfShown(task.id)
+              })
+            }
+            onDelete={() =>
+              runTaskOperation(task.id, async () => {
+                await deleteTask(task.id)
+                leaveIfShown(task.id)
+              })
+            }
+          />
+        ) : (
+          <header className="chat-header">
+            <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
+          </header>
+        )}
 
         {error && <p className="error">{error}</p>}
 
@@ -291,12 +320,12 @@ export default function App() {
           {groupMessages(messages).map((item) => {
             if (item.kind === 'plain') {
               const message = item.message
-              // 外部(MCP)経由のツール呼び出しは「思考・ツール」の折りたたみに含めず、
-              // 独立した1行として表示する(docs/spec/legacy/frontend.md 1節)。
+              // 応答生成以外の経路(画面・MCP等)での操作の記録は「思考・ツール」の
+              // 折りたたみに含めず、独立した1行として表示する(docs/spec/legacy/frontend.md 1節)。
               if (message.kind === 'tool_execution') {
                 return (
                   <li key={message.id} className="entry entry-tool">
-                    <ExternalToolLine message={message} />
+                    <OperationLine message={message} />
                     <time className="entry-time">{formatDateTime(message.created_at)}</time>
                   </li>
                 )

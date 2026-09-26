@@ -1,3 +1,4 @@
+import type { MessageKey } from './i18n'
 import type { Message, ToolExecutionRecord, TurnEvent } from './types'
 
 // 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック(Issue #42)。
@@ -18,9 +19,9 @@ export interface PlainEntry {
 
 export type DisplayItem = TurnGroup | PlainEntry
 
-/// `list_for_task`が返す発言列(created_at, id順)を、SCITL自身の応答生成に属する行
-/// (`turn_id`が同じ行の連続)ごとにまとめる。ユーザー発言・外部(MCP)経由の記録は
-/// `turn_id`を持たないため常に独立した`plain`項目になる
+/// `list_chat_messages`が返す発言列(created_at, id順)を、SCITL自身の応答生成に属する行
+/// (`turn_id`が同じ行の連続)ごとにまとめる。ユーザー発言・応答生成以外の経路での操作の
+/// 記録は`turn_id`を持たないため常に独立した`plain`項目になる
 /// (docs/spec/rebuild/data-model.md「ターン境界」の3分類)。
 export function groupMessages(messages: Message[]): DisplayItem[] {
   const items: DisplayItem[] = []
@@ -59,6 +60,14 @@ export function parseToolExecution(content: string): ToolExecutionContent {
   } catch {
     return {}
   }
+}
+
+/// 操作の記録の行末に出す経路のラベル(`messages.source`)。知らない値は汎用のラベルにし、
+/// 値そのものは出さない(MCP経由の`mcp:`の後ろは外部のクライアントが名乗る名前になる)。
+export function operationSourceLabel(source: string | null): MessageKey {
+  if (source === 'ui') return 'chat.source_ui'
+  if (source === 'mcp' || source?.startsWith('mcp:')) return 'chat.source_mcp'
+  return 'chat.source_unknown'
 }
 
 export function isErrorResult(result: unknown): boolean {

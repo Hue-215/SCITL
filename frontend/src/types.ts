@@ -24,8 +24,10 @@ export type TaskCreation =
   | { status: 'unavailable'; error_kind: string }
 
 // crates/scitl-core/src/db/tasks.rs の TaskDetailView(Taskをフラット化したもの)。
-// ヘッダー向け。fallback_labelの意味はTaskSummaryと同じ。
+// ヘッダー向け。steps_*・fallback_labelの意味はTaskSummaryと同じ。
 export interface TaskDetail extends Task {
+  steps_done: number
+  steps_total: number
   fallback_label: string | null
 }
 

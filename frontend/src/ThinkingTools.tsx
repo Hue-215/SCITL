@@ -1,6 +1,7 @@
 import { t } from './i18n'
 import {
   isErrorResult,
+  operationSourceLabel,
   parseToolExecution,
   type ThoughtItem,
   type ToolExecutionContent,
@@ -9,7 +10,8 @@ import type { Message } from './types'
 
 // 「思考・ツール」の折りたたみ表示(Issue #42、docs/spec/legacy/frontend.md 1節)。
 // モデルの思考(reasoning)と内部ツール呼び出しを発生順に混在させて表示する。
-// 外部(MCP)経由のツール呼び出しはここに含めず、App.tsx側で独立した1行として扱う。
+// 応答生成以外の経路(画面・MCP等)での操作の記録はここに含めず、独立した1行として扱う
+// (`OperationLine`)。
 // 保存済みのターンも、応答待ちの間の途中経過(Issue #70)もこれで描く。
 //
 // 表示専用のコンポーネントであり、モデルへの再送信経路には一切関与しない
@@ -21,7 +23,7 @@ import type { Message } from './types'
 // 出したものをそのまま確かめるための表示なので、本文用のMarkdown描画(Markdown.tsx)は
 // 通さない。整形しない分、ここからリンクや画像が作られることも無い。
 
-// ツール呼び出し1件の引数と結果。内部・外部(MCP)のどちらの表示でも同じ形で見せる。
+// ツール呼び出し1件の引数と結果。ターンの中の呼び出しと操作の記録のどちらでも同じ形で見せる。
 function ToolCallDetail({ content }: { content: ToolExecutionContent }) {
   return (
     <div className="tool-call-detail">
@@ -69,17 +71,18 @@ export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
   )
 }
 
-/// 外部(MCP)経由のツール呼び出し1件を、内部の「思考・ツール」折りたたみとは独立した
-/// 1行として表示する(docs/spec/legacy/frontend.md 1節)。
-export function ExternalToolLine({ message }: { message: Message }) {
+/// 応答生成以外の経路(画面・MCP等)での操作の記録1件を、「思考・ツール」折りたたみとは
+/// 独立した1行として表示する。行末に経路のラベルを出し、ターンの中の呼び出しと見分けられる
+/// ようにする(docs/spec/legacy/frontend.md 1節)。
+export function OperationLine({ message }: { message: Message }) {
   const content = parseToolExecution(message.content)
   const isError = isErrorResult(content.result)
   return (
-    <details className="external-tool-line">
+    <details className="operation-line">
       <summary>
-        <span className="external-tool-name">{content.tool ?? t('chat.tool_unknown')}()</span>
+        <span className="operation-name">{content.tool ?? t('chat.tool_unknown')}()</span>
         {isError && <span className="thinking-tools-error">{t('chat.tool_error')}</span>}
-        <span className="external-tool-label">{t('chat.tool_external_label')}</span>
+        <span className="operation-label">{t(operationSourceLabel(message.source))}</span>
       </summary>
       <ToolCallDetail content={content} />
     </details>

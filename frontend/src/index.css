@@ -271,6 +271,45 @@ option {
   gap: var(--space-1);
 }
 
+/* 名前と操作ボタンを1行に並べ、収まらなければ操作を次の行へ送る。 */
+.chat-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.chat-header-row h1 {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-header-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* 見出しの文字のまま押せるようにする(押すとその場で名前を編集する)。字の大きさ・太さは
+   基盤層の font: inherit で見出しから受け継ぐ。 */
+.chat-header-title {
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: text;
+}
+
+.chat-header-title-input {
+  width: 100%;
+}
+
+.chat-header-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .chat-compose {
   display: flex;
   /* 複数行になった入力欄が伸びても送信ボタンは1行分の高さのまま下端に揃える。 */
@@ -680,7 +719,7 @@ option {
 }
 
 .tool-call-detail pre,
-.external-tool-line pre,
+.operation-line pre,
 .entry-error-detail pre {
   padding: var(--space-2);
   background: var(--color-surface-alt);
@@ -694,23 +733,23 @@ option {
   color: var(--color-danger);
 }
 
-.external-tool-line {
+.operation-line {
   align-self: flex-start;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-.external-tool-line summary {
+.operation-line summary {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.external-tool-name {
+.operation-name {
   font-family: var(--font-family-mono);
 }
 
-.external-tool-label {
+.operation-label {
   font-size: var(--font-size-sm);
   border: var(--border-width) solid var(--color-border);
   padding: 0 var(--space-2);

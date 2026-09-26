@@ -38,6 +38,20 @@ export function createTask(): Promise<TaskCreation> {
   return invoke('create_task')
 }
 
+// ヘッダーからのタスク操作(Issue #75)。変更と会話ログへの記録はRust側が一緒に書く。
+// どれも応答を生成中のタスクでは断られる。
+export function renameTask(taskId: number, title: string): Promise<void> {
+  return invoke('rename_task', { taskId, title })
+}
+
+export function setTaskArchived(taskId: number, archived: boolean): Promise<void> {
+  return invoke('set_task_archived', { taskId, archived })
+}
+
+export function deleteTask(taskId: number): Promise<void> {
+  return invoke('delete_task', { taskId })
+}
+
 // 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける
 // (architecture.md 3節)。経路(Channel)はコマンドの呼び出しごとに作るので、届いた
 // イベントがどのタスクのものかは呼び出し側が知っている。
