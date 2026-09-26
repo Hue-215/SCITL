@@ -660,8 +660,6 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     );
 }
 
-/// 送信日時はユーザー発言の`sent_at`として本文と分けて運ぶ(Issue #68)。
-/// 本文には混ぜず、アシスタント発言には付けない。
 #[tokio::test]
 async fn state_tool_results_stay_in_their_own_turn() {
     // 状態系の結果は最新状態JSONが代わりに伝えるので、次のターンの履歴には載せない
@@ -700,6 +698,8 @@ async fn state_tool_results_stay_in_their_own_turn() {
     assert_eq!(record["call_id"], "call_1");
 }
 
+/// 送信日時はユーザー発言の`sent_at`として本文と分けて運ぶ(Issue #68)。
+/// 本文には混ぜず、アシスタント発言には付けない。
 #[tokio::test]
 async fn history_carries_send_time_beside_the_user_text() {
     let conn = db::open_in_memory().unwrap();
