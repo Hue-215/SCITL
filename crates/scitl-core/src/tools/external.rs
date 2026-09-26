@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use crate::config::McpServerConfig;
 use crate::llm::ToolSchema;
 use crate::mcp::McpToolInfo;
+use crate::tools::ToolKind;
 
 /// サーバー識別子とツール名の区切り。名前空間化の目的は、内部ツール・他サーバーの
 /// ツールとの衝突を避けることと、呼び出し先APIの命名規則に収めること
@@ -31,6 +32,7 @@ struct Entry {
     server_id: String,
     tool_name: String,
     schema: ToolSchema,
+    kind: ToolKind,
 }
 
 /// このターンでモデルへ公開する外部ツールの集合。
@@ -74,6 +76,9 @@ impl ExternalToolset {
                     schema,
                     server_id: server.id.clone(),
                     tool_name: tool.name,
+                    // 外部ツールの結果はサーバー側の事情で決まり、SCITLの最新状態JSONの
+                    // どこにも現れないため、一律に事実系とする(tools.md 4節)。
+                    kind: ToolKind::Fact,
                 });
             }
         }
@@ -88,11 +93,11 @@ impl ExternalToolset {
         self.entries.iter().map(|e| e.schema.clone()).collect()
     }
 
-    /// モデルが呼んだ名前から、接続先サーバーIDと元のツール名を引く。
+    /// モデルが呼んだ名前から、接続先サーバーID・元のツール名・分類を引く。
     /// 内部ツールの呼び出しでは`None`が返り、呼び出し側が内部の実行へ回す。
-    pub fn route(&self, exposed_name: &str) -> Option<(&str, &str)> {
+    pub fn route(&self, exposed_name: &str) -> Option<(&str, &str, ToolKind)> {
         let entry = &self.entries[*self.routes.get(exposed_name)?];
-        Some((&entry.server_id, &entry.tool_name))
+        Some((&entry.server_id, &entry.tool_name, entry.kind))
     }
 
     #[cfg(test)]
@@ -162,7 +167,10 @@ mod tests {
         let s = server("id1", "files", &["read"]);
         let toolset = ExternalToolset::build([(&s, vec![tool("read"), tool("write")])], &[]);
         assert_eq!(toolset.exposed_names(), vec!["files__read"]);
-        assert_eq!(toolset.route("files__read"), Some(("id1", "read")));
+        assert_eq!(
+            toolset.route("files__read"),
+            Some(("id1", "read", ToolKind::Fact))
+        );
         assert_eq!(toolset.route("files__write"), None);
     }
 
@@ -201,7 +209,10 @@ mod tests {
         let toolset =
             ExternalToolset::build([(&s, vec![tool("read\u{1}file"), tool("readfile")])], &[]);
         assert_eq!(toolset.exposed_names(), vec!["files__readfile"]);
-        assert_eq!(toolset.route("files__readfile"), Some(("id1", "readfile")));
+        assert_eq!(
+            toolset.route("files__readfile"),
+            Some(("id1", "readfile", ToolKind::Fact))
+        );
     }
 
     #[test]
@@ -221,7 +232,7 @@ mod tests {
         let toolset =
             ExternalToolset::build([(&a, vec![tool("c")]), (&b, vec![tool("b__c")])], &[]);
         assert_eq!(toolset.exposed_names(), vec!["a__b__c"]);
-        assert_eq!(toolset.route("a__b__c"), Some(("id1", "c")));
+        assert_eq!(toolset.route("a__b__c"), Some(("id1", "c", ToolKind::Fact)));
 
         let s = server("id1", "files", &["read"]);
         let toolset =

@@ -660,6 +660,44 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     );
 }
 
+#[tokio::test]
+async fn state_tool_results_stay_in_their_own_turn() {
+    // 状態系の結果は最新状態JSONが代わりに伝えるので、次のターンの履歴には載せない
+    // (docs/spec/rebuild/tools.md 4節)。実行記録には分類と払い出されたIDを残す。
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = RecordingAdapter {
+        calls: AtomicUsize::new(0),
+        sent_messages: Mutex::new(Vec::new()),
+    };
+    let db = Arc::new(Mutex::new(conn));
+
+    for text in ["工程を足して", "ありがとう"] {
+        run_turn(db.clone(), &context(&adapter), task_id, text.to_string())
+            .await
+            .unwrap();
+    }
+
+    let sent = adapter.sent_messages.lock().unwrap();
+    let next_turn = sent.last().unwrap();
+    assert!(!next_turn
+        .iter()
+        .any(|m| matches!(m, ChatMessage::Tool { .. })));
+    assert!(!next_turn
+        .iter()
+        .any(|m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())));
+
+    let conn = db.lock().unwrap();
+    let record = db::messages::list_for_task(&conn, task_id)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.kind == "tool_execution")
+        .unwrap();
+    let record: serde_json::Value = serde_json::from_str(&record.content).unwrap();
+    assert_eq!(record["tool_kind"], "state");
+    assert_eq!(record["call_id"], "call_1");
+}
+
 /// 送信日時はユーザー発言の`sent_at`として本文と分けて運ぶ(Issue #68)。
 /// 本文には混ぜず、アシスタント発言には付けない。
 #[tokio::test]

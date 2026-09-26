@@ -13,12 +13,14 @@ use crate::llm::{
     ToolCallRequest, ToolSchema,
 };
 use crate::mcp::McpSessions;
+use crate::orchestration::history::build_history;
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
+use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::{SystemPrompts, TurnContext};
-use crate::tools::{self, external::ExternalToolset};
+use crate::tools::{self, external::ExternalToolset, ToolKind};
 
 /// 1ターンの処理フロー(architecture.md 1節)。ユーザー発言の保存 → LLM呼び出し →
 /// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
@@ -335,14 +337,16 @@ async fn run_tool_rounds(
     sessions: &mut McpSessions,
 ) -> Result<Vec<ResponseEvent>> {
     let task_id = attempt.task_id;
-    // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
-    // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
-    let history = with_conn(db.clone(), move |conn| build_history(conn, task_id)).await?;
-
     // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
     // 衝突の排除は`ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
     // (対応しないモデルにツールを渡すと、リクエストごと拒否するサーバーがある)。
     let tools_available = ctx.capabilities.tools;
+    // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
+    // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
+    let history = with_conn(db.clone(), move |conn| {
+        build_history(conn, task_id, tools_available)
+    })
+    .await?;
     let mut exposed_tools = Vec::new();
     if tools_available {
         exposed_tools.extend(tools::task_chat_tools());
@@ -501,7 +505,7 @@ async fn run_tool_rounds(
                 return fail_turn(db, attempt, TurnFailure::ToolTimeout).await;
             }
             let started = Instant::now();
-            let result =
+            let (result, tool_kind) =
                 execute_call(db.clone(), task_id, &ctx.mcp, external, sessions, &call).await?;
             tool_time_used = tool_time_used.saturating_add(started.elapsed());
 
@@ -513,17 +517,17 @@ async fn run_tool_rounds(
             } else {
                 None
             };
-            // 読めなかった引数は、モデルが実際に何を出したかが分かるよう生の文字列で残す。
-            let recorded_arguments = match &call.arguments {
-                ToolArguments::Valid { value } => value.clone(),
-                ToolArguments::Malformed { raw, .. } => serde_json::Value::String(raw.clone()),
-            };
-            let content = json!({
-                "tool": call.name.clone(),
-                "arguments": recorded_arguments,
-                "result": result.clone(),
+            let content = serde_json::to_string(&ToolExecutionRecord {
+                tool: call.name.clone(),
+                arguments: match &call.arguments {
+                    ToolArguments::Valid { value } => value.clone(),
+                    ToolArguments::Malformed { raw, .. } => serde_json::Value::String(raw.clone()),
+                },
+                result: result.clone(),
+                tool_kind,
+                call_id: call.id.clone(),
             })
-            .to_string();
+            .expect("a record of JSON values serializes");
             let attempt_for_db = attempt.clone();
             with_conn(db.clone(), move |conn| {
                 attempt_for_db.insert(
@@ -573,6 +577,10 @@ async fn run_tool_rounds(
 ///
 /// 引数がJSONとして読めなかった呼び出し(`ToolArguments::Malformed`)は、どのツールも
 /// 実行せずに失敗を返し、出し直させる。
+///
+/// 結果と一緒に、実行したツールの分類(tools.md 4節)を返す。分類は振り分け先の定義から
+/// 引き、ここでは決めない。実行しなかった呼び出し(引数が読めない・公開していない名前・
+/// 接続先が無い)は`None`で、次ターン以降の履歴に載らない。
 async fn execute_call(
     db: SharedConnection,
     task_id: i64,
@@ -580,37 +588,39 @@ async fn execute_call(
     external: &ExternalToolset,
     sessions: &mut McpSessions,
     call: &ToolCallRequest,
-) -> Result<serde_json::Value> {
+) -> Result<(serde_json::Value, Option<ToolKind>)> {
     let arguments = match &call.arguments {
         ToolArguments::Valid { value } => value,
         ToolArguments::Malformed { error, .. } => {
-            return Ok(json!({
+            let result = json!({
                 "error": format!(
                     "the arguments were not valid JSON ({error}); \
                      the tool was not run. Call it again with valid JSON arguments."
                 )
-            }));
+            });
+            return Ok((result, None));
         }
     };
-    let Some((server_id, tool_name)) = external.route(&call.name) else {
+    let Some((server_id, tool_name, kind)) = external.route(&call.name) else {
         let name = call.name.clone();
         let arguments = arguments.clone();
         return with_conn(db, move |conn| {
-            Ok(
-                tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
-                    .unwrap_or_else(|e| json!({ "error": e.to_string() })),
-            )
+            let result = tools::execute_task_chat_tool(conn, task_id, &name, &arguments)
+                .unwrap_or_else(|e| json!({ "error": e.to_string() }));
+            Ok((result, tools::task_chat_tool_kind(&name)))
         })
         .await;
     };
 
     let Some(server) = mcp.servers.iter().find(|s| s.id == server_id) else {
-        return Ok(json!({ "error": format!("MCP server not found: {server_id}") }));
+        let result = json!({ "error": format!("MCP server not found: {server_id}") });
+        return Ok((result, None));
     };
-    Ok(sessions
+    let result = sessions
         .call_tool(server, tool_name, arguments)
         .await
-        .unwrap_or_else(|e| json!({ "error": e.to_string() })))
+        .unwrap_or_else(|e| json!({ "error": e.to_string() }));
+    Ok((result, Some(kind)))
 }
 
 /// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
@@ -636,29 +646,4 @@ async fn fail_turn(
     Ok(vec![ResponseEvent::Done {
         finish_reason: FinishReason::Error,
     }])
-}
-
-/// API送信用の履歴。送信日時は本文と分けて囲みの属性に置く
-/// (Issue #68。組み立ては`llm::PromptText::user_message`)。アシスタント発言に日時を付けないのは、
-/// モデルが自分の過去の発言の形を真似て、応答の地の文に日時やタグを書き出すのを避けるため。
-///
-/// エラー発言(`role='error'`)は除外する
-/// (`legacy/backend.md` 4節手順2「エラー発言・ツール実行記録はこのAPI送信用の履歴からは
-/// 除外する」)。表示・エクスポートには`list_for_task`経由で引き続き残る。
-fn build_history(conn: &Connection, task_id: i64) -> Result<Vec<ChatMessage>> {
-    let stored = messages::list_for_task(conn, task_id)?;
-    Ok(stored
-        .into_iter()
-        .filter(|m| m.kind == "normal" && m.role != "error")
-        .map(|m| {
-            if m.role == "user" {
-                ChatMessage::User(PromptText::user_message(&m.content, Some(&m.created_at)))
-            } else {
-                ChatMessage::Assistant {
-                    content: Some(m.content),
-                    tool_calls: Vec::new(),
-                }
-            }
-        })
-        .collect())
 }

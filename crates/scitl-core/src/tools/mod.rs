@@ -8,19 +8,23 @@ pub mod update_step;
 pub mod update_task;
 
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::error::{CoreError, Result};
 use crate::db::task_steps;
 use crate::llm::ToolSchema;
 
-/// ツール実行結果を毎ターンの入力履歴に残すか否かの分類(docs/spec/rebuild/tools.md 4節)。
-/// 状態系は次ターンの最新状態JSONで完全に代替できるため履歴に残さない。事実系
-/// (検索・外部MCPツール等)を次ターン以降の履歴に残す仕組み自体はIssue #11の範囲で、
-/// 外部ツール(Issue #44)の結果も現時点では同一ターン内に閉じる。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// ツール実行結果を次ターン以降の入力履歴に残すか否かの分類(docs/spec/rebuild/tools.md 4節)。
+/// 状態系は次ターンの最新状態JSONで完全に代替できるため履歴に残さない。事実系(検索・
+/// 外部MCPツール等)は「現在の状態」として言い表せないため、実行記録から履歴を組み立てる。
+/// 実行したときに決まった値を実行記録に書き写し、履歴はその値だけを見る
+/// (`orchestration::tool_record`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     State,
+    Fact,
 }
 
 pub struct ToolDefinition {
@@ -77,6 +81,14 @@ pub fn task_chat_tool_names() -> Vec<String> {
         .iter()
         .map(|t| t.name().to_string())
         .collect()
+}
+
+/// タスクチャット面で公開する内部ツールの分類。公開していない名前には`None`を返す。
+pub fn task_chat_tool_kind(name: &str) -> Option<ToolKind> {
+    tool_definitions(Surface::Task)
+        .into_iter()
+        .find(|def| def.schema.name() == name)
+        .map(|def| def.kind)
 }
 
 /// タスクチャット向けの公開ツール一覧(docs/spec/rebuild/tools.md 2節)。
