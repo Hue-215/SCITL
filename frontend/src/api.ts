@@ -9,7 +9,7 @@ import type {
   Message,
   ReasoningEffort,
   SettingsView,
-  Task,
+  TaskCreation,
   TaskDetail,
   TaskSummary,
   TurnEvent,
@@ -33,13 +33,20 @@ export function listTasks(): Promise<TaskSummary[]> {
   return invoke('list_tasks')
 }
 
-export function createTask(): Promise<Task> {
+export function createTask(): Promise<TaskCreation> {
   return invoke('create_task')
 }
 
-// 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける(architecture.md 3節)。
-// 経路(Channel)はコマンドの呼び出しごとに作るので、届いたイベントがどのタスクのものかは
-// 呼び出し側が知っている。
+// 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける
+// (architecture.md 3節)。経路(Channel)はコマンドの呼び出しごとに作るので、届いた
+// イベントがどのタスクのものかは呼び出し側が知っている。
+export function openTaskChat(
+  taskId: number,
+  onEvent: (event: TurnEvent) => void,
+): Promise<void> {
+  return invoke('open_task_chat', { taskId, onEvent: new Channel(onEvent) })
+}
+
 export function sendTaskChatMessage(
   taskId: number,
   text: string,

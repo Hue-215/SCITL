@@ -12,6 +12,12 @@ export interface Task {
   updated_at: string
 }
 
+// crates/scitl-core/src/orchestration/turn.rs の TaskCreation。チャットを使えない間は
+// タスクを作らず、その理由をエラー発言と同じ種別コードで返す。
+export type TaskCreation =
+  | { status: 'created'; task: Task }
+  | { status: 'unavailable'; error_kind: string }
+
 // crates/scitl-core/src/db/tasks.rs の TaskDetailView(Taskをフラット化したもの)。
 // ヘッダー向け。fallback_labelの意味はTaskSummaryと同じ。
 export interface TaskDetail extends Task {
