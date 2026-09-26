@@ -1,7 +1,9 @@
+mod history;
 mod history_trim;
 mod mcp_access;
 mod state_prompt;
 mod tool_limits;
+mod tool_record;
 pub mod turn;
 mod turn_context;
 pub mod turn_error;
