@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
   AvailableModel,
@@ -8,11 +8,11 @@ import type {
   LinkInspection,
   Message,
   ReasoningEffort,
-  ResponseEvent,
   SettingsView,
   Task,
   TaskDetail,
   TaskSummary,
+  TurnEvent,
 } from './types'
 
 // フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
@@ -37,11 +37,15 @@ export function createTask(): Promise<Task> {
   return invoke('create_task')
 }
 
+// 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける(architecture.md 3節)。
+// 経路(Channel)はコマンドの呼び出しごとに作るので、届いたイベントがどのタスクのものかは
+// 呼び出し側が知っている。
 export function sendTaskChatMessage(
   taskId: number,
   text: string,
-): Promise<ResponseEvent[]> {
-  return invoke('send_task_chat_message', { taskId, text })
+  onEvent: (event: TurnEvent) => void,
+): Promise<void> {
+  return invoke('send_task_chat_message', { taskId, text, onEvent: new Channel(onEvent) })
 }
 
 export function listTaskMessages(taskId: number): Promise<Message[]> {
@@ -54,15 +58,22 @@ export function editTaskChatMessage(
   taskId: number,
   messageId: number,
   text: string,
-): Promise<ResponseEvent[]> {
-  return invoke('edit_task_chat_message', { taskId, messageId, text })
+  onEvent: (event: TurnEvent) => void,
+): Promise<void> {
+  return invoke('edit_task_chat_message', {
+    taskId,
+    messageId,
+    text,
+    onEvent: new Channel(onEvent),
+  })
 }
 
 export function retryTaskChatMessage(
   taskId: number,
   messageId: number,
-): Promise<ResponseEvent[]> {
-  return invoke('retry_task_chat_message', { taskId, messageId })
+  onEvent: (event: TurnEvent) => void,
+): Promise<void> {
+  return invoke('retry_task_chat_message', { taskId, messageId, onEvent: new Channel(onEvent) })
 }
 
 export function deleteTaskChatMessage(taskId: number, messageId: number): Promise<void> {

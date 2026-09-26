@@ -1,14 +1,25 @@
+use tauri::ipc::Channel;
 use tauri::State;
 
-use scitl_core::llm::ResponseEvent;
-use scitl_core::orchestration::{delete_message, edit_user_message, retry_reply, run_turn};
+use scitl_core::orchestration::{
+    delete_message, edit_user_message, retry_reply, run_turn, TurnEvent,
+};
 
 use super::with_db;
 use crate::AppState;
 
+/// ターンの途中経過を`channel`へ送る受け口。送れなくても(画面が閉じた等)ターンは最後まで
+/// 走らせて保存するので、送信の失敗は捨てる。
+fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '_ {
+    move |event| {
+        let _ = channel.send(event);
+    }
+}
+
 /// タスクチャットへの発言送信。`task_id`は文脈(表示中のタスク)から決まる引数であり、
 /// モデルへのツール引数には出てこない(update_taskのタスクチャット版と同じ区別。
-/// docs/spec/rebuild/tools.md 1節)。
+/// docs/spec/rebuild/tools.md 1節)。ターンの途中経過は`on_event`へ送る
+/// (編集・再試行も同じ。architecture.md 3節)。
 ///
 /// プロバイダー未選択・モデル未選択・APIキー未設定・空応答等は`run_turn`内でエラー発言
 /// として保存され`Ok`で返る(Issue #40)。ここで`Err`になるのはDB自体への書き込み失敗など、
@@ -18,12 +29,14 @@ pub async fn send_task_chat_message(
     state: State<'_, AppState>,
     task_id: i64,
     text: String,
-) -> Result<Vec<ResponseEvent>, String> {
+    on_event: Channel<TurnEvent>,
+) -> Result<(), String> {
     // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
     let snapshot = state.settings.snapshot_for_turn().await;
+    let events = forward(&on_event);
     run_turn(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating),
+        &snapshot.turn_context(&state.generating, &events),
         task_id,
         text,
     )
@@ -39,11 +52,13 @@ pub async fn edit_task_chat_message(
     task_id: i64,
     message_id: i64,
     text: String,
-) -> Result<Vec<ResponseEvent>, String> {
+    on_event: Channel<TurnEvent>,
+) -> Result<(), String> {
     let snapshot = state.settings.snapshot_for_turn().await;
+    let events = forward(&on_event);
     edit_user_message(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating),
+        &snapshot.turn_context(&state.generating, &events),
         task_id,
         message_id,
         text,
@@ -59,11 +74,13 @@ pub async fn retry_task_chat_message(
     state: State<'_, AppState>,
     task_id: i64,
     message_id: i64,
-) -> Result<Vec<ResponseEvent>, String> {
+    on_event: Channel<TurnEvent>,
+) -> Result<(), String> {
     let snapshot = state.settings.snapshot_for_turn().await;
+    let events = forward(&on_event);
     retry_reply(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating),
+        &snapshot.turn_context(&state.generating, &events),
         task_id,
         message_id,
     )

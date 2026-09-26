@@ -17,9 +17,10 @@ pub use token_estimate::{estimate_message, estimate_tools};
 use crate::config::ReasoningEffort;
 use crate::db::error::CoreError;
 
-/// アダプタ層が上位に返す形は完成した応答1つではなくイベントの並び
+/// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び
 /// (docs/spec/principles.md 3節「応答はイベントの並びとして受け取る」、Issue #8)。
-/// ストリーミングしないプロバイダーも各イベントを1回ずつ返せば同じ経路に乗る。
+/// ストリーミングしないプロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る
+/// ([`LlmAdapter::send`])。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseEvent {
@@ -217,12 +218,25 @@ pub trait LlmAdapter: Send + Sync {
     /// `reasoning_effort`は、思考に対応するモデルでは常に`Some`、対応しないモデルでは
     /// `None`(指定そのものを拒むAPIがあるため、強さを指定しない)。どちらにするかは
     /// 呼び出し元が能力から決める。
+    ///
+    /// 応答のイベントは、生成した順に1件ずつ`on_event`へ渡す。ストリーミングするかどうかは
+    /// アダプタの都合で、呼び出し側は区別しない(architecture.md 3節)。渡したイベントは
+    /// そのまま画面へ流れるため、次を守る。
+    ///
+    /// - 失敗は`Err`で返し、イベントにしない(ストリームの途中で届くエラーも同じ)。
+    ///   エラー本文を本文のイベントに載せると、`orchestration::turn_error`の伏せ字と長さの
+    ///   上限を通らずに画面へ届く
+    /// - `Err`を返したら、それまでに渡したイベントは無効とする(呼び出し側は保存しない)
+    /// - 一度イベントを渡したら、この呼び出しの中でリクエストをやり直さない。画面に二重に
+    ///   出るため。やり直すなら最初のイベントを渡す前に限る
+    /// - `Done`は成功したときに最後に1回だけ渡す(画面はこれをラウンドの区切りに使う)
     async fn send(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
         reasoning_effort: Option<ReasoningEffort>,
-    ) -> Result<Vec<ResponseEvent>, CoreError>;
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError>;
 }
 
 #[cfg(test)]
