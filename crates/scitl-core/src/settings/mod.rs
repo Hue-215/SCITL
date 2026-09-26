@@ -26,6 +26,7 @@ use crate::config::{
     ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort, SecretRef, ToolConfig,
 };
 use crate::db::error::{CoreError, Result};
+use crate::db::messages::Chat;
 use crate::i18n::Language;
 use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};
@@ -136,7 +137,7 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn turn_context<'a>(
         &'a self,
-        generating: &'a InFlightSet<i64>,
+        generating: &'a InFlightSet<Chat>,
         events: TurnEvents<'a>,
     ) -> TurnContext<'a> {
         TurnContext {
@@ -144,7 +145,7 @@ impl Snapshot {
                 Ok(adapter) => Ok(adapter.as_ref() as &dyn LlmAdapter),
                 Err(failure) => Err(failure.clone()),
             },
-            prompts: SystemPrompts::for_task_chat(&self.config.general),
+            prompts: SystemPrompts::from_config(&self.config.general),
             opening_message: orchestration::opening_message(&self.config.general),
             capabilities: self.capabilities,
             reasoning_effort: self

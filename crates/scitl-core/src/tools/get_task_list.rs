@@ -26,6 +26,12 @@ pub fn schema() -> ToolSchema {
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
     Args::parse(arguments, &[])?;
 
+    task_list(conn)
+}
+
+/// 総合チャットの最新状態(`orchestration::state_prompt`)もこの形で渡す。ツールの結果と
+/// 最新状態で同じタスクの見え方が食い違わないようにするため。
+pub fn task_list(conn: &Connection) -> Result<Value> {
     // 表示側のフォールバック(Issue #61)はモデルには渡さない。`title: null` が「未設定」を
     // 意味する状態をそのまま見せる(docs/spec/rebuild/tools.md「変更点の詳細」)。
     // アーカイブ済みは返さない(旧実装と同じ。docs/spec/rebuild/tools.md 2節)。アーカイブは

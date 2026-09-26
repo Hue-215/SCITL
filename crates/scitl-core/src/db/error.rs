@@ -12,9 +12,9 @@ pub enum CoreError {
     MessageNotFound(i64),
     #[error("invalid message operation: {0}")]
     InvalidMessageOperation(String),
-    /// そのタスクは既に応答を生成中(`orchestration::TurnContext::generating`)。
-    #[error("task {0} is already generating a response")]
-    TaskBusy(i64),
+    /// その会話は既に応答を生成中(`orchestration::TurnContext::generating`)。
+    #[error("{0} is already generating a response")]
+    ChatBusy(crate::db::messages::Chat),
     #[error("unknown argument: {0}")]
     UnknownArgument(String),
     /// モデルが公開していないツール名を呼んだ。

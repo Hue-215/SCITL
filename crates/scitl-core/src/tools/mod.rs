@@ -3,6 +3,7 @@ mod args;
 pub mod delete_step;
 pub mod external;
 pub mod get_current_task_detail;
+pub mod get_task_detail;
 pub mod get_task_list;
 pub mod update_step;
 pub mod update_task;
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::error::{CoreError, Result};
+use crate::db::messages::Chat;
 use crate::db::task_steps;
 use crate::llm::ToolSchema;
 
@@ -32,7 +34,7 @@ pub struct ToolDefinition {
     pub kind: ToolKind,
 }
 
-/// 公開面。総合/MCPは枠のみ(docs/spec/rebuild/tools.md 1節、Issue #38範囲外)。
+/// 公開面(docs/spec/rebuild/tools.md 2節)。MCPは枠のみ(Issue #73)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
     General,
@@ -40,10 +42,31 @@ pub enum Surface {
     Mcp,
 }
 
+impl Surface {
+    /// 会話ごとの面。総合チャットは読み取り専用のツールだけを公開する(tools.md 5節)。
+    fn of(chat: Chat) -> Self {
+        match chat {
+            Chat::General => Self::General,
+            Chat::Task(_) => Self::Task,
+        }
+    }
+}
+
 /// 面ごとの公開ツール定義。実装関数は1つのまま、公開するスキーマだけを面で分ける
-/// (docs/spec/rebuild/tools.md 1節「確定方針」)。
+/// (docs/spec/rebuild/tools.md 1節「確定方針」)。実行の振り分け([`execute`])と
+/// 同じ集合を並べる(`each_chat_runs_exactly_the_tools_it_exposes`が確かめる)。
 pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
     match surface {
+        Surface::General => vec![
+            ToolDefinition {
+                schema: get_task_list::schema(),
+                kind: ToolKind::State,
+            },
+            ToolDefinition {
+                schema: get_task_detail::schema(),
+                kind: ToolKind::State,
+            },
+        ],
         Surface::Task => vec![
             ToolDefinition {
                 schema: get_task_list::schema(),
@@ -70,53 +93,49 @@ pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
                 kind: ToolKind::State,
             },
         ],
-        Surface::General | Surface::Mcp => Vec::new(),
+        Surface::Mcp => Vec::new(),
     }
 }
 
-/// タスクチャット面で公開する内部ツールの名前。外部ツールの名前空間化で衝突を
-/// 避けるために使う(`external::ExternalToolset::build`)。
-pub fn task_chat_tool_names() -> Vec<String> {
-    task_chat_tools()
-        .iter()
-        .map(|t| t.name().to_string())
-        .collect()
-}
-
-/// タスクチャット面で公開する内部ツールの分類。公開していない名前には`None`を返す。
-pub fn task_chat_tool_kind(name: &str) -> Option<ToolKind> {
-    tool_definitions(Surface::Task)
-        .into_iter()
-        .find(|def| def.schema.name() == name)
-        .map(|def| def.kind)
-}
-
-/// タスクチャット向けの公開ツール一覧(docs/spec/rebuild/tools.md 2節)。
-/// `task_id`はターン開始時にオーケストレーション層が束縛するため、
-/// ここでは引数として公開しない(architecture.md 7節)。
-pub fn task_chat_tools() -> Vec<ToolSchema> {
-    tool_definitions(Surface::Task)
+/// 会話で公開する内部ツールの一覧。タスクチャットの`task_id`はターン開始時に
+/// オーケストレーション層が束縛するため、引数として公開しない(architecture.md 7節)。
+pub fn schemas(chat: Chat) -> Vec<ToolSchema> {
+    tool_definitions(Surface::of(chat))
         .into_iter()
         .map(|def| def.schema)
         .collect()
 }
 
-/// タスクチャット面でのツール実行。`task_id`は呼び出し元(orchestration)が
-/// 文脈から渡す(モデルには公開しない)。
-pub fn execute_task_chat_tool(
-    conn: &Connection,
-    task_id: i64,
-    tool_name: &str,
-    arguments: &Value,
-) -> Result<Value> {
-    match tool_name {
-        get_task_list::NAME => get_task_list::execute(conn, arguments),
-        get_current_task_detail::NAME => get_current_task_detail::execute(conn, task_id, arguments),
-        update_task::NAME => update_task::execute(conn, task_id, arguments),
-        add_steps::NAME => add_steps::execute(conn, task_id, arguments),
-        update_step::NAME => update_step::execute(conn, task_id, arguments),
-        delete_step::NAME => delete_step::execute(conn, task_id, arguments),
-        other => Err(CoreError::UnknownTool(other.to_string())),
+/// 会話で公開する内部ツールの名前。外部ツールの名前空間化で衝突を避けるために使う
+/// (`external::ExternalToolset::build`)。
+pub fn names(chat: Chat) -> Vec<String> {
+    schemas(chat).iter().map(|t| t.name().to_string()).collect()
+}
+
+/// 会話で公開する内部ツールの分類。公開していない名前には`None`を返す。
+pub fn kind(chat: Chat, name: &str) -> Option<ToolKind> {
+    tool_definitions(Surface::of(chat))
+        .into_iter()
+        .find(|def| def.schema.name() == name)
+        .map(|def| def.kind)
+}
+
+/// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]に
+/// する。総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離を
+/// モデルの自己制御に頼らない。tools.md 5節)。タスクチャットの`task_id`は呼び出し元
+/// (orchestration)が文脈から渡す(モデルには公開しない)。
+pub fn execute(conn: &Connection, chat: Chat, tool_name: &str, arguments: &Value) -> Result<Value> {
+    match (chat, tool_name) {
+        (_, get_task_list::NAME) => get_task_list::execute(conn, arguments),
+        (Chat::General, get_task_detail::NAME) => get_task_detail::execute(conn, arguments),
+        (Chat::Task(task_id), get_current_task_detail::NAME) => {
+            get_current_task_detail::execute(conn, task_id, arguments)
+        }
+        (Chat::Task(task_id), update_task::NAME) => update_task::execute(conn, task_id, arguments),
+        (Chat::Task(task_id), add_steps::NAME) => add_steps::execute(conn, task_id, arguments),
+        (Chat::Task(task_id), update_step::NAME) => update_step::execute(conn, task_id, arguments),
+        (Chat::Task(task_id), delete_step::NAME) => delete_step::execute(conn, task_id, arguments),
+        (_, other) => Err(CoreError::UnknownTool(other.to_string())),
     }
 }
 
@@ -145,7 +164,33 @@ mod tests {
         for surface in [Surface::General, Surface::Task, Surface::Mcp] {
             tool_definitions(surface);
         }
-        assert!(!task_chat_tools().is_empty());
+        assert!(!schemas(Chat::General).is_empty());
+        assert!(!schemas(Chat::Task(1)).is_empty());
+    }
+
+    /// 公開する集合と実行できる集合が食い違うと、公開していないツールが呼べてしまう
+    /// (総合チャットで更新系が動く)か、公開したツールが未知のツールになる。
+    #[test]
+    fn each_chat_runs_exactly_the_tools_it_exposes() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = db::tasks::create_task(&conn).unwrap().id;
+        let all_names: Vec<String> = [Surface::General, Surface::Task]
+            .into_iter()
+            .flat_map(tool_definitions)
+            .map(|def| def.schema.name().to_string())
+            .collect();
+        for chat in [Chat::General, Chat::Task(task_id)] {
+            let exposed = names(chat);
+            for name in &all_names {
+                // 引数は検証の手前で止まってもよいので、空で呼ぶ。未知のツールかどうかだけを見る。
+                let unknown = matches!(
+                    execute(&conn, chat, name, &serde_json::json!({})),
+                    Err(CoreError::UnknownTool(_))
+                );
+                assert_eq!(!unknown, exposed.contains(name), "{chat}: {name}");
+            }
+        }
+        assert!(!names(Chat::General).contains(&update_task::NAME.to_string()));
     }
 
     #[test]
@@ -153,8 +198,13 @@ mod tests {
         // モデルに返る文言が「未知の引数」にならないこと(ツール名の誤りだと伝える)。
         let conn = db::open_in_memory().unwrap();
         let task_id = db::tasks::create_task(&conn).unwrap().id;
-        let err = execute_task_chat_tool(&conn, task_id, "no_such_tool", &serde_json::json!({}))
-            .unwrap_err();
+        let err = execute(
+            &conn,
+            Chat::Task(task_id),
+            "no_such_tool",
+            &serde_json::json!({}),
+        )
+        .unwrap_err();
         assert!(matches!(&err, CoreError::UnknownTool(name) if name == "no_such_tool"));
     }
 }

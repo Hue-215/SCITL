@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use rusqlite::Connection;
 
 use crate::db::error::Result;
-use crate::db::messages::{self, Message, Opener};
+use crate::db::messages::{self, Chat, Message, Opener};
 use crate::llm::{ChatMessage, PromptText, ToolArguments, ToolCallRequest};
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
 use crate::tools::ToolKind;
@@ -23,20 +23,23 @@ use crate::tools::ToolKind;
 /// `tools_available`が偽なら送らない。ツールに対応しないモデルには、`tool_calls`を含む
 /// 履歴ごと拒むサーバーがあるため。
 ///
-/// 聞き取りから始まった会話(`messages::Opener::Reply`)は、保存していない開始の発言
-/// (`opening`)を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
-/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。
+/// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
+/// 発言(`opening`)を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
+/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。総合チャットは聞き取りを
+/// 持たず、必ずユーザー発言から始まるので補わない。
 pub(super) fn build_history(
     conn: &Connection,
-    task_id: i64,
+    chat: Chat,
     tools_available: bool,
     opening: &str,
 ) -> Result<Vec<ChatMessage>> {
-    let stored = messages::list_for_task(conn, task_id)?;
+    let stored = messages::list_for_chat(conn, chat)?;
     let replied_turns = replied_turns(&stored);
     let mut history = Vec::with_capacity(stored.len() + 1);
-    if messages::opener(conn, task_id)? != Some(Opener::User) {
-        history.push(ChatMessage::User(PromptText::user_message(opening, None)));
+    if let Chat::Task(task_id) = chat {
+        if messages::opener(conn, task_id)? != Some(Opener::User) {
+            history.push(ChatMessage::User(PromptText::user_message(opening, None)));
+        }
     }
     for m in stored {
         if m.kind == "tool_execution" {
@@ -220,7 +223,13 @@ mod tests {
         }
 
         fn history(&self, tools_available: bool) -> Vec<ChatMessage> {
-            build_history(&self.conn, self.task_id, tools_available, OPENING).unwrap()
+            build_history(
+                &self.conn,
+                Chat::Task(self.task_id),
+                tools_available,
+                OPENING,
+            )
+            .unwrap()
         }
     }
 
@@ -342,7 +351,7 @@ mod tests {
         f.user("u");
         f.record(Some("t1"), Some(ToolKind::Fact), json!({ "text": "古い" }));
         let first_reply = f.insert(Role::Assistant, Kind::Normal, "a", Some("t1"));
-        messages::soft_delete_normal_from(&f.conn, f.task_id, first_reply).unwrap();
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), first_reply).unwrap();
         f.insert_attempt(Role::Assistant, Kind::Normal, "b", "t1", 2);
         assert!(tool_contents(&f.history(true)).is_empty());
     }
@@ -353,7 +362,7 @@ mod tests {
         let user = f.user("u");
         f.record(Some("t1"), Some(ToolKind::Fact), json!({ "text": "古い" }));
         f.reply("t1", "a");
-        messages::soft_delete_normal_from(&f.conn, f.task_id, user).unwrap();
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), user).unwrap();
         f.user("編集後");
         assert!(tool_contents(&f.history(true)).is_empty());
     }
@@ -403,5 +412,29 @@ mod tests {
         assert!(history_call_id(123_456)
             .chars()
             .all(|c| c.is_ascii_alphanumeric()));
+    }
+    #[test]
+    fn general_chat_history_has_no_opening_message() {
+        let f = Fixture::new();
+        messages::insert_message(
+            &f.conn,
+            NewMessage {
+                task_id: None,
+                role: Role::User,
+                content: "今週は何をする?",
+                kind: Kind::Normal,
+                source: None,
+                turn: None,
+                error_kind: None,
+                error_detail: None,
+                reasoning: None,
+            },
+        )
+        .unwrap();
+        f.user("タスクの発言");
+
+        let history = build_history(&f.conn, Chat::General, true, OPENING).unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(!history.contains(&opening_message()));
     }
 }

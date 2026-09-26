@@ -1,7 +1,39 @@
+use std::fmt;
+
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{now_iso8601, CoreError, Result};
+
+/// 発言が属する会話。`messages.task_id`がNULLなら総合チャット(data-model.md messages)。
+/// `Option<i64>`で持たないのは、渡し忘れの`None`が総合チャットへの書き込みに化けるのを
+/// 型で防ぐため(tools.md 1節が修正した「対象の取り違え」と同種の事故)。
+/// 画面とは`{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "task_id", rename_all = "snake_case")]
+pub enum Chat {
+    General,
+    Task(i64),
+}
+
+impl Chat {
+    /// `messages.task_id`の値。
+    pub fn task_id(self) -> Option<i64> {
+        match self {
+            Self::General => None,
+            Self::Task(id) => Some(id),
+        }
+    }
+}
+
+impl fmt::Display for Chat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::General => f.write_str("the general chat"),
+            Self::Task(id) => write!(f, "task {id}"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,7 +132,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     Ok(conn.last_insert_rowid())
 }
 
-/// タスクチャンネル分の発言取得(支配的クエリ)。
+/// 1つの会話の発言取得(支配的クエリ)。
 /// ターンを持つ行は`turn_id`ごとの最新試行のみに絞り、さらに**通常発言が1行も生き残って
 /// いないターン(破棄されたターン)を丸ごと除く**(data-model.md「ターン境界」—
 /// 外部経由の記録はturn_idを持たないため常に残る)。
@@ -109,11 +141,11 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// (ツール実行記録は保全する。data-model.md)、破棄されたターンのツール実行記録だけが
 /// 残る。これを会話に並べると、直後に挿入される編集後の発言がその下に来て新規送信と
 /// 見分けが付かなくなる。記録はDBに残したまま、この支配的クエリの時点で会話から外す。
-pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
+pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
         "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
          FROM messages
-         WHERE task_id = ?1
+         WHERE task_id IS ?1
            AND deleted_at IS NULL
            AND (
              turn_id IS NULL
@@ -134,7 +166,7 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<Message>> {
          ORDER BY created_at ASC, id ASC",
     )?;
     let rows = stmt
-        .query_map([task_id], message_from_row)?
+        .query_map([chat.task_id()], message_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -153,7 +185,7 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     .map_err(Into::into)
 }
 
-/// `SELECT`の列の並びは`list_for_task`・`find_message`で共通。
+/// `SELECT`の列の並びは`list_for_chat`・`find_message`で共通。
 fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
     Ok(Message {
         id: row.get(0)?,
@@ -174,7 +206,7 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
 /// 削除(共通)の唯一の入口。対象はユーザー発言とターンの返信(アシスタント発言・
 /// エラー発言)の通常発言のみ
 /// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない」)。
-/// 返信を消したターンは通常発言が残らないため、`list_for_task`がターンごと会話から外す。
+/// 返信を消したターンは通常発言が残らないため、`list_for_chat`がターンごと会話から外す。
 /// 確認ダイアログを挟まない即時の論理削除で、`deleted_at`を立てるだけの取り消し可能な
 /// 操作にする(`deleted_at`をNULLに戻せば復元できる。復元UIは本Issueの範囲外)。
 pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
@@ -203,15 +235,15 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
 /// (会話の整合性より実行記録の保全を優先する)」)。
 ///
 /// この呼び出しの後、対象のターンには通常発言が1行も残らず、ツール実行記録だけが浮く。
-/// 会話としては破棄されたターンなので、`list_for_task`が表示から外す(Issue #95。
+/// 会話としては破棄されたターンなので、`list_for_chat`が表示から外す(Issue #95。
 /// `soft_delete_normal_from_cascades_but_spares_tool_execution_rows`で、DBには残り
 /// 会話には出ないことを確認している)。**保全と表示を切り離すのがここの要点**で、
 /// 記録の側を消して辻褄を合わせてはならない。
-pub fn soft_delete_normal_from(conn: &Connection, task_id: i64, from_id: i64) -> Result<()> {
+pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
-         WHERE task_id = ?2 AND id >= ?3 AND kind = 'normal' AND deleted_at IS NULL",
-        rusqlite::params![now_iso8601(), task_id, from_id],
+         WHERE task_id IS ?2 AND id >= ?3 AND kind = 'normal' AND deleted_at IS NULL",
+        rusqlite::params![now_iso8601(), chat.task_id(), from_id],
     )?;
     Ok(())
 }
@@ -328,7 +360,7 @@ mod tests {
         )
         .unwrap();
 
-        let messages = list_for_task(&conn, task_id).unwrap();
+        let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
         assert_eq!(contents, vec!["こんにちは", "再試行後の応答"]);
     }
@@ -354,7 +386,7 @@ mod tests {
         )
         .unwrap();
 
-        let messages = list_for_task(&conn, task_id).unwrap();
+        let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].source.as_deref(), Some("mcp:external-client"));
     }
@@ -409,7 +441,7 @@ mod tests {
         )
         .unwrap();
 
-        let messages = list_for_task(&conn, task_id).unwrap();
+        let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "error");
         assert_eq!(messages[0].error_kind.as_deref(), Some("no_api_key"));
@@ -562,10 +594,10 @@ mod tests {
         }
 
         // 前方のユーザー発言を編集した場合のカスケード。通常発言は全試行分が消える。
-        soft_delete_normal_from(&conn, task_id, user_id).unwrap();
+        soft_delete_normal_from(&conn, Chat::Task(task_id), user_id).unwrap();
 
         // 旧試行・最新試行のどちらのツール実行記録も会話には出ない。
-        let remaining = list_for_task(&conn, task_id).unwrap();
+        let remaining = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert!(
             remaining.is_empty(),
             "unexpected remaining rows: {remaining:?}"
@@ -605,7 +637,9 @@ mod tests {
 
         soft_delete_message(&conn, id).unwrap();
 
-        assert!(list_for_task(&conn, task_id).unwrap().is_empty());
+        assert!(list_for_chat(&conn, Chat::Task(task_id))
+            .unwrap()
+            .is_empty());
         // 物理削除ではないことを確認する(deleted_atを無視すれば行は残っている)。
         let deleted_at: Option<String> = conn
             .query_row("SELECT deleted_at FROM messages WHERE id = ?1", [id], |r| {
@@ -700,13 +734,13 @@ mod tests {
         .unwrap();
 
         // ユーザー発言以降(自身を含む)をすべて論理削除する = 編集操作のカスケードと同じ形。
-        soft_delete_normal_from(&conn, task_id, user_id).unwrap();
+        soft_delete_normal_from(&conn, Chat::Task(task_id), user_id).unwrap();
 
         // kind='normal'の行(ユーザー発言・アシスタント発言)はすべて消える。ツール実行記録は
         // `soft_delete_normal_from`の対象外なので`deleted_at`が立たないが、通常発言が1行も
-        // 残らないターンは会話としては破棄されているため、`list_for_task`は丸ごと外す
+        // 残らないターンは会話としては破棄されているため、`list_for_chat`は丸ごと外す
         // (Issue #95)。保全(DBに残る)と表示(会話に出ない)を切り離すのがこのテストの要点。
-        let remaining = list_for_task(&conn, task_id).unwrap();
+        let remaining = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert!(
             remaining.is_empty(),
             "unexpected remaining rows: {remaining:?}"
@@ -824,7 +858,66 @@ mod tests {
         insert(by_reply, Role::Tool, None, Some("mcp:external-client"));
         let reply = insert(by_reply, Role::Assistant, Some(("turn-2", 1)), None);
         insert(by_reply, Role::User, None, None);
-        soft_delete_normal_from(&conn, by_reply, reply).unwrap();
+        soft_delete_normal_from(&conn, Chat::Task(by_reply), reply).unwrap();
         assert_eq!(opener(&conn, by_reply).unwrap(), Some(Opener::Reply));
+    }
+    #[test]
+    fn general_and_task_chats_do_not_see_each_others_messages() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let insert = |task_id: Option<i64>, content| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    task_id,
+                    role: Role::User,
+                    content,
+                    kind: Kind::Normal,
+                    source: None,
+                    turn: None,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let general_first = insert(None, "総合1");
+        insert(Some(task_id), "タスク");
+        insert(None, "総合2");
+
+        let contents = |chat| -> Vec<String> {
+            list_for_chat(&conn, chat)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.content)
+                .collect()
+        };
+        assert_eq!(contents(Chat::General), vec!["総合1", "総合2"]);
+        assert_eq!(contents(Chat::Task(task_id)), vec!["タスク"]);
+
+        // 編集のカスケードも会話の中に留まる。
+        soft_delete_normal_from(&conn, Chat::General, general_first).unwrap();
+        assert!(contents(Chat::General).is_empty());
+        assert_eq!(contents(Chat::Task(task_id)), vec!["タスク"]);
+    }
+
+    #[test]
+    fn chat_is_exchanged_as_a_tagged_object() {
+        assert_eq!(
+            serde_json::to_value(Chat::General).unwrap(),
+            serde_json::json!({ "kind": "general" })
+        );
+        assert_eq!(
+            serde_json::to_value(Chat::Task(3)).unwrap(),
+            serde_json::json!({ "kind": "task", "task_id": 3 })
+        );
+        let general: Chat =
+            serde_json::from_value(serde_json::json!({ "kind": "general" })).unwrap();
+        assert_eq!(general, Chat::General);
+        // nullや数値だけでは総合チャットにもタスクにもならない。
+        assert!(serde_json::from_value::<Chat>(serde_json::json!(null)).is_err());
+        assert!(serde_json::from_value::<Chat>(serde_json::json!(3)).is_err());
+        assert!(serde_json::from_value::<Chat>(serde_json::json!({ "kind": "task" })).is_err());
     }
 }
