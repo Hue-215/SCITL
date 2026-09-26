@@ -5,9 +5,10 @@
 // 見分けられないため、ここでは拾わない。
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
-const SRC = new URL('../src', import.meta.url).pathname
+const SRC = fileURLToPath(new URL('../src', import.meta.url))
 const JAPANESE = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u
 
 function sourceFiles(dir) {
