@@ -1,27 +1,30 @@
 //! ツール実行記録(`kind='tool_execution'`の行)の`content`の形。書き込み(`turn`)と
-//! 読み戻し(`history`)で同じ形を使うため、ここに1つだけ置く(principles.md 5節)。
+//! 読み戻し(`history`)、実行を画面へ知らせるイベント(`turn_event`)で同じ形を使うため、
+//! ここに1つだけ置く(principles.md 5節)。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::tools::ToolKind;
 
+/// フィールドをcoreの外に開かないのは、記録を作るのがターンの処理だけだから
+/// (外へは直列化した形で渡るだけ)。
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct ToolExecutionRecord {
-    pub tool: String,
+pub struct ToolExecutionRecord {
+    pub(crate) tool: String,
     /// 読めなかった引数は、モデルが実際に何を出したかが分かるよう生の文字列で残す。
     /// この形は「正しく読めた引数が文字列だった」場合と見分けられないが、読めなかった
     /// 呼び出しは実行しないので`tool_kind`を持たない。
-    pub arguments: Value,
-    pub result: Value,
+    pub(crate) arguments: Value,
+    pub(crate) result: Value,
     /// 実行したときにツール定義が決めた分類(tools.md 4節)。実行しなかった呼び出し
     /// (引数が読めない・公開していない名前・接続先が無い)と、Issue #11より前の記録には無い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_kind: Option<ToolKind>,
+    pub(crate) tool_kind: Option<ToolKind>,
     /// プロバイダーが払い出した呼び出しID。記録のためだけに持ち、次ターン以降の履歴には
     /// 使わない(`history::history_call_id`)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub call_id: Option<String>,
+    pub(crate) call_id: Option<String>,
 }
 
 /// ツール結果が失敗を表すか。最上位の`error`キーを作るのはSCITL自身だけ

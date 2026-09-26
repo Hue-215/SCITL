@@ -31,7 +31,9 @@ use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};
 use crate::llm::{self, DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::{self, ToolCatalog};
-use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnContext, TurnFailure};
+use crate::orchestration::{
+    McpAccess, SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure,
+};
 use crate::secrets;
 use crate::tools::external;
 
@@ -117,7 +119,11 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn turn_context<'a>(&'a self, generating: &'a InFlightSet<i64>) -> TurnContext<'a> {
+    pub fn turn_context<'a>(
+        &'a self,
+        generating: &'a InFlightSet<i64>,
+        events: TurnEvents<'a>,
+    ) -> TurnContext<'a> {
         TurnContext {
             adapter: match &self.adapter {
                 Ok(adapter) => Ok(adapter.as_ref() as &dyn LlmAdapter),
@@ -136,6 +142,7 @@ impl Snapshot {
             mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
             limits: ToolLimits::from_config(&self.config.tools),
             generating,
+            events,
         }
     }
 }
@@ -872,6 +879,7 @@ fn invalid(message: impl Into<String>) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestration::discard_events;
 
     // 鍵を渡さない操作だけを試す(資格情報ストアに触れない)。
 
@@ -927,7 +935,7 @@ name = "m"
             let generating = InFlightSet::new();
             settings
                 .snapshot()
-                .turn_context(&generating)
+                .turn_context(&generating, &discard_events)
                 .reasoning_effort
         };
 

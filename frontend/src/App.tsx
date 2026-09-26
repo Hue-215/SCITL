@@ -158,7 +158,7 @@ export default function App() {
         { role: 'user', content: text },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      () => sendTaskChatMessage(id, text),
+      (onEvent) => sendTaskChatMessage(id, text, onEvent),
       settle,
     )
   }
@@ -191,7 +191,7 @@ export default function App() {
         { role: 'user', content: text },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      () => editTaskChatMessage(id, messageId, text),
+      (onEvent) => editTaskChatMessage(id, messageId, text, onEvent),
       settle,
     )
   }
@@ -204,7 +204,7 @@ export default function App() {
     await requests.run(
       id,
       [{ role: 'pending', content: t('chat.pending_reply') }],
-      () => retryTaskChatMessage(id, messageId),
+      (onEvent) => retryTaskChatMessage(id, messageId, onEvent),
       settle,
     )
   }

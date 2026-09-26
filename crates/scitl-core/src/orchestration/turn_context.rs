@@ -4,7 +4,7 @@
 use crate::config::ReasoningEffort;
 use crate::in_flight::InFlightSet;
 use crate::llm::{LlmAdapter, ModelCapabilities};
-use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnFailure};
+use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnEvents, TurnFailure};
 
 /// 組み立ては[`crate::settings::Snapshot::turn_context`]が行う。
 #[derive(Clone)]
@@ -24,4 +24,6 @@ pub struct TurnContext<'a> {
     /// 応答を生成中のタスク。アプリの起動中ずっと同じ集合を渡す。同じタスクで2つの
     /// ターンが並ぶと、発言と実行記録の行が混ざり合うため、ターンの入口で1本に絞る。
     pub generating: &'a InFlightSet<i64>,
+    /// ターンの途中経過の受け口([`crate::orchestration::TurnEvent`])。
+    pub events: TurnEvents<'a>,
 }

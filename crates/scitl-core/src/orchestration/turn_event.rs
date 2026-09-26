@@ -1,0 +1,30 @@
+//! ターンの途中経過の通知(architecture.md 3節「プロセス間の受け渡し」)。表示のためだけに
+//! 使い、発言として保存するのは1ターン分を組み立て終えてから`turn`が行う
+//! (principles.md 3節「保存するのは組み立て終わった応答」)。
+
+use serde::Serialize;
+
+use crate::llm::ResponseEvent;
+use crate::orchestration::ToolExecutionRecord;
+
+/// どのタスクのイベントかは持たない。受け口はターンの呼び出しごとに渡されるので、
+/// 呼び出し側が知っている。
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TurnEvent {
+    /// アダプタが渡したイベントをそのまま転送する(`llm::LlmAdapter::send`の約束事に従う)。
+    Response { event: ResponseEvent },
+    /// ツールを1件実行し、実行記録を保存した。`id`は保存した行のid、`record`はその行の
+    /// `content`と同じ値。
+    ToolExecuted {
+        id: i64,
+        record: ToolExecutionRecord,
+    },
+}
+
+/// ターンのイベントの受け口([`crate::orchestration::TurnContext::events`])。
+/// ターンの処理を止めないよう、受け口の側で待たない。
+pub type TurnEvents<'a> = &'a (dyn Fn(TurnEvent) + Send + Sync);
+
+/// 途中経過を見ない呼び出し元(テスト等)が渡す受け口。
+pub fn discard_events(_: TurnEvent) {}

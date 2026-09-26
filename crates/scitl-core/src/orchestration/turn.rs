@@ -9,8 +9,7 @@ use crate::db::messages::{self, Kind, Message, NewMessage, Role};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
-    ChatMessage, FinishReason, LlmAdapter, PromptText, ResponseEvent, ToolArguments,
-    ToolCallRequest, ToolSchema,
+    ChatMessage, LlmAdapter, PromptText, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
 use crate::mcp::McpSessions;
 use crate::orchestration::history::build_history;
@@ -19,7 +18,7 @@ use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn_error::{self, TurnFailure};
-use crate::orchestration::{SystemPrompts, TurnContext};
+use crate::orchestration::{SystemPrompts, TurnContext, TurnEvent, TurnEvents};
 use crate::tools::{self, external::ExternalToolset, ToolKind};
 
 /// 1ターンの処理フロー(architecture.md 1節)。ユーザー発言の保存 → LLM呼び出し →
@@ -34,7 +33,7 @@ pub async fn run_turn(
     ctx: &TurnContext<'_>,
     task_id: i64,
     user_text: String,
-) -> Result<Vec<ResponseEvent>> {
+) -> Result<()> {
     let _generating = begin_generating(ctx.generating, task_id)?;
     with_conn(db.clone(), move |conn| {
         messages::insert_message(
@@ -69,7 +68,7 @@ pub async fn edit_user_message(
     task_id: i64,
     message_id: i64,
     new_text: String,
-) -> Result<Vec<ResponseEvent>> {
+) -> Result<()> {
     let _generating = begin_generating(ctx.generating, task_id)?;
     with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -114,7 +113,7 @@ pub async fn retry_reply(
     ctx: &TurnContext<'_>,
     task_id: i64,
     message_id: i64,
-) -> Result<Vec<ResponseEvent>> {
+) -> Result<()> {
     let _generating = begin_generating(ctx.generating, task_id)?;
     let attempt = with_conn(db.clone(), move |conn| {
         let target = messages::find_message(conn, message_id)?
@@ -208,7 +207,7 @@ async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     attempt: Attempt,
-) -> Result<Vec<ResponseEvent>> {
+) -> Result<()> {
     let adapter = match &ctx.adapter {
         Ok(adapter) => *adapter,
         Err(failure) => return fail_turn(db, &attempt, failure.clone()).await,
@@ -252,7 +251,7 @@ impl Attempt {
         }
     }
 
-    /// この試行に属する行を書く。
+    /// この試行に属する行を書き、行のidを返す。
     fn insert(
         &self,
         conn: &Connection,
@@ -261,7 +260,7 @@ impl Attempt {
         kind: Kind,
         error: Option<(&str, Option<&str>)>,
         reasoning: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         messages::insert_message(
             conn,
             NewMessage {
@@ -278,8 +277,7 @@ impl Attempt {
                 error_detail: error.and_then(|(_, detail)| detail),
                 reasoning,
             },
-        )?;
-        Ok(())
+        )
     }
 }
 
@@ -335,7 +333,7 @@ async fn run_tool_rounds(
     attempt: &Attempt,
     external: &ExternalToolset,
     sessions: &mut McpSessions,
-) -> Result<Vec<ResponseEvent>> {
+) -> Result<()> {
     let task_id = attempt.task_id;
     // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
     // 衝突の排除は`ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
@@ -353,7 +351,6 @@ async fn run_tool_rounds(
         exposed_tools.extend(external.schemas());
     }
 
-    let mut all_events = Vec::new();
     // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
     // 変換しておく(`SystemPrompts`自体はDBスレッドとやり取りするラウンドごとに組み直す)。
     let base_owned = ctx.prompts.base.map(str::to_string);
@@ -417,13 +414,20 @@ async fn run_tool_rounds(
         messages_to_send.extend(kept.iter().cloned());
         messages_to_send.extend(round_trip.iter().cloned());
 
+        // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
         let mut events = Vec::new();
+        let notify = ctx.events;
         let sent = adapter
             .send(
                 &messages_to_send,
                 offered,
                 ctx.reasoning_effort,
-                &mut |event| events.push(event),
+                &mut |event| {
+                    notify(TurnEvent::Response {
+                        event: event.clone(),
+                    });
+                    events.push(event);
+                },
             )
             .await;
         if let Err(e) = sent {
@@ -453,7 +457,6 @@ async fn run_tool_rounds(
                 ResponseEvent::Done { .. } => {}
             }
         }
-        all_events.extend(events);
         let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
 
         if tool_calls.is_empty() {
@@ -477,7 +480,7 @@ async fn run_tool_rounds(
                 )
             })
             .await?;
-            return Ok(all_events);
+            return Ok(());
         }
         // ツールを渡していないのに呼んできた。実行はせず、ツールを渡さなかった理由
         // (上限に達した・ツールに対応しないモデル)のエラーで終える。
@@ -520,7 +523,7 @@ async fn run_tool_rounds(
             } else {
                 None
             };
-            let content = serde_json::to_string(&ToolExecutionRecord {
+            let record = ToolExecutionRecord {
                 tool: call.name.clone(),
                 arguments: match &call.arguments {
                     ToolArguments::Valid { value } => value.clone(),
@@ -529,20 +532,8 @@ async fn run_tool_rounds(
                 result: result.clone(),
                 tool_kind,
                 call_id: call.id.clone(),
-            })
-            .expect("a record of JSON values serializes");
-            let attempt_for_db = attempt.clone();
-            with_conn(db.clone(), move |conn| {
-                attempt_for_db.insert(
-                    conn,
-                    Role::Tool,
-                    &content,
-                    Kind::ToolExecution,
-                    None,
-                    reasoning_for_row.as_deref(),
-                )
-            })
-            .await?;
+            };
+            save_tool_execution(db.clone(), attempt, record, reasoning_for_row, ctx.events).await?;
             executed.push((call, result));
         }
 
@@ -626,13 +617,37 @@ async fn execute_call(
     Ok((result, Some(kind)))
 }
 
-/// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
-/// の定型文言、`error_detail`は`failure.detail()`(Issue #159)。
-async fn fail_turn(
+/// ツール実行記録を保存する唯一の入口。保存した値をそのまま画面へ知らせる
+/// ([`TurnEvent::ToolExecuted`])。画面への出力の規則(architecture.md 10節)は保存値を
+/// 前提にしているので、保存する値と知らせる値をここ1箇所で作る。
+async fn save_tool_execution(
     db: SharedConnection,
     attempt: &Attempt,
-    failure: TurnFailure,
-) -> Result<Vec<ResponseEvent>> {
+    record: ToolExecutionRecord,
+    reasoning: Option<String>,
+    events: TurnEvents<'_>,
+) -> Result<()> {
+    let content = serde_json::to_string(&record).expect("a record of JSON values serializes");
+    let attempt = attempt.clone();
+    let id = with_conn(db, move |conn| {
+        attempt.insert(
+            conn,
+            Role::Tool,
+            &content,
+            Kind::ToolExecution,
+            None,
+            reasoning.as_deref(),
+        )
+    })
+    .await?;
+    // DBのロックを離してから知らせる。
+    events(TurnEvent::ToolExecuted { id, record });
+    Ok(())
+}
+
+/// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
+/// の定型文言、`error_detail`は`failure.detail()`(Issue #159)。
+async fn fail_turn(db: SharedConnection, attempt: &Attempt, failure: TurnFailure) -> Result<()> {
     let attempt = attempt.clone();
     let content = failure.user_message();
     with_conn(db, move |conn| {
@@ -646,7 +661,5 @@ async fn fail_turn(
         )
     })
     .await?;
-    Ok(vec![ResponseEvent::Done {
-        finish_reason: FinishReason::Error,
-    }])
+    Ok(())
 }

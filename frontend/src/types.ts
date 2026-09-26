@@ -44,6 +44,23 @@ export type ResponseEvent =
   | { type: 'tool_call'; id: string | null; name: string; arguments: ToolArguments }
   | { type: 'done'; finish_reason: 'stop' | 'tool_call' | 'length' | 'error' }
 
+// crates/scitl-core/src/orchestration/tool_record.rs の ToolExecutionRecord と一致させる。
+// ツール実行記録の行の`content`と同じ形。
+export interface ToolExecutionRecord {
+  tool: string
+  arguments: unknown
+  result: unknown
+  tool_kind?: 'state' | 'fact'
+  call_id?: string
+}
+
+// crates/scitl-core/src/orchestration/turn_event.rs の TurnEvent と一致させる。
+// 応答待ちの間の表示専用で、完了したらDBから読み直した発言に置き換わる。
+export type TurnEvent =
+  | { type: 'response'; event: ResponseEvent }
+  // `id`は保存したツール実行記録の行のid
+  | { type: 'tool_executed'; id: number; record: ToolExecutionRecord }
+
 // crates/scitl-core/src/db/messages.rs の Message と一致させる。
 export interface Message {
   id: number
