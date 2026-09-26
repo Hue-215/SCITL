@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use rusqlite::Connection;
 
 use crate::db::error::Result;
-use crate::db::messages::{self, Message};
+use crate::db::messages::{self, Message, Opener};
 use crate::llm::{ChatMessage, PromptText, ToolArguments, ToolCallRequest};
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
 use crate::tools::ToolKind;
@@ -22,14 +22,22 @@ use crate::tools::ToolKind;
 /// ツール実行記録は、事実系の結果だけを呼び出しと結果の組にして送る(tools.md 4節)。
 /// `tools_available`が偽なら送らない。ツールに対応しないモデルには、`tool_calls`を含む
 /// 履歴ごと拒むサーバーがあるため。
+///
+/// 聞き取りから始まった会話(`messages::Opener::Reply`)は、保存していない開始の発言
+/// (`opening`)を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
+/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。
 pub(super) fn build_history(
     conn: &Connection,
     task_id: i64,
     tools_available: bool,
+    opening: &str,
 ) -> Result<Vec<ChatMessage>> {
     let stored = messages::list_for_task(conn, task_id)?;
     let replied_turns = replied_turns(&stored);
-    let mut history = Vec::with_capacity(stored.len());
+    let mut history = Vec::with_capacity(stored.len() + 1);
+    if messages::opener(conn, task_id)? != Some(Opener::User) {
+        history.push(ChatMessage::User(PromptText::user_message(opening, None)));
+    }
     for m in stored {
         if m.kind == "tool_execution" {
             if tools_available {
@@ -130,6 +138,8 @@ mod tests {
     use crate::db;
     use crate::db::messages::{Kind, NewMessage, Role};
 
+    const OPENING: &str = "開始の発言";
+
     struct Fixture {
         conn: Connection,
         task_id: i64,
@@ -210,7 +220,7 @@ mod tests {
         }
 
         fn history(&self, tools_available: bool) -> Vec<ChatMessage> {
-            build_history(&self.conn, self.task_id, tools_available).unwrap()
+            build_history(&self.conn, self.task_id, tools_available, OPENING).unwrap()
         }
     }
 
@@ -346,6 +356,43 @@ mod tests {
         messages::soft_delete_normal_from(&f.conn, f.task_id, user).unwrap();
         f.user("編集後");
         assert!(tool_contents(&f.history(true)).is_empty());
+    }
+
+    fn opening_message() -> ChatMessage {
+        ChatMessage::User(PromptText::user_message(OPENING, None))
+    }
+
+    #[test]
+    fn starts_an_opened_conversation_with_the_opening_message() {
+        let f = Fixture::new();
+        assert_eq!(f.history(true), vec![opening_message()]);
+
+        let greeting = f.insert(
+            Role::Assistant,
+            Kind::Normal,
+            "どんなタスクですか",
+            Some("t1"),
+        );
+        f.user("レポート");
+        let history = f.history(true);
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0], opening_message());
+        assert!(
+            matches!(&history[1], ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか")
+        );
+
+        // 最初の返信を消しても、聞き取りから始まった会話であることは変わらない。
+        messages::soft_delete_message(&f.conn, greeting).unwrap();
+        assert_eq!(f.history(true)[0], opening_message());
+    }
+
+    #[test]
+    fn does_not_add_the_opening_message_when_the_user_spoke_first() {
+        let f = Fixture::new();
+        let first = f.user("レポート");
+        f.reply("t1", "了解しました");
+        messages::soft_delete_message(&f.conn, first).unwrap();
+        assert!(!f.history(true).contains(&opening_message()));
     }
 
     #[test]

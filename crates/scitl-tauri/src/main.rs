@@ -40,6 +40,7 @@ fn main() {
             commands::tasks::get_task_detail,
             commands::tasks::list_tasks,
             commands::tasks::create_task,
+            commands::chat::open_task_chat,
             commands::chat::send_task_chat_message,
             commands::chat::list_task_messages,
             commands::chat::edit_task_chat_message,

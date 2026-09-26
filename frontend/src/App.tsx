@@ -7,6 +7,7 @@ import {
   getTaskDetail,
   listTaskMessages,
   listTasks,
+  openTaskChat,
   retryTaskChatMessage,
   sendTaskChatMessage,
 } from './api'
@@ -125,19 +126,34 @@ export default function App() {
     if (taskId !== null) void loadTask(taskId)
   }, [taskId, loadTask])
 
+  // 作ったらユーザーの発言を待たずに聞き取りを始める(Issue #76、legacy/frontend.md 1節)。
   const addTask = async () => {
     if (adding) return
     setAdding(true)
+    let id: number
     try {
-      const created = await createTask()
+      const result = await createTask()
+      if (result.status === 'unavailable') {
+        // モデル未選択等でチャットを使えない間は作らない。理由はエラー発言と同じ文言で出す。
+        setError(turnErrorText(result.error_kind, result.error_kind))
+        return
+      }
+      id = result.task.id
       await loadTasks()
-      selectTask(created.id)
+      selectTask(id)
       setError(null)
     } catch (e) {
       setError(failureText(e))
+      return
     } finally {
       setAdding(false)
     }
+    await requests.run(
+      id,
+      [{ role: 'pending', content: t('chat.pending_reply') }],
+      (onEvent) => openTaskChat(id, onEvent),
+      settle,
+    )
   }
 
   // 応答待ちのタスクでは、送信・編集・再試行・削除のすべてを不可にする(Issue #41、

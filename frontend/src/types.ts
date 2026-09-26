@@ -12,6 +12,12 @@ export interface Task {
   updated_at: string
 }
 
+// crates/scitl-core/src/orchestration/turn.rs の TaskCreation。チャットを使えない間は
+// タスクを作らず、その理由をエラー発言と同じ種別コードで返す。
+export type TaskCreation =
+  | { status: 'created'; task: Task }
+  | { status: 'unavailable'; error_kind: string }
+
 // crates/scitl-core/src/db/tasks.rs の TaskDetailView(Taskをフラット化したもの)。
 // ヘッダー向け。fallback_labelの意味はTaskSummaryと同じ。
 export interface TaskDetail extends Task {
@@ -95,8 +101,11 @@ export type ApiFormat = 'open_ai_compat'
 export interface GeneralSettings {
   system_prompt: string | null
   task_chat_system_prompt: string | null
+  task_opening_message: string | null
   response_timeout_secs: number | null
   // 未設定時に実際に使われる値(ToolSettingsのdefault_*と同じ扱い)。
+  default_task_chat_system_prompt: string
+  default_task_opening_message: string
   default_response_timeout_secs: number
   // 保存した表示言語(未設定なら既定の言語に解決済み)。画面は起動時の言語で描かれている。
   language: Language

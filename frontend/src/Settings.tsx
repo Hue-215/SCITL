@@ -145,15 +145,7 @@ export default function Settings({ onClose }: SettingsProps) {
             ) : tab === 'general' ? (
               <GeneralTab
                 settings={settings}
-                onSave={(systemPrompt, taskChatSystemPrompt, timeout) =>
-                  runOrReportError(() =>
-                    updateGeneralSettings({
-                      systemPrompt,
-                      taskChatSystemPrompt,
-                      responseTimeoutSecs: timeout,
-                    }),
-                  )
-                }
+                onSave={(update) => runOrReportError(() => updateGeneralSettings(update))}
                 onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
               />
             ) : tab === 'providers' ? (
@@ -259,35 +251,68 @@ function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldPr
   )
 }
 
+type GeneralUpdate = Parameters<typeof updateGeneralSettings>[0]
+
 interface GeneralTabProps {
   settings: SettingsView
-  onSave: (
-    systemPrompt: string | null,
-    taskChatSystemPrompt: string | null,
-    responseTimeoutSecs: number | null,
-  ) => void
+  onSave: (update: GeneralUpdate) => void
   onSaveLanguage: (language: Language) => void
+}
+
+interface PromptFieldProps {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  onBlur: () => void
+  caption?: string
+}
+
+function PromptField({ label, value, onChange, onBlur, caption }: PromptFieldProps) {
+  return (
+    <label className="settings-field">
+      <span>{label}</span>
+      <textarea value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} />
+      {caption && <p className="settings-hint">{caption}</p>}
+    </label>
+  )
 }
 
 // フォーカスを外すと自動保存(legacy/frontend.md 2節)。入力中は自身のstateだけを更新し、
 // blur時にのみ親へ確定した値を渡す。
+//
+// 既定の文面を持つ欄は、未設定の間は既定の文面を表示する(書き換えの起点にできるように)。
+// 空欄と既定の文面のままの値は、Rust側が未設定として保存する(`Settings::update_general`)。
 function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
-  const [systemPrompt, setSystemPrompt] = useState(settings.general.system_prompt ?? '')
+  const { general } = settings
+  const [systemPrompt, setSystemPrompt] = useState(general.system_prompt ?? '')
   const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
-    settings.general.task_chat_system_prompt ?? '',
+    general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
+  )
+  const [taskOpeningMessage, setTaskOpeningMessage] = useState(
+    general.task_opening_message ?? general.default_task_opening_message,
   )
 
   useEffect(() => {
-    setSystemPrompt(settings.general.system_prompt ?? '')
-    setTaskChatSystemPrompt(settings.general.task_chat_system_prompt ?? '')
-  }, [settings])
+    setSystemPrompt(general.system_prompt ?? '')
+    setTaskChatSystemPrompt(
+      general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
+    )
+    setTaskOpeningMessage(general.task_opening_message ?? general.default_task_opening_message)
+  }, [general])
+
+  const current = (): GeneralUpdate => ({
+    systemPrompt: systemPrompt || null,
+    taskChatSystemPrompt: taskChatSystemPrompt || null,
+    taskOpeningMessage: taskOpeningMessage || null,
+    responseTimeoutSecs: general.response_timeout_secs,
+  })
 
   return (
     <div className="settings-panel">
       <label className="settings-field">
         <span>{t('settings.general.language_label')}</span>
         <select
-          value={settings.general.language}
+          value={general.language}
           onChange={(e) => onSaveLanguage(e.target.value as Language)}
         >
           {LANGUAGES.map((language) => (
@@ -297,50 +322,45 @@ function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
           ))}
         </select>
         {/* 画面は起動時の言語で描かれているので、保存した言語と違う間だけ出す */}
-        {settings.general.language !== currentLanguage() && (
+        {general.language !== currentLanguage() && (
           <p className="settings-hint">{t('settings.general.language_restart_note')}</p>
         )}
       </label>
 
-      <label className="settings-field">
-        <span>{t('settings.general.system_prompt_label')}</span>
-        <textarea
-          value={systemPrompt}
-          onChange={(e) => setSystemPrompt(e.target.value)}
-          onBlur={() =>
-            onSave(
-              systemPrompt || null,
-              taskChatSystemPrompt || null,
-              settings.general.response_timeout_secs,
-            )
-          }
-        />
-      </label>
+      <PromptField
+        label={t('settings.general.system_prompt_label')}
+        value={systemPrompt}
+        onChange={setSystemPrompt}
+        onBlur={() => onSave(current())}
+      />
 
       <NumberField
         label={t('settings.general.timeout_label')}
-        value={settings.general.response_timeout_secs}
-        defaultValue={settings.general.default_response_timeout_secs}
-        onSave={(secs) => onSave(systemPrompt || null, taskChatSystemPrompt || null, secs)}
+        value={general.response_timeout_secs}
+        defaultValue={general.default_response_timeout_secs}
+        onSave={(secs) => onSave({ ...current(), responseTimeoutSecs: secs })}
       />
 
       <details className="settings-advanced">
         <summary>{t('settings.general.advanced_settings')}</summary>
-        <label className="settings-field">
-          <span>{t('settings.general.task_chat_prompt_label')}</span>
-          <textarea
+        {/* <details>自体はflexにしないので(index.cssの.settings-advanced)、欄の間隔は
+            中の入れ物のgapで持つ */}
+        <div className="settings-section">
+          <PromptField
+            label={t('settings.general.task_chat_prompt_label')}
             value={taskChatSystemPrompt}
-            onChange={(e) => setTaskChatSystemPrompt(e.target.value)}
-            onBlur={() =>
-              onSave(
-                systemPrompt || null,
-                taskChatSystemPrompt || null,
-                settings.general.response_timeout_secs,
-              )
-            }
+            onChange={setTaskChatSystemPrompt}
+            onBlur={() => onSave(current())}
+            caption={t('settings.general.task_chat_prompt_caption')}
           />
-          <p className="settings-hint">{t('settings.general.task_chat_prompt_caption')}</p>
-        </label>
+          <PromptField
+            label={t('settings.general.task_opening_label')}
+            value={taskOpeningMessage}
+            onChange={setTaskOpeningMessage}
+            onBlur={() => onSave(current())}
+            caption={t('settings.general.task_opening_caption')}
+          />
+        </div>
       </details>
     </div>
   )

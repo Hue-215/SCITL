@@ -9,7 +9,7 @@ import type {
   Message,
   ReasoningEffort,
   SettingsView,
-  Task,
+  TaskCreation,
   TaskDetail,
   TaskSummary,
   TurnEvent,
@@ -33,13 +33,20 @@ export function listTasks(): Promise<TaskSummary[]> {
   return invoke('list_tasks')
 }
 
-export function createTask(): Promise<Task> {
+export function createTask(): Promise<TaskCreation> {
   return invoke('create_task')
 }
 
-// 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける(architecture.md 3節)。
-// 経路(Channel)はコマンドの呼び出しごとに作るので、届いたイベントがどのタスクのものかは
-// 呼び出し側が知っている。
+// 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける
+// (architecture.md 3節)。経路(Channel)はコマンドの呼び出しごとに作るので、届いた
+// イベントがどのタスクのものかは呼び出し側が知っている。
+export function openTaskChat(
+  taskId: number,
+  onEvent: (event: TurnEvent) => void,
+): Promise<void> {
+  return invoke('open_task_chat', { taskId, onEvent: new Channel(onEvent) })
+}
+
 export function sendTaskChatMessage(
   taskId: number,
   text: string,
@@ -93,12 +100,13 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
   return invoke('update_language', { language })
 }
 
-// systemPrompt/taskChatSystemPromptはどちらも`string | null`で並ぶため、位置引数だと
+// プロンプトはどれも`string | null`で並ぶため、位置引数だと
 // 呼び出し側での取り違えに気付きにくい(docs/spec/rebuild/tools.md 1節が修正した
 // 「対象タスクの取り違え」と同種の事故)。名前で縛るためオブジェクト引数にする。
 export function updateGeneralSettings(args: {
   systemPrompt: string | null
   taskChatSystemPrompt: string | null
+  taskOpeningMessage: string | null
   responseTimeoutSecs: number | null
 }): Promise<SettingsView> {
   return invoke('update_general_settings', args)
