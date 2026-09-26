@@ -1,12 +1,13 @@
 import { useState } from 'react'
+import { GENERAL_CHAT, taskChat } from './chat'
 import { t } from './i18n'
 import { taskName } from './taskName'
-import type { TaskSummary } from './types'
+import type { Chat, TaskSummary } from './types'
 
 interface SidebarProps {
   tasks: TaskSummary[]
-  selectedTaskId: number | null
-  onSelect: (taskId: number) => void
+  selected: Chat
+  onSelect: (chat: Chat) => void
   onAddTask: () => void
   adding: boolean
   onOpenSettings: () => void
@@ -30,7 +31,7 @@ function TaskList({
 }: {
   tasks: TaskSummary[]
   selectedTaskId: number | null
-  onSelect: (taskId: number) => void
+  onSelect: (chat: Chat) => void
 }) {
   return (
     <ul className="sidebar-task-list">
@@ -39,7 +40,7 @@ function TaskList({
           <button
             type="button"
             className={task.id === selectedTaskId ? 'list-row selected' : 'list-row'}
-            onClick={() => onSelect(task.id)}
+            onClick={() => onSelect(taskChat(task.id))}
           >
             {taskLabel(task)}
           </button>
@@ -49,11 +50,11 @@ function TaskList({
   )
 }
 
-// サイドバー: 総合チャット行(固定・現時点では無効)・タスク一覧・アーカイブ折りたたみ・
-// 新規タスク追加ボタン(legacy/frontend.md 1節)。総合チャット自体は別Issue。
+// サイドバー: 総合チャット行(固定)・タスク一覧・アーカイブ折りたたみ・
+// 新規タスク追加ボタン(legacy/frontend.md 1節)。
 export default function Sidebar({
   tasks,
-  selectedTaskId,
+  selected,
   onSelect,
   onAddTask,
   adding,
@@ -63,11 +64,16 @@ export default function Sidebar({
 
   const active = tasks.filter((t) => t.archived_at === null)
   const archived = tasks.filter((t) => t.archived_at !== null)
+  const selectedTaskId = selected.kind === 'task' ? selected.task_id : null
 
   return (
     <nav className="sidebar">
       <div className="sidebar-general-row">
-        <button type="button" className="sidebar-general" disabled>
+        <button
+          type="button"
+          className={selected.kind === 'general' ? 'sidebar-general selected' : 'sidebar-general'}
+          onClick={() => onSelect(GENERAL_CHAT)}
+        >
           {t('sidebar.general_chat')}
         </button>
         <button

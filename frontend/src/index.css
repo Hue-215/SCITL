@@ -457,7 +457,8 @@ option {
   overflow-wrap: anywhere;
 }
 
-.list-row.selected {
+.list-row.selected,
+.sidebar-general.selected {
   background: var(--color-primary-container);
   color: var(--color-on-primary-container);
 }

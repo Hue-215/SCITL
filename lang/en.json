@@ -2,6 +2,7 @@
   "chat.command_failed": "The operation failed: {error}",
   "chat.edit_button": "Edit",
   "chat.error_detail_summary": "Show details",
+  "chat.general_title": "General chat",
   "chat.input_hint": "Type a message",
   "chat.pending_reply": "Waiting for a reply…",
   "chat.retry_button": "Retry",

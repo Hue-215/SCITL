@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   createTask,
-  deleteTaskChatMessage,
-  editTaskChatMessage,
+  deleteChatMessage,
+  editChatMessage,
   failureText,
   getTaskDetail,
-  listTaskMessages,
+  listChatMessages,
   listTasks,
   openTaskChat,
-  retryTaskChatMessage,
-  sendTaskChatMessage,
+  retryChatMessage,
+  sendChatMessage,
 } from './api'
+import { chatKey, GENERAL_CHAT, taskChat } from './chat'
 import ChatModelBar from './ChatModelBar'
 import { formatDateTime, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
@@ -19,9 +20,9 @@ import Sidebar from './Sidebar'
 import { taskName } from './taskName'
 import { ExternalToolLine, ThinkingTools } from './ThinkingTools'
 import { buildThoughtItems, finalEntryOf, groupMessages } from './thinking'
-import type { Message, TaskDetail, TaskSummary } from './types'
+import type { Chat, Message, TaskDetail, TaskSummary } from './types'
+import { useChatRequests } from './useChatRequests'
 import { useStickToBottom } from './useStickToBottom'
-import { useTaskRequests } from './useTaskRequests'
 import { isCommitEnter } from './keyboard'
 
 // Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
@@ -43,22 +44,24 @@ function EntryBody({
 
 export default function App() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
-  const [taskId, setTaskId] = useState<number | null>(null)
+  // 表示中の会話。起動したら総合チャットを開く(タスクを離れたときの戻り先でもある)。
+  const [chat, setChat] = useState<Chat>(GENERAL_CHAT)
   const [adding, setAdding] = useState(false)
+  // 表示中のタスク。総合チャットと、タスクを読み込むまでの間はnull。
   const [task, setTask] = useState<TaskDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
-  // タスクに属さない操作(一覧・作成・読み込み)の失敗。タスクへのコマンドの失敗は
-  // `requests`がタスクごとに持つ。
+  // 会話に属さない操作(一覧・作成・読み込み)の失敗。会話へのコマンドの失敗は
+  // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // 編集モード(Issue #41)。ユーザー発言のみが対象。応答待ち中は開始できない
   // (`disableActions`参照)。
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
-  // 選択中のタスク。非同期の処理が終わった時点で見比べるため、stateとは別にrefでも持つ
-  // (処理を始めたときのstateは古いままなので、比べても切り替えに気付けない)。
-  const selectedRef = useRef<number | null>(null)
+  // 表示中の会話の鍵(`chatKey`)。非同期の処理が終わった時点で見比べるため、stateとは別に
+  // refでも持つ(処理を始めたときのstateは古いままなので、比べても切り替えに気付けない)。
+  const selectedRef = useRef(chatKey(GENERAL_CHAT))
   const {
     ref: logRef,
     onScroll: onLogScroll,
@@ -78,53 +81,59 @@ export default function App() {
     }
   }, [])
 
-  const selectTask = useCallback((id: number) => {
-    if (selectedRef.current === id) return
-    selectedRef.current = id
-    stick()
-    setTaskId(id)
-    // 読み込みが終わるまで前のタスクの内容を出しておくと、それを見ながら新しいタスクへ
-    // 操作できてしまう。
-    setTask(null)
-    setMessages([])
-  }, [stick])
+  const selectChat = useCallback(
+    (next: Chat) => {
+      const key = chatKey(next)
+      if (selectedRef.current === key) return
+      selectedRef.current = key
+      stick()
+      setChat(next)
+      // 読み込みが終わるまで前の会話の内容を出しておくと、それを見ながら新しい会話へ
+      // 操作できてしまう。
+      setTask(null)
+      setMessages([])
+    },
+    [stick],
+  )
 
   useEffect(() => {
-    void loadTasks().then((summaries) => {
-      if (summaries.length > 0) selectTask(summaries[0].id)
-    })
-  }, [loadTasks, selectTask])
+    void loadTasks()
+  }, [loadTasks])
 
-  const requests = useTaskRequests()
+  const requests = useChatRequests()
   const { reloaded } = requests
 
-  const loadTask = useCallback(
-    async (id: number) => {
+  const loadChat = useCallback(
+    async (target: Chat) => {
+      const key = chatKey(target)
       try {
-        const [detail, history] = await Promise.all([getTaskDetail(id), listTaskMessages(id)])
-        // 読み込み中に別のタスクへ移っていたら捨てる。追い越した結果で表示を上書きしない。
-        if (selectedRef.current !== id) return
+        const [detail, history] = await Promise.all([
+          target.kind === 'task' ? getTaskDetail(target.task_id) : null,
+          listChatMessages(target),
+        ])
+        // 読み込み中に別の会話へ移っていたら捨てる。追い越した結果で表示を上書きしない。
+        if (selectedRef.current !== key) return
         setTask(detail)
         setMessages(history)
         setEditingId(null)
-        reloaded(id)
+        reloaded(target)
       } catch (e) {
-        if (selectedRef.current === id) setError(failureText(e))
+        if (selectedRef.current === key) setError(failureText(e))
       }
     },
     [reloaded],
   )
 
-  // コマンドが終わったら、そのタスクを見ているときだけ引き直す。一覧は常に引き直す
+  // コマンドが終わったら、その会話を見ているときだけ引き直す。一覧は常に引き直す
   // (タイトル・工程の進捗が変わりうるため)。
-  const settle = async (id: number) => {
-    if (selectedRef.current === id) await loadTask(id)
+  const settle = async (target: Chat) => {
+    if (selectedRef.current === chatKey(target)) await loadChat(target)
     await loadTasks()
   }
 
   useEffect(() => {
-    if (taskId !== null) void loadTask(taskId)
-  }, [taskId, loadTask])
+    void loadChat(chat)
+  }, [chat, loadChat])
 
   // 作ったらユーザーの発言を待たずに聞き取りを始める(Issue #76、legacy/frontend.md 1節)。
   const addTask = async () => {
@@ -140,7 +149,7 @@ export default function App() {
       }
       id = result.task.id
       await loadTasks()
-      selectTask(id)
+      selectChat(taskChat(id))
       setError(null)
     } catch (e) {
       setError(failureText(e))
@@ -149,32 +158,32 @@ export default function App() {
       setAdding(false)
     }
     await requests.run(
-      id,
+      taskChat(id),
       [{ role: 'pending', content: t('chat.pending_reply') }],
       (onEvent) => openTaskChat(id, onEvent),
       settle,
     )
   }
 
-  // 応答待ちのタスクでは、送信・編集・再試行・削除のすべてを不可にする(Issue #41、
-  // legacy/frontend.md 1節)。他のタスクは応答待ちの間も操作できる。
-  const disableActions = taskId === null || requests.isBusy(taskId)
+  // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする(Issue #41、
+  // legacy/frontend.md 1節)。他の会話は応答待ちの間も操作できる。
+  const disableActions = requests.isBusy(chat)
 
   const send = async () => {
     const text = draft.trim()
-    if (!text || disableActions || taskId === null) return
-    const id = taskId
+    if (!text || disableActions) return
+    const target = chat
     setDraft('')
     stick()
     // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
     // DBから引き直す(docs/spec/principles.md 3節「保存するのは組み立て終わった応答」)。
     await requests.run(
-      id,
+      target,
       [
         { role: 'user', content: text },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      (onEvent) => sendTaskChatMessage(id, text, onEvent),
+      (onEvent) => sendChatMessage(target, text, onEvent),
       settle,
     )
   }
@@ -196,31 +205,31 @@ export default function App() {
 
   const submitEdit = async (messageId: number) => {
     const text = editDraft.trim()
-    if (!text || disableActions || taskId === null) return
-    const id = taskId
+    if (!text || disableActions) return
+    const target = chat
     setEditingId(null)
     stick()
     hideSuperseded(messageId, null)
     await requests.run(
-      id,
+      target,
       [
         { role: 'user', content: text },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      (onEvent) => editTaskChatMessage(id, messageId, text, onEvent),
+      (onEvent) => editChatMessage(target, messageId, text, onEvent),
       settle,
     )
   }
 
   const retry = async (messageId: number) => {
-    if (disableActions || taskId === null) return
-    const id = taskId
+    if (disableActions) return
+    const target = chat
     stick()
     hideSuperseded(messageId, messages.find((m) => m.id === messageId)?.turn_id ?? null)
     await requests.run(
-      id,
+      target,
       [{ role: 'pending', content: t('chat.pending_reply') }],
-      (onEvent) => retryTaskChatMessage(id, messageId, onEvent),
+      (onEvent) => retryChatMessage(target, messageId, onEvent),
       settle,
     )
   }
@@ -229,14 +238,14 @@ export default function App() {
   // ユーザー発言を消すと一覧のフォールバック表示が変わる(Issue #61)が、引き直しは
   // `requests`が一覧ごと行う。
   const remove = async (messageId: number) => {
-    if (disableActions || taskId === null) return
-    const id = taskId
-    await requests.run(id, [], () => deleteTaskChatMessage(id, messageId), settle)
+    if (disableActions) return
+    const target = chat
+    await requests.run(target, [], () => deleteChatMessage(target, messageId), settle)
   }
 
-  const pending = taskId === null ? [] : requests.pendingOf(taskId)
-  const live = taskId === null ? [] : requests.liveOf(taskId)
-  const failure = taskId === null ? null : requests.failureOf(taskId)
+  const pending = requests.pendingOf(chat)
+  const live = requests.liveOf(chat)
+  const failure = requests.failureOf(chat)
 
   // 会話欄の中身が変わるのは、発言の引き直し・楽観表示の出し入れ・途中経過の到着・失敗の
   // 表示のとき。設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
@@ -257,8 +266,8 @@ export default function App() {
     <div className="layout">
       <Sidebar
         tasks={tasks}
-        selectedTaskId={taskId}
-        onSelect={selectTask}
+        selected={chat}
+        onSelect={selectChat}
         onAddTask={() => void addTask()}
         adding={adding}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -266,7 +275,13 @@ export default function App() {
 
       <main>
         <header className="chat-header">
-          <h1>{task ? taskName(task) : t('common.app_name')}</h1>
+          <h1>
+            {chat.kind === 'general'
+              ? t('chat.general_title')
+              : task
+                ? taskName(task)
+                : t('common.app_name')}
+          </h1>
           {task?.description && <p>{task.description}</p>}
         </header>
 

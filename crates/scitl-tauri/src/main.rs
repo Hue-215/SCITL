@@ -5,18 +5,19 @@ mod navigation;
 
 use std::sync::{Arc, Mutex};
 
+use scitl_core::db::messages::Chat;
 use scitl_core::db::SharedConnection;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::settings::Settings;
 use tauri::Manager;
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
-/// (DBは`db::with_conn`、設定は`settings::Settings`、生成中のタスクは`in_flight`)。
+/// (DBは`db::with_conn`、設定は`settings::Settings`、生成中の会話は`in_flight`)。
 pub struct AppState {
     pub db: SharedConnection,
     pub settings: Arc<Settings>,
-    /// 応答を生成中のタスク(`orchestration::TurnContext::generating`)。
-    pub generating: InFlightSet<i64>,
+    /// 応答を生成中の会話(`orchestration::TurnContext::generating`)。
+    pub generating: InFlightSet<Chat>,
 }
 
 fn main() {
@@ -41,11 +42,11 @@ fn main() {
             commands::tasks::list_tasks,
             commands::tasks::create_task,
             commands::chat::open_task_chat,
-            commands::chat::send_task_chat_message,
-            commands::chat::list_task_messages,
-            commands::chat::edit_task_chat_message,
-            commands::chat::retry_task_chat_message,
-            commands::chat::delete_task_chat_message,
+            commands::chat::send_chat_message,
+            commands::chat::list_chat_messages,
+            commands::chat::edit_chat_message,
+            commands::chat::retry_chat_message,
+            commands::chat::delete_chat_message,
             commands::settings::get_settings,
             commands::settings::update_general_settings,
             commands::settings::get_display_language,

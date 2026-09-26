@@ -12,6 +12,11 @@ export interface Task {
   updated_at: string
 }
 
+// crates/scitl-core/src/db/messages.rs の Chat。発言が属する会話で、総合チャットか
+// タスクの会話か。`null`で総合チャットを表さないのは、渡し間違いが総合チャットへの
+// 送信に化けるのを型で防ぐため。
+export type Chat = { kind: 'general' } | { kind: 'task'; task_id: number }
+
 // crates/scitl-core/src/orchestration/turn.rs の TaskCreation。チャットを使えない間は
 // タスクを作らず、その理由をエラー発言と同じ種別コードで返す。
 export type TaskCreation =
