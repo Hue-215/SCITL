@@ -110,7 +110,28 @@ export interface AttachmentView {
 export interface PendingEntry {
   role: 'user' | 'pending'
   content: string
+  // 送った添付の名前(ユーザー発言のみ)。確定するまで開けないので、名前だけを出す。
+  attachmentNames?: string[]
 }
+
+// crates/scitl-core/src/attachments/classify.rs の Limits。
+export interface AttachmentLimits {
+  text_bytes: number
+  image_bytes: number
+  other_bytes: number
+  per_message: number
+}
+
+// crates/scitl-core/src/attachments/staging.rs の StageOutcome。
+export type StageOutcome =
+  | {
+      status: 'staged'
+      token: string
+      kind: AttachmentKind
+      mime_type: string
+      size_bytes: number
+    }
+  | { status: 'rejected'; reason: 'too_large'; kind: AttachmentKind; limit_bytes: number }
 
 // crates/scitl-core/src/i18n.rs の Language。
 export type Language = 'ja' | 'en'

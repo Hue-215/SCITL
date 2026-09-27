@@ -14,6 +14,7 @@ import {
   sendChatMessage,
   setTaskArchived,
 } from './api'
+import { MessageAttachments, PendingAttachments, StagedAttachmentChips } from './Attachments'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
 import ChatModelBar from './ChatModelBar'
 import { formatDateTime, t, turnErrorText } from './i18n'
@@ -23,8 +24,17 @@ import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
 import { buildThoughtItems, finalEntryOf, groupMessages } from './thinking'
-import type { Chat, Message, TaskDetail, TaskSummary } from './types'
+import type {
+  AttachmentDelivery,
+  AttachmentKind,
+  Chat,
+  Message,
+  SelectedModel,
+  TaskDetail,
+  TaskSummary,
+} from './types'
 import { useChatRequests } from './useChatRequests'
+import { useStagedAttachments } from './useStagedAttachments'
 import { useStickToBottom } from './useStickToBottom'
 import { isCommitEnter } from './keyboard'
 
@@ -57,6 +67,18 @@ export default function App() {
   const [task, setTask] = useState<TaskDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
+  // 入力欄の送信前の添付(Issue #21)。本文と同じく、会話を切り替えても残す。
+  const staged = useStagedAttachments()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
+  const [deliveries, setDeliveries] = useState<Record<
+    AttachmentKind,
+    AttachmentDelivery
+  > | null>(null)
+  const onModelSelected = useCallback(
+    (selected: SelectedModel | null) => setDeliveries(selected?.attachments ?? null),
+    [],
+  )
   // 会話に属さない操作(一覧・作成・読み込み)の失敗。会話へのコマンドの失敗は
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
@@ -175,10 +197,14 @@ export default function App() {
   // legacy/frontend.md 1節)。他の会話は応答待ちの間も操作できる。
   const disableActions = requests.isBusy(chat)
 
+  // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
+  const canSend = !disableActions && !staged.busy && (draft.trim() !== '' || staged.ready)
+
   const send = async () => {
+    if (!canSend) return
     const text = draft.trim()
-    if (!text || disableActions) return
     const target = chat
+    const attachments = staged.take()
     setDraft('')
     stick()
     // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
@@ -186,10 +212,10 @@ export default function App() {
     await requests.run(
       target,
       [
-        { role: 'user', content: text },
+        { role: 'user', content: text, attachmentNames: attachments.names },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      (onEvent) => sendChatMessage(target, text, [], onEvent),
+      (onEvent) => sendChatMessage(target, text, attachments.tokens, onEvent),
       settle,
     )
   }
@@ -209,9 +235,11 @@ export default function App() {
     )
   }
 
-  const submitEdit = async (messageId: number) => {
+  // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。
+  const submitEdit = async (message: Message) => {
+    const messageId = message.id
     const text = editDraft.trim()
-    if (!text || disableActions) return
+    if ((!text && message.attachments.length === 0) || disableActions) return
     const target = chat
     setEditingId(null)
     stick()
@@ -219,7 +247,11 @@ export default function App() {
     await requests.run(
       target,
       [
-        { role: 'user', content: text },
+        {
+          role: 'user',
+          content: text,
+          attachmentNames: message.attachments.map((a) => a.original_name),
+        },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
       (onEvent) => editChatMessage(target, messageId, text, onEvent),
@@ -352,18 +384,19 @@ export default function App() {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                           e.preventDefault()
-                          void submitEdit(message.id)
+                          void submitEdit(message)
                         } else if (e.key === 'Escape') {
                           setEditingId(null)
                         }
                       }}
                       autoFocus
                     />
+                    <MessageAttachments attachments={message.attachments} />
                     <div className="entry-actions">
                       <button type="button" onClick={() => setEditingId(null)}>
                         {t('common.cancel')}
                       </button>
-                      <button type="button" onClick={() => void submitEdit(message.id)}>
+                      <button type="button" onClick={() => void submitEdit(message)}>
                         {t('chat.send_button')}
                       </button>
                     </div>
@@ -373,11 +406,15 @@ export default function App() {
 
               return (
                 <li key={message.id} className={`entry entry-${message.role}`}>
-                  <EntryBody
-                    role={message.role}
-                    content={message.content}
-                    errorKind={message.error_kind}
-                  />
+                  {/* 添付だけの発言は本文が空になる */}
+                  {message.content && (
+                    <EntryBody
+                      role={message.role}
+                      content={message.content}
+                      errorKind={message.error_kind}
+                    />
+                  )}
+                  <MessageAttachments attachments={message.attachments} />
                   <time className="entry-time">{formatDateTime(message.created_at)}</time>
                   {canEditOrDelete && (
                     <div className="entry-actions">
@@ -465,7 +502,8 @@ export default function App() {
               </li>
             ) : (
               <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
-                <EntryBody role={entry.role} content={entry.content} />
+                {entry.content && <EntryBody role={entry.role} content={entry.content} />}
+                <PendingAttachments names={entry.attachmentNames ?? []} />
               </li>
             ),
           )}
@@ -477,6 +515,8 @@ export default function App() {
           )}
         </ul>
 
+        <StagedAttachmentChips staged={staged} deliveries={deliveries} disabled={disableActions} />
+
         <form
           className="chat-compose"
           onSubmit={(e) => {
@@ -484,6 +524,25 @@ export default function App() {
             void send()
           }}
         >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              staged.add(Array.from(e.target.files ?? []))
+              // 同じファイルをもう一度選んでも変更として届くように空へ戻す。
+              e.target.value = ''
+            }}
+          />
+          <button
+            type="button"
+            disabled={disableActions}
+            title={t('attachment.add_tooltip')}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {t('attachment.add_button')}
+          </button>
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -496,12 +555,16 @@ export default function App() {
             disabled={disableActions}
             placeholder={t('chat.input_hint')}
           />
-          <button type="submit" disabled={disableActions || !draft.trim()}>
+          <button type="submit" disabled={!canSend}>
             {t('chat.send_button')}
           </button>
         </form>
 
-        <ChatModelBar onError={setError} onChanged={() => setAddBlocked(null)} />
+        <ChatModelBar
+          onError={setError}
+          onChanged={() => setAddBlocked(null)}
+          onSelected={onModelSelected}
+        />
       </main>
     </div>
   )

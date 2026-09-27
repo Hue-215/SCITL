@@ -1,6 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
+  AttachmentLimits,
   AvailableModel,
   Capability,
   Chat,
@@ -10,6 +11,7 @@ import type {
   Message,
   ReasoningEffort,
   SettingsView,
+  StageOutcome,
   TaskCreation,
   TaskDetail,
   TaskSummary,
@@ -75,6 +77,36 @@ export function sendChatMessage(
     attachments,
     onEvent: new Channel(onEvent),
   })
+}
+
+// 添付(Issue #21)。中身は生のバイト列で送り、名前はヘッダーに載せる(ヘッダーはASCIIしか
+// 運べないので符号化する)。パスを渡すコマンドは無い(architecture.md 12節)。
+export async function stageAttachment(file: File): Promise<StageOutcome> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  return invoke('stage_attachment', bytes, {
+    headers: { 'x-scitl-file-name': encodeURIComponent(file.name) },
+  })
+}
+
+export function discardStagedAttachment(token: string): Promise<void> {
+  return invoke('discard_staged_attachment', { token })
+}
+
+export function getAttachmentLimits(): Promise<AttachmentLimits> {
+  return invoke('get_attachment_limits')
+}
+
+export function readTextAttachment(attachmentId: number): Promise<string> {
+  return invoke('read_text_attachment', { attachmentId })
+}
+
+// data URL(`data:image/…;base64,`で始まることはRust側が保証する)。
+export function readImageAttachment(attachmentId: number): Promise<string> {
+  return invoke('read_image_attachment', { attachmentId })
+}
+
+export function revealAttachment(attachmentId: number): Promise<void> {
+  return invoke('reveal_attachment', { attachmentId })
 }
 
 export function listChatMessages(chat: Chat): Promise<Message[]> {
