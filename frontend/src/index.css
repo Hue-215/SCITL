@@ -333,6 +333,11 @@ option {
   padding-block: var(--space-2);
 }
 
+/* 入力欄の上の送信前の添付。ログが伸びても押し出されない。 */
+.chat-compose-attachments {
+  flex-shrink: 0;
+}
+
 /* 入力欄の下で、モデル選択と思考の強さ選択を両端に置く。 */
 .chat-model-bar {
   flex-shrink: 0;
@@ -1093,6 +1098,94 @@ button.danger {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);
   border-color: transparent;
+}
+
+/* チップの共通部品(Chip.tsx、legacy/frontend.md 5節)。添付ファイルの名前を、発言の中と
+   入力欄の上で同じ形に出す。押せる部分(.chip-main)と×(.chip-remove)は、どちらも
+   チップの枠の中に収め、ボタンとしての枠と背景は持たせない。 */
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: stretch;
+  max-width: 100%;
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+/* モデルに中身が渡らない添付。送信は止めないので、色で塗らず枠だけで示す。 */
+.chip-warning {
+  border-color: var(--color-danger);
+}
+
+/* 受け付けなかった添付。送られない。 */
+.chip-error {
+  background: var(--color-danger-container);
+  color: var(--color-on-danger-container);
+}
+
+.chip-main,
+.chip-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+}
+
+.chip-remove {
+  border-left: var(--border-width) solid var(--color-border);
+  padding: 0 var(--space-2);
+}
+
+/* 長い名前は1行で省略する(大きさと×は常に見える)。 */
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-detail {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.chip-warning .chip-mark {
+  color: var(--color-danger);
+}
+
+/* 画像の添付のサムネイル。ここでしか使わない値なのでトークン化しない。 */
+.chip-thumbnail {
+  width: 3rem;
+  height: 3rem;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+/* 添付の拡大表示・全文表示(ダイアログの本文)。 */
+.attachment-preview-image {
+  max-width: 100%;
+  height: auto;
+  align-self: center;
+}
+
+.attachment-preview-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
 /* ダイアログの共通枠(legacy/frontend.md 5節)。タスク削除・プロバイダー削除・

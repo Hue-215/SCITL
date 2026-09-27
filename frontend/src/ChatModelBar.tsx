@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { failureText, getChatModels, selectChatModel, setReasoningEffort } from './api'
 import Dropdown, { type DropdownOption } from './Dropdown'
 import { t, type MessageKey } from './i18n'
-import type { ChatModelsView, ModelChoice, ReasoningEffort } from './types'
+import type { ChatModelsView, ModelChoice, ReasoningEffort, SelectedModel } from './types'
 
 const EFFORT_LABELS: Record<ReasoningEffort, MessageKey> = {
   off: 'select.effort.off',
@@ -28,21 +28,26 @@ function choiceKey(choice: ModelChoice): string {
 export default function ChatModelBar({
   onError,
   onChanged,
+  onSelected,
 }: {
   onError: (message: string) => void
   // 選択を変えられたとき。
   onChanged: () => void
+  // 選択中のモデル(未選択ならnull)を読み込むたび。入力欄の添付の警告に使う。
+  onSelected: (selected: SelectedModel | null) => void
 }) {
   const [view, setView] = useState<ChatModelsView | null>(null)
   const [open, setOpen] = useState<'model' | 'effort' | null>(null)
 
   const reload = useCallback(async () => {
     try {
-      setView(await getChatModels())
+      const next = await getChatModels()
+      setView(next)
+      onSelected(next.selected)
     } catch (e) {
       onError(failureText(e))
     }
-  }, [onError])
+  }, [onError, onSelected])
 
   useEffect(() => {
     void reload()
