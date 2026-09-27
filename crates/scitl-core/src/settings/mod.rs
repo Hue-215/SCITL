@@ -1035,6 +1035,7 @@ name = "m"
         // 既定では画像に対応しないので、画像の添付は名前だけになる。
         assert_eq!(selected.attachments.image, Delivery::NameOnly);
         assert_eq!(selected.attachments.text, Delivery::Content);
+        assert_eq!(selected.attachments.other, Delivery::NameOnly);
 
         settings
             .set_model_capability(&b, "qwen2.5:7b", Capability::Image, true)

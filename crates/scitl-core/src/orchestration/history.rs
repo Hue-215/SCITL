@@ -34,7 +34,7 @@ pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
         Chat::General => false,
     };
     Ok(StoredChat {
-        messages: messages::list_for_chat(conn, chat)?,
+        messages: messages::list_rows_for_chat(conn, chat)?,
         attachments: db_attachments::for_chat(conn, chat)?,
         starts_with_opening,
     })
