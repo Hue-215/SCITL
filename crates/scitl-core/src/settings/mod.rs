@@ -896,7 +896,7 @@ fn invalid(message: impl Into<String>) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachments::AttachmentStore;
+    use crate::attachments::{AttachmentStore, Delivery};
     use crate::orchestration::discard_events;
 
     // 鍵を渡さない操作だけを試す(資格情報ストアに触れない)。
@@ -1032,6 +1032,16 @@ name = "m"
         let selected = chat_models(&settings).selected.unwrap();
         assert_eq!(selected.choice.provider_name, "B");
         assert!(!selected.thinking);
+        // 既定では画像に対応しないので、画像の添付は名前だけになる。
+        assert_eq!(selected.attachments.image, Delivery::NameOnly);
+        assert_eq!(selected.attachments.text, Delivery::Content);
+
+        settings
+            .set_model_capability(&b, "qwen2.5:7b", Capability::Image, true)
+            .unwrap();
+        let selected = chat_models(&settings).selected.unwrap();
+        assert_eq!(selected.attachments.image, Delivery::Image);
+        assert_eq!(selected.attachments.other, Delivery::NameOnly);
     }
 
     #[test]
