@@ -11,6 +11,11 @@ const ASCII_CHARS_PER_TOKEN: usize = 3;
 /// 1発言ごとに、本文の外で増える分(役割の区切り・テンプレートの記号等)。
 const MESSAGE_OVERHEAD: usize = 8;
 
+/// 画像1枚あたりの見積もり。画像はbase64の長さでは数えない(実際の消費は解像度で決まり、
+/// 文字数とは桁が違う)。多くのプロバイダーで1メガピクセル前後の画像が千数百トークンに
+/// なるので、それより多めに置く。
+const IMAGE_TOKENS: usize = 2_000;
+
 /// ASCII以外(日本語等)は1文字1トークンと数える。現行のトークナイザの多くは、かな・
 /// 漢字を1文字1トークン以下にまとめる。
 pub fn estimate_text(text: &str) -> usize {
@@ -22,7 +27,9 @@ pub fn estimate_text(text: &str) -> usize {
 pub fn estimate_message(message: &ChatMessage) -> usize {
     let body = match message {
         ChatMessage::System(text) => estimate_text(text),
-        ChatMessage::User(text) => estimate_text(text.as_str()),
+        ChatMessage::User { text, images } => {
+            estimate_text(text.as_str()) + images.len() * IMAGE_TOKENS
+        }
         ChatMessage::Assistant {
             content,
             tool_calls,
@@ -69,6 +76,23 @@ mod tests {
         assert_eq!(estimate_text("abcd"), 2);
         assert_eq!(estimate_text("締切"), 2);
         assert_eq!(estimate_text("締切 is"), 2 + 1);
+    }
+
+    #[test]
+    fn counts_images_by_a_fixed_estimate_not_by_their_encoded_length() {
+        let text = crate::llm::PromptText::user_message("見て", None);
+        let image = crate::llm::InlineImage::from_bytes(
+            &[b"\x89PNG\r\n\x1a\n".as_slice(), &[0; 4096]].concat(),
+        )
+        .unwrap();
+        let with_image = ChatMessage::User {
+            text: text.clone(),
+            images: vec![image],
+        };
+        assert_eq!(
+            estimate_message(&with_image),
+            estimate_message(&ChatMessage::user(text)) + IMAGE_TOKENS
+        );
     }
 
     #[test]

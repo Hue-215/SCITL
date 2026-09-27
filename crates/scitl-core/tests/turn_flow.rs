@@ -543,7 +543,7 @@ const OPENING: &str = "新しいタスクを追加したい";
 
 fn opening_message() -> ChatMessage {
     // 実際に送られた発言ではないので、送信日時を付けない。
-    ChatMessage::User(PromptText::user_message(OPENING, None))
+    ChatMessage::user(PromptText::user_message(OPENING, None))
 }
 
 /// プロバイダー未選択・既定のプロンプト・外部ツール無し・既定の上限の文脈。
@@ -908,7 +908,7 @@ async fn history_carries_send_time_beside_the_user_text() {
     let last = rounds.last().unwrap();
     let history = &last[1..];
     match &history[0] {
-        ChatMessage::User(content) => {
+        ChatMessage::User { text: content, .. } => {
             assert_eq!(
                 content,
                 &PromptText::user_message("工程を追加して", Some(&stored_user_times[0]))
@@ -924,7 +924,7 @@ async fn history_carries_send_time_beside_the_user_text() {
         other => panic!("expected Assistant, got {other:?}"),
     }
     match &history[2] {
-        ChatMessage::User(content) => {
+        ChatMessage::User { text: content, .. } => {
             assert_eq!(
                 content,
                 &PromptText::user_message("ありがとう", Some(&stored_user_times[1]))
@@ -1548,7 +1548,7 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
                 content: Some(content),
                 ..
             } => content.contains(needle),
-            ChatMessage::User(content) | ChatMessage::Tool { content, .. } => {
+            ChatMessage::User { text: content, .. } | ChatMessage::Tool { content, .. } => {
                 content.as_str().contains(needle)
             }
             ChatMessage::Assistant { content: None, .. } => false,
@@ -1596,7 +1596,7 @@ async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
     assert_eq!(rounds.len(), 2);
     for round in &rounds {
         match &round[1] {
-            ChatMessage::User(content) => assert!(content.as_str().contains("2回目")),
+            ChatMessage::User { text: content, .. } => assert!(content.as_str().contains("2回目")),
             other => {
                 panic!("expected the kept history to start with the user message, got {other:?}")
             }
@@ -1827,7 +1827,7 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
                 } => {
                     assert!(!content.contains("考える"));
                 }
-                ChatMessage::User(content) | ChatMessage::Tool { content, .. } => {
+                ChatMessage::User { text: content, .. } | ChatMessage::Tool { content, .. } => {
                     assert!(!content.as_str().contains("考える"));
                 }
                 _ => {}
@@ -2335,7 +2335,7 @@ async fn open_task_chat_answers_the_opening_message_without_saving_it() {
         &histories[1][1],
         ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか"
     ));
-    assert!(matches!(&histories[1][2], ChatMessage::User(_)));
+    assert!(matches!(&histories[1][2], ChatMessage::User { .. }));
 }
 
 #[tokio::test]
@@ -2805,4 +2805,52 @@ async fn attachments_return_to_staging_when_the_message_cannot_be_saved() {
         .unwrap();
     let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(alive)).unwrap();
     assert_eq!(messages[0].attachments.len(), 1);
+}
+
+/// 画像に対応するモデルには、送った発言の画像が一緒に届く。テキストの本文は囲みの後ろの
+/// 添付の情報に載る(Issue #21)。
+#[tokio::test]
+async fn attachments_reach_the_model_with_the_message() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::one("見ました");
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.image = true;
+    let ctx = TurnContext {
+        capabilities,
+        ..context(&adapter)
+    };
+    let text = staged_token(
+        ctx.attachments
+            .stage("memo.txt".into(), b"memo".to_vec())
+            .unwrap(),
+    );
+    let image = staged_token(
+        ctx.attachments
+            .stage("photo.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
+            .unwrap(),
+    );
+
+    run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        UserInput {
+            text: "これ".to_string(),
+            attachments: vec![text, image],
+        },
+    )
+    .await
+    .unwrap();
+
+    let sent = adapter.sent_histories();
+    let ChatMessage::User { text, images } = sent[0].last().unwrap() else {
+        panic!("expected the user message last");
+    };
+    assert!(text.as_str().contains(r#""name":"memo.txt""#));
+    assert!(text.as_str().contains(r#""content":"memo""#));
+    assert!(text.as_str().contains(r#""delivered":"image""#));
+    assert_eq!(images.len(), 1);
+    assert!(images[0].data_url().starts_with("data:image/png;base64,"));
 }

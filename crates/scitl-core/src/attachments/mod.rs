@@ -5,8 +5,8 @@ mod classify;
 mod staging;
 mod store;
 
-use base64::Engine;
 use rusqlite::Connection;
+use serde::Serialize;
 
 pub use classify::{classify, image_mime_type, Classified, Limits, LIMITS};
 pub(crate) use staging::Taken;
@@ -17,6 +17,31 @@ use crate::blocking;
 use crate::db::attachments::{self, AttachmentContent, AttachmentKind, NewAttachment};
 use crate::db::error::{CoreError, Result};
 use crate::db::{with_conn, SharedConnection};
+use crate::llm::InlineImage;
+
+/// 添付をモデルへどう渡すか(Issue #21)。履歴の組み立てと、画面が添付に出す警告
+/// (`settings::ChatModelsView`)の両方がこれで決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// テキストの本文を送る。
+    Content,
+    /// 画像を一緒に送る。
+    Image,
+    /// 名前・種類・大きさだけを送る。
+    NameOnly,
+}
+
+/// テキストは毎ターン全文を送る(履歴の間引きが予算を守る)。画像は直近のユーザー発言の
+/// ものだけを、画像に対応するモデルへ送る(legacy/backend.md 4節手順2)。古い画像まで
+/// 毎ターン送ると、1枚ごとにコンテキストを大きく使い続けるため。その他は中身を送らない。
+pub fn delivery(kind: AttachmentKind, image_input: bool, in_latest_message: bool) -> Delivery {
+    match kind {
+        AttachmentKind::Text => Delivery::Content,
+        AttachmentKind::Image if image_input && in_latest_message => Delivery::Image,
+        AttachmentKind::Image | AttachmentKind::Other => Delivery::NameOnly,
+    }
+}
 
 /// アプリの起動中ずっと1つを使う。
 pub struct Attachments {
@@ -50,6 +75,11 @@ impl Attachments {
         self.staged.restore(taken);
     }
 
+    /// 実体の置き場所。ブロッキング処理へ持ち出すための写し(パスだけを持つ)。
+    pub(crate) fn store(&self) -> AttachmentStore {
+        self.store.clone()
+    }
+
     /// 取り出した添付の実体を書き、行として書く形にする(ファイルI/Oを伴う)。
     pub(crate) async fn store_taken(&self, taken: Taken) -> Result<Vec<NewAttachment>> {
         let store = self.store.clone();
@@ -71,13 +101,9 @@ impl Attachments {
         let hash = file_hash(attachment.content, id, AttachmentKind::Image)?;
         let store = self.store.clone();
         blocking::run(move || {
-            let bytes = store.read(&hash)?;
-            let mime_type =
-                image_mime_type(&bytes).ok_or_else(|| not_of_kind(id, AttachmentKind::Image))?;
-            Ok(format!(
-                "data:{mime_type};base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(bytes)
-            ))
+            let image = InlineImage::from_bytes(&store.read(&hash)?)
+                .ok_or_else(|| not_of_kind(id, AttachmentKind::Image))?;
+            Ok(image.data_url())
         })
         .await
     }

@@ -177,6 +177,17 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// 残る。これを会話に並べると、直後に挿入される編集後の発言がその下に来て新規送信と
 /// 見分けが付かなくなる。記録はDBに残したまま、この支配的クエリの時点で会話から外す。
 pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
+    let mut rows = list_rows_for_chat(conn, chat)?;
+    let mut attached = attachments::views_for_chat(conn, chat)?;
+    for row in &mut rows {
+        row.attachments = attached.remove(&row.id).unwrap_or_default();
+    }
+    Ok(rows)
+}
+
+/// [`list_for_chat`]の、添付を埋めない形。添付を中身ごと別に引く呼び出し側
+/// (`orchestration::history`)が、同じ添付を2回引かないために使う。
+pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
         "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
          FROM messages
@@ -200,13 +211,9 @@ pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
            )
          ORDER BY created_at ASC, id ASC",
     )?;
-    let mut rows = stmt
+    let rows = stmt
         .query_map([chat.task_id()], message_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut attached = attachments::views_for_chat(conn, chat)?;
-    for row in &mut rows {
-        row.attachments = attached.remove(&row.id).unwrap_or_default();
-    }
     Ok(rows)
 }
 

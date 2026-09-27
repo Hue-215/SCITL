@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::ReasoningEffort;
 use crate::db::error::CoreError;
 use crate::llm::{
-    ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
+    ChatMessage, ErrorDetail, FinishReason, InlineImage, LlmAdapter, LlmError, PromptText,
+    Readiness, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
@@ -254,7 +254,7 @@ enum RequestMessage {
         content: String,
     },
     User {
-        content: String,
+        content: UserContent,
     },
     Assistant {
         content: Option<String>,
@@ -266,6 +266,70 @@ enum RequestMessage {
         tool_call_id: Option<String>,
         content: String,
     },
+}
+
+/// ユーザー発言の`content`。画像を伴うときだけパーツの配列にする。画像の無い発言まで配列に
+/// すると、文字列しか受け付けないサーバー(ローカルの推論サーバーに多い)で会話ごと送れなくなる。
+#[derive(Serialize)]
+#[serde(untagged)]
+enum UserContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Serialize)]
+struct ImageUrl {
+    url: String,
+}
+
+impl UserContent {
+    /// 本文を先に、画像をその後に並べる。
+    fn new(text: String, image_urls: Vec<String>) -> Self {
+        if image_urls.is_empty() {
+            return Self::Text(text);
+        }
+        let mut parts = vec![ContentPart::Text { text }];
+        parts.extend(image_urls.into_iter().map(|url| ContentPart::ImageUrl {
+            image_url: ImageUrl { url },
+        }));
+        Self::Parts(parts)
+    }
+
+    fn into_parts(self) -> (String, Vec<String>) {
+        match self {
+            Self::Text(text) => (text, Vec::new()),
+            Self::Parts(parts) => {
+                let mut text = String::new();
+                let mut urls = Vec::new();
+                for part in parts {
+                    match part {
+                        ContentPart::Text { text: t } => text.push_str(&t),
+                        ContentPart::ImageUrl { image_url } => urls.push(image_url.url),
+                    }
+                }
+                (text, urls)
+            }
+        }
+    }
+
+    /// 続くユーザー発言を1つにまとめる(`to_request_messages`)。本文は段落で繋ぎ、画像は
+    /// まとめた本文の後ろに並べる。画像を送るのは直近の1発言だけ(`attachments::delivery`)
+    /// なので、並べ直しても画像と添付の情報の対応(同じ順)は崩れない。複数の発言の画像を
+    /// 送るように変えるときは、ここで対応が失われる。
+    fn append(&mut self, next: Self) {
+        let (mut text, mut urls) = std::mem::replace(self, Self::Text(String::new())).into_parts();
+        let (next_text, next_urls) = next.into_parts();
+        append_paragraph(&mut text, &next_text);
+        urls.extend(next_urls);
+        *self = Self::new(text, urls);
+    }
 }
 
 #[derive(Serialize)]
@@ -302,7 +366,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
     for message in messages {
         match (out.last_mut(), to_request_message(message)) {
             (Some(RequestMessage::User { content: prev }), RequestMessage::User { content }) => {
-                append_paragraph(prev, &content);
+                prev.append(content);
             }
             (
                 Some(RequestMessage::Assistant {
@@ -326,7 +390,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
                 if matches!(message, RequestMessage::Assistant { .. })
                     && matches!(last, None | Some(RequestMessage::System { .. }))
                 {
-                    out.push(to_request_message(&ChatMessage::User(
+                    out.push(to_request_message(&ChatMessage::user(
                         PromptText::user_message(PLACEHOLDER_USER_TEXT, None),
                     )));
                 }
@@ -347,8 +411,11 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
         ChatMessage::System(content) => RequestMessage::System {
             content: content.clone(),
         },
-        ChatMessage::User(content) => RequestMessage::User {
-            content: content.as_str().to_string(),
+        ChatMessage::User { text, images } => RequestMessage::User {
+            content: UserContent::new(
+                text.as_str().to_string(),
+                images.iter().map(InlineImage::data_url).collect(),
+            ),
         },
         ChatMessage::Assistant {
             content,
@@ -826,7 +893,7 @@ mod tests {
             serde_json::json!({"role": "system", "content": "be helpful"})
         );
 
-        let user = serde_json::to_value(to_request_message(&ChatMessage::User(
+        let user = serde_json::to_value(to_request_message(&ChatMessage::user(
             PromptText::user_message("hi", Some("2026-09-22T04:12:00Z")),
         )))
         .unwrap();
@@ -861,7 +928,7 @@ mod tests {
     }
 
     fn user(text: &str, sent_at: &str) -> ChatMessage {
-        ChatMessage::User(PromptText::user_message(text, Some(sent_at)))
+        ChatMessage::user(PromptText::user_message(text, Some(sent_at)))
     }
 
     fn assistant(text: &str) -> ChatMessage {
@@ -927,6 +994,52 @@ mod tests {
             )
         );
         assert_eq!(sent[2]["content"], "a1\n\na2");
+    }
+
+    fn png() -> InlineImage {
+        InlineImage::from_bytes(b"\x89PNG\r\n\x1a\nbody").unwrap()
+    }
+
+    #[test]
+    fn sends_images_as_parts_after_the_text() {
+        let sent = request_json(&[ChatMessage::User {
+            text: PromptText::user_message("見て", None),
+            images: vec![png()],
+        }]);
+        assert_eq!(
+            sent[0],
+            serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": PromptText::user_message("見て", None).as_str()},
+                    {"type": "image_url", "image_url": {"url": png().data_url()}},
+                ],
+            })
+        );
+        assert!(png().data_url().starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn merging_keeps_images_of_either_message() {
+        let sent = request_json(&[
+            user("u1", "2026-09-22T04:12:00Z"),
+            ChatMessage::User {
+                text: PromptText::user_message("u2", None),
+                images: vec![png()],
+            },
+        ]);
+        assert_eq!(sent.len(), 1);
+        let parts = sent[0]["content"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(
+            parts[0]["text"],
+            format!(
+                "{}\n\n{}",
+                PromptText::user_message("u1", Some("2026-09-22T04:12:00Z")).as_str(),
+                PromptText::user_message("u2", None).as_str(),
+            )
+        );
+        assert_eq!(parts[1]["type"], "image_url");
     }
 
     #[test]

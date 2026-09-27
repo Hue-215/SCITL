@@ -6,10 +6,12 @@
 
 use serde::Serialize;
 
+use crate::attachments::{self, Delivery};
 use crate::config::{
     ApiFormat, Config, McpEndpoint, McpServerConfig, ModelConfig, ProviderConfig, ReasoningEffort,
     DEFAULT_RESPONSE_TIMEOUT_SECS,
 };
+use crate::db::attachments::AttachmentKind;
 use crate::i18n::Language;
 use crate::llm::providers;
 use crate::llm::{self, DetectedCapabilities, DetectedCatalog, ModelCapabilities};
@@ -174,6 +176,28 @@ pub struct SelectedModel {
     /// 思考に対応する(3層で解決済み)。対応しなければ思考の強さは選べない。
     pub thinking: bool,
     pub reasoning_effort: ReasoningEffort,
+    /// 送る発言の添付を、種別ごとにモデルへどう渡すか(`attachments::delivery`)。
+    /// 画面は`name_only`の種別に警告を出す(送信は止めない)。
+    pub attachments: AttachmentDeliveries,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttachmentDeliveries {
+    pub text: Delivery,
+    pub image: Delivery,
+    pub other: Delivery,
+}
+
+impl AttachmentDeliveries {
+    /// これから送る発言は、送った時点で直近のユーザー発言になる。
+    fn for_next_message(image_input: bool) -> Self {
+        let of = |kind| attachments::delivery(kind, image_input, true);
+        Self {
+            text: of(AttachmentKind::Text),
+            image: of(AttachmentKind::Image),
+            other: of(AttachmentKind::Other),
+        }
+    }
 }
 
 pub(super) fn chat_models(config: &Config, detected: &DetectedCatalog) -> ChatModelsView {
@@ -188,10 +212,14 @@ pub(super) fn chat_models(config: &Config, detected: &DetectedCatalog) -> ChatMo
                     .map(|m| ModelChoice::of(p, m))
             })
             .collect(),
-        selected: config.active_model().map(|(p, m)| SelectedModel {
-            choice: ModelChoice::of(p, m),
-            thinking: llm::resolve_capabilities(m, detected.get(&p.id, &m.name).as_ref()).thinking,
-            reasoning_effort: m.reasoning_effort,
+        selected: config.active_model().map(|(p, m)| {
+            let capabilities = llm::resolve_capabilities(m, detected.get(&p.id, &m.name).as_ref());
+            SelectedModel {
+                choice: ModelChoice::of(p, m),
+                thinking: capabilities.thinking,
+                reasoning_effort: m.reasoning_effort,
+                attachments: AttachmentDeliveries::for_next_message(capabilities.image),
+            }
         }),
     }
 }

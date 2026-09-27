@@ -203,7 +203,12 @@ export interface SelectedModel extends ModelChoice {
   // 思考に対応する(3層で解決済み)。対応しなければ思考の強さは選べない。
   thinking: boolean
   reasoning_effort: ReasoningEffort
+  // 送る発言の添付を、種別ごとにモデルへどう渡すか。'name_only'の種別に警告を出す。
+  attachments: Record<AttachmentKind, AttachmentDelivery>
 }
+
+// crates/scitl-core/src/attachments/mod.rs の Delivery。
+export type AttachmentDelivery = 'content' | 'image' | 'name_only'
 
 export interface ChatModelsView {
   // 設定画面で表示にしたモデル。

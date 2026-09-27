@@ -95,25 +95,39 @@ pub fn insert(conn: &Connection, message_id: i64, new: &NewAttachment) -> Result
     Ok(conn.last_insert_rowid())
 }
 
-/// 1つの会話の、論理削除していない発言に付いた添付を発言ごとにまとめる。添付の並びは
-/// 付けた順。表示から外れる行(古い試行等)の分も入るが、引く側が自分の行の分だけを使う。
-pub fn views_for_chat(conn: &Connection, chat: Chat) -> Result<HashMap<i64, Vec<AttachmentView>>> {
+/// 1つの会話の、論理削除していない発言に付いた添付を、中身ごと発言ごとにまとめる。添付の
+/// 並びは付けた順。表示から外れる行(古い試行等)の分も入るが、引く側が自分の行の分だけを使う。
+pub fn for_chat(conn: &Connection, chat: Chat) -> Result<HashMap<i64, Vec<Attachment>>> {
     let mut stmt = conn.prepare(
-        "SELECT a.message_id, a.id, a.original_name, a.mime_type, a.kind, a.size_bytes
+        "SELECT a.message_id, a.id, a.original_name, a.mime_type, a.kind, a.size_bytes,
+                a.content_text, a.file_hash
          FROM attachments a
          JOIN messages m ON m.id = a.message_id
          WHERE m.task_id IS ?1 AND m.deleted_at IS NULL
          ORDER BY a.id",
     )?;
     let rows = stmt.query_map([chat.task_id()], |row| {
-        Ok((row.get::<_, i64>(0)?, view_from_row(row, 1)?))
+        Ok((row.get::<_, i64>(0)?, attachment_from_row(row, 1)?))
     })?;
-    let mut out: HashMap<i64, Vec<AttachmentView>> = HashMap::new();
+    let mut out: HashMap<i64, Vec<Attachment>> = HashMap::new();
     for row in rows {
-        let (message_id, view) = row?;
-        out.entry(message_id).or_default().push(view);
+        let (message_id, attachment) = row?;
+        out.entry(message_id).or_default().push(attachment);
     }
     Ok(out)
+}
+
+/// [`for_chat`]の、画面に渡す形。
+pub fn views_for_chat(conn: &Connection, chat: Chat) -> Result<HashMap<i64, Vec<AttachmentView>>> {
+    Ok(for_chat(conn, chat)?
+        .into_iter()
+        .map(|(message_id, attachments)| {
+            (
+                message_id,
+                attachments.into_iter().map(|a| a.view).collect(),
+            )
+        })
+        .collect())
 }
 
 /// 1つの発言の添付。付けた順。
@@ -133,22 +147,7 @@ pub fn get(conn: &Connection, id: i64) -> Result<Attachment> {
         "SELECT id, original_name, mime_type, kind, size_bytes, content_text, file_hash
          FROM attachments WHERE id = ?1",
         [id],
-        |row| {
-            let view = view_from_row(row, 0)?;
-            let content = match (row.get::<_, Option<String>>(5)?, row.get(6)?) {
-                (Some(text), None) => AttachmentContent::Text(text),
-                (None, Some(hash)) => AttachmentContent::File { hash },
-                // CHECK制約で排他が保証されているので、ここには来ない。
-                _ => {
-                    return Err(rusqlite::Error::InvalidColumnType(
-                        5,
-                        "content_text".to_string(),
-                        rusqlite::types::Type::Null,
-                    ))
-                }
-            };
-            Ok(Attachment { view, content })
-        },
+        |row| attachment_from_row(row, 0),
     )
     .optional()?
     .ok_or(CoreError::AttachmentNotFound(id))
@@ -169,6 +168,28 @@ pub fn copy_to_message(
         rusqlite::params![from_message_id, to_message_id, now_iso8601()],
     )?;
     Ok(copied)
+}
+
+/// `SELECT`の`start`列目から`id, original_name, mime_type, kind, size_bytes, content_text,
+/// file_hash`が並んでいる前提。
+fn attachment_from_row(row: &rusqlite::Row, start: usize) -> rusqlite::Result<Attachment> {
+    let view = view_from_row(row, start)?;
+    let content = match (
+        row.get::<_, Option<String>>(start + 5)?,
+        row.get(start + 6)?,
+    ) {
+        (Some(text), None) => AttachmentContent::Text(text),
+        (None, Some(hash)) => AttachmentContent::File { hash },
+        // CHECK制約で排他が保証されているので、ここには来ない。
+        _ => {
+            return Err(rusqlite::Error::InvalidColumnType(
+                start + 5,
+                "content_text".to_string(),
+                rusqlite::types::Type::Null,
+            ))
+        }
+    };
+    Ok(Attachment { view, content })
 }
 
 /// `SELECT`の`start`列目から`id, original_name, mime_type, kind, size_bytes`が並んでいる前提。

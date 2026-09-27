@@ -1,66 +1,168 @@
 //! API送信用の履歴の組み立て。DBの行のうち何をどの形でモデルへ送るかの判断はここに閉じる
 //! (principles.md 5節)。どこまで送るか(間引き)は`history_trim`。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
+use crate::attachments::{self, AttachmentStore, Delivery};
+use crate::db::attachments::{self as db_attachments, Attachment, AttachmentContent};
 use crate::db::error::Result;
 use crate::db::messages::{self, Chat, Message, Opener};
-use crate::llm::{ChatMessage, PromptText, ToolArguments, ToolCallRequest};
+use crate::llm::{
+    AttachmentNote, ChatMessage, InlineImage, PromptText, ToolArguments, ToolCallRequest,
+};
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
 use crate::tools::ToolKind;
+
+/// 履歴の組み立てに要るDBの行。DBのロックを持つ間に引き終え、添付画像の読み出し
+/// ([`build_history`])はロックの外で行う。
+pub(super) struct StoredChat {
+    messages: Vec<Message>,
+    attachments: HashMap<i64, Vec<Attachment>>,
+    /// 保存していない開始の発言を先頭に補うか。
+    starts_with_opening: bool,
+}
+
+/// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
+/// 発言を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
+/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。総合チャットは聞き取りを
+/// 持たず、必ずユーザー発言から始まるので補わない。
+pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
+    let starts_with_opening = match chat {
+        Chat::Task(task_id) => messages::opener(conn, task_id)? != Some(Opener::User),
+        Chat::General => false,
+    };
+    Ok(StoredChat {
+        messages: messages::list_rows_for_chat(conn, chat)?,
+        attachments: db_attachments::for_chat(conn, chat)?,
+        starts_with_opening,
+    })
+}
+
+/// [`build_history`]の、モデルと設定から決まる部分。
+pub(super) struct HistoryOptions {
+    /// 偽ならツール実行記録を送らない。ツールに対応しないモデルには、`tool_calls`を含む
+    /// 履歴ごと拒むサーバーがあるため。
+    pub tools_available: bool,
+    /// モデルが画像入力に対応するか(`attachments::delivery`)。
+    pub image_input: bool,
+    /// 聞き取りの開始の発言(`TurnContext::opening_message`)。
+    pub opening: String,
+}
 
 /// 送信日時は本文と分けて囲みの属性に置く
 /// (Issue #68。組み立ては`llm::PromptText::user_message`)。アシスタント発言に日時を付けないのは、
 /// モデルが自分の過去の発言の形を真似て、応答の地の文に日時やタグを書き出すのを避けるため。
+///
+/// ユーザー発言の添付は、囲みの直後に情報を置き、渡し方は`attachments::delivery`で決める
+/// (Issue #21)。画像を送るのは直近のユーザー発言だけなので、ここで実体を読んで埋めてよい。
+/// 直近のユーザー発言は間引き(`history_trim`)で必ず残り、画像の見積もりは実体の大きさに
+/// よらない(`llm::estimate_message`)ため、埋めても間引きの計算は狂わない。実体を読めない
+/// 画像は、名前だけを送る(会話を止めない)。
 ///
 /// エラー発言(`role='error'`)は除外する
 /// (`legacy/backend.md` 4節手順2「エラー発言・ツール実行記録はこのAPI送信用の履歴からは
 /// 除外する」)。表示・エクスポートには`list_for_chat`経由で引き続き残る。
 ///
 /// ツール実行記録は、事実系の結果だけを呼び出しと結果の組にして送る(tools.md 4節)。
-/// `tools_available`が偽なら送らない。ツールに対応しないモデルには、`tool_calls`を含む
-/// 履歴ごと拒むサーバーがあるため。
-///
-/// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
-/// 発言(`opening`)を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
-/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。総合チャットは聞き取りを
-/// 持たず、必ずユーザー発言から始まるので補わない。
 pub(super) fn build_history(
-    conn: &Connection,
-    chat: Chat,
-    tools_available: bool,
-    opening: &str,
-) -> Result<Vec<ChatMessage>> {
-    let stored = messages::list_for_chat(conn, chat)?;
-    let replied_turns = replied_turns(&stored);
-    let mut history = Vec::with_capacity(stored.len() + 1);
-    if let Chat::Task(task_id) = chat {
-        if messages::opener(conn, task_id)? != Some(Opener::User) {
-            history.push(ChatMessage::User(PromptText::user_message(opening, None)));
-        }
+    mut stored: StoredChat,
+    options: &HistoryOptions,
+    store: &AttachmentStore,
+) -> Vec<ChatMessage> {
+    let replied_turns = replied_turns(&stored.messages);
+    let latest_user = stored
+        .messages
+        .iter()
+        .rposition(|m| m.kind == "normal" && m.role == "user");
+    let mut history = Vec::with_capacity(stored.messages.len() + 1);
+    if stored.starts_with_opening {
+        history.push(ChatMessage::user(PromptText::user_message(
+            &options.opening,
+            None,
+        )));
     }
-    for m in stored {
+    for (i, m) in stored.messages.iter().enumerate() {
         if m.kind == "tool_execution" {
-            if tools_available {
-                history.extend(fact_round_trip(&m, &replied_turns).into_iter().flatten());
+            if options.tools_available {
+                history.extend(fact_round_trip(m, &replied_turns).into_iter().flatten());
             }
             continue;
         }
         match m.role.as_str() {
-            "user" => history.push(ChatMessage::User(PromptText::user_message(
-                &m.content,
-                Some(&m.created_at),
-            ))),
+            "user" => {
+                let attached = stored.attachments.remove(&m.id).unwrap_or_default();
+                history.push(user_message(
+                    m,
+                    &attached,
+                    options.image_input,
+                    latest_user == Some(i),
+                    store,
+                ));
+            }
             "assistant" => history.push(ChatMessage::Assistant {
-                content: Some(m.content),
+                content: Some(m.content.clone()),
                 tool_calls: Vec::new(),
             }),
             _ => {}
         }
     }
-    Ok(history)
+    history
+}
+
+fn user_message(
+    m: &Message,
+    attached: &[Attachment],
+    image_input: bool,
+    is_latest: bool,
+    store: &AttachmentStore,
+) -> ChatMessage {
+    let mut images = Vec::new();
+    let notes: Vec<AttachmentNote> = attached
+        .iter()
+        .map(|a| {
+            let mut delivered = attachments::delivery(a.view.kind, image_input, is_latest);
+            let content = match &a.content {
+                AttachmentContent::Text(text) if delivered == Delivery::Content => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            };
+            if delivered == Delivery::Image {
+                match load_image(a, store) {
+                    Some(image) => images.push(image),
+                    None => delivered = Delivery::NameOnly,
+                }
+            }
+            AttachmentNote {
+                id: a.view.id,
+                name: &a.view.original_name,
+                kind: a.view.kind,
+                mime_type: &a.view.mime_type,
+                size_bytes: a.view.size_bytes,
+                delivered,
+                content,
+            }
+        })
+        .collect();
+    ChatMessage::User {
+        text: PromptText::user_message_with_attachments(&m.content, Some(&m.created_at), &notes),
+        images,
+    }
+}
+
+fn load_image(attachment: &Attachment, store: &AttachmentStore) -> Option<InlineImage> {
+    let AttachmentContent::File { hash } = &attachment.content else {
+        return None;
+    };
+    match store.read(hash) {
+        Ok(bytes) => InlineImage::from_bytes(&bytes),
+        Err(e) => {
+            eprintln!("failed to read attachment {}: {e}", attachment.view.id);
+            None
+        }
+    }
 }
 
 /// 返信(アシスタント発言)で終わったターン。失敗したターンの実行記録は送らない。
@@ -139,6 +241,7 @@ mod tests {
 
     use super::*;
     use crate::db;
+    use crate::db::attachments::{AttachmentKind, NewAttachment};
     use crate::db::messages::{Kind, NewMessage, OperationSource, Origin, Role};
 
     const OPENING: &str = "開始の発言";
@@ -146,13 +249,60 @@ mod tests {
     struct Fixture {
         conn: Connection,
         task_id: i64,
+        root: std::path::PathBuf,
+        store: AttachmentStore,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
     }
 
     impl Fixture {
         fn new() -> Self {
             let conn = db::open_in_memory().unwrap();
             let task_id = db::tasks::create_task(&conn).unwrap().id;
-            Self { conn, task_id }
+            let root = std::env::temp_dir().join(format!("scitl-history-{}", ulid::Ulid::new()));
+            let store = AttachmentStore::new(root.join("blobs"), root.join("revealed"));
+            Self {
+                conn,
+                task_id,
+                root,
+                store,
+            }
+        }
+
+        fn build(&self, chat: Chat, tools_available: bool, image_input: bool) -> Vec<ChatMessage> {
+            let options = HistoryOptions {
+                tools_available,
+                image_input,
+                opening: OPENING.to_string(),
+            };
+            build_history(load(&self.conn, chat).unwrap(), &options, &self.store)
+        }
+
+        fn attach(&self, message_id: i64, name: &str, kind: AttachmentKind, bytes: &[u8]) {
+            let content = match kind {
+                AttachmentKind::Text => {
+                    AttachmentContent::Text(String::from_utf8(bytes.to_vec()).unwrap())
+                }
+                _ => AttachmentContent::File {
+                    hash: self.store.put(bytes).unwrap(),
+                },
+            };
+            db_attachments::insert(
+                &self.conn,
+                message_id,
+                &NewAttachment {
+                    original_name: name.to_string(),
+                    mime_type: attachments::classify(bytes).mime_type.to_string(),
+                    kind,
+                    size_bytes: bytes.len() as i64,
+                    content,
+                },
+            )
+            .unwrap();
         }
 
         fn insert(&self, role: Role, kind: Kind, content: &str, turn: Option<&str>) -> i64 {
@@ -227,13 +377,7 @@ mod tests {
         }
 
         fn history(&self, tools_available: bool) -> Vec<ChatMessage> {
-            build_history(
-                &self.conn,
-                Chat::Task(self.task_id),
-                tools_available,
-                OPENING,
-            )
-            .unwrap()
+            self.build(Chat::Task(self.task_id), tools_available, false)
         }
     }
 
@@ -372,7 +516,7 @@ mod tests {
     }
 
     fn opening_message() -> ChatMessage {
-        ChatMessage::User(PromptText::user_message(OPENING, None))
+        ChatMessage::user(PromptText::user_message(OPENING, None))
     }
 
     #[test]
@@ -436,8 +580,82 @@ mod tests {
         .unwrap();
         f.user("タスクの発言");
 
-        let history = build_history(&f.conn, Chat::General, true, OPENING).unwrap();
+        let history = f.build(Chat::General, true, false);
         assert_eq!(history.len(), 1);
         assert!(!history.contains(&opening_message()));
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nbody";
+
+    /// ユーザー発言の添付の情報(`<scitl:attachments>`のJSON)と、一緒に送る画像の数。
+    fn attachments_of(message: &ChatMessage) -> (Value, usize) {
+        let ChatMessage::User { text, images } = message else {
+            panic!("expected a user message, got {message:?}");
+        };
+        let json = text
+            .as_str()
+            .split("<scitl:attachments>")
+            .nth(1)
+            .map(|rest| rest.trim_end_matches("</scitl:attachments>"))
+            .unwrap_or("[]");
+        (serde_json::from_str(json).unwrap(), images.len())
+    }
+
+    #[test]
+    fn sends_text_contents_every_turn_and_images_only_with_the_latest_message() {
+        let f = Fixture::new();
+        let first = f.user("これを読んで");
+        f.attach(first, "memo.txt", AttachmentKind::Text, "メモ".as_bytes());
+        f.attach(first, "old.png", AttachmentKind::Image, PNG);
+        f.reply("t1", "読みました");
+        let latest = f.user("こちらも");
+        f.attach(latest, "new.png", AttachmentKind::Image, PNG);
+        f.attach(latest, "a.pdf", AttachmentKind::Other, b"%PDF-1.4");
+
+        let history = f.build(Chat::Task(f.task_id), true, true);
+        let (older, older_images) = attachments_of(&history[0]);
+        assert_eq!(older[0]["delivered"], "content");
+        assert_eq!(older[0]["content"], "メモ");
+        assert_eq!(older[1]["delivered"], "name_only");
+        assert_eq!(older_images, 0);
+
+        let (newer, newer_images) = attachments_of(&history[2]);
+        assert_eq!(newer[0]["delivered"], "image");
+        assert_eq!(newer[1]["delivered"], "name_only");
+        assert!(newer[1].get("content").is_none());
+        assert_eq!(newer_images, 1);
+    }
+
+    #[test]
+    fn sends_only_the_name_of_images_to_models_without_image_input() {
+        let f = Fixture::new();
+        let m = f.user("見て");
+        f.attach(m, "p.png", AttachmentKind::Image, PNG);
+        let (notes, images) = attachments_of(&f.build(Chat::Task(f.task_id), true, false)[0]);
+        assert_eq!(notes[0]["delivered"], "name_only");
+        assert_eq!(images, 0);
+    }
+
+    #[test]
+    fn falls_back_to_the_name_when_the_image_cannot_be_read() {
+        let f = Fixture::new();
+        let m = f.user("見て");
+        f.attach(m, "p.png", AttachmentKind::Image, PNG);
+        std::fs::remove_dir_all(f.root.join("blobs")).unwrap();
+        let (notes, images) = attachments_of(&f.build(Chat::Task(f.task_id), true, true)[0]);
+        assert_eq!(notes[0]["delivered"], "name_only");
+        assert_eq!(images, 0);
+    }
+
+    #[test]
+    fn messages_without_attachments_keep_the_plain_shape() {
+        let f = Fixture::new();
+        f.user("やあ");
+        let history = f.build(Chat::Task(f.task_id), true, true);
+        let ChatMessage::User { text, images } = &history[0] else {
+            panic!("expected a user message");
+        };
+        assert!(!text.as_str().contains("scitl:attachments"));
+        assert!(images.is_empty());
     }
 }
