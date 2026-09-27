@@ -6,6 +6,7 @@ use serde_json::json;
 use ulid::Ulid;
 
 use crate::attachments::Taken;
+use crate::blocking;
 use crate::db::attachments as db_attachments;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
@@ -16,7 +17,7 @@ use crate::llm::{
     ChatMessage, LlmAdapter, PromptText, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
 use crate::mcp::McpSessions;
-use crate::orchestration::history::build_history;
+use crate::orchestration::history::{self, HistoryOptions};
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
@@ -473,11 +474,16 @@ async fn run_tool_rounds(
     let tools_available = ctx.capabilities.tools;
     // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
-    let opening = ctx.opening_message.to_string();
-    let history = with_conn(db.clone(), move |conn| {
-        build_history(conn, chat, tools_available, &opening)
-    })
-    .await?;
+    let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
+    let options = HistoryOptions {
+        tools_available,
+        image_input: ctx.capabilities.image,
+        opening: ctx.opening_message.to_string(),
+    };
+    // 添付画像の読み出しはファイルI/Oなので、DBのロックの外でブロッキング処理として行う。
+    let store = ctx.attachments.store();
+    let history =
+        blocking::run(move || Ok(history::build_history(stored, &options, &store))).await?;
     let mut exposed_tools = Vec::new();
     if tools_available {
         exposed_tools.extend(tools::schemas(chat));
@@ -533,8 +539,7 @@ async fn run_tool_rounds(
         let offered: &[ToolSchema] = if final_call { &[] } else { &exposed_tools };
         let system = ChatMessage::System(system_prompt_text);
         // システムプロンプトとこのラウンドまでの往復はラウンドごとに伸びるので、間引きも
-        // ラウンドごとにやり直す。添付の実データは、見積もりを狂わせないよう間引きの後で埋める
-        // (legacy/backend.md 4節手順2)。
+        // ラウンドごとにやり直す。
         let kept = trim_history(
             &history,
             ctx.capabilities.context_length,

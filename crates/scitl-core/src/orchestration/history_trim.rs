@@ -33,7 +33,7 @@ pub(super) fn trim_history<'a, 'b>(
     for (i, message) in history.iter().enumerate().rev() {
         used += estimate_message(message);
         // 先頭は、ユーザー発言でなくても単位の始まりとして扱う(全体が収まるなら全部送る)。
-        let starts_unit = i == 0 || matches!(message, ChatMessage::User(_));
+        let starts_unit = i == 0 || matches!(message, ChatMessage::User { .. });
         if !starts_unit {
             continue;
         }
@@ -51,7 +51,7 @@ mod tests {
     use crate::llm::{PromptText, ToolCallRequest};
 
     fn user(text: &str) -> ChatMessage {
-        ChatMessage::User(PromptText::user_message(text, None))
+        ChatMessage::user(PromptText::user_message(text, None))
     }
 
     fn assistant(text: &str) -> ChatMessage {

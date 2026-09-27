@@ -11,7 +11,7 @@ pub use capabilities::{
     ModelCapabilities, DEFAULT_CAPABILITIES, FALLBACK_CONTEXT_LENGTH,
 };
 pub use error::{ErrorDetail, LlmError};
-pub use prompt::{user_message_format_note, PromptText};
+pub use prompt::{user_message_format_note, AttachmentNote, PromptText};
 pub use token_estimate::{estimate_message, estimate_tools};
 
 use crate::config::ReasoningEffort;
@@ -68,10 +68,14 @@ pub enum FinishReason {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum ChatMessage {
     System(String),
-    /// ユーザー発言。送信日時を本文の外に置いた囲みとして、組み立て済みの形で運ぶ
+    /// ユーザー発言。送信日時と添付の情報を本文の外に置いた囲みとして、組み立て済みの形で運ぶ
     /// ([`PromptText::user_message`]。Issue #68。`docs/spec/legacy/backend.md` 4節手順2
-    /// 「本文とは別の構造化情報として付与する。地の文に混ぜない」)。
-    User(PromptText),
+    /// 「本文とは別の構造化情報として付与する。地の文に混ぜない」)。`images`は一緒に送る
+    /// 添付画像(Issue #21)で、どの画像を送るかは`attachments::delivery`が決める。
+    User {
+        text: PromptText,
+        images: Vec<InlineImage>,
+    },
     Assistant {
         content: Option<String>,
         tool_calls: Vec<ToolCallRequest>,
@@ -82,6 +86,39 @@ pub enum ChatMessage {
         tool_call_id: Option<String>,
         content: PromptText,
     },
+}
+
+impl ChatMessage {
+    /// 画像を伴わないユーザー発言。
+    pub fn user(text: PromptText) -> Self {
+        Self::User {
+            text,
+            images: Vec::new(),
+        }
+    }
+}
+
+/// ユーザー発言と一緒に送る画像。MIMEは実体の先頭バイトから決めたもの
+/// (`attachments::image_mime_type`)に限る。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InlineImage {
+    mime_type: &'static str,
+    base64: String,
+}
+
+impl InlineImage {
+    /// 画像として扱う形式でなければ`None`。
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        use base64::Engine;
+        Some(Self {
+            mime_type: crate::attachments::image_mime_type(bytes)?,
+            base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    }
+
+    pub fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.mime_type, self.base64)
+    }
 }
 
 /// モデルが出したツール呼び出し1件。往復のために`Assistant`側で保持する。
