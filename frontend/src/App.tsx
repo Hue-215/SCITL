@@ -189,7 +189,7 @@ export default function App() {
         { role: 'user', content: text },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      (onEvent) => sendChatMessage(target, text, onEvent),
+      (onEvent) => sendChatMessage(target, text, [], onEvent),
       settle,
     )
   }

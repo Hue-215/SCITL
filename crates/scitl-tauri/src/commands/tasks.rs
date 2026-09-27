@@ -37,7 +37,7 @@ pub async fn create_task(state: State<'_, AppState>) -> Result<TaskCreation, Str
     let snapshot = state.settings.snapshot();
     orchestration::create_task(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &discard_events),
+        &snapshot.turn_context(&state.generating, &state.attachments, &discard_events),
     )
     .await
     .map_err(|e| e.to_string())

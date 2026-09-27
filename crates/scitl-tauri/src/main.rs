@@ -5,6 +5,7 @@ mod navigation;
 
 use std::sync::{Arc, Mutex};
 
+use scitl_core::attachments::{AttachmentStore, Attachments};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::SharedConnection;
 use scitl_core::in_flight::InFlightSet;
@@ -18,6 +19,8 @@ pub struct AppState {
     pub settings: Arc<Settings>,
     /// 応答を生成中の会話(`orchestration::TurnContext::generating`)。
     pub generating: InFlightSet<Chat>,
+    /// 送信前の添付と実体の置き場所(`orchestration::TurnContext::attachments`)。
+    pub attachments: Arc<Attachments>,
 }
 
 fn main() {
@@ -29,11 +32,16 @@ fn main() {
             let conn = scitl_core::db::open(app_data_dir.join("scitl.sqlite3"))?;
 
             let settings = Settings::load(app_data_dir.join("config.toml"));
+            let attachments = Arc::new(Attachments::new(AttachmentStore::new(
+                app_data_dir.join("attachments"),
+                app.path().app_cache_dir()?.join("revealed-attachments"),
+            )));
 
             app.manage(AppState {
                 db: Arc::new(Mutex::new(conn)),
                 settings: Arc::new(settings),
                 generating: InFlightSet::new(),
+                attachments,
             });
             Ok(())
         })
@@ -50,6 +58,12 @@ fn main() {
             commands::chat::edit_chat_message,
             commands::chat::retry_chat_message,
             commands::chat::delete_chat_message,
+            commands::attachments::stage_attachment,
+            commands::attachments::discard_staged_attachment,
+            commands::attachments::get_attachment_limits,
+            commands::attachments::read_text_attachment,
+            commands::attachments::read_image_attachment,
+            commands::attachments::reveal_attachment,
             commands::settings::get_settings,
             commands::settings::update_general_settings,
             commands::settings::get_display_language,

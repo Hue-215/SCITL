@@ -10,6 +10,11 @@ pub enum CoreError {
     TaskStepNotFound(i64),
     #[error("message {0} not found")]
     MessageNotFound(i64),
+    #[error("attachment {0} not found")]
+    AttachmentNotFound(i64),
+    /// 添付の実体の読み書き・送信前の添付の取り出しの失敗。
+    #[error("attachment error: {0}")]
+    Attachment(String),
     #[error("invalid message operation: {0}")]
     InvalidMessageOperation(String),
     /// その会話は既に応答を生成中(`orchestration::TurnContext::generating`)。

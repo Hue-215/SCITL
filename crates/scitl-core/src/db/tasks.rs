@@ -106,12 +106,14 @@ pub struct TaskDetailView {
 }
 
 /// タスク`t`の最初のユーザー発言を引く相関サブクエリ。フォールバックの元になる発言の選び方を
-/// 一覧と詳細で食い違わせないため、ここだけに書く。
+/// 一覧と詳細で食い違わせないため、ここだけに書く。添付だけを送った発言は本文が空白だけに
+/// なりうるので飛ばす(名前にならない)。
 const FIRST_USER_MESSAGE: &str = "(SELECT m.content FROM messages m
                   WHERE m.task_id = t.id
                     AND m.role = 'user'
                     AND m.kind = 'normal'
                     AND m.deleted_at IS NULL
+                    AND TRIM(m.content, ' ' || char(9) || char(10) || char(13)) <> ''
                   ORDER BY m.created_at ASC, m.id ASC
                   LIMIT 1)";
 
@@ -797,6 +799,19 @@ mod tests {
         assert_eq!(
             list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
             Some("書き直した発言")
+        );
+    }
+
+    #[test]
+    fn list_tasks_skips_blank_first_user_message() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, " \n");
+        seed_user_message(&conn, id, "写真の件");
+
+        assert_eq!(
+            list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
+            Some("写真の件")
         );
     }
 

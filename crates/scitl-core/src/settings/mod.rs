@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
+use crate::attachments::Attachments;
 use crate::config::{
     self, validate_mcp_server_name, ApiFormat, Capability, Config, McpEndpoint, McpServerConfig,
     ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort, SecretRef, ToolConfig,
@@ -133,6 +134,7 @@ impl Snapshot {
     pub fn turn_context<'a>(
         &'a self,
         generating: &'a InFlightSet<Chat>,
+        attachments: &'a Attachments,
         events: TurnEvents<'a>,
     ) -> TurnContext<'a> {
         TurnContext {
@@ -151,6 +153,7 @@ impl Snapshot {
             mcp: McpAccess::new(&self.config.mcp_servers, &self.mcp_tools),
             limits: ToolLimits::from_config(&self.config.tools),
             generating,
+            attachments,
             events,
         }
     }
@@ -893,6 +896,7 @@ fn invalid(message: impl Into<String>) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachments::AttachmentStore;
     use crate::orchestration::discard_events;
 
     // 鍵を渡さない操作だけを試す(資格情報ストアに触れない)。
@@ -947,9 +951,15 @@ name = "m"
             std::fs::write(&path, config_with(model_lines)).unwrap();
             let settings = Settings::load(path.clone());
             let generating = InFlightSet::new();
+            // このテストは添付を使わないので、置き場所は作られない。
+            let unused = path.with_file_name("attachments");
+            let attachments = Attachments::new(AttachmentStore::new(
+                unused.join("blobs"),
+                unused.join("revealed"),
+            ));
             settings
                 .snapshot()
-                .turn_context(&generating, &discard_events)
+                .turn_context(&generating, &attachments, &discard_events)
                 .reasoning_effort
         };
 

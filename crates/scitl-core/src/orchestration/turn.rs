@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::json;
 use ulid::Ulid;
 
+use crate::attachments::Taken;
+use crate::db::attachments as db_attachments;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
 use crate::db::tasks::{self, Task};
@@ -23,40 +25,84 @@ use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::{SystemPrompts, TurnContext, TurnEvent, TurnEvents};
 use crate::tools::{self, external::ExternalToolset, ToolKind};
 
+/// 送信する発言。本文と、送信前に預けた添付のトークン(`attachments::Attachments::stage`)。
+#[derive(Debug, Clone, Default)]
+pub struct UserInput {
+    pub text: String,
+    pub attachments: Vec<String>,
+}
+
+impl From<String> for UserInput {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            attachments: Vec::new(),
+        }
+    }
+}
+
 /// 1ターンの処理フロー(architecture.md 1節)。ユーザー発言の保存 → LLM呼び出し →
 /// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
 /// までを1つの関数に閉じる(docs/spec/principles.md 5節)。
 ///
+/// 添付は預かりから取り出してユーザー発言と一緒に書き、書けなければ預かりに戻す。
+/// 本文が空白だけでも、添付があれば送れる(添付だけの発言)。
+///
 /// ユーザー発言を保存したあとの失敗は、`Err`で上位に返さずエラー発言として保存し
 /// `Ok`で返す([`generate_turn_response`])。`Err`になるのは、その会話が既に応答を
-/// 生成中のとき、タスクが無い(削除済みを含む)とき、発言やエラー発言自体を書けないときだけ。
+/// 生成中のとき、タスクが無い(削除済みを含む)とき、本文も添付も無いとき、預けていない
+/// 添付を指したとき、発言やエラー発言自体を書けないときだけ。
 pub async fn run_turn(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     chat: Chat,
-    user_text: String,
+    input: impl Into<UserInput>,
 ) -> Result<()> {
+    let UserInput { text, attachments } = input.into();
     let _generating = begin_generating(ctx.generating, chat)?;
-    with_conn(db.clone(), move |conn| {
-        require_chat(conn, chat)?;
-        messages::insert_message(
-            conn,
-            NewMessage {
-                task_id: chat.task_id(),
-                role: Role::User,
-                content: &user_text,
-                kind: Kind::Normal,
-                origin: Origin::User,
-                error_kind: None,
-                error_detail: None,
-                reasoning: None,
-            },
-        )?;
-        Ok(())
-    })
-    .await?;
+    let taken = ctx.attachments.take_staged(&attachments)?;
+    if let Err(e) = save_user_message(db.clone(), ctx, chat, text, taken.clone()).await {
+        ctx.attachments.restore_staged(taken);
+        return Err(e);
+    }
 
     generate_turn_response(db, ctx, Attempt::first(chat)).await
+}
+
+/// ユーザー発言と添付を1つのトランザクションで書く。実体は行より先に置き場所へ書く
+/// (行が指す実体が無い状態を作らない)。
+async fn save_user_message(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    chat: Chat,
+    text: String,
+    taken: Taken,
+) -> Result<()> {
+    require_content(&text, taken.len())?;
+    let rows = ctx.attachments.store_taken(taken).await?;
+    with_conn(db, move |conn| {
+        require_chat(conn, chat)?;
+        in_transaction(conn, |conn| {
+            let message_id = messages::insert_message(
+                conn,
+                NewMessage {
+                    task_id: chat.task_id(),
+                    role: Role::User,
+                    content: &text,
+                    kind: Kind::Normal,
+                    origin: Origin::User,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )?;
+            for row in &rows {
+                db_attachments::insert(conn, message_id, row)?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// [`create_task`]の結果。
@@ -116,8 +162,7 @@ pub async fn open_task_chat(
 /// 編集(ユーザー発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言をすべて
 /// 論理削除し、編集後の内容を新しい発言として挿入したうえで、新しいターンとして
 /// 応答を生成し直す。ツール実行記録は対象外(`db::messages::soft_delete_normal_from`
-/// 参照)。添付ファイルは現時点で未実装(Issue #21)のため引き継ぎ処理自体が無いが、
-/// 実装され次第ここに「新しい発言へコピーする」処理を追加する必要がある。
+/// 参照)。添付は新しい発言へ引き継ぐ(legacy/frontend.md 1節)。
 pub async fn edit_user_message(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -133,7 +178,7 @@ pub async fn edit_user_message(
         // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
         in_transaction(conn, |conn| {
             messages::soft_delete_normal_from(conn, chat, target.id)?;
-            messages::insert_message(
+            let message_id = messages::insert_message(
                 conn,
                 NewMessage {
                     task_id: chat.task_id(),
@@ -146,7 +191,9 @@ pub async fn edit_user_message(
                     reasoning: None,
                 },
             )?;
-            Ok(())
+            let carried = db_attachments::copy_to_message(conn, target.id, message_id)?;
+            // 断るとトランザクションごと戻り、元の発言は消えない。
+            require_content(&new_text, carried)
         })
     })
     .await?;
@@ -207,6 +254,16 @@ pub async fn delete_message(
         messages::soft_delete_message(conn, target.id)
     })
     .await
+}
+
+/// ユーザー発言には本文か添付のどちらかが要る。本文が空白だけでも、添付があれば送れる。
+fn require_content(text: &str, attachment_count: usize) -> Result<()> {
+    if text.trim().is_empty() && attachment_count == 0 {
+        return Err(CoreError::InvalidMessageOperation(
+            "a message needs text or attachments".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// 会話の行を1行も書かないうちに、同じ会話の応答生成が走っていないかを確かめる

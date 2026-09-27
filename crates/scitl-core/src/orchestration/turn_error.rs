@@ -162,6 +162,9 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::TaskNotFound(_) => unexpected("task_not_found"),
         CoreError::TaskStepNotFound(_) => unexpected("task_step_not_found"),
         CoreError::MessageNotFound(_) => unexpected("message_not_found"),
+        CoreError::AttachmentNotFound(_) => unexpected("attachment_not_found"),
+        // 実体の置き場所のパスを含みうるので、文言は載せない。
+        CoreError::Attachment(_) => unexpected("attachment"),
         CoreError::InvalidMessageOperation(_) => unexpected("invalid_message_operation"),
         // ターンの行を書く前に返すので、ターンの経路には来ない。
         CoreError::ChatBusy(_) => unexpected("chat_busy"),
