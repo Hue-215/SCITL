@@ -31,6 +31,13 @@ toml = "0.8"
 # チャット本文中のリンクをOSの既定アプリで開く(`scitl-core/src/link.rs`)。Windowsでは
 # `cmd /c start`を経由させず、URLがシェルに解釈されないようShellExecuteWを使う
 open = { version = "5", features = ["shellexecute-on-windows"] }
+# 添付ファイルの実体を内容のハッシュ(SHA-256)で名付けて重複排除する(`scitl-core/src/attachments/`)。
+# 同じ版がwryの依存として既にビルドされている。上流の版が上がったら合わせて上げる
+# (`cargo tree -d -i sha2`で確認)
+sha2 = "0.10"
+# 添付画像をdata URLにする(画面のサムネイルと、モデルへの埋め込み)。同じ版がhyper-utilの依存として
+# 既にビルドされている。上流の版が上がったら合わせて上げる(`cargo tree -d -i base64`で確認)
+base64 = "0.22"
 # MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
 # 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
 # (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため)。
