@@ -1,14 +1,17 @@
-//! 送信前の添付。選んだ時点で判定と実体の保存を済ませてトークンを返し、送信のときに
-//! トークンから取り出す。判定を画面に写さず、選んだ時点で結果(種別・大きさの上限)を
-//! 見せられるようにするため。
+//! 送信前の添付。選んだ時点で判定を済ませてトークンを返し、送信のときにトークンから
+//! 取り出す。判定を画面に写さず、選んだ時点で結果(種別・大きさの上限)を見せられるように
+//! するため。
+//!
+//! 中身は送信までメモリにだけ持ち、実体の置き場所には送信のときに書く。選んだ時点で書くと、
+//! 取り消した・送らずに終えた添付の実体が、どの行からも指されないまま残り続けるため。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
 use ulid::Ulid;
 
-use super::classify::{classify, LIMITS};
+use super::classify::{classify, Classified, LIMITS};
 use super::store::AttachmentStore;
 use crate::db::attachments::{AttachmentContent, AttachmentKind, NewAttachment};
 use crate::db::error::{CoreError, Result};
@@ -39,27 +42,62 @@ pub enum Rejection {
     },
 }
 
-/// 送信前の添付の集合。アプリの起動中だけメモリに持つ(実体は置き場所に書いてあり、
-/// 送らずに終えても同じ内容をもう一度添付すれば同じ実体を指す)。
+#[derive(Debug, Clone)]
+struct Entry {
+    name: String,
+    classified: Classified,
+    bytes: Arc<[u8]>,
+}
+
+/// 送信のために預かりから取り出した添付。発言を書けなかったら[`Staged::restore`]で戻す。
+#[derive(Debug, Clone)]
+pub(crate) struct Taken(Vec<(String, Entry)>);
+
+impl Taken {
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// 実体を置き場所に書き、行として書く形にする。テキストは本文を行に持つので書かない。
+    pub(crate) fn store(&self, store: &AttachmentStore) -> Result<Vec<NewAttachment>> {
+        self.0
+            .iter()
+            .map(|(_, entry)| {
+                let content = match entry.classified.kind {
+                    AttachmentKind::Text => AttachmentContent::Text(
+                        String::from_utf8(entry.bytes.to_vec()).expect("classified as UTF-8 text"),
+                    ),
+                    AttachmentKind::Image | AttachmentKind::Other => AttachmentContent::File {
+                        hash: store.put(&entry.bytes)?,
+                    },
+                };
+                Ok(NewAttachment {
+                    original_name: entry.name.clone(),
+                    mime_type: entry.classified.mime_type.to_string(),
+                    kind: entry.classified.kind,
+                    size_bytes: size_of(&entry.bytes),
+                    content,
+                })
+            })
+            .collect()
+    }
+}
+
+/// 送信前の添付の集合。アプリの起動中だけメモリに持つ。
 #[derive(Default)]
 pub(super) struct Staged {
-    entries: Mutex<HashMap<String, NewAttachment>>,
+    entries: Mutex<HashMap<String, Entry>>,
 }
 
 impl Staged {
-    pub(super) fn stage(
-        &self,
-        store: &AttachmentStore,
-        name: String,
-        bytes: &[u8],
-    ) -> Result<StageOutcome> {
+    pub(super) fn stage(&self, name: String, bytes: Vec<u8>) -> Result<StageOutcome> {
         if name.trim().is_empty() {
             return Err(CoreError::InvalidArgument {
                 name: "name".to_string(),
                 reason: "attachment name must not be empty".to_string(),
             });
         }
-        let classified = classify(bytes);
+        let classified = classify(&bytes);
         let limit_bytes = LIMITS.bytes_for(classified.kind);
         if bytes.len() as u64 > limit_bytes {
             return Ok(StageOutcome::Rejected {
@@ -69,24 +107,14 @@ impl Staged {
                 },
             });
         }
-        let content = match classified.kind {
-            AttachmentKind::Text => AttachmentContent::Text(
-                String::from_utf8(bytes.to_vec()).expect("classified as UTF-8 text"),
-            ),
-            AttachmentKind::Image | AttachmentKind::Other => AttachmentContent::File {
-                hash: store.put(bytes)?,
-            },
-        };
-        let size_bytes = i64::try_from(bytes.len()).expect("bounded by the size limit");
+        let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
         self.lock().insert(
             token.clone(),
-            NewAttachment {
-                original_name: name,
-                mime_type: classified.mime_type.to_string(),
-                kind: classified.kind,
-                size_bytes,
-                content,
+            Entry {
+                name,
+                classified,
+                bytes: bytes.into(),
             },
         );
         Ok(StageOutcome::Staged {
@@ -102,9 +130,9 @@ impl Staged {
         self.lock().remove(token);
     }
 
-    /// 送る添付を、渡された順に写して返す。まだ集合から外さない(発言を書き終えてから
-    /// [`Self::remove`]で外す。書けなかったら、画面は同じトークンで送り直せる)。
-    pub(super) fn resolve(&self, tokens: &[String]) -> Result<Vec<NewAttachment>> {
+    /// 送る添付を、渡された順に預かりから取り出す。1つでも取り出せなければ何も取り出さない。
+    /// 取り出しと外すことを1回のロックで行い、同じトークンが2つの発言に使われないようにする。
+    pub(super) fn take(&self, tokens: &[String]) -> Result<Taken> {
         if tokens.len() > LIMITS.per_message {
             return Err(CoreError::Attachment(format!(
                 "a message can carry at most {} attachments",
@@ -112,45 +140,44 @@ impl Staged {
             )));
         }
         let mut seen = HashSet::new();
-        let entries = self.lock();
-        tokens
-            .iter()
-            .map(|token| {
-                if !seen.insert(token.as_str()) {
-                    return Err(CoreError::Attachment(
-                        "the same attachment was given twice".to_string(),
-                    ));
-                }
-                entries
-                    .get(token)
-                    .cloned()
-                    .ok_or_else(|| CoreError::Attachment("staged attachment not found".to_string()))
-            })
-            .collect()
-    }
-
-    pub(super) fn remove(&self, tokens: &[String]) {
-        let mut entries = self.lock();
-        for token in tokens {
-            entries.remove(token);
+        if !tokens.iter().all(|t| seen.insert(t.as_str())) {
+            return Err(CoreError::Attachment(
+                "the same attachment was given twice".to_string(),
+            ));
         }
+        let mut entries = self.lock();
+        if !tokens.iter().all(|t| entries.contains_key(t)) {
+            return Err(CoreError::Attachment(
+                "staged attachment not found".to_string(),
+            ));
+        }
+        Ok(Taken(
+            tokens
+                .iter()
+                .map(|t| (t.clone(), entries.remove(t).expect("checked above")))
+                .collect(),
+        ))
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, NewAttachment>> {
+    /// 取り出した添付を戻す。画面は同じトークンで送り直せる。
+    pub(super) fn restore(&self, taken: Taken) {
+        self.lock().extend(taken.0);
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Entry>> {
         self.entries
             .lock()
             .expect("staged attachments mutex poisoned")
     }
 }
 
+fn size_of(bytes: &[u8]) -> i64 {
+    i64::try_from(bytes.len()).expect("bounded by the size limit")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn store() -> AttachmentStore {
-        let root = std::env::temp_dir().join(format!("scitl-staging-{}", Ulid::new()));
-        AttachmentStore::new(root.join("blobs"), root.join("revealed"))
-    }
 
     fn token_of(outcome: StageOutcome) -> String {
         match outcome {
@@ -160,25 +187,50 @@ mod tests {
     }
 
     #[test]
-    fn keeps_text_in_memory_and_resolves_in_the_given_order() {
+    fn takes_in_the_given_order_and_only_once() {
         let staged = Staged::default();
-        let store = store();
-        let a = token_of(staged.stage(&store, "a.txt".into(), b"aaa").unwrap());
-        let b = token_of(staged.stage(&store, "b.txt".into(), b"bbb").unwrap());
+        let a = token_of(staged.stage("a.txt".into(), b"aaa".to_vec()).unwrap());
+        let b = token_of(staged.stage("b.txt".into(), b"bbb".to_vec()).unwrap());
 
-        let resolved = staged.resolve(&[b.clone(), a.clone()]).unwrap();
-        assert_eq!(resolved[0].original_name, "b.txt");
-        assert_eq!(
-            resolved[1].content,
-            AttachmentContent::Text("aaa".to_string())
-        );
-        // 取り出しただけでは外れない。
-        assert!(staged.resolve(std::slice::from_ref(&a)).is_ok());
+        let taken = staged.take(&[b.clone(), a.clone()]).unwrap();
+        let names: Vec<&str> = taken.0.iter().map(|(_, e)| e.name.as_str()).collect();
+        assert_eq!(names, ["b.txt", "a.txt"]);
+        assert!(staged.take(std::slice::from_ref(&a)).is_err());
 
-        staged.remove(std::slice::from_ref(&a));
-        assert!(staged.resolve(std::slice::from_ref(&a)).is_err());
+        staged.restore(taken);
+        assert!(staged.take(std::slice::from_ref(&a)).is_ok());
         staged.discard(&b);
-        assert!(staged.resolve(&[b]).is_err());
+        assert!(staged.take(&[b]).is_err());
+    }
+
+    #[test]
+    fn takes_nothing_when_any_token_is_unknown() {
+        let staged = Staged::default();
+        let a = token_of(staged.stage("a.txt".into(), b"a".to_vec()).unwrap());
+        assert!(staged.take(&[a.clone(), "missing".to_string()]).is_err());
+        assert!(staged.take(&[a]).is_ok());
+    }
+
+    #[test]
+    fn stores_only_files_and_keeps_text_in_the_row() {
+        let root = std::env::temp_dir().join(format!("scitl-staging-{}", Ulid::new()));
+        let store = AttachmentStore::new(root.join("blobs"), root.join("revealed"));
+        let staged = Staged::default();
+        let text = token_of(staged.stage("a.txt".into(), b"aaa".to_vec()).unwrap());
+        let taken = staged.take(&[text]).unwrap();
+
+        let rows = taken.store(&store).unwrap();
+        assert_eq!(rows[0].content, AttachmentContent::Text("aaa".to_string()));
+        assert!(!root.exists(), "text must not touch the store");
+
+        let image = token_of(
+            staged
+                .stage("p.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
+                .unwrap(),
+        );
+        let rows = staged.take(&[image]).unwrap().store(&store).unwrap();
+        assert!(matches!(&rows[0].content, AttachmentContent::File { hash } if hash.len() == 64));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -186,7 +238,7 @@ mod tests {
         let staged = Staged::default();
         let too_long = vec![b'a'; LIMITS.text_bytes as usize + 1];
         assert_eq!(
-            staged.stage(&store(), "big.txt".into(), &too_long).unwrap(),
+            staged.stage("big.txt".into(), too_long).unwrap(),
             StageOutcome::Rejected {
                 reason: Rejection::TooLarge {
                     kind: AttachmentKind::Text,
@@ -200,10 +252,13 @@ mod tests {
     #[test]
     fn refuses_duplicates_too_many_and_empty_names() {
         let staged = Staged::default();
-        let store = store();
-        let a = token_of(staged.stage(&store, "a.txt".into(), b"a").unwrap());
-        assert!(staged.resolve(&[a.clone(), a.clone()]).is_err());
-        assert!(staged.resolve(&vec![a; LIMITS.per_message + 1]).is_err());
-        assert!(staged.stage(&store, "  ".into(), b"a").is_err());
+        let a = token_of(staged.stage("a.txt".into(), b"a".to_vec()).unwrap());
+        assert!(staged.take(&[a.clone(), a.clone()]).is_err());
+        assert!(staged
+            .take(&vec![a.clone(); LIMITS.per_message + 1])
+            .is_err());
+        // 断った取り出しでは外れない。
+        assert!(staged.take(&[a]).is_ok());
+        assert!(staged.stage("  ".into(), b"a".to_vec()).is_err());
     }
 }

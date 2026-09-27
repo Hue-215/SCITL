@@ -2590,10 +2590,14 @@ async fn run_turn_saves_attachments_with_the_user_message() {
     let db = Arc::new(Mutex::new(conn));
     let adapter = TextAdapter::one("受け取りました");
     let ctx = context(&adapter);
-    let text = staged_token(ctx.attachments.stage("memo.txt".into(), b"memo").unwrap());
+    let text = staged_token(
+        ctx.attachments
+            .stage("memo.txt".into(), b"memo".to_vec())
+            .unwrap(),
+    );
     let image = staged_token(
         ctx.attachments
-            .stage("photo.png".into(), b"\x89PNG\r\n\x1a\nbody")
+            .stage("photo.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
             .unwrap(),
     );
 
@@ -2695,7 +2699,11 @@ async fn edit_user_message_carries_attachments_over() {
     let db = Arc::new(Mutex::new(conn));
     let adapter = TextAdapter::many(&["1回目", "2回目"]);
     let ctx = context(&adapter);
-    let token = staged_token(ctx.attachments.stage("memo.txt".into(), b"memo").unwrap());
+    let token = staged_token(
+        ctx.attachments
+            .stage("memo.txt".into(), b"memo".to_vec())
+            .unwrap(),
+    );
     run_turn(
         db.clone(),
         &ctx,
@@ -2764,4 +2772,37 @@ async fn edit_user_message_refuses_to_leave_an_empty_message() {
     let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
     assert_eq!(messages[0].content, "元の本文");
     assert_eq!(reply_of(&messages), "応答");
+}
+
+/// 発言を書けなかったら、取り出した添付は預かりに戻り、同じトークンで送り直せる。
+#[tokio::test]
+async fn attachments_return_to_staging_when_the_message_cannot_be_saved() {
+    let conn = db::open_in_memory().unwrap();
+    let deleted = seed_task(&conn);
+    db::tasks::delete_task(&conn, deleted).unwrap();
+    let alive = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::one("応答");
+    let ctx = context(&adapter);
+    let token = staged_token(
+        ctx.attachments
+            .stage("memo.txt".into(), b"memo".to_vec())
+            .unwrap(),
+    );
+    let input = UserInput {
+        text: "見て".to_string(),
+        attachments: vec![token],
+    };
+
+    let failed = run_turn(db.clone(), &ctx, Chat::Task(deleted), input.clone()).await;
+    assert!(
+        matches!(failed, Err(CoreError::TaskNotFound(_))),
+        "{failed:?}"
+    );
+
+    run_turn(db.clone(), &ctx, Chat::Task(alive), input)
+        .await
+        .unwrap();
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(alive)).unwrap();
+    assert_eq!(messages[0].attachments.len(), 1);
 }

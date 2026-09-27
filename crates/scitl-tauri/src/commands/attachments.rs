@@ -15,7 +15,8 @@ use crate::AppState;
 /// 符号化して入れる。
 const FILE_NAME_HEADER: &str = "x-scitl-file-name";
 
-/// 選んだファイルを預け、判定の結果を返す。本文はファイルの中身そのもの。
+/// 選んだファイルを預け、判定の結果を返す。本文はファイルの中身そのもの。判定は中身全体を
+/// 走査する(UTF-8の検査)ので、ブロッキング処理として呼ぶ。
 #[tauri::command]
 pub async fn stage_attachment(
     state: State<'_, AppState>,
@@ -33,7 +34,7 @@ pub async fn stage_attachment(
     // 借りている本文を、ブロッキング処理のスレッドへ渡せるよう複製する(大きさは上限まで)。
     let bytes = bytes.clone();
     let attachments = Arc::clone(&state.attachments);
-    scitl_core::blocking::run(move || attachments.stage(name, &bytes))
+    scitl_core::blocking::run(move || attachments.stage(name, bytes))
         .await
         .map_err(|e| e.to_string())
 }

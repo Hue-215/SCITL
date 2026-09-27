@@ -9,6 +9,7 @@ use base64::Engine;
 use rusqlite::Connection;
 
 pub use classify::{classify, image_mime_type, Classified, Limits, LIMITS};
+pub(crate) use staging::Taken;
 pub use staging::{Rejection, StageOutcome};
 pub use store::AttachmentStore;
 
@@ -33,20 +34,26 @@ impl Attachments {
 
     /// 選んだファイルを判定し、受け付けたら送信まで預かる。`name`は元のファイル名で、
     /// DBにそのまま残す。
-    pub fn stage(&self, name: String, bytes: &[u8]) -> Result<StageOutcome> {
-        self.staged.stage(&self.store, name, bytes)
+    pub fn stage(&self, name: String, bytes: Vec<u8>) -> Result<StageOutcome> {
+        self.staged.stage(name, bytes)
     }
 
     pub fn discard(&self, token: &str) {
         self.staged.discard(token);
     }
 
-    pub(crate) fn resolve_staged(&self, tokens: &[String]) -> Result<Vec<NewAttachment>> {
-        self.staged.resolve(tokens)
+    pub(crate) fn take_staged(&self, tokens: &[String]) -> Result<Taken> {
+        self.staged.take(tokens)
     }
 
-    pub(crate) fn remove_staged(&self, tokens: &[String]) {
-        self.staged.remove(tokens);
+    pub(crate) fn restore_staged(&self, taken: Taken) {
+        self.staged.restore(taken);
+    }
+
+    /// 取り出した添付の実体を書き、行として書く形にする(ファイルI/Oを伴う)。
+    pub(crate) async fn store_taken(&self, taken: Taken) -> Result<Vec<NewAttachment>> {
+        let store = self.store.clone();
+        blocking::run(move || taken.store(&store)).await
     }
 
     pub fn read_text(&self, conn: &Connection, id: i64) -> Result<String> {

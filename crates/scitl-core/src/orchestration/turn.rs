@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_json::json;
 use ulid::Ulid;
 
+use crate::attachments::Taken;
 use crate::db::attachments as db_attachments;
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
@@ -44,7 +45,7 @@ impl From<String> for UserInput {
 /// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
 /// までを1つの関数に閉じる(docs/spec/principles.md 5節)。
 ///
-/// 添付はユーザー発言と同じトランザクションで書き、書けてから送信前の集合から外す。
+/// 添付は預かりから取り出してユーザー発言と一緒に書き、書けなければ預かりに戻す。
 /// 本文が空白だけでも、添付があれば送れる(添付だけの発言)。
 ///
 /// ユーザー発言を保存したあとの失敗は、`Err`で上位に返さずエラー発言として保存し
@@ -59,9 +60,27 @@ pub async fn run_turn(
 ) -> Result<()> {
     let UserInput { text, attachments } = input.into();
     let _generating = begin_generating(ctx.generating, chat)?;
-    let staged = ctx.attachments.resolve_staged(&attachments)?;
-    require_content(&text, staged.len())?;
-    with_conn(db.clone(), move |conn| {
+    let taken = ctx.attachments.take_staged(&attachments)?;
+    if let Err(e) = save_user_message(db.clone(), ctx, chat, text, taken.clone()).await {
+        ctx.attachments.restore_staged(taken);
+        return Err(e);
+    }
+
+    generate_turn_response(db, ctx, Attempt::first(chat)).await
+}
+
+/// ユーザー発言と添付を1つのトランザクションで書く。実体は行より先に置き場所へ書く
+/// (行が指す実体が無い状態を作らない)。
+async fn save_user_message(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    chat: Chat,
+    text: String,
+    taken: Taken,
+) -> Result<()> {
+    require_content(&text, taken.len())?;
+    let rows = ctx.attachments.store_taken(taken).await?;
+    with_conn(db, move |conn| {
         require_chat(conn, chat)?;
         in_transaction(conn, |conn| {
             let message_id = messages::insert_message(
@@ -77,16 +96,13 @@ pub async fn run_turn(
                     reasoning: None,
                 },
             )?;
-            for attachment in &staged {
-                db_attachments::insert(conn, message_id, attachment)?;
+            for row in &rows {
+                db_attachments::insert(conn, message_id, row)?;
             }
             Ok(())
         })
     })
-    .await?;
-    ctx.attachments.remove_staged(&attachments);
-
-    generate_turn_response(db, ctx, Attempt::first(chat)).await
+    .await
 }
 
 /// [`create_task`]の結果。
