@@ -93,7 +93,7 @@ export interface Message {
 }
 
 // DBに未確定の、送信直後の楽観表示専用のプレースホルダ(principles.md 3節「保存するのは
-// 組み立て終わった応答」に従い、確定後はlist_task_messagesで引き直して置き換える)。
+// 組み立て終わった応答」に従い、確定後はlist_chat_messagesで引き直して置き換える)。
 export interface PendingEntry {
   role: 'user' | 'pending'
   content: string

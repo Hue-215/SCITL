@@ -42,10 +42,22 @@ pub fn opening_message(general: &GeneralConfig) -> &str {
     )
 }
 
-/// 空は画面からは保存されないが、手で編集した`config.toml`が同じ経路を通るため、ここでも
-/// 未設定として受け止める。
+/// 設定画面から保存するプロンプトの値。空白だけの値と既定の文面は未設定にする(既定の文面を
+/// 改めたときに追従させるため)。既定の文面を持たないプロンプト(基本のシステムプロンプト)は
+/// `default`に`None`を渡す。
+pub(crate) fn stored_prompt(value: Option<String>, default: Option<&str>) -> Option<String> {
+    value.filter(|v| !is_blank(v) && Some(v.as_str()) != default)
+}
+
+/// 空白だけの値は画面からは保存されないが、手で編集した`config.toml`が同じ経路を通るため、
+/// ここでも未設定として受け止める。
 fn or_default<'a>(value: Option<&'a str>, default: &'a str) -> &'a str {
-    value.filter(|v| !v.is_empty()).unwrap_or(default)
+    value.filter(|v| !is_blank(v)).unwrap_or(default)
+}
+
+/// 空白だけのプロンプトは未設定(設定画面の「空欄にすると既定の文面に戻ります」)。
+fn is_blank(value: &str) -> bool {
+    value.trim().is_empty()
 }
 
 #[cfg(test)]
@@ -78,6 +90,35 @@ mod tests {
             Some("custom")
         );
         assert_eq!(opening_message(&general), "hello");
+    }
+
+    #[test]
+    fn blank_settings_fall_back_to_the_defaults() {
+        let general = GeneralConfig {
+            task_chat_system_prompt: Some(" \n".to_string()),
+            task_opening_message: Some("\t".to_string()),
+            language: Some(Language::En),
+            ..GeneralConfig::default()
+        };
+        assert_eq!(
+            SystemPrompts::from_config(&general).task_chat,
+            Some(default_task_chat_prompt(Language::En))
+        );
+        assert_eq!(
+            opening_message(&general),
+            default_opening_message(Language::En)
+        );
+    }
+
+    #[test]
+    fn stored_prompts_leave_blank_and_default_values_unset() {
+        let stored = |value: &str, default| stored_prompt(Some(value.to_string()), default);
+        assert_eq!(stored("", None), None);
+        assert_eq!(stored("  \n", None), None);
+        assert_eq!(stored("既定", Some("既定")), None);
+        assert_eq!(stored(" 既定 ", Some("既定")).as_deref(), Some(" 既定 "));
+        assert_eq!(stored("custom", Some("既定")).as_deref(), Some("custom"));
+        assert_eq!(stored_prompt(None, Some("既定")), None);
     }
 
     #[test]

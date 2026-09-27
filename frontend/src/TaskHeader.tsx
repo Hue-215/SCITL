@@ -29,7 +29,9 @@ export default function TaskHeader({
   const name = taskName(task)
   const archived = task.archived_at !== null
 
-  // 空・変更なしは取り消しと同じ扱いにする(何も変わらない記録を残さない)。
+  // 空・変更なしは取り消しと同じ扱いにする(何も変わらない記録を残さない)。整形すると今の
+  // タイトルと同じになる値(括弧で囲んだ等)は、Rust側が変更も記録もしない
+  // (orchestration::operations)。整形の規則はここに写さない。
   const commit = () => {
     setEditing(false)
     const title = draft.trim()

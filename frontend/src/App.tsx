@@ -50,6 +50,9 @@ export default function App() {
   // 表示中の会話。起動したら総合チャットを開く(タスクを離れたときの戻り先でもある)。
   const [chat, setChat] = useState<Chat>(GENERAL_CHAT)
   const [adding, setAdding] = useState(false)
+  // タスクを作らなかった理由(チャットを使えない間。Issue #76)。IPCの失敗(`error`)と違い、
+  // モデルの選択や設定の変更で解消しうるので、それらを変えたら外す(次の追加で改めて判定される)。
+  const [addBlocked, setAddBlocked] = useState<string | null>(null)
   // 表示中のタスク。総合チャットと、タスクを読み込むまでの間はnull。
   const [task, setTask] = useState<TaskDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -142,18 +145,18 @@ export default function App() {
   const addTask = async () => {
     if (adding) return
     setAdding(true)
+    setAddBlocked(null)
     let id: number
     try {
       const result = await createTask()
       if (result.status === 'unavailable') {
         // モデル未選択等でチャットを使えない間は作らない。理由はエラー発言と同じ文言で出す。
-        setError(turnErrorText(result.error_kind, result.error_kind))
+        setAddBlocked(turnErrorText(result.error_kind, result.error_kind))
         return
       }
       id = result.task.id
       await loadTasks()
       selectChat(taskChat(id))
-      setError(null)
     } catch (e) {
       setError(failureText(e))
       return
@@ -193,7 +196,7 @@ export default function App() {
 
   // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す(Issue #95)。
   // バックエンドはコマンド最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
-  // ここでやっているのは「すでに起きた削除を先に見せる」ことだけ。確定後は`loadTask`が必ず
+  // ここでやっているのは「すでに起きた削除を先に見せる」ことだけ。確定後は`loadChat`が必ず
   // DBの内容で上書きするため、これが最終的な表示になることはない(楽観表示はユーザー発言の
   // プレースホルダと同じ扱い)。
   //
@@ -271,6 +274,7 @@ export default function App() {
       <Settings
         onClose={() => {
           stick()
+          setAddBlocked(null)
           setSettingsOpen(false)
         }}
       />
@@ -315,6 +319,7 @@ export default function App() {
         )}
 
         {error && <p className="error">{error}</p>}
+        {addBlocked && <p className="error">{addBlocked}</p>}
 
         <ul className="chat-log" ref={logRef} onScroll={onLogScroll}>
           {groupMessages(messages).map((item) => {
@@ -496,7 +501,7 @@ export default function App() {
           </button>
         </form>
 
-        <ChatModelBar onError={setError} />
+        <ChatModelBar onError={setError} onChanged={() => setAddBlocked(null)} />
       </main>
     </div>
   )

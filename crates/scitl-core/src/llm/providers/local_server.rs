@@ -294,7 +294,8 @@ mod tests {
     }
 
     /// 要求の1行目(`GET /props HTTP/1.1`等)から応答を決める、最小限のHTTPサーバー。
-    /// 接続ごとに1要求だけ受けて閉じる。受けた要求の1行目を返す。
+    /// 接続ごとに1要求だけ受けて閉じる。受けた要求の1行目を返す。1行目は応答を書く前に
+    /// 渡す(書いたあとだと、クライアントが検出を終えて受けた要求を数えるのに間に合わない)。
     fn spawn_server(route: fn(&str) -> Reply) -> (String, std::sync::mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -306,7 +307,9 @@ mod tests {
                 let n = stream.read(&mut buf).unwrap_or(0);
                 let request = String::from_utf8_lossy(&buf[..n]).to_string();
                 let line = request.lines().next().unwrap_or_default().to_string();
-                let response = match route(&line) {
+                let reply = route(&line);
+                let _ = tx.send(line);
+                let response = match reply {
                     Reply::Json(body) => format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -317,7 +320,6 @@ mod tests {
                     ),
                 };
                 let _ = stream.write_all(response.as_bytes());
-                let _ = tx.send(line);
             }
         });
         (format!("http://{addr}/v1"), rx)

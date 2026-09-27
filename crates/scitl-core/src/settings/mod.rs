@@ -33,8 +33,8 @@ use crate::llm::providers::{self, SharedAdapter};
 use crate::llm::{self, DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::{self, ToolCatalog};
 use crate::orchestration::{
-    self, default_opening_message, default_task_chat_prompt, McpAccess, SystemPrompts, ToolLimits,
-    TurnContext, TurnEvents, TurnFailure,
+    self, default_opening_message, default_task_chat_prompt, stored_prompt, McpAccess,
+    SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure,
 };
 use crate::secrets;
 use crate::tools::external;
@@ -56,11 +56,6 @@ pub struct GeneralUpdate {
     pub task_chat_system_prompt: Option<String>,
     pub task_opening_message: Option<String>,
     pub response_timeout_secs: Option<u64>,
-}
-
-/// 空と既定の文面は未設定([`Settings::update_general`])。
-fn unless_default(value: Option<String>, default: &str) -> Option<String> {
-    value.filter(|v| !v.is_empty() && v != default)
 }
 
 /// サーバー追加フォームからの入力。接続方式ごとに必要な値だけを受け取る
@@ -376,8 +371,9 @@ impl Settings {
         }
     }
 
-    /// 空文字のプロンプトは未設定として保存する。既定の文面を持つもの(タスクチャット用・
-    /// 開始の発言)は、既定の文面と同じ値も未設定にする(architecture.md 3節「聞き取りの開始」)。
+    /// 空白だけのプロンプトは未設定として保存する。既定の文面を持つもの(タスクチャット用・
+    /// 開始の発言)は、既定の文面と同じ値も未設定にする(architecture.md 3節「聞き取りの開始」。
+    /// 判定は`orchestration::stored_prompt`)。
     /// 表示言語は[`Self::update_language`]が別に持つので、ここでは変えない。
     pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
         // `0`は画面側でも弾くが、UIの入力チェックはセキュリティ境界ではない。
@@ -386,15 +382,15 @@ impl Settings {
         }
         let mut draft = self.edit();
         let general = &mut draft.config.general;
-        general.system_prompt = update.system_prompt.filter(|s| !s.is_empty());
+        general.system_prompt = stored_prompt(update.system_prompt, None);
         let language = general.language();
-        general.task_chat_system_prompt = unless_default(
+        general.task_chat_system_prompt = stored_prompt(
             update.task_chat_system_prompt,
-            default_task_chat_prompt(language),
+            Some(default_task_chat_prompt(language)),
         );
-        general.task_opening_message = unless_default(
+        general.task_opening_message = stored_prompt(
             update.task_opening_message,
-            default_opening_message(language),
+            Some(default_opening_message(language)),
         );
         general.response_timeout_secs = update.response_timeout_secs;
         draft.commit()
@@ -1135,7 +1131,7 @@ name = "m"
     }
 
     #[test]
-    fn prompts_equal_to_their_defaults_are_saved_as_unset() {
+    fn blank_prompts_and_prompts_equal_to_their_defaults_are_saved_as_unset() {
         let (settings, _) = temp_settings();
         let view = settings
             .update_general(GeneralUpdate {
@@ -1152,8 +1148,8 @@ name = "m"
         let view = settings
             .update_general(GeneralUpdate {
                 task_chat_system_prompt: Some("custom".to_string()),
-                task_opening_message: Some(String::new()),
-                ..general_update(None, None)
+                task_opening_message: Some(" \n".to_string()),
+                ..general_update(Some("  "), None)
             })
             .unwrap();
         assert_eq!(
@@ -1161,6 +1157,7 @@ name = "m"
             Some("custom")
         );
         assert!(view.general.task_opening_message.is_none());
+        assert!(view.general.system_prompt.is_none());
     }
 
     #[test]

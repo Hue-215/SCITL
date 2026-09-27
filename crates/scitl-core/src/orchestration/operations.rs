@@ -5,13 +5,18 @@
 //! どの操作も、そのタスクが応答を生成中なら断る([`super::turn`]の生成中の集合)。ターンの
 //! 途中に`turn_id`の無い記録が挟まるとターンの表示が割れ、モデルの`update_task`と同じタスクへ
 //! 並んで書くことにもなる。
+//!
+//! 状態が変わらない操作(整形すると今と同じになるタイトル、アーカイブ済みのアーカイブ)は、
+//! 変更も記録もしない。何も起きなかった記録を会話ログに残さないため。変わるかどうかの判定は
+//! ここに置き、画面には整形の規則を写さない。
 
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Chat, Kind, NewMessage, OperationSource, Origin, Role};
-use crate::db::{in_transaction, tasks, with_conn, SharedConnection};
+use crate::db::tasks::{self, Task};
+use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::in_flight::InFlightSet;
 use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn::begin_generating;
@@ -30,13 +35,23 @@ pub async fn rename_task(
     task_id: i64,
     title: String,
 ) -> Result<()> {
-    if tasks::sanitize_title(&title).is_empty() {
+    let sanitized = tasks::sanitize_title(&title);
+    if sanitized.is_empty() {
         return Err(CoreError::InvalidArgument {
             name: "title".to_string(),
             reason: "must not be empty".to_string(),
         });
     }
-    update(db, generating, source, task_id, json!({ "title": title })).await
+    let unchanged = move |task: &Task| task.title.as_deref() == Some(sanitized.as_str());
+    update(
+        db,
+        generating,
+        source,
+        task_id,
+        json!({ "title": title }),
+        unchanged,
+    )
+    .await
 }
 
 /// アーカイブ・アーカイブ解除。
@@ -48,7 +63,16 @@ pub async fn set_task_archived(
     archived: bool,
 ) -> Result<()> {
     let status = if archived { "archived" } else { "unarchived" };
-    update(db, generating, source, task_id, json!({ "status": status })).await
+    let unchanged = move |task: &Task| task.archived_at.is_some() == archived;
+    update(
+        db,
+        generating,
+        source,
+        task_id,
+        json!({ "status": status }),
+        unchanged,
+    )
+    .await
 }
 
 /// タスクの論理削除。記録は削除したタスク自身の会話に置く(削除を取り消せば一緒に戻る)。
@@ -70,17 +94,22 @@ pub async fn delete_task(
 }
 
 /// タスクチャット版の`update_task`ツールと同じ検証・実行を通す。記録する引数は、実行した
-/// 引数そのもの(記録用と実行用を別に組み立てると食い違う余地が残る)。
+/// 引数そのもの(記録用と実行用を別に組み立てると食い違う余地が残る)。`unchanged`が今の
+/// タスクについて真なら、変更も記録もしない。
 async fn update(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,
     source: OperationSource,
     task_id: i64,
     arguments: Value,
+    unchanged: impl FnOnce(&Task) -> bool + Send + 'static,
 ) -> Result<()> {
     let _generating = begin_generating(generating, Chat::Task(task_id))?;
     with_conn(db, move |conn| {
         in_transaction(conn, |conn| {
+            if unchanged(&tasks::get_task(conn, task_id)?) {
+                return Ok(());
+            }
             let result = update_task::execute(conn, task_id, &arguments)?;
             record(conn, source, task_id, update_task::NAME, arguments, result)
         })
@@ -153,7 +182,7 @@ mod tests {
                 .collect()
         }
 
-        fn task(&self) -> tasks::Task {
+        fn task(&self) -> Task {
             tasks::get_task(&self.db.lock().unwrap(), self.task_id).unwrap()
         }
     }
@@ -231,6 +260,45 @@ mod tests {
                 json!({ "status": "unarchived" })
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn operations_that_change_nothing_are_not_recorded() {
+        let f = Fixture::new();
+        let rename = |title: &str| {
+            rename_task(
+                f.db.clone(),
+                &f.generating,
+                OperationSource::Ui,
+                f.task_id,
+                title.to_string(),
+            )
+        };
+        let archive = |archived| {
+            set_task_archived(
+                f.db.clone(),
+                &f.generating,
+                OperationSource::Ui,
+                f.task_id,
+                archived,
+            )
+        };
+
+        // まだアーカイブしていないタスクのアーカイブ解除。
+        archive(false).await.unwrap();
+        assert!(f.records().is_empty());
+
+        rename("買い物").await.unwrap();
+        archive(true).await.unwrap();
+        let archived = f.task();
+        assert_eq!(f.records().len(), 2);
+
+        // 整形すると今と同じになるタイトルと、アーカイブ済みのアーカイブ。
+        rename("「買い物」").await.unwrap();
+        rename(" 買い物 ").await.unwrap();
+        archive(true).await.unwrap();
+        assert_eq!(f.records().len(), 2);
+        assert_eq!(f.task().updated_at, archived.updated_at);
     }
 
     #[tokio::test]

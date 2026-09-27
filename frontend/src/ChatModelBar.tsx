@@ -25,7 +25,14 @@ function choiceKey(choice: ModelChoice): string {
 
 // チャット入力欄の下に置くモデル選択と思考の強さ選択(Issue #64、legacy/frontend.md 1節)。
 // 選べるものと選択中のものはRust側が組み立てて渡し、ここは描いて選ばせるだけ。
-export default function ChatModelBar({ onError }: { onError: (message: string) => void }) {
+export default function ChatModelBar({
+  onError,
+  onChanged,
+}: {
+  onError: (message: string) => void
+  // 選択を変えられたとき。
+  onChanged: () => void
+}) {
   const [view, setView] = useState<ChatModelsView | null>(null)
   const [open, setOpen] = useState<'model' | 'effort' | null>(null)
 
@@ -44,6 +51,7 @@ export default function ChatModelBar({ onError }: { onError: (message: string) =
   const change = async (update: () => Promise<void>) => {
     try {
       await update()
+      onChanged()
     } catch (e) {
       onError(failureText(e))
     }
