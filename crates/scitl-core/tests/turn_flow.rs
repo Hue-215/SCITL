@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
+use scitl_core::attachments::{AttachmentStore, Attachments, StageOutcome};
 use scitl_core::config::{McpEndpoint, McpServerConfig, ReasoningEffort};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
@@ -15,7 +16,7 @@ use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     create_task, delete_message, discard_events, edit_user_message, open_task_chat, retry_reply,
     run_turn, McpAccess, SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent,
-    TurnFailure,
+    TurnFailure, UserInput,
 };
 use serde_json::json;
 
@@ -558,8 +559,18 @@ fn context_without_provider() -> TurnContext<'static> {
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
         generating: Box::leak(Box::new(InFlightSet::new())),
+        attachments: Box::leak(Box::new(temp_attachments())),
         events: &discard_events,
     }
+}
+
+/// テストごとに別の一時ディレクトリを置き場所にする。添付を預けないテストでは作られない。
+fn temp_attachments() -> Attachments {
+    let root = std::env::temp_dir().join(format!("scitl-turn-flow-{}", ulid::Ulid::new()));
+    Attachments::new(AttachmentStore::new(
+        root.join("blobs"),
+        root.join("revealed"),
+    ))
 }
 
 /// ターンが知らせたイベントを`sink`に溜める受け口。
@@ -2561,4 +2572,196 @@ async fn a_turn_on_a_deleted_task_writes_nothing() {
         .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
         .unwrap();
     assert_eq!(written, 0);
+}
+
+fn staged_token(outcome: StageOutcome) -> String {
+    match outcome {
+        StageOutcome::Staged { token, .. } => token,
+        other => panic!("expected staged, got {other:?}"),
+    }
+}
+
+/// 添付はユーザー発言と一緒に保存され、送信前の集合から外れる(Issue #21)。本文が
+/// 空でも添付があれば送れる。
+#[tokio::test]
+async fn run_turn_saves_attachments_with_the_user_message() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::one("受け取りました");
+    let ctx = context(&adapter);
+    let text = staged_token(ctx.attachments.stage("memo.txt".into(), b"memo").unwrap());
+    let image = staged_token(
+        ctx.attachments
+            .stage("photo.png".into(), b"\x89PNG\r\n\x1a\nbody")
+            .unwrap(),
+    );
+
+    run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        UserInput {
+            text: String::new(),
+            attachments: vec![text.clone(), image],
+        },
+    )
+    .await
+    .unwrap();
+
+    let image_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        let user = &messages[0];
+        assert_eq!(user.role, "user");
+        let names: Vec<&str> = user
+            .attachments
+            .iter()
+            .map(|a| a.original_name.as_str())
+            .collect();
+        assert_eq!(names, ["memo.txt", "photo.png"]);
+        assert_eq!(
+            ctx.attachments
+                .read_text(&conn, user.attachments[0].id)
+                .unwrap(),
+            "memo"
+        );
+        assert_eq!(reply_of(&messages), "受け取りました");
+        user.attachments[1].id
+    };
+    let data_url = ctx
+        .attachments
+        .image_data_url(db.clone(), image_id)
+        .await
+        .unwrap();
+    assert!(data_url.starts_with("data:image/png;base64,"), "{data_url}");
+
+    // 送った添付は預かりから外れ、同じトークンではもう送れない。
+    let again = run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        UserInput {
+            text: "もう一度".to_string(),
+            attachments: vec![text],
+        },
+    )
+    .await;
+    assert!(matches!(again, Err(CoreError::Attachment(_))), "{again:?}");
+}
+
+/// 本文も添付も無い発言と、預けていない添付は、何も書かずに断る。
+#[tokio::test]
+async fn run_turn_refuses_an_empty_message_and_unknown_attachments() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::one("応答");
+    let ctx = context(&adapter);
+
+    let empty = run_turn(db.clone(), &ctx, Chat::Task(task_id), "  \n".to_string()).await;
+    assert!(
+        matches!(empty, Err(CoreError::InvalidMessageOperation(_))),
+        "{empty:?}"
+    );
+    let unknown = run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        UserInput {
+            text: "見て".to_string(),
+            attachments: vec!["missing".to_string()],
+        },
+    )
+    .await;
+    assert!(
+        matches!(unknown, Err(CoreError::Attachment(_))),
+        "{unknown:?}"
+    );
+
+    let written: i64 = db
+        .lock()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(written, 0);
+}
+
+/// 編集した発言は添付を引き継ぐ(legacy/frontend.md 1節)。
+#[tokio::test]
+async fn edit_user_message_carries_attachments_over() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::many(&["1回目", "2回目"]);
+    let ctx = context(&adapter);
+    let token = staged_token(ctx.attachments.stage("memo.txt".into(), b"memo").unwrap());
+    run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        UserInput {
+            text: "読んで".to_string(),
+            attachments: vec![token],
+        },
+    )
+    .await
+    .unwrap();
+    let original =
+        db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap()[0].id;
+
+    edit_user_message(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        original,
+        "要約して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let edited = &messages[0];
+    assert_eq!(edited.content, "要約して");
+    assert_ne!(edited.id, original);
+    assert_eq!(edited.attachments.len(), 1);
+    assert_eq!(edited.attachments[0].original_name, "memo.txt");
+    assert_eq!(reply_of(&messages), "2回目");
+}
+
+/// 編集で本文を空にしても、添付が無ければ断り、元の発言は残る。
+#[tokio::test]
+async fn edit_user_message_refuses_to_leave_an_empty_message() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = TextAdapter::one("応答");
+    let ctx = context(&adapter);
+    run_turn(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        "元の本文".to_string(),
+    )
+    .await
+    .unwrap();
+    let original =
+        db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap()[0].id;
+
+    let result = edit_user_message(
+        db.clone(),
+        &ctx,
+        Chat::Task(task_id),
+        original,
+        " ".to_string(),
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(CoreError::InvalidMessageOperation(_))),
+        "{result:?}"
+    );
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    assert_eq!(messages[0].content, "元の本文");
+    assert_eq!(reply_of(&messages), "応答");
 }

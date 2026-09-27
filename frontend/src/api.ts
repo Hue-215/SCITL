@@ -62,12 +62,19 @@ export function openTaskChat(
   return invoke('open_task_chat', { taskId, onEvent: new Channel(onEvent) })
 }
 
+// `attachments`は`stageAttachment`が返したトークン。
 export function sendChatMessage(
   chat: Chat,
   text: string,
+  attachments: string[],
   onEvent: (event: TurnEvent) => void,
 ): Promise<void> {
-  return invoke('send_chat_message', { chat, text, onEvent: new Channel(onEvent) })
+  return invoke('send_chat_message', {
+    chat,
+    text,
+    attachments,
+    onEvent: new Channel(onEvent),
+  })
 }
 
 export function listChatMessages(chat: Chat): Promise<Message[]> {

@@ -3,7 +3,7 @@ use tauri::State;
 
 use scitl_core::db::messages::{self, Chat, Message};
 use scitl_core::orchestration::{
-    self, delete_message, edit_user_message, retry_reply, run_turn, TurnEvent,
+    self, delete_message, edit_user_message, retry_reply, run_turn, TurnEvent, UserInput,
 };
 
 use super::with_db;
@@ -20,6 +20,7 @@ fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '
 /// 発言送信。`chat`は文脈(表示中の会話)から決まる引数であり、モデルへのツール引数には
 /// 出てこない(update_taskのタスクチャット版と同じ区別。docs/spec/rebuild/tools.md 1節)。
 /// ターンの途中経過は`on_event`へ送る(編集・再試行も同じ。architecture.md 3節)。
+/// `attachments`は`stage_attachment`が返したトークン。
 ///
 /// プロバイダー未選択・モデル未選択・APIキー未設定・空応答等は`run_turn`内でエラー発言
 /// として保存され`Ok`で返る(Issue #40)。ここで`Err`になるのはDB自体への書き込み失敗など、
@@ -29,6 +30,7 @@ pub async fn send_chat_message(
     state: State<'_, AppState>,
     chat: Chat,
     text: String,
+    attachments: Vec<String>,
     on_event: Channel<TurnEvent>,
 ) -> Result<(), String> {
     // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
@@ -36,9 +38,9 @@ pub async fn send_chat_message(
     let events = forward(&on_event);
     run_turn(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &events),
+        &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
-        text,
+        UserInput { text, attachments },
     )
     .await
     .map_err(|e| e.to_string())
@@ -56,7 +58,7 @@ pub async fn open_task_chat(
     let events = forward(&on_event);
     orchestration::open_task_chat(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &events),
+        &snapshot.turn_context(&state.generating, &state.attachments, &events),
         task_id,
     )
     .await
@@ -77,7 +79,7 @@ pub async fn edit_chat_message(
     let events = forward(&on_event);
     edit_user_message(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &events),
+        &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
         message_id,
         text,
@@ -99,7 +101,7 @@ pub async fn retry_chat_message(
     let events = forward(&on_event);
     retry_reply(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &events),
+        &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
         message_id,
     )
