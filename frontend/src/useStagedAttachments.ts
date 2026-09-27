@@ -10,12 +10,26 @@ export type StagedItem = { key: string; name: string } & (
   | { state: 'rejected'; message: string }
 )
 
+/** 送信のために取り出した添付。送信が失敗したら[`StagedAttachments.restore`]で戻す。 */
+export interface TakenAttachments {
+  items: StagedItem[]
+  tokens: string[]
+  names: string[]
+}
+
 export interface StagedAttachments {
   items: StagedItem[]
   add: (files: File[]) => void
   remove: (key: string) => void
   /** 送る添付を取り出し、一覧を空にする。受け付けなかったものも一緒に消える。 */
-  take: () => { tokens: string[]; names: string[] }
+  take: () => TakenAttachments
+  /**
+   * 送信のコマンドが失敗したときに、取り出した添付を一覧へ戻す。Rust側も発言を書けなければ
+   * 預かりに戻す(`orchestration::run_turn`)ので、同じトークンで送り直せる。
+   */
+  restore: (taken: TakenAttachments) => void
+  /** 添付を選べる(上限を受け取ってから。受け取る前は大きさ・数の確かめができない)。 */
+  canAdd: boolean
   /** まだ判定を待っているものがある(送信できない)。 */
   busy: boolean
   /** 送れるものがある。 */
@@ -110,20 +124,28 @@ export function useStagedAttachments(): StagedAttachments {
     setItems((prev) => prev.filter((i) => i.key !== key))
   }
 
-  const take = useCallback(() => {
+  const take = useCallback((): TakenAttachments => {
     const staged = items.filter((i) => i.state === 'staged')
     setItems([])
     return {
+      items: staged,
       tokens: staged.map((i) => i.token),
       names: staged.map((i) => i.name),
     }
   }, [items])
+
+  // 失敗を待つ間に選んだ添付があれば、その前に戻す(選んだ順を保つ)。
+  const restore = useCallback((taken: TakenAttachments) => {
+    setItems((prev) => [...taken.items, ...prev])
+  }, [])
 
   return {
     items,
     add,
     remove,
     take,
+    restore,
+    canAdd: limits !== null,
     busy: items.some((i) => i.state === 'staging'),
     ready: items.some((i) => i.state === 'staged'),
   }

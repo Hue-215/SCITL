@@ -215,7 +215,11 @@ export default function App() {
         { role: 'user', content: text, attachmentNames: attachments.names },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      (onEvent) => sendChatMessage(target, text, attachments.tokens, onEvent),
+      (onEvent) =>
+        sendChatMessage(target, text, attachments.tokens, onEvent).catch((e: unknown) => {
+          staged.restore(attachments)
+          throw e
+        }),
       settle,
     )
   }
@@ -537,7 +541,7 @@ export default function App() {
           />
           <button
             type="button"
-            disabled={disableActions}
+            disabled={disableActions || !staged.canAdd}
             title={t('attachment.add_tooltip')}
             onClick={() => fileInputRef.current?.click()}
           >
