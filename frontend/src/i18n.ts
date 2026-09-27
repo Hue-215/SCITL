@@ -89,6 +89,23 @@ export function formatDateTime(iso: string): string {
   return state().dateTime.format(new Date(iso))
 }
 
+const BYTE_UNITS = ['byte', 'kilobyte', 'megabyte', 'gigabyte'] as const
+
+/** ファイルの大きさ。単位の刻みは1024(上限の値がKiB・MiB単位で決めてあるため)。 */
+export function formatBytes(bytes: number): string {
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return new Intl.NumberFormat(state().language, {
+    style: 'unit',
+    unit: BYTE_UNITS[unit],
+    maximumFractionDigits: unit === 0 ? 0 : 1,
+  }).format(value)
+}
+
 /**
  * エラー発言(role='error')の本文。保存された`content`は英語の定型文言なので、画面は種別
  * コードから表示言語の文言を引く(data-model.md messages)。知らない種別の行(別の版で
