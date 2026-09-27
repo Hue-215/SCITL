@@ -1,3 +1,4 @@
+pub mod attachments;
 pub mod error;
 pub mod messages;
 pub mod task_steps;

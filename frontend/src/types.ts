@@ -90,6 +90,19 @@ export interface Message {
   turn_id: string | null
   attempt_no: number | null
   created_at: string
+  // 付けた順(Issue #21)。
+  attachments: AttachmentView[]
+}
+
+// crates/scitl-core/src/db/attachments.rs の AttachmentKind・AttachmentView。
+export type AttachmentKind = 'text' | 'image' | 'other'
+
+export interface AttachmentView {
+  id: number
+  original_name: string
+  mime_type: string
+  kind: AttachmentKind
+  size_bytes: number
 }
 
 // DBに未確定の、送信直後の楽観表示専用のプレースホルダ(principles.md 3節「保存するのは
