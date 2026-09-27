@@ -17,7 +17,8 @@ SCITL-2.0/
 ├── crates/
 │   ├── scitl-core/                 # UI非依存のコアライブラリ
 │   │   └── src/
-│   │       ├── db/                 # tasks/steps/messages(/attachments)のrepository
+│   │       ├── db/                 # tasks/steps/messages/attachmentsのrepository
+│   │       ├── attachments/        # 添付の種別の判定・実体の置き場所・送信前の添付(12節)
 │   │       ├── llm/                # types(イベント列), adapter trait, 失敗の種類, providers/
 │   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
 │   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), turn_event.rs(途中経過の通知), state_prompt.rs(最新状態), operations.rs(応答生成以外の経路での操作と記録)
@@ -531,3 +532,46 @@ core側(`scitl_core::i18n`)は同じ言語ファイルをビルド時に埋め�
   フロントエンド(`turnErrorText`)にある
 - コマンドの失敗(`CoreError` の表示文)は英語の診断文のまま画面に出る。フロントエンドで
   表示文字列にする処理は `api.ts` の `failureText` に集めてあり、訳すのはIssue #199
+
+## 12. 添付ファイル(Issue #21)
+
+添付の種別の判定・実体の置き場所・送信前の添付・画面が開くときの読み出しは
+`scitl-core/src/attachments/` に、行の読み書きは `db::attachments` に置く。
+
+### 受け取り方
+
+- **画面はファイルの中身を渡すだけで、パスを渡すコマンドを持たない**。ファイルは
+  `<input type="file">` でOSのダイアログから選ばせ、中身をIPCの生のバイト列
+  (`tauri::ipc::Request` の本文)で送る。名前は本文と一緒に送れないので、`encodeURIComponent` で
+  符号化してヘッダーに載せる。パスを受け取るコマンドがあると、WebViewを乗っ取られたときに
+  利用者が選んでいないファイル(鍵ファイル等)を読ませてプロバイダーへ送らせる経路になる。
+  WebViewが触れるのは、利用者がダイアログで選んだファイルだけになる
+- **選んだ時点でcoreが判定し、送信まで預かる**(`Attachments::stage`)。種別・大きさの上限の
+  判定を画面に写さないため。預かったものはトークンで指し、送信(`run_turn`)でユーザー発言と
+  同じトランザクションで書いてから預かりを外す。預かりはメモリにだけ持ち、再起動で消える
+- **種別は中身だけから決める**(`attachments::classify`)。拡張子や画面の申告は信用しない。
+  画像はOpenAI互換APIが受け付けるPNG・JPEG・GIF・WebPを先頭バイトで見分けたものだけで、
+  SVGは画像にしない(スクリプトや外部参照を持てる)。それ以外の画像は、正規化(#45)が入るまで
+  「その他」。UTF-8として読めてNULを含まないものがテキスト
+- 大きさの上限は `attachments::LIMITS` の1箇所に置く(#5で設定へ移す)。画面は同じ値を
+  `get_attachment_limits` で受け取り、上限を超えるファイルを読む前に弾く
+
+### 置き場所
+
+- テキストは本文を `attachments.content_text` に、それ以外は実体をアプリのデータディレクトリの
+  `attachments/<SHA-256の小文字16進>` に置く(data-model.md attachments)。同じ内容は1つで済む。
+  一時ファイルに書いてから名前を移し、途中まで書いたファイルがハッシュの名前で残らないようにする
+- DBから読んだハッシュは、パスに繋ぐ前に64桁の16進であることを確かめる。DBが書き換えられても、
+  置き場所の外を指せないようにするため
+
+### 画面での開き方
+
+- 画像はcoreが組み立てたdata URLで渡す(`read_image_attachment`)。MIMEは保存した値ではなく
+  実体の先頭バイトから決め直し、画像として扱う形式でなければ作らない。CSP(8節)の
+  `img-src data:` の範囲で、CSP・権限・assetプロトコルは変えない
+- テキストは本文を返す(`read_text_attachment`)。描画はプレーンテキスト(10節の
+  「モデル・ユーザーが書いたもの」と同じ扱い)
+- その他は、元の名前(どのOSでも置ける形にしたもの)でキャッシュディレクトリへ書き出し、
+  **入っているフォルダを開く**(`reveal_attachment`)。ファイルそのものをOSの既定アプリで
+  開かないのは、実行形式の添付を確認なしに起動させないため。WebViewを乗っ取られた場合も、
+  できるのはフォルダを開くことまでになる
