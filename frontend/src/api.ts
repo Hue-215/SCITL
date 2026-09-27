@@ -54,7 +54,7 @@ export function deleteTask(taskId: number): Promise<void> {
 
 // 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける
 // (architecture.md 3節)。経路(Channel)はコマンドの呼び出しごとに作るので、届いた
-// イベントがどのタスクのものかは呼び出し側が知っている。
+// イベントがどの会話のものかは呼び出し側が知っている。
 export function openTaskChat(
   taskId: number,
   onEvent: (event: TurnEvent) => void,
