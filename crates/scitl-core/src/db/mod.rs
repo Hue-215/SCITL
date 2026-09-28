@@ -42,7 +42,8 @@ where
 /// 別プロセスの書き込みは`f`が終わるまで待たせる(data-model.md 4節)。
 ///
 /// 既にトランザクションの中で呼ばれたら、新しく始めずにその中で実行する(SQLiteは入れ子の
-/// `BEGIN`を受け付けない)。確定と巻き戻しは外側に任せる。
+/// `BEGIN`を受け付けない)。開始方法・確定・巻き戻しは外側に従うので、トランザクションは
+/// すべてこの関数で始める。
 pub(crate) fn in_transaction<T>(
     conn: &Connection,
     f: impl FnOnce(&Connection) -> Result<T>,
