@@ -166,9 +166,10 @@ export default function Settings({ onClose }: SettingsProps) {
             ) : tab === 'providers' ? (
               <ProvidersTab
                 settings={settings}
-                onAddProvider={(name, format, baseUrl, apiKey) =>
-                  runOrReportError(() => addProvider(name, format, baseUrl, apiKey))
-                }
+                onAddProvider={async (name, format, baseUrl, apiKey) => {
+                  // 追加のエラーはフォームの直下に出すため、ここでは握らず呼び出し元へ返す。
+                  setSettings(await addProvider(name, format, baseUrl, apiKey))
+                }}
                 onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
                 onUpdateModels={runOrReportError}
               />
@@ -180,9 +181,14 @@ export default function Settings({ onClose }: SettingsProps) {
                     updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }),
                   )
                 }
-                onAddServer={(name, endpoint) =>
-                  runOrReportError(() => addMcpServer(name, endpoint))
-                }
+                onAddServer={async (name, endpoint) => {
+                  // 追加のエラーはフォームの直下に出すため、ここでは握らず呼び出し元へ返す。
+                  // 追加したサーバーは、追加前に無かったidで見分ける。
+                  const before = new Set(settings.mcp_servers.map((s) => s.id))
+                  const next = await addMcpServer(name, endpoint)
+                  setSettings(next)
+                  return next.mcp_servers.find((s) => !before.has(s.id))?.id ?? null
+                }}
                 onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
                 onSetServerEnabled={(id, enabled) =>
                   runOrReportError(() => setMcpServerEnabled(id, enabled))
@@ -451,7 +457,7 @@ interface ProvidersTabProps {
     apiFormat: ApiFormat,
     baseUrl: string,
     apiKey: string | null,
-  ) => void
+  ) => Promise<void>
   onDeleteProvider: (providerId: string) => void
   // モデルの操作(追加・削除・表の各列)は種類が多いため、個別のコールバックを並べずに
   // 呼び出しごと受け取り、結果の反映とエラー表示を親に任せる。
@@ -921,8 +927,35 @@ function CollapseToggle({ showLabel, expanded, onToggle }: CollapseToggleProps) 
 // この件数以上の一覧は既定で畳む。モデル表とMCPのツール一覧で揃える。
 const LIST_COLLAPSE_THRESHOLD = 5
 
+// 追加フォームの送信。結果を待ち、成功したときだけ`onDone`で入力を空にする。失敗は
+// フォームの直下に出し、入力は残す(Rust側の検証で弾かれても打ち直さずに済むように)。
+function useAddSubmission() {
+  const [adding, setAdding] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async (add: () => Promise<unknown>, onDone: () => void) => {
+    setAdding(true)
+    setError(null)
+    try {
+      await add()
+      onDone()
+    } catch (e) {
+      setError(failureText(e))
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  return { adding, error, run }
+}
+
 interface AddProviderFormProps {
-  onAdd: (name: string, apiFormat: ApiFormat, baseUrl: string, apiKey: string | null) => void
+  onAdd: (
+    name: string,
+    apiFormat: ApiFormat,
+    baseUrl: string,
+    apiKey: string | null,
+  ) => Promise<void>
 }
 
 function AddProviderForm({ onAdd }: AddProviderFormProps) {
@@ -931,16 +964,21 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
   const [apiFormat, setApiFormat] = useState<ApiFormat>('open_ai_compat')
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL_BY_FORMAT.open_ai_compat)
   const [apiKey, setApiKey] = useState('')
+  const submission = useAddSubmission()
 
   return (
     <form
       className="provider-add-form settings-section-break"
       onSubmit={(e) => {
         e.preventDefault()
-        if (!name.trim() || !baseUrl.trim()) return
-        onAdd(name.trim(), apiFormat, baseUrl.trim(), apiKey || null)
-        setName('')
-        setApiKey('')
+        if (submission.adding || !name.trim() || !baseUrl.trim()) return
+        void submission.run(
+          () => onAdd(name.trim(), apiFormat, baseUrl.trim(), apiKey || null),
+          () => {
+            setName('')
+            setApiKey('')
+          },
+        )
       }}
     >
       <h2>{t('settings.provider.add_provider_heading')}</h2>
@@ -980,7 +1018,10 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
           placeholder={t('settings.provider.api_key_placeholder')}
         />
       </label>
-      <button type="submit">{t('common.add')}</button>
+      {submission.error && <p className="error">{submission.error}</p>}
+      <button type="submit" disabled={submission.adding}>
+        {submission.adding ? t('common.adding') : t('common.add')}
+      </button>
     </form>
   )
 }
@@ -1017,7 +1058,8 @@ const MCP_NAME_CHARS = /^[A-Za-z0-9_]+$/
 interface McpTabProps {
   settings: SettingsView
   onSaveLimits: (maxRoundsPerTurn: number | null, totalTimeoutSecs: number | null) => void
-  onAddServer: (name: string, endpoint: NewMcpEndpoint) => void
+  // 追加したサーバーのidを返す。
+  onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<string | null>
   onDeleteServer: (serverId: string) => void
   onSetServerEnabled: (serverId: string, enabled: boolean) => void
   onSetToolEnabled: (serverId: string, toolName: string, enabled: boolean) => void
@@ -1033,6 +1075,37 @@ function McpTab({
   onSetToolEnabled,
   onFetchTools,
 }: McpTabProps) {
+  // ツール一覧の取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す)。
+  // 追加した直後の自動取得もカードの取得と同じ表示にするため、カードではなくここで持つ。
+  const [fetching, setFetching] = useState<string[]>([])
+  const [fetchErrors, setFetchErrors] = useState<Record<string, string>>({})
+
+  const fetchTools = async (serverId: string) => {
+    setFetching((prev) => [...prev, serverId])
+    setFetchErrors((prev) => {
+      const next = { ...prev }
+      delete next[serverId]
+      return next
+    })
+    try {
+      await onFetchTools(serverId)
+    } catch (e) {
+      setFetchErrors((prev) => ({
+        ...prev,
+        [serverId]: t('common.fetch_failed', { error: failureText(e) }),
+      }))
+    } finally {
+      setFetching((prev) => prev.filter((id) => id !== serverId))
+    }
+  }
+
+  // 追加したら続けて1回ツール一覧を取得する(legacy/frontend.md 4節「追加時に自動で1回
+  // 接続テスト」)。失敗しても登録は残し、エラーはそのサーバーのカードに出す。
+  const addServer = async (name: string, endpoint: NewMcpEndpoint) => {
+    const serverId = await onAddServer(name, endpoint)
+    if (serverId !== null) void fetchTools(serverId)
+  }
+
   return (
     <div className="settings-panel">
       <p className="settings-hint">{t('settings.tools.intro')}</p>
@@ -1045,7 +1118,9 @@ function McpTab({
             onDelete={() => onDeleteServer(server.id)}
             onSetEnabled={(enabled) => onSetServerEnabled(server.id, enabled)}
             onSetToolEnabled={(toolName, enabled) => onSetToolEnabled(server.id, toolName, enabled)}
-            onFetchTools={() => onFetchTools(server.id)}
+            fetching={fetching.includes(server.id)}
+            fetchError={fetchErrors[server.id] ?? null}
+            onFetchTools={() => void fetchTools(server.id)}
           />
         ))}
         {settings.mcp_servers.length === 0 && (
@@ -1056,7 +1131,7 @@ function McpTab({
       <AddMcpServerForm
         existingNames={settings.mcp_servers.map((s) => s.name)}
         nameMaxChars={settings.mcp_server_name_max_chars}
-        onAdd={onAddServer}
+        onAdd={addServer}
       />
 
       {/* ツール呼び出し全体の上限(legacy/frontend.md 4節「共通設定」)。内部ツールにも
@@ -1088,7 +1163,9 @@ interface McpServerCardProps {
   onDelete: () => void
   onSetEnabled: (enabled: boolean) => void
   onSetToolEnabled: (toolName: string, enabled: boolean) => void
-  onFetchTools: () => Promise<void>
+  fetching: boolean
+  fetchError: string | null
+  onFetchTools: () => void
 }
 
 // 取得済みのツール一覧は`server.tools`(Rust側のキャッシュ)から来る。カード自身では
@@ -1099,24 +1176,12 @@ function McpServerCard({
   onDelete,
   onSetEnabled,
   onSetToolEnabled,
+  fetching,
+  fetchError,
   onFetchTools,
 }: McpServerCardProps) {
   const tools = server.tools
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
-
-  const handleFetchTools = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      await onFetchTools()
-    } catch (e) {
-      setError(t('common.fetch_failed', { error: failureText(e) }))
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const endpointSummary =
     server.endpoint.transport === 'stdio'
@@ -1206,9 +1271,9 @@ function McpServerCard({
         </>
       )}
 
-      {error && <p className="error">{error}</p>}
-      <button type="button" onClick={handleFetchTools} disabled={loading}>
-        {loading ? t('common.fetching') : t('settings.tools.fetch_tools_button')}
+      {fetchError && <p className="error">{fetchError}</p>}
+      <button type="button" onClick={onFetchTools} disabled={fetching}>
+        {fetching ? t('common.fetching') : t('settings.tools.fetch_tools_button')}
       </button>
     </li>
   )
@@ -1217,7 +1282,7 @@ function McpServerCard({
 interface AddMcpServerFormProps {
   existingNames: string[]
   nameMaxChars: number
-  onAdd: (name: string, endpoint: NewMcpEndpoint) => void
+  onAdd: (name: string, endpoint: NewMcpEndpoint) => Promise<void>
 }
 
 function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFormProps) {
@@ -1230,6 +1295,7 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
   const [url, setUrl] = useState('')
   const [headersText, setHeadersText] = useState('')
   const [errors, setErrors] = useState<string[]>([])
+  const submission = useAddSubmission()
 
   const reset = () => {
     setName('')
@@ -1242,6 +1308,7 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    if (submission.adding) return
     const trimmedName = name.trim()
     const validationErrors: string[] = []
     if (trimmedName === '') {
@@ -1265,7 +1332,13 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
         return
       }
       setErrors([])
-      onAdd(trimmedName, { transport: 'stdio', command: command.trim(), args, env: pairs })
+      const endpoint: NewMcpEndpoint = {
+        transport: 'stdio',
+        command: command.trim(),
+        args,
+        env: pairs,
+      }
+      void submission.run(() => onAdd(trimmedName, endpoint), reset)
     } else {
       if (!url.trim()) validationErrors.push(t('settings.tools.url_required'))
       const { pairs, errors: headerErrors } = parseKeyValueLines(headersText)
@@ -1275,9 +1348,13 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
         return
       }
       setErrors([])
-      onAdd(trimmedName, { transport: 'streamable_http', url: url.trim(), headers: pairs })
+      const endpoint: NewMcpEndpoint = {
+        transport: 'streamable_http',
+        url: url.trim(),
+        headers: pairs,
+      }
+      void submission.run(() => onAdd(trimmedName, endpoint), reset)
     }
-    reset()
   }
 
   return (
@@ -1348,7 +1425,10 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
           {e}
         </p>
       ))}
-      <button type="submit">{t('common.add')}</button>
+      {submission.error && <p className="error">{submission.error}</p>}
+      <button type="submit" disabled={submission.adding}>
+        {submission.adding ? t('common.adding') : t('common.add')}
+      </button>
     </form>
   )
 }
