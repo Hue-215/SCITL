@@ -2506,7 +2506,10 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     .unwrap();
 
     let offered = adapter.offered.lock().unwrap();
-    assert_eq!(offered[0], vec!["get_task_list", "get_task_detail"]);
+    assert_eq!(
+        offered[0],
+        vec!["get_task_list", "get_task_detail", "read_attachment"]
+    );
     let system = system_prompt_content(&adapter.sent.lock().unwrap()[0][0]).to_string();
     assert!(system.contains("current tasks (not archived)"));
     assert!(!system.contains("current task state"));
@@ -2858,4 +2861,101 @@ async fn attachments_reach_the_model_with_the_message() {
     assert!(text.as_str().contains(r#""delivered":"image""#));
     assert_eq!(images.len(), 1);
     assert!(images[0].data_url().starts_with("data:image/png;base64,"));
+}
+
+/// 過去の画像は、添付の読み込みツールで読み直せる(Issue #213)。画像は読んだターンでだけ
+/// ツール結果と一緒に送り、次のターンの履歴には結果だけが残る。
+#[tokio::test]
+async fn an_earlier_image_can_be_read_again_only_for_that_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.image = true;
+    let attachments = context_without_provider().attachments;
+
+    let first = TextAdapter::one("見ました");
+    let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&first)
+        },
+        chat,
+        UserInput {
+            text: "これ".to_string(),
+            attachments: vec![image],
+        },
+    )
+    .await
+    .unwrap();
+    let attachment_id = {
+        let conn = db.lock().unwrap();
+        let views = db::attachments::views_for_chat(&conn, chat).unwrap();
+        views.values().next().unwrap()[0].id
+    };
+
+    let reader = ScriptedToolsAdapter::new(vec![(
+        "read_attachment",
+        json!({ "attachment_id": attachment_id }),
+    )]);
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&reader)
+        },
+        chat,
+        "さっきの画像をもう一度".to_string(),
+    )
+    .await
+    .unwrap();
+    {
+        let sent = reader.sent.lock().unwrap();
+        // 読む前は、前の発言の画像は名前だけ。
+        let ChatMessage::User { text, images } = &sent[0][1] else {
+            panic!("expected the earlier user message, got {:?}", sent[0][1]);
+        };
+        assert!(text.as_str().contains(r#""delivered":"name_only""#));
+        assert!(images.is_empty());
+        let ChatMessage::Tool {
+            content, images, ..
+        } = sent[1].last().unwrap()
+        else {
+            panic!("expected the tool result last");
+        };
+        assert!(content.as_str().contains(r#""delivered":"image""#));
+        assert_eq!(images.len(), 1);
+    }
+
+    let next = TextAdapter::one("はい");
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&next)
+        },
+        chat,
+        "ありがとう".to_string(),
+    )
+    .await
+    .unwrap();
+    let history = next.sent_histories().remove(0);
+    let results: Vec<_> = history
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Tool {
+                content, images, ..
+            } => Some((content, images)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].0.as_str().contains(r#""name":"photo.png""#));
+    assert!(results[0].1.is_empty());
 }

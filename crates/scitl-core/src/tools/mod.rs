@@ -5,6 +5,7 @@ pub mod external;
 pub mod get_current_task_detail;
 pub mod get_task_detail;
 pub mod get_task_list;
+pub mod read_attachment;
 pub mod update_step;
 pub mod update_task;
 
@@ -27,6 +28,25 @@ use crate::llm::ToolSchema;
 pub enum ToolKind {
     State,
     Fact,
+}
+
+/// 内部ツール1回の実行結果。
+pub struct ToolOutput {
+    /// モデルへ返し、実行記録に残す結果。
+    pub result: Value,
+    /// 結果と一緒にモデルへ見せる画像(添付の実体のハッシュ)。実体の読み出しはファイルI/Oなので、
+    /// DBのロックの外で呼び出し元が行う。実行記録には残さず、結果を得たターンでだけ送る
+    /// (docs/spec/rebuild/tools.md「添付の読み込み」)。
+    pub image_hashes: Vec<String>,
+}
+
+impl From<Value> for ToolOutput {
+    fn from(result: Value) -> Self {
+        Self {
+            result,
+            image_hashes: Vec::new(),
+        }
+    }
 }
 
 pub struct ToolDefinition {
@@ -66,6 +86,10 @@ pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
                 schema: get_task_detail::schema(),
                 kind: ToolKind::State,
             },
+            ToolDefinition {
+                schema: read_attachment::schema(),
+                kind: ToolKind::Fact,
+            },
         ],
         Surface::Task => vec![
             ToolDefinition {
@@ -91,6 +115,10 @@ pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
             ToolDefinition {
                 schema: delete_step::schema(),
                 kind: ToolKind::State,
+            },
+            ToolDefinition {
+                schema: read_attachment::schema(),
+                kind: ToolKind::Fact,
             },
         ],
         Surface::Mcp => Vec::new(),
@@ -123,9 +151,19 @@ pub fn kind(chat: Chat, name: &str) -> Option<ToolKind> {
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]に
 /// する。総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離を
 /// モデルの自己制御に頼らない。tools.md 5節)。タスクチャットの`task_id`は呼び出し元
-/// (orchestration)が文脈から渡す(モデルには公開しない)。
-pub fn execute(conn: &Connection, chat: Chat, tool_name: &str, arguments: &Value) -> Result<Value> {
-    match (chat, tool_name) {
+/// (orchestration)が文脈から渡す(モデルには公開しない)。`image_input`はモデルが画像入力に
+/// 対応するか(`attachments::delivery`)。
+pub fn execute(
+    conn: &Connection,
+    chat: Chat,
+    image_input: bool,
+    tool_name: &str,
+    arguments: &Value,
+) -> Result<ToolOutput> {
+    let result = match (chat, tool_name) {
+        (_, read_attachment::NAME) => {
+            return read_attachment::execute(conn, chat, image_input, arguments)
+        }
         (_, get_task_list::NAME) => get_task_list::execute(conn, arguments),
         (Chat::General, get_task_detail::NAME) => get_task_detail::execute(conn, arguments),
         (Chat::Task(task_id), get_current_task_detail::NAME) => {
@@ -136,7 +174,8 @@ pub fn execute(conn: &Connection, chat: Chat, tool_name: &str, arguments: &Value
         (Chat::Task(task_id), update_step::NAME) => update_step::execute(conn, task_id, arguments),
         (Chat::Task(task_id), delete_step::NAME) => delete_step::execute(conn, task_id, arguments),
         (_, other) => Err(CoreError::UnknownTool(other.to_string())),
-    }
+    };
+    result.map(ToolOutput::from)
 }
 
 /// `step_id`はタスクIDと違いモデルの文脈に頼らず渡させる引数のため
@@ -184,7 +223,7 @@ mod tests {
             for name in &all_names {
                 // 引数は検証の手前で止まってもよいので、空で呼ぶ。未知のツールかどうかだけを見る。
                 let unknown = matches!(
-                    execute(&conn, chat, name, &serde_json::json!({})),
+                    execute(&conn, chat, true, name, &serde_json::json!({})),
                     Err(CoreError::UnknownTool(_))
                 );
                 assert_eq!(!unknown, exposed.contains(name), "{chat}: {name}");
@@ -201,10 +240,12 @@ mod tests {
         let err = execute(
             &conn,
             Chat::Task(task_id),
+            true,
             "no_such_tool",
             &serde_json::json!({}),
         )
-        .unwrap_err();
+        .err()
+        .unwrap();
         assert!(matches!(&err, CoreError::UnknownTool(name) if name == "no_such_tool"));
     }
 }
