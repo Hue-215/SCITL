@@ -1,9 +1,10 @@
 use tauri::ipc::Channel;
 use tauri::State;
 
-use scitl_core::db::messages::{self, Chat, Message};
+use scitl_core::db::messages::Chat;
 use scitl_core::orchestration::{
-    self, delete_message, edit_user_message, retry_reply, run_turn, TurnEvent, UserInput,
+    self, delete_message, edit_user_message, retry_reply, run_turn, MessageView, TurnEvent,
+    UserInput,
 };
 
 use super::with_db;
@@ -127,6 +128,6 @@ pub async fn delete_chat_message(
 pub async fn list_chat_messages(
     state: State<'_, AppState>,
     chat: Chat,
-) -> Result<Vec<Message>, String> {
-    with_db(&state, move |conn| messages::list_for_chat(conn, chat)).await
+) -> Result<Vec<MessageView>, String> {
+    with_db(&state, move |conn| orchestration::list_chat(conn, chat)).await
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { GENERAL_CHAT, taskChat } from './chat'
-import { t } from './i18n'
+import { isolated, t } from './i18n'
 import { taskName, taskProgress } from './taskName'
 import type { Chat, TaskSummary } from './types'
 
@@ -14,7 +14,7 @@ interface SidebarProps {
 }
 
 function taskLabel(task: TaskSummary): string {
-  return t('sidebar.task_label', { title: taskName(task), ...taskProgress(task) })
+  return t('sidebar.task_label', { title: isolated(taskName(task)), ...taskProgress(task) })
 }
 
 function TaskList({

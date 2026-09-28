@@ -57,14 +57,14 @@ export type ResponseEvent =
   | { type: 'tool_call'; id: string | null; name: string; arguments: ToolArguments }
   | { type: 'done'; finish_reason: 'stop' | 'tool_call' | 'length' | 'error' }
 
-// crates/scitl-core/src/orchestration/tool_record.rs の ToolExecutionRecord と一致させる。
-// ツール実行記録の行の`content`と同じ形。
-export interface ToolExecutionRecord {
-  tool: string
-  arguments: unknown
-  result: unknown
-  tool_kind?: 'state' | 'fact'
-  call_id?: string
+// crates/scitl-core/src/orchestration/tool_record.rs の ToolExecutionView と一致させる。
+// 引数・結果は整形済みのJSONの文字列で、見えない文字は`\uXXXX`の形になっている
+// (architecture.md 10節)。画面はそのまま出すだけにする。
+export interface ToolExecutionView {
+  tool: string | null
+  arguments: string
+  result: string
+  is_error: boolean
 }
 
 // crates/scitl-core/src/orchestration/turn_event.rs の TurnEvent と一致させる。
@@ -72,9 +72,10 @@ export interface ToolExecutionRecord {
 export type TurnEvent =
   | { type: 'response'; event: ResponseEvent }
   // `id`は保存したツール実行記録の行のid
-  | { type: 'tool_executed'; id: number; record: ToolExecutionRecord }
+  | { type: 'tool_executed'; id: number; execution: ToolExecutionView }
 
-// crates/scitl-core/src/db/messages.rs の Message と一致させる。
+// crates/scitl-core/src/db/messages.rs の Message と、それに表示の形を足す
+// crates/scitl-core/src/orchestration/chat_view.rs の MessageView と一致させる。
 export interface Message {
   id: number
   task_id: number | null
@@ -92,6 +93,8 @@ export interface Message {
   created_at: string
   // 付けた順(Issue #21)。
   attachments: AttachmentView[]
+  // ツール実行記録の行だけが持つ。
+  tool_execution: ToolExecutionView | null
 }
 
 // crates/scitl-core/src/db/attachments.rs の AttachmentKind・AttachmentView。

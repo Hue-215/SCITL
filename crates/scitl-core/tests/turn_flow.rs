@@ -727,16 +727,18 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
         vec!["tool_call", "done", "tool_executed", "text_delta", "done"]
     );
 
-    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
-    let saved = messages
+    // 知らせた表示は、保存した行を会話の一覧で読んだときと同じ。
+    let views =
+        scitl_core::orchestration::list_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let saved = views
         .iter()
-        .find(|m| m.kind == Kind::ToolExecution)
+        .find(|v| v.message.kind == Kind::ToolExecution)
         .unwrap();
     let executed = &events[2];
-    assert_eq!(executed["id"], saved.id);
+    assert_eq!(executed["id"], saved.message.id);
     assert_eq!(
-        executed["record"],
-        serde_json::from_str::<serde_json::Value>(&saved.content).unwrap()
+        executed["execution"],
+        serde_json::to_value(saved.tool_execution.as_ref().unwrap()).unwrap()
     );
 }
 

@@ -22,7 +22,7 @@ use crate::orchestration::history::{self, HistoryOptions};
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::state_prompt::build_system_prompt;
-use crate::orchestration::tool_record::ToolExecutionRecord;
+use crate::orchestration::tool_record::{ToolExecutionRecord, ToolExecutionView};
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::{SystemPrompts, TurnContext, TurnEvent, TurnEvents};
 use crate::tools::{self, external::ExternalToolset, ToolKind, ToolOutput};
@@ -840,7 +840,10 @@ async fn save_tool_execution(
     })
     .await?;
     // DBのロックを離してから知らせる。
-    events(TurnEvent::ToolExecuted { id, record });
+    events(TurnEvent::ToolExecuted {
+        id,
+        execution: ToolExecutionView::of_record(&record),
+    });
     Ok(())
 }
 

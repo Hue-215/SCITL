@@ -86,6 +86,25 @@ pub fn display_block(s: &str, max: usize) -> String {
     ellipsize(&cleaned, max)
 }
 
+/// 見えない文字(改行以外の制御文字と[`is_invisible_format`]の書式文字)を、JSONの
+/// エスケープの形(`\uXXXX`。基本多言語面の外はサロゲートの対)にして見えるようにする。
+/// 除かずに見せるのは、隠されていたこと自体を確かめられるようにするため。JSONのテキストに
+/// 掛けても、同じ値を表すJSONのまま。
+pub fn reveal_invisible(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if is_invisible_format(c) || (c.is_control() && c != '\n') {
+            let mut units = [0u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{unit:04X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +157,25 @@ mod tests {
             ("日本語".to_string(), true)
         );
         assert_eq!(truncate_chars("日本語", 3), ("日本語".to_string(), false));
+    }
+
+    #[test]
+    fn reveal_escapes_invisible_characters_and_keeps_newlines() {
+        assert_eq!(
+            reveal_invisible("a\u{202E}b\u{200B}c\td\ne"),
+            "a\\u202Eb\\u200Bc\\u0009d\ne"
+        );
+        // 絵文字の結合に使うゼロ幅接合子も、見えないので見える形にする。
+        assert_eq!(reveal_invisible("x\u{200D}y"), "x\\u200Dy");
+    }
+
+    #[test]
+    fn reveal_writes_surrogate_pairs_outside_the_basic_plane() {
+        assert_eq!(reveal_invisible("\u{E0068}"), "\\uDB40\\uDC68");
+        let json = reveal_invisible(&serde_json::to_string("a\u{202E}\u{E0068}").unwrap());
+        assert_eq!(
+            serde_json::from_str::<String>(&json).unwrap(),
+            "a\u{202E}\u{E0068}"
+        );
     }
 }

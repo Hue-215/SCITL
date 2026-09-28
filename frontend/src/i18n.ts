@@ -71,6 +71,14 @@ function fill(text: string, params: Record<string, string | number>): string {
   })
 }
 
+/**
+ * 文言に差し込む、モデル・ユーザー由来の値。双方向制御文字を含んでいても、文言の残りの
+ * 並び順を入れ替えないよう、分離の制御文字(FSI・PDI)で閉じ込める(ui.md 2節「部品ごとの決まり」)。
+ */
+export function isolated(value: string): string {
+  return `\u2068${value}\u2069`
+}
+
 /** `key`の文言。表示言語に無ければ正本、そこにも無ければキーそのものを返す。 */
 export function t(key: MessageKey, params: Record<string, string | number> = {}): string {
   return fill(state().messages.get(key) ?? key, params)
