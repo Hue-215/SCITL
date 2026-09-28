@@ -690,6 +690,7 @@ async fn run_tool_rounds(
             round_trip.push(ChatMessage::Tool {
                 tool_call_id: call.id,
                 content: PromptText::json(&result),
+                images: Vec::new(),
             });
         }
     }

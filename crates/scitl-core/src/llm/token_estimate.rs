@@ -47,7 +47,12 @@ pub fn estimate_message(message: &ChatMessage) -> usize {
         ChatMessage::Tool {
             tool_call_id,
             content,
-        } => tool_call_id.as_deref().map_or(0, estimate_text) + estimate_text(content.as_str()),
+            images,
+        } => {
+            tool_call_id.as_deref().map_or(0, estimate_text)
+                + estimate_text(content.as_str())
+                + images.len() * IMAGE_TOKENS
+        }
     };
     MESSAGE_OVERHEAD + body
 }
@@ -87,11 +92,21 @@ mod tests {
         .unwrap();
         let with_image = ChatMessage::User {
             text: text.clone(),
-            images: vec![image],
+            images: vec![image.clone()],
         };
         assert_eq!(
             estimate_message(&with_image),
-            estimate_message(&ChatMessage::user(text)) + IMAGE_TOKENS
+            estimate_message(&ChatMessage::user(text.clone())) + IMAGE_TOKENS
+        );
+
+        let tool_result = |images| ChatMessage::Tool {
+            tool_call_id: None,
+            content: text.clone(),
+            images,
+        };
+        assert_eq!(
+            estimate_message(&tool_result(vec![image])),
+            estimate_message(&tool_result(Vec::new())) + IMAGE_TOKENS
         );
     }
 

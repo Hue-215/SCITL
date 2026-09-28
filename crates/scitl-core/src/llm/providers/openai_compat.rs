@@ -350,6 +350,11 @@ struct RequestToolCallFunction {
 /// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
 const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is not available.)";
 
+/// ツール結果の画像を載せるために補うユーザー発言の本文。利用者が書いたものではないので、
+/// ユーザー発言の囲み(`PromptText::user_message`)には入れない。
+const TOOL_IMAGES_TEXT: &str =
+    "(Images returned by the tool results above, in the same order as those results.)";
+
 /// 発言列を、userから始まりuserとassistantが交互に並ぶ形に整えて変換する
 /// (architecture.md 3節)。発言の削除やエラー発言の除外で、履歴はアシスタント発言から
 /// 始まったり同じ役割が続いたりする。チャットテンプレートが交互の並びを要求するサーバー
@@ -359,46 +364,75 @@ const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is n
 ///   発言ごとの送信日時は残る
 /// - 最初の発言がアシスタント発言なら、その前にユーザー発言を補う。補う発言に日時は
 ///   付けない(`PromptText::user_message`の`sent_at`)
+/// - ツール結果の画像は、続くtoolの並びが終わった位置に、画像を載せたユーザー発言を
+///   1つ補って送る。toolロールの画像を拒むAPIがあり、toolの並びは呼び出したassistantの
+///   直後に切れ目なく置く必要があるため
 ///
-/// ツールの往復(`tool_calls`を持つassistantに続くtool)には手を加えない。
+/// ツールの往復(`tool_calls`を持つassistantに続くtool)には、上の画像のほかは手を加えない。
 fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
     let mut out: Vec<RequestMessage> = Vec::with_capacity(messages.len() + 1);
+    let mut tool_images: Vec<String> = Vec::new();
     for message in messages {
-        match (out.last_mut(), to_request_message(message)) {
-            (Some(RequestMessage::User { content: prev }), RequestMessage::User { content }) => {
-                prev.append(content);
+        match message {
+            ChatMessage::Tool { images, .. } => {
+                tool_images.extend(images.iter().map(InlineImage::data_url));
             }
-            (
-                Some(RequestMessage::Assistant {
-                    content: prev,
-                    tool_calls: prev_calls,
-                }),
-                RequestMessage::Assistant {
-                    content,
-                    tool_calls,
-                },
-            ) => {
-                if let Some(content) = content {
-                    match prev {
-                        Some(prev) => append_paragraph(prev, &content),
-                        None => *prev = Some(content),
-                    }
+            _ => flush_tool_images(&mut out, &mut tool_images),
+        }
+        push_merged(&mut out, to_request_message(message));
+    }
+    flush_tool_images(&mut out, &mut tool_images);
+    out
+}
+
+fn flush_tool_images(out: &mut Vec<RequestMessage>, images: &mut Vec<String>) {
+    if images.is_empty() {
+        return;
+    }
+    push_merged(
+        out,
+        RequestMessage::User {
+            content: UserContent::new(TOOL_IMAGES_TEXT.to_string(), std::mem::take(images)),
+        },
+    );
+}
+
+/// 同じ役割が続いたら1つにまとめ、会話がアシスタント発言から始まるならユーザー発言を補って
+/// 積む([`to_request_messages`])。
+fn push_merged(out: &mut Vec<RequestMessage>, message: RequestMessage) {
+    match (out.last_mut(), message) {
+        (Some(RequestMessage::User { content: prev }), RequestMessage::User { content }) => {
+            prev.append(content);
+        }
+        (
+            Some(RequestMessage::Assistant {
+                content: prev,
+                tool_calls: prev_calls,
+            }),
+            RequestMessage::Assistant {
+                content,
+                tool_calls,
+            },
+        ) => {
+            if let Some(content) = content {
+                match prev {
+                    Some(prev) => append_paragraph(prev, &content),
+                    None => *prev = Some(content),
                 }
-                prev_calls.extend(tool_calls);
             }
-            (last, message) => {
-                if matches!(message, RequestMessage::Assistant { .. })
-                    && matches!(last, None | Some(RequestMessage::System { .. }))
-                {
-                    out.push(to_request_message(&ChatMessage::user(
-                        PromptText::user_message(PLACEHOLDER_USER_TEXT, None),
-                    )));
-                }
-                out.push(message);
+            prev_calls.extend(tool_calls);
+        }
+        (last, message) => {
+            if matches!(message, RequestMessage::Assistant { .. })
+                && matches!(last, None | Some(RequestMessage::System { .. }))
+            {
+                out.push(to_request_message(&ChatMessage::user(
+                    PromptText::user_message(PLACEHOLDER_USER_TEXT, None),
+                )));
             }
+            out.push(message);
         }
     }
-    out
 }
 
 fn append_paragraph(prev: &mut String, next: &str) {
@@ -424,9 +458,11 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
             content: content.clone(),
             tool_calls: tool_calls.iter().map(to_request_tool_call).collect(),
         },
+        // 画像は`to_request_messages`が続くユーザー発言として送る。
         ChatMessage::Tool {
             tool_call_id,
             content,
+            images: _,
         } => RequestMessage::Tool {
             tool_call_id: tool_call_id.clone(),
             content: content.as_str().to_string(),
@@ -1042,6 +1078,85 @@ mod tests {
         assert_eq!(parts[1]["type"], "image_url");
     }
 
+    fn tool_result(id: &str, images: Vec<InlineImage>) -> ChatMessage {
+        ChatMessage::Tool {
+            tool_call_id: Some(id.to_string()),
+            content: PromptText::json(&serde_json::json!({})),
+            images,
+        }
+    }
+
+    #[test]
+    fn sends_tool_result_images_in_one_user_message_after_the_tool_results() {
+        let sent = request_json(&[
+            ChatMessage::System("s".to_string()),
+            user("u", "2026-09-22T04:12:00Z"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![
+                    tool_call("call_1"),
+                    tool_call("call_2"),
+                    tool_call("call_3"),
+                ],
+            },
+            tool_result("call_1", vec![png()]),
+            tool_result("call_2", Vec::new()),
+            tool_result("call_3", vec![png()]),
+        ]);
+
+        assert_eq!(
+            roles(&sent),
+            vec![
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "tool",
+                "tool",
+                "user"
+            ]
+        );
+        // toolロールには画像を載せない(拒むAPIがある)。
+        for tool in &sent[3..6] {
+            assert!(tool["content"].is_string());
+        }
+        let parts = sent[6]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["text"], TOOL_IMAGES_TEXT);
+        assert_eq!(parts.len(), 3);
+        assert!(parts[1..].iter().all(|p| p["type"] == "image_url"));
+    }
+
+    #[test]
+    fn sends_tool_result_images_before_the_next_round() {
+        let sent = request_json(&[
+            ChatMessage::System("s".to_string()),
+            user("u", "2026-09-22T04:12:00Z"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![tool_call("call_1")],
+            },
+            tool_result("call_1", vec![png()]),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![tool_call("call_2")],
+            },
+            tool_result("call_2", Vec::new()),
+        ]);
+
+        assert_eq!(
+            roles(&sent),
+            vec![
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "user",
+                "assistant",
+                "tool"
+            ]
+        );
+    }
+
     #[test]
     fn merges_assistant_text_into_a_following_tool_call() {
         let sent = request_json(&[
@@ -1055,6 +1170,7 @@ mod tests {
             ChatMessage::Tool {
                 tool_call_id: Some("call_1".to_string()),
                 content: PromptText::json(&serde_json::json!({})),
+                images: Vec::new(),
             },
         ]);
 
@@ -1074,6 +1190,7 @@ mod tests {
                 ChatMessage::Tool {
                     tool_call_id: Some(id.to_string()),
                     content: PromptText::json(&serde_json::json!({})),
+                    images: Vec::new(),
                 },
             ]
         };
@@ -1162,6 +1279,7 @@ mod tests {
         let with_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
             tool_call_id: Some("call_1".to_string()),
             content: PromptText::json(&serde_json::json!({})),
+            images: Vec::new(),
         }))
         .unwrap();
         assert_eq!(
@@ -1174,6 +1292,7 @@ mod tests {
         let without_id = serde_json::to_value(to_request_message(&ChatMessage::Tool {
             tool_call_id: None,
             content: PromptText::json(&serde_json::json!({})),
+            images: Vec::new(),
         }))
         .unwrap();
         assert_eq!(

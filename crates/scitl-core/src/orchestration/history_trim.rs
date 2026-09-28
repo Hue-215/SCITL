@@ -74,6 +74,7 @@ mod tests {
             ChatMessage::Tool {
                 tool_call_id: Some("call_1".to_string()),
                 content: PromptText::untrusted("result"),
+                images: Vec::new(),
             },
         ]
     }

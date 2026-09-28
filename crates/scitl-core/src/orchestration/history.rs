@@ -208,6 +208,8 @@ fn fact_round_trip(m: &Message, replied_turns: &HashSet<String>) -> Option<[Chat
             // 結果は外部から来た文字列を含む。保存したままの値に送る直前で無害化する
             // (architecture.md 10節)。
             content: PromptText::json(&record.result),
+            // ツール結果の画像は、結果を得たターンでだけ送る(tools.md「添付の読み込み」)。
+            images: Vec::new(),
         },
     ])
 }
@@ -422,9 +424,11 @@ mod tests {
             ChatMessage::Tool {
                 tool_call_id,
                 content,
+                images,
             } => {
                 assert_eq!(tool_call_id.as_deref(), Some(id.as_str()));
                 assert_eq!(content.as_str(), r#"{"text":"晴れ"}"#);
+                assert!(images.is_empty());
             }
             other => panic!("expected a tool result, got {other:?}"),
         }

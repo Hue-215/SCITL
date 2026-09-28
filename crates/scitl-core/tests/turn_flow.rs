@@ -801,6 +801,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
         ChatMessage::Tool {
             tool_call_id,
             content,
+            ..
         } => {
             assert_eq!(tool_call_id.as_deref(), Some("call_1"));
             assert!(content.as_str().contains("買い出し"));
