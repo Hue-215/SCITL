@@ -1,12 +1,6 @@
 import { t } from './i18n'
-import {
-  isErrorResult,
-  operationSourceLabel,
-  parseToolExecution,
-  type ThoughtItem,
-  type ToolExecutionContent,
-} from './thinking'
-import type { Message } from './types'
+import { operationSourceLabel, type ThoughtItem } from './thinking'
+import type { Message, ToolExecutionView } from './types'
 
 // 「思考・ツール」の折りたたみ表示(Issue #42、docs/spec/legacy/frontend.md 1節)。
 // モデルの思考(reasoning)と内部ツール呼び出しを発生順に混在させて表示する。
@@ -21,24 +15,31 @@ import type { Message } from './types'
 // 思考・ツール引数・結果はすべてプレーンテキストとして描画する(JSXのテキスト補間と
 // <pre>のみを使い、dangerouslySetInnerHTMLは使わない)。いずれもモデルや外部ツールが
 // 出したものをそのまま確かめるための表示なので、本文用のMarkdown描画(Markdown.tsx)は
-// 通さない。整形しない分、ここからリンクや画像が作られることも無い。
+// 通さない。整形しない分、ここからリンクや画像が作られることも無い。引数・結果は
+// Rust側が整形し、見えない文字を見える形にしてある(`ToolExecutionView`)。
 
 // ツール呼び出し1件の引数と結果。ターンの中の呼び出しと操作の記録のどちらでも同じ形で見せる。
-function ToolCallDetail({ content }: { content: ToolExecutionContent }) {
+function ToolCallDetail({ execution }: { execution: ToolExecutionView }) {
   return (
     <div className="tool-call-detail">
       <p className="tool-call-label">{t('chat.tool_detail_args')}</p>
-      <pre>{JSON.stringify(content.arguments ?? {}, null, 2)}</pre>
+      <pre>{execution.arguments}</pre>
       <p className="tool-call-label">{t('chat.tool_detail_result')}</p>
-      <pre>{JSON.stringify(content.result ?? null, null, 2)}</pre>
+      <pre>{execution.result}</pre>
     </div>
   )
+}
+
+// ツール名はモデルが書いたものなので、続く「()」や失敗の印の並びを入れ替えないよう閉じ込める
+// (ui.md 2節「部品ごとの決まり」)。
+function ToolName({ execution }: { execution: ToolExecutionView }) {
+  return <bdi>{execution.tool ?? t('chat.tool_unknown')}</bdi>
 }
 
 export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
   if (items.length === 0) return null
 
-  const hasError = items.some((item) => item.kind === 'tool' && item.isError)
+  const hasError = items.some((item) => item.kind === 'tool' && item.execution.is_error)
 
   return (
     <details className="thinking-tools">
@@ -58,10 +59,12 @@ export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
             <li key={`tool-${item.id}`}>
               <details className="tool-call">
                 <summary>
-                  {item.content.tool ?? t('chat.tool_unknown')}()
-                  {item.isError && <span className="thinking-tools-error">{t('chat.tool_error')}</span>}
+                  <ToolName execution={item.execution} />()
+                  {item.execution.is_error && (
+                    <span className="thinking-tools-error">{t('chat.tool_error')}</span>
+                  )}
                 </summary>
-                <ToolCallDetail content={item.content} />
+                <ToolCallDetail execution={item.execution} />
               </details>
             </li>
           ),
@@ -75,16 +78,18 @@ export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
 /// 独立した1行として表示する。行末に経路のラベルを出し、ターンの中の呼び出しと見分けられる
 /// ようにする(docs/spec/legacy/frontend.md 1節)。
 export function OperationLine({ message }: { message: Message }) {
-  const content = parseToolExecution(message.content)
-  const isError = isErrorResult(content.result)
+  const execution = message.tool_execution
+  if (!execution) return null
   return (
     <details className="operation-line">
       <summary>
-        <span className="operation-name">{content.tool ?? t('chat.tool_unknown')}()</span>
-        {isError && <span className="thinking-tools-error">{t('chat.tool_error')}</span>}
+        <span className="operation-name">
+          <ToolName execution={execution} />()
+        </span>
+        {execution.is_error && <span className="thinking-tools-error">{t('chat.tool_error')}</span>}
         <span className="operation-label">{t(operationSourceLabel(message.source))}</span>
       </summary>
-      <ToolCallDetail content={content} />
+      <ToolCallDetail execution={execution} />
     </details>
   )
 }

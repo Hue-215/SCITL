@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ConfirmButton } from './Dialog'
-import { t } from './i18n'
+import { isolated, t } from './i18n'
 import { isCommitEnter } from './keyboard'
 import { taskName, taskProgress } from './taskName'
 import type { TaskDetail } from './types'
@@ -84,7 +84,7 @@ export default function TaskHeader({
           <ConfirmButton
             label={t('common.delete')}
             confirmTitle={t('task_header.delete_dialog_title')}
-            confirmMessage={t('task_header.delete_dialog_message', { title: name })}
+            confirmMessage={t('task_header.delete_dialog_message', { title: isolated(name) })}
             confirmLabel={t('common.delete')}
             onConfirm={onDelete}
             disabled={disabled}

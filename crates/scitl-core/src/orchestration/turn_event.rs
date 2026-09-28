@@ -5,7 +5,7 @@
 use serde::Serialize;
 
 use crate::llm::ResponseEvent;
-use crate::orchestration::ToolExecutionRecord;
+use crate::orchestration::ToolExecutionView;
 
 /// どのタスクのイベントかは持たない。受け口はターンの呼び出しごとに渡されるので、
 /// 呼び出し側が知っている。
@@ -14,11 +14,11 @@ use crate::orchestration::ToolExecutionRecord;
 pub enum TurnEvent {
     /// アダプタが渡したイベントをそのまま転送する(`llm::LlmAdapter::send`の約束事に従う)。
     Response { event: ResponseEvent },
-    /// ツールを1件実行し、実行記録を保存した。`id`は保存した行のid、`record`はその行の
-    /// `content`と同じ値。
+    /// ツールを1件実行し、実行記録を保存した。`id`は保存した行のid、`execution`はその行を
+    /// 会話の一覧([`crate::orchestration::list_chat`])で読んだときと同じ表示。
     ToolExecuted {
         id: i64,
-        record: ToolExecutionRecord,
+        execution: ToolExecutionView,
     },
 }
 

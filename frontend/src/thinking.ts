@@ -1,5 +1,5 @@
 import type { MessageKey } from './i18n'
-import type { Message, ToolExecutionRecord, TurnEvent } from './types'
+import type { Message, ToolExecutionView, TurnEvent } from './types'
 
 // 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック(Issue #42)。
 // コンポーネント本体は./ThinkingTools.tsxに置き、こちらは純粋な変換関数のみを持つ
@@ -51,17 +51,6 @@ export function finalEntryOf(entries: Message[]): Message {
   return entries[entries.length - 1]
 }
 
-// 画面が読むツール実行記録の項目。保存済みの行は読めた形を保証しないので、どれも欠けうる。
-export type ToolExecutionContent = Partial<Pick<ToolExecutionRecord, 'tool' | 'arguments' | 'result'>>
-
-export function parseToolExecution(content: string): ToolExecutionContent {
-  try {
-    return JSON.parse(content) as ToolExecutionContent
-  } catch {
-    return {}
-  }
-}
-
 /// 操作の記録の行末に出す経路のラベル(`messages.source`)。知らない値は汎用のラベルにし、
 /// 値そのものは出さない(MCP経由の`mcp:`の後ろは外部のクライアントが名乗る名前になる)。
 export function operationSourceLabel(source: string | null): MessageKey {
@@ -70,19 +59,10 @@ export function operationSourceLabel(source: string | null): MessageKey {
   return 'chat.source_unknown'
 }
 
-export function isErrorResult(result: unknown): boolean {
-  return typeof result === 'object' && result !== null && 'error' in (result as Record<string, unknown>)
-}
-
 // `id`は描画のキー。保存済みの項目では行のid、応答待ちの間の思考では項目の位置。
 export type ThoughtItem =
   | { kind: 'reasoning'; id: number; text: string }
-  | { kind: 'tool'; id: number; content: ToolExecutionContent; isError: boolean }
-
-/// ツール実行記録1件の項目。保存済みの行からも、応答待ちの間に届いた知らせからもこれで作る。
-function toolItem(id: number, content: ToolExecutionContent): ThoughtItem {
-  return { kind: 'tool', id, content, isError: isErrorResult(content.result) }
-}
+  | { kind: 'tool'; id: number; execution: ToolExecutionView }
 
 /// 1ターン分のentriesから、発生順の思考・ツール項目列を組み立てる。各行の`reasoning`は
 /// そのラウンド(または最終応答)より前に生じた思考であるため、同じ行のツール実行より
@@ -94,8 +74,8 @@ export function buildThoughtItems(entries: Message[]): ThoughtItem[] {
     if (entry.reasoning) {
       items.push({ kind: 'reasoning', id: entry.id, text: entry.reasoning })
     }
-    if (entry.kind === 'tool_execution') {
-      items.push(toolItem(entry.id, parseToolExecution(entry.content)))
+    if (entry.tool_execution) {
+      items.push({ kind: 'tool', id: entry.id, execution: entry.tool_execution })
     }
   }
   return items
@@ -115,7 +95,8 @@ export const NO_LIVE_THOUGHTS: LiveThoughts = { items: [], reasoningOpen: false 
 /// 描かず、実行の知らせ(`tool_executed`)で結果と一緒に出す。
 export function appendTurnEvent(live: LiveThoughts, event: TurnEvent): LiveThoughts {
   if (event.type === 'tool_executed') {
-    return { items: [...live.items, toolItem(event.id, event.record)], reasoningOpen: false }
+    const item: ThoughtItem = { kind: 'tool', id: event.id, execution: event.execution }
+    return { items: [...live.items, item], reasoningOpen: false }
   }
   const response = event.event
   switch (response.type) {
