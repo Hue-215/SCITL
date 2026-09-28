@@ -338,7 +338,7 @@ mod tests {
             messages::insert_message(
                 &self.conn,
                 NewMessage {
-                    task_id: Some(self.task_id),
+                    chat: Chat::Task(self.task_id),
                     role,
                     content,
                     kind,
@@ -361,7 +361,7 @@ mod tests {
             messages::insert_message(
                 &self.conn,
                 NewMessage {
-                    task_id: Some(self.task_id),
+                    chat: Chat::Task(self.task_id),
                     role: Role::User,
                     content: text,
                     kind: Kind::Normal,
@@ -583,7 +583,7 @@ mod tests {
         messages::insert_message(
             &f.conn,
             NewMessage {
-                task_id: None,
+                chat: Chat::General,
                 role: Role::User,
                 content: "今週は何をする?",
                 kind: Kind::Normal,

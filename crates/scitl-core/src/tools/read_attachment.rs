@@ -112,7 +112,7 @@ mod tests {
             let message_id = messages::insert_message(
                 &self.conn,
                 NewMessage {
-                    task_id: self.chat.task_id(),
+                    chat: self.chat,
                     role: Role::User,
                     content: "見て",
                     kind: Kind::Normal,

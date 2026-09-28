@@ -305,7 +305,7 @@ mod tests {
             messages::insert_message(
                 &self.conn,
                 NewMessage {
-                    task_id: chat.task_id(),
+                    chat,
                     role,
                     content,
                     kind,

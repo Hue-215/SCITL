@@ -136,7 +136,7 @@ fn record(
     messages::insert_message(
         conn,
         NewMessage {
-            task_id: Some(task_id),
+            chat: Chat::Task(task_id),
             role: Role::Tool,
             content: &content,
             kind: Kind::ToolExecution,

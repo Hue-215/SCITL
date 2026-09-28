@@ -244,7 +244,7 @@ mod tests {
         messages::insert_message(
             conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::User,
                 content: "見て",
                 kind: Kind::Normal,

@@ -98,7 +98,7 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
     messages::insert_message(
         conn,
         NewMessage {
-            task_id: chat.task_id(),
+            chat,
             role: Role::User,
             content: text,
             kind: Kind::Normal,
@@ -399,7 +399,7 @@ impl Attempt {
         messages::insert_message(
             conn,
             NewMessage {
-                task_id: self.chat.task_id(),
+                chat: self.chat,
                 role,
                 content,
                 kind,
