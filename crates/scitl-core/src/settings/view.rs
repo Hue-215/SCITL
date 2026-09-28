@@ -24,6 +24,7 @@ use crate::text;
 use crate::tools::external;
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ProviderView {
     pub id: String,
     pub name: String,
@@ -40,6 +41,7 @@ pub struct ProviderView {
 
 /// モデル表の1行(Issue #65)。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ModelView {
     /// 登録した名前。操作の鍵として送り返すだけで、画面には描かない(描くのは`label`)。
     pub name: String,
@@ -55,6 +57,7 @@ pub struct ModelView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum McpEndpointView {
     Stdio {
@@ -71,6 +74,7 @@ pub enum McpEndpointView {
 /// 設定画面へ渡すツール1件。引数スキーマは表示に使わないので渡さない
 /// (表示に不要なサーバー由来のデータをWebViewへ出さない)。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct McpToolView {
     /// サーバーが返したままの名前。有効化を切り替えるときの鍵として送り返すだけで、
     /// 画面には描かない(描くのは`label`)。
@@ -84,6 +88,7 @@ pub struct McpToolView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct McpServerView {
     pub id: String,
     pub name: String,
@@ -103,6 +108,7 @@ pub struct McpServerView {
 /// 一般設定。既定値を持つものは`ToolSettingsView`と同じく、設定値(未設定は`None`)と
 /// 未設定時に実際に使われる既定値の両方を渡す(既定値をTS側に書き写さない理由も同じ)。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct GeneralSettingsView {
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
@@ -120,6 +126,7 @@ pub struct GeneralSettingsView {
 /// 実際に使われる既定値も渡す。画面はプレースホルダにこれを出すだけで、既定値を
 /// TS側に書き写さない(2箇所に持つと必ずどちらかが古くなる)。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ToolSettingsView {
     pub max_rounds_per_turn: Option<u32>,
     pub total_timeout_secs: Option<u64>,
@@ -128,6 +135,7 @@ pub struct ToolSettingsView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct SettingsView {
     /// 起動時に設定ファイルを読めなかった理由(Issue #155)。あれば設定は保存されない。
     pub config_error: Option<String>,
@@ -143,6 +151,7 @@ pub struct SettingsView {
 /// チャット入力欄の下のモデル選択・思考の強さ選択(Issue #64)。設定画面の[`SettingsView`]
 /// とは別に持ち、選ぶのに要るものだけを渡す。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ChatModelsView {
     /// 一覧に出すモデル(設定画面で表示にしたもの)。プロバイダーの登録順、その中はモデルの
     /// 登録順。
@@ -152,6 +161,7 @@ pub struct ChatModelsView {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ModelChoice {
     pub provider_id: String,
     pub provider_name: String,
@@ -172,6 +182,7 @@ impl ModelChoice {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct SelectedModel {
     #[serde(flatten)]
     pub choice: ModelChoice,
@@ -184,6 +195,7 @@ pub struct SelectedModel {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AttachmentDeliveries {
     pub text: Delivery,
     pub image: Delivery,
@@ -290,6 +302,7 @@ pub(super) fn build(
 
 /// プロバイダーの一覧から取得したモデル1件(Issue #33)。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AvailableModel {
     /// サーバーが返したままの名前。登録するときに送り返す。
     pub name: String,

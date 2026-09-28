@@ -13,6 +13,7 @@ use crate::error::{CoreError, Result};
 /// 型で防ぐため(tools.md 1節が修正した「対象の取り違え」と同種の事故)。
 /// 画面とは`{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", content = "task_id", rename_all = "snake_case")]
 pub enum Chat {
     General,
@@ -39,6 +40,7 @@ impl fmt::Display for Chat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
@@ -73,6 +75,7 @@ impl FromSql for Role {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Normal,
@@ -150,6 +153,7 @@ pub struct NewMessage<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Message {
     pub id: i64,
     pub task_id: Option<i64>,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { discardStagedAttachment, failureText, getAttachmentLimits, stageAttachment } from './api'
 import { formatBytes, t } from './i18n'
-import type { AttachmentKind, AttachmentLimits } from './types'
+import type { AttachmentKind, PickingLimits } from './types'
 
 /** 送信前の添付1件。 */
 export type StagedItem = { key: string; name: string } & (
@@ -39,7 +39,7 @@ export interface StagedAttachments {
 /** 入力欄の送信前の添付。選んだファイルはRust側で判定させて預け、トークンで持つ。 */
 export function useStagedAttachments(): StagedAttachments {
   const [items, setItems] = useState<StagedItem[]>([])
-  const [limits, setLimits] = useState<AttachmentLimits | null>(null)
+  const [limits, setLimits] = useState<PickingLimits | null>(null)
   // 判定を待つ間に取り消した添付。戻ってきたトークンをその場で破棄する。
   const withdrawn = useRef(new Set<string>())
   const nextKey = useRef(0)

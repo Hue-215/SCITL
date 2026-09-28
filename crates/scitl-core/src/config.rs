@@ -14,6 +14,7 @@ use crate::i18n::Language;
 /// 対応するプロバイダーAPIの方言。現状はOpenAI互換チャットコンプリーションAPIのみ
 /// (architecture.md 2節)。将来プロバイダーを追加する際はここにバリアントを足す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ApiFormat {
     OpenAiCompat,
@@ -91,6 +92,7 @@ fn visible_by_default() -> bool {
 
 /// モデルの能力のうち、対応の有無で表すもの。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Image,
@@ -100,6 +102,7 @@ pub enum Capability {
 
 /// 思考の強さ。リクエストでの書き方は方言ごとにアダプタが決める。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
     /// 思考させない。

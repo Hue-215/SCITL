@@ -112,6 +112,7 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
 
 /// [`create_task`]の結果。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum TaskCreation {
     Created {

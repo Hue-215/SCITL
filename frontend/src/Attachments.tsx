@@ -3,7 +3,7 @@ import { failureText, readImageAttachment, readTextAttachment, revealAttachment 
 import Chip from './Chip'
 import Dialog from './Dialog'
 import { formatBytes, t } from './i18n'
-import type { AttachmentDelivery, AttachmentKind, AttachmentView } from './types'
+import type { AttachmentDeliveries, AttachmentView } from './types'
 import type { StagedAttachments } from './useStagedAttachments'
 
 // 添付ファイル(Issue #21)。種別の判定・大きさの上限・モデルへの渡し方はRust側が決め、
@@ -181,7 +181,7 @@ export function StagedAttachmentChips({
 }: {
   staged: StagedAttachments
   // 選んでいるモデルの、種別ごとの渡し方。モデルが未選択なら警告は出さない。
-  deliveries: Record<AttachmentKind, AttachmentDelivery> | null
+  deliveries: AttachmentDeliveries | null
   disabled: boolean
 }) {
   if (staged.items.length === 0) return null

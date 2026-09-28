@@ -45,6 +45,7 @@ impl Limits {
 /// 画面へ渡す上限。種別は中身を読むまで分からないので、種別ごとの上限は渡さず
 /// (預けたときの判定の結果として返る)、どの種別でも受け付けない大きさだけを渡す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct PickingLimits {
     pub largest_bytes: u64,
     pub per_message: usize,

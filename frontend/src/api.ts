@@ -1,7 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
-  AttachmentLimits,
+  PickingLimits,
   AvailableModel,
   Capability,
   Chat,
@@ -9,13 +9,13 @@ import type {
   ExportSummary,
   Language,
   LinkInspection,
-  Message,
+  MessageView,
   ReasoningEffort,
   SettingsView,
   StageOutcome,
   TaskCreation,
-  TaskDetail,
-  TaskSummary,
+  TaskDetailView,
+  TaskListItem,
   TurnEvent,
 } from './types'
 
@@ -29,11 +29,11 @@ import type {
 export function failureText(e: unknown): string {
   return String(e)
 }
-export function getTaskDetail(taskId: number): Promise<TaskDetail> {
+export function getTaskDetail(taskId: number): Promise<TaskDetailView> {
   return invoke('get_task_detail', { taskId })
 }
 
-export function listTasks(): Promise<TaskSummary[]> {
+export function listTasks(): Promise<TaskListItem[]> {
   return invoke('list_tasks')
 }
 
@@ -93,7 +93,7 @@ export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
 }
 
-export function getAttachmentLimits(): Promise<AttachmentLimits> {
+export function getAttachmentLimits(): Promise<PickingLimits> {
   return invoke('get_attachment_limits')
 }
 
@@ -119,7 +119,7 @@ export function openExportFolder(): Promise<void> {
   return invoke('open_export_folder')
 }
 
-export function listChatMessages(chat: Chat): Promise<Message[]> {
+export function listChatMessages(chat: Chat): Promise<MessageView[]> {
   return invoke('list_chat_messages', { chat })
 }
 

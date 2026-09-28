@@ -39,6 +39,7 @@ pub(super) fn is_error_result(result: &Value) -> bool {
 /// 表示なので、引数と結果は整形したJSONのまま、見えない文字だけを見える形にして渡す
 /// (architecture.md 10節)。どの文字が見えないかの判定を画面に写さないため、ここで作る。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ToolExecutionView {
     /// 呼び出したツールの名前。記録から読めなければ`None`。
     tool: Option<String>,

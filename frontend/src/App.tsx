@@ -25,13 +25,12 @@ import TaskHeader from './TaskHeader'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
 import { buildThoughtItems, finalEntryOf, groupMessages } from './thinking'
 import type {
-  AttachmentDelivery,
-  AttachmentKind,
+  AttachmentDeliveries,
   Chat,
-  Message,
+  MessageView,
   SelectedModel,
-  TaskDetail,
-  TaskSummary,
+  TaskDetailView,
+  TaskListItem,
 } from './types'
 import { useChatRequests } from './useChatRequests'
 import { useStagedAttachments } from './useStagedAttachments'
@@ -56,7 +55,7 @@ function EntryBody({
 }
 
 export default function App() {
-  const [tasks, setTasks] = useState<TaskSummary[]>([])
+  const [tasks, setTasks] = useState<TaskListItem[]>([])
   // 表示中の会話。起動したら総合チャットを開く(タスクを離れたときの戻り先でもある)。
   const [chat, setChat] = useState<Chat>(GENERAL_CHAT)
   const [adding, setAdding] = useState(false)
@@ -64,17 +63,14 @@ export default function App() {
   // モデルの選択や設定の変更で解消しうるので、それらを変えたら外す(次の追加で改めて判定される)。
   const [addBlocked, setAddBlocked] = useState<string | null>(null)
   // 表示中のタスク。総合チャットと、タスクを読み込むまでの間はnull。
-  const [task, setTask] = useState<TaskDetail | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [task, setTask] = useState<TaskDetailView | null>(null)
+  const [messages, setMessages] = useState<MessageView[]>([])
   const [draft, setDraft] = useState('')
   // 入力欄の送信前の添付(Issue #21)。本文と同じく、会話を切り替えても残す。
   const staged = useStagedAttachments()
   const fileInputRef = useRef<HTMLInputElement>(null)
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
-  const [deliveries, setDeliveries] = useState<Record<
-    AttachmentKind,
-    AttachmentDelivery
-  > | null>(null)
+  const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)
   const onModelSelected = useCallback(
     (selected: SelectedModel | null) => setDeliveries(selected?.attachments ?? null),
     [],
@@ -240,7 +236,7 @@ export default function App() {
   }
 
   // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。
-  const submitEdit = async (message: Message) => {
+  const submitEdit = async (message: MessageView) => {
     const messageId = message.id
     const text = editDraft.trim()
     if ((!text && message.attachments.length === 0) || disableActions) return

@@ -22,6 +22,7 @@ use crate::error::{CoreError, Result};
 
 /// [`Staged::stage`]の結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum StageOutcome {
     Staged {
@@ -38,6 +39,7 @@ pub enum StageOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum Rejection {
     TooLarge {

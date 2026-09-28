@@ -83,8 +83,17 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # 画面へ渡す型のTS定義(`frontend/src/bindings/`)は`cargo test`が生成する。消してから
+      # 生成し直すので、生成し直し忘れも、もう無い型の定義が残っているのも次の段で拾える。
       - name: テスト
-        run: cargo test --workspace --locked
+        run: |
+          rm -rf frontend/src/bindings
+          cargo test --workspace --locked
+
+      - name: 型定義の生成物
+        run: |
+          git status --porcelain -- frontend/src/bindings | tee /tmp/bindings-diff
+          test ! -s /tmp/bindings-diff
 
   frontend:
     runs-on: ubuntu-24.04

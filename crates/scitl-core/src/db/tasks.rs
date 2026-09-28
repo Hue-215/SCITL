@@ -6,6 +6,7 @@ use crate::error::{CoreError, Result};
 use crate::text::{collapse_whitespace, ellipsize, truncate_chars};
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Task {
     pub id: i64,
     pub title: Option<String>,
@@ -71,6 +72,7 @@ impl TaskStatus {
 /// サイドバーのタスク一覧表示に必要な最小限の情報。
 /// 本文(description)は一覧に出さないため含めない。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskSummary {
     pub id: i64,
     pub title: Option<String>,
@@ -84,6 +86,7 @@ pub struct TaskSummary {
 /// `title`は未設定(null)のまま返し、書き換えない
 /// (docs/spec/rebuild/data-model.md「title は TEXT NULL」)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskListItem {
     #[serde(flatten)]
     pub summary: TaskSummary,
@@ -97,6 +100,7 @@ pub struct TaskListItem {
 /// `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する
 /// (docs/spec/rebuild/tools.md「モデルには `title: null` をそのまま見せる」)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskDetailView {
     #[serde(flatten)]
     pub task: Task,

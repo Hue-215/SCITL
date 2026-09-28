@@ -14,6 +14,7 @@ use crate::config::{Capability, ModelConfig};
 
 /// 解決済みのモデル能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ModelCapabilities {
     pub image: bool,
     pub tools: bool,

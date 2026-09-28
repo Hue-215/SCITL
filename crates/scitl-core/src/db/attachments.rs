@@ -11,6 +11,7 @@ use super::now_iso8601;
 use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentKind {
     Text,
@@ -59,6 +60,7 @@ pub struct NewAttachment {
 
 /// 画面に渡す形。テキストの本文と実体は載せない(開いたときに別のコマンドで引く)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AttachmentView {
     pub id: i64,
     pub original_name: String,

@@ -2,10 +2,10 @@ import { useState } from 'react'
 import { GENERAL_CHAT, taskChat } from './chat'
 import { isolated, t } from './i18n'
 import { taskName, taskProgress } from './taskName'
-import type { Chat, TaskSummary } from './types'
+import type { Chat, TaskListItem } from './types'
 
 interface SidebarProps {
-  tasks: TaskSummary[]
+  tasks: TaskListItem[]
   selected: Chat
   onSelect: (chat: Chat) => void
   onAddTask: () => void
@@ -13,7 +13,7 @@ interface SidebarProps {
   onOpenSettings: () => void
 }
 
-function taskLabel(task: TaskSummary): string {
+function taskLabel(task: TaskListItem): string {
   return t('sidebar.task_label', { title: isolated(taskName(task)), ...taskProgress(task) })
 }
 
@@ -22,7 +22,7 @@ function TaskList({
   selectedTaskId,
   onSelect,
 }: {
-  tasks: TaskSummary[]
+  tasks: TaskListItem[]
   selectedTaskId: number | null
   onSelect: (chat: Chat) => void
 }) {

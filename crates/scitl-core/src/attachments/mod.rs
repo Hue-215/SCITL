@@ -25,6 +25,7 @@ use crate::error::{CoreError, Result};
 /// 添付をモデルへどう渡すか(Issue #21)。履歴の組み立てと、画面が添付に出す警告
 /// (`settings::ChatModelsView`)の両方がこれで決める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Delivery {
     /// テキストの本文を送る。

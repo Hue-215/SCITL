@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// 表示言語。値は言語ファイルの名前(`lang/{code}.json`)と、画面の`lang`属性に使う。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     Ja,

@@ -12,6 +12,7 @@ use crate::text::encode_all_but;
 
 /// 開いてよいかどうかと、その理由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinkVerdict {
     Web,
@@ -28,6 +29,7 @@ pub enum LinkVerdict {
 
 /// 確認ダイアログに出す内容。`url`は受け取った文字列をそのまま返す(表示用)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct LinkInspection {
     pub url: String,
     pub verdict: LinkVerdict,

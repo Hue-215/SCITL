@@ -1,5 +1,5 @@
 import type { MessageKey } from './i18n'
-import type { Message, ToolExecutionView, TurnEvent } from './types'
+import type { MessageView, ToolExecutionView, TurnEvent } from './types'
 
 // 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック(Issue #42)。
 // コンポーネント本体は./ThinkingTools.tsxに置き、こちらは純粋な変換関数のみを持つ
@@ -9,12 +9,12 @@ import type { Message, ToolExecutionView, TurnEvent } from './types'
 export interface TurnGroup {
   kind: 'turn'
   turnId: string
-  entries: Message[]
+  entries: MessageView[]
 }
 
 export interface PlainEntry {
   kind: 'plain'
-  message: Message
+  message: MessageView
 }
 
 export type DisplayItem = TurnGroup | PlainEntry
@@ -26,7 +26,7 @@ export type DisplayItem = TurnGroup | PlainEntry
 ///
 /// 連続した行ではなく`turn_id`でまとめ、ターンは最初の行の位置に1つだけ置く。別プロセスの
 /// 操作の記録がターンの途中に挟まりうるため(data-model.md「応答生成以外の経路での操作の記録」)。
-export function groupMessages(messages: Message[]): DisplayItem[] {
+export function groupMessages(messages: MessageView[]): DisplayItem[] {
   const items: DisplayItem[] = []
   const turns = new Map<string, TurnGroup>()
   for (const message of messages) {
@@ -53,7 +53,7 @@ export function groupMessages(messages: Message[]): DisplayItem[] {
 /// ターン(編集で破棄されたターン)はクエリの時点で会話から外れるため、ここへ届かない
 /// (Issue #95)。破棄されたかどうかの判定を表示側にも持たせると同じ判断が2箇所に分かれる
 /// ので、ここでは判定しない(../../docs/spec/principles.md 5節)。
-export function finalEntryOf(entries: Message[]): Message {
+export function finalEntryOf(entries: MessageView[]): MessageView {
   return entries[entries.length - 1]
 }
 
@@ -75,7 +75,7 @@ export type ThoughtItem =
 /// そのラウンド(または最終応答)より前に生じた思考であるため、同じ行のツール実行より
 /// 先に並べる(`orchestration/turn.rs`がラウンド内最初のツール実行記録の`reasoning`列に
 /// そのラウンドの思考を格納する設計と対応する)。
-export function buildThoughtItems(entries: Message[]): ThoughtItem[] {
+export function buildThoughtItems(entries: MessageView[]): ThoughtItem[] {
   const items: ThoughtItem[] = []
   for (const entry of entries) {
     if (entry.reasoning) {

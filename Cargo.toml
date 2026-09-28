@@ -85,6 +85,9 @@ process-wrap = { version = "10.0", default-features = false, features = [
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"
+# 画面へ渡す型のTypeScript定義を生成する(開発時のみ。`frontend/src/bindings/`)。Rust側の型を
+# 正本にし、TS側に写しを手で持たない。生成は`cargo test`が行い、CIが生成物との差分を検査する
+ts-rs = "12"
 
 # 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
 # デコード・縮小・エンコードに関わるクレートだけは最適化する
