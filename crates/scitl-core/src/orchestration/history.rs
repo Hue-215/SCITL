@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::attachments::{self, AttachmentStore, Delivery};
 use crate::db::attachments::{self as db_attachments, Attachment, AttachmentContent};
 use crate::db::error::Result;
-use crate::db::messages::{self, Chat, Message, Opener};
+use crate::db::messages::{self, Chat, Kind, Message, Opener, Role};
 use crate::llm::{
     AttachmentNote, ChatMessage, InlineImage, PromptText, ToolArguments, ToolCallRequest,
 };
@@ -75,7 +75,7 @@ pub(super) fn build_history(
     let latest_user = stored
         .messages
         .iter()
-        .rposition(|m| m.kind == "normal" && m.role == "user");
+        .rposition(|m| m.kind == Kind::Normal && m.role == Role::User);
     let mut history = Vec::with_capacity(stored.messages.len() + 1);
     if stored.starts_with_opening {
         history.push(ChatMessage::user(PromptText::user_message(
@@ -84,14 +84,14 @@ pub(super) fn build_history(
         )));
     }
     for (i, m) in stored.messages.iter().enumerate() {
-        if m.kind == "tool_execution" {
+        if m.kind == Kind::ToolExecution {
             if options.tools_available {
                 history.extend(fact_round_trip(m, &replied_turns).into_iter().flatten());
             }
             continue;
         }
-        match m.role.as_str() {
-            "user" => {
+        match m.role {
+            Role::User => {
                 let attached = stored.attachments.remove(&m.id).unwrap_or_default();
                 history.push(user_message(
                     m,
@@ -101,11 +101,12 @@ pub(super) fn build_history(
                     store,
                 ));
             }
-            "assistant" => history.push(ChatMessage::Assistant {
+            Role::Assistant => history.push(ChatMessage::Assistant {
                 content: Some(m.content.clone()),
                 tool_calls: Vec::new(),
             }),
-            _ => {}
+            // `role='tool'`は実行記録の行だけで、上で済んでいる(0002のトリガー)。
+            Role::Error | Role::Tool => {}
         }
     }
     history
@@ -171,7 +172,7 @@ fn load_image(attachment: &Attachment, store: &AttachmentStore) -> Option<Inline
 fn replied_turns(stored: &[Message]) -> HashSet<String> {
     stored
         .iter()
-        .filter(|m| m.kind == "normal" && m.role == "assistant")
+        .filter(|m| m.kind == Kind::Normal && m.role == Role::Assistant)
         .filter_map(|m| m.turn_id.clone())
         .collect()
 }
