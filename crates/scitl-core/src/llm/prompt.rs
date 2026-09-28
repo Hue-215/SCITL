@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::attachments::Delivery;
-use crate::db::attachments::AttachmentKind;
+use crate::db::attachments::{AttachmentKind, AttachmentView};
 
 /// ユーザー発言を包む予約タグ。地の文との境目をモデルが機械的に見分けられる形にするため、
 /// 本文をこのタグで囲み、送信日時は属性として外に置く。
@@ -29,6 +29,21 @@ pub struct AttachmentNote<'a> {
     /// テキストの本文。`delivered`が`Content`のときだけ持つ。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<&'a str>,
+}
+
+impl<'a> AttachmentNote<'a> {
+    /// 発言に付いた添付の情報に、渡し方と(渡すなら)本文を添える。
+    pub fn new(view: &'a AttachmentView, delivered: Delivery, content: Option<&'a str>) -> Self {
+        Self {
+            id: view.id,
+            name: &view.original_name,
+            kind: view.kind,
+            mime_type: &view.mime_type,
+            size_bytes: view.size_bytes,
+            delivered,
+            content,
+        }
+    }
 }
 
 /// 予約タグの無害化を通した、モデルへ送る文字列。無害化するコンストラクタでしか作れないため、

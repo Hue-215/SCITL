@@ -156,15 +156,7 @@ fn user_message(
                     None => delivered = Delivery::NameOnly,
                 }
             }
-            AttachmentNote {
-                id: a.view.id,
-                name: &a.view.original_name,
-                kind: a.view.kind,
-                mime_type: &a.view.mime_type,
-                size_bytes: a.view.size_bytes,
-                delivered,
-                content,
-            }
+            AttachmentNote::new(&a.view, delivered, content)
         })
         .collect();
     ChatMessage::User {

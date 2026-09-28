@@ -79,16 +79,8 @@ pub fn execute(
         }
     };
     let note = |content| {
-        let note = AttachmentNote {
-            id: view.id,
-            name: &view.original_name,
-            kind: view.kind,
-            mime_type: &view.mime_type,
-            size_bytes: view.size_bytes,
-            delivered,
-            content,
-        };
-        serde_json::to_value(note).expect("an attachment note serializes to JSON")
+        serde_json::to_value(AttachmentNote::new(view, delivered, content))
+            .expect("an attachment note serializes to JSON")
     };
     Ok(ToolOutput {
         result: note(None),
