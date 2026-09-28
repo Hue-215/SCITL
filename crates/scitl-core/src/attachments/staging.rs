@@ -208,6 +208,7 @@ fn size_of(bytes: &[u8]) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachments::TempStore;
 
     fn token_of(outcome: StageOutcome) -> String {
         match outcome {
@@ -243,20 +244,22 @@ mod tests {
 
     #[test]
     fn stores_only_files_and_keeps_text_in_the_row() {
-        let root = std::env::temp_dir().join(format!("scitl-staging-{}", Ulid::new()));
-        let store = AttachmentStore::new(root.join("blobs"), root.join("revealed"));
+        let temp = TempStore::new();
+        let store = &temp.store;
         let staged = Staged::default();
         let text = token_of(staged.stage("a.txt".into(), b"aaa".to_vec()).unwrap());
         let taken = staged.take(&[text]).unwrap();
 
-        let rows = taken.store(&store).unwrap();
+        let rows = taken.store(store).unwrap();
         assert_eq!(rows[0].content, AttachmentContent::Text("aaa".to_string()));
-        assert!(!root.exists(), "text must not touch the store");
+        assert!(
+            !temp.root().join("blobs").exists(),
+            "text must not touch the store"
+        );
 
         let image = token_of(staged.stage("p.png".into(), png(4, 4)).unwrap());
-        let rows = staged.take(&[image]).unwrap().store(&store).unwrap();
+        let rows = staged.take(&[image]).unwrap().store(store).unwrap();
         assert!(matches!(&rows[0].content, AttachmentContent::File { hash } if hash.len() == 64));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn png(width: u32, height: u32) -> Vec<u8> {

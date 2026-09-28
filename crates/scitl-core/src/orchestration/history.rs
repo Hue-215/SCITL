@@ -263,6 +263,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+    use crate::attachments::TempStore;
     use crate::db;
     use crate::db::attachments::{AttachmentKind, NewAttachment};
     use crate::db::messages::{Kind, NewMessage, OperationSource, Origin, Role};
@@ -272,27 +273,17 @@ mod tests {
     struct Fixture {
         conn: Connection,
         task_id: i64,
-        root: std::path::PathBuf,
-        store: AttachmentStore,
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
-        }
+        temp: TempStore,
     }
 
     impl Fixture {
         fn new() -> Self {
             let conn = db::open_in_memory().unwrap();
             let task_id = db::tasks::create_task(&conn).unwrap().id;
-            let root = std::env::temp_dir().join(format!("scitl-history-{}", ulid::Ulid::new()));
-            let store = AttachmentStore::new(root.join("blobs"), root.join("revealed"));
             Self {
                 conn,
                 task_id,
-                root,
-                store,
+                temp: TempStore::new(),
             }
         }
 
@@ -302,7 +293,7 @@ mod tests {
                 image_input,
                 opening: OPENING.to_string(),
             };
-            build_history(load(&self.conn, chat).unwrap(), &options, &self.store)
+            build_history(load(&self.conn, chat).unwrap(), &options, &self.temp.store)
         }
 
         fn attach(&self, message_id: i64, name: &str, kind: AttachmentKind, bytes: &[u8]) {
@@ -311,7 +302,7 @@ mod tests {
                     AttachmentContent::Text(String::from_utf8(bytes.to_vec()).unwrap())
                 }
                 _ => AttachmentContent::File {
-                    hash: self.store.put(bytes).unwrap(),
+                    hash: self.temp.store.put(bytes).unwrap(),
                 },
             };
             db_attachments::insert(
@@ -666,7 +657,7 @@ mod tests {
         let f = Fixture::new();
         let m = f.user("見て");
         f.attach(m, "p.png", AttachmentKind::Image, PNG);
-        std::fs::remove_dir_all(f.root.join("blobs")).unwrap();
+        std::fs::remove_dir_all(f.temp.root().join("blobs")).unwrap();
         let (notes, images) = attachments_of(&f.build(Chat::Task(f.task_id), true, true)[0]);
         assert_eq!(notes[0]["delivered"], "name_only");
         assert_eq!(images, 0);

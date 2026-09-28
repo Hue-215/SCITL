@@ -1,42 +1,30 @@
 //! バイナリを実際に起動し、GUIと同じDBへの書き込みと端末への出力を確かめる。
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::{Command, Output};
 
 use scitl_core::db;
 use scitl_core::paths::DataLayout;
 
-struct DataDir(PathBuf);
+struct DataDir(tempfile::TempDir);
 
 impl DataDir {
     fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!("scitl-cli-test-{}", unique_suffix()));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
+        Self(tempfile::tempdir().unwrap())
+    }
+
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_scitl-cli"))
             .arg("--data-dir")
-            .arg(&self.0)
+            .arg(self.path())
             .args(args)
             .output()
             .unwrap()
     }
-}
-
-impl Drop for DataDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn unique_suffix() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{}-{nanos}", std::process::id())
 }
 
 fn stdout_json(output: &Output) -> serde_json::Value {
@@ -48,7 +36,7 @@ fn stdout_json(output: &Output) -> serde_json::Value {
 fn operations_are_recorded_with_the_cli_source() {
     let data = DataDir::new();
     let task_id = {
-        let conn = db::open(DataLayout::new(&data.0).database()).unwrap();
+        let conn = db::open(DataLayout::new(data.path()).database()).unwrap();
         db::tasks::create_task(&conn).unwrap().id
     };
 
@@ -66,7 +54,7 @@ fn operations_are_recorded_with_the_cli_source() {
 fn invisible_characters_reach_the_terminal_escaped_with_the_same_value() {
     let data = DataDir::new();
     let task_id = {
-        let conn = db::open(DataLayout::new(&data.0).database()).unwrap();
+        let conn = db::open(DataLayout::new(data.path()).database()).unwrap();
         db::tasks::create_task(&conn).unwrap().id
     };
     let title = "ab\u{202E}\u{9B}c";
@@ -88,7 +76,7 @@ fn invisible_characters_reach_the_terminal_escaped_with_the_same_value() {
 #[test]
 fn a_missing_data_directory_is_not_created() {
     let data = DataDir::new();
-    let missing = data.0.join("missing");
+    let missing = data.path().join("missing");
 
     let output = Command::new(env!("CARGO_BIN_EXE_scitl-cli"))
         .arg("--data-dir")
@@ -130,7 +118,7 @@ fn argument_errors_reach_the_terminal_escaped() {
 fn preview_without_a_provider_reports_why_and_saves_nothing() {
     let data = DataDir::new();
     let task_id = {
-        let conn = db::open(DataLayout::new(&data.0).database()).unwrap();
+        let conn = db::open(DataLayout::new(data.path()).database()).unwrap();
         db::tasks::create_task(&conn).unwrap().id
     };
 
