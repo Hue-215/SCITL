@@ -396,11 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn unreachable_servers_are_errors() {
-        let addr = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap();
-        // 閉じたポートに繋ぐ。
+        let (addr, _port) = crate::net::refused_addr();
         let result = detect(&format!("http://{addr}/v1"), &no_key(), &["m".to_string()]).await;
         assert!(result.is_err());
     }

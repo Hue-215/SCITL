@@ -196,12 +196,10 @@ mod tests {
         format!("http://{addr}/v1/chat/completions")
     }
 
-    /// 何も待ち受けていないポートのURL。
-    fn refused_url() -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-        format!("http://{addr}/v1/chat/completions")
+    /// 接続を拒否されるURL。ソケットは接続を試し終えるまで生かしておくこと。
+    fn refused_url() -> (String, tokio::net::TcpSocket) {
+        let (addr, socket) = crate::net::refused_addr();
+        (format!("http://{addr}/v1/chat/completions"), socket)
     }
 
     fn client(url: &str, timeout: Duration) -> reqwest::Client {
@@ -210,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn refused_connection_is_a_connection_failure_with_its_cause() {
-        let url = refused_url();
+        let (url, _port) = refused_url();
         let err = client(&url, Duration::from_secs(5))
             .get(&url)
             .send()
@@ -265,7 +263,7 @@ mod tests {
     /// ヘッダーに載せられない文字を含む鍵は、送る前に失敗する。
     #[tokio::test]
     async fn a_key_that_cannot_be_a_header_is_an_invalid_request() {
-        let url = refused_url();
+        let (url, _port) = refused_url();
         let err = client(&url, Duration::from_secs(5))
             .get(&url)
             .bearer_auth("sk-bad\nkey")
