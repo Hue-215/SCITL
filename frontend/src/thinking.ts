@@ -20,22 +20,28 @@ export interface PlainEntry {
 export type DisplayItem = TurnGroup | PlainEntry
 
 /// `list_chat_messages`が返す発言列(created_at, id順)を、SCITL自身の応答生成に属する行
-/// (`turn_id`が同じ行の連続)ごとにまとめる。ユーザー発言・応答生成以外の経路での操作の
+/// (`turn_id`が同じ行)ごとにまとめる。ユーザー発言・応答生成以外の経路での操作の
 /// 記録は`turn_id`を持たないため常に独立した`plain`項目になる
 /// (docs/spec/rebuild/data-model.md「ターン境界」の3分類)。
+///
+/// 連続した行ではなく`turn_id`でまとめ、ターンは最初の行の位置に1つだけ置く。別プロセスの
+/// 操作の記録がターンの途中に挟まりうるため(data-model.md「応答生成以外の経路での操作の記録」)。
 export function groupMessages(messages: Message[]): DisplayItem[] {
   const items: DisplayItem[] = []
+  const turns = new Map<string, TurnGroup>()
   for (const message of messages) {
     if (message.turn_id === null) {
       items.push({ kind: 'plain', message })
       continue
     }
-    const last = items[items.length - 1]
-    if (last?.kind === 'turn' && last.turnId === message.turn_id) {
-      last.entries.push(message)
-    } else {
-      items.push({ kind: 'turn', turnId: message.turn_id, entries: [message] })
+    const turn = turns.get(message.turn_id)
+    if (turn) {
+      turn.entries.push(message)
+      continue
     }
+    const opened: TurnGroup = { kind: 'turn', turnId: message.turn_id, entries: [message] }
+    turns.set(message.turn_id, opened)
+    items.push(opened)
   }
   return items
 }
