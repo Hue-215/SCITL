@@ -8,8 +8,15 @@ use crate::error::Result;
 use crate::llm::ToolSchema;
 
 use super::args::Args;
+use super::{InternalTool, Run, ToolKind};
 
 pub const NAME: &str = "get_current_task_detail";
+
+pub(super) const TOOL: InternalTool = InternalTool {
+    schema,
+    kind: ToolKind::State,
+    run: Run::ReadTask(execute),
+};
 
 /// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない
 /// (docs/spec/rebuild/tools.md 1節)。

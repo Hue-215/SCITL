@@ -8,8 +8,15 @@ use crate::llm::ToolSchema;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
+use super::{InternalTool, Run, ToolKind};
 
 pub const NAME: &str = "get_task_detail";
+
+pub(super) const TOOL: InternalTool = InternalTool {
+    schema,
+    kind: ToolKind::State,
+    run: Run::Read(execute),
+};
 
 /// 総合チャット版(docs/spec/rebuild/tools.md 2節)。総合チャットは特定のタスクに紐づかず、
 /// 対象を文脈から決められないので、`task_id`をモデルに選ばせる。読み取り専用なので、

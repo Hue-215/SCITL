@@ -9,8 +9,6 @@ pub mod read_attachment;
 pub mod update_step;
 pub mod update_task;
 
-use std::sync::LazyLock;
-
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,9 +54,26 @@ impl From<Value> for ToolOutput {
     }
 }
 
-pub struct ToolDefinition {
-    pub schema: &'static ToolSchema,
-    pub kind: ToolKind,
+/// 内部ツール1つ。公開する定義と実行の振り分けを同じ値から作り、公開したツールだけが
+/// 実行できる状態を構造で保つ。
+pub(crate) struct InternalTool {
+    schema: fn() -> &'static ToolSchema,
+    kind: ToolKind,
+    run: Run,
+}
+
+/// 実行の形。タスクを対象にする形は、タスクチャットの面([`TASK`])にだけ並べる。
+#[derive(Clone, Copy)]
+enum Run {
+    /// 会話によらない読み取り。
+    Read(fn(&Connection, &Value) -> Result<Value>),
+    /// 会話の対象タスクの読み取り。
+    ReadTask(fn(&Connection, i64, &Value) -> Result<Value>),
+    /// 会話の対象タスクの更新。対象の確認から変更後の全体の読み直しまでを1単位にする。
+    /// 確認のあとや返す全体に、別プロセスの書き込みが割り込まない(data-model.md 4節)。
+    UpdateTask(fn(&Connection, i64, &Value) -> Result<Value>),
+    /// 会話の添付の読み込み。結果にこのターンでだけ渡す中身を伴う。
+    ReadAttachment,
 }
 
 /// 公開面(docs/spec/rebuild/tools.md 2節)。MCPは枠のみ(Issue #73)。
@@ -77,99 +92,64 @@ impl Surface {
             Chat::Task(_) => Self::Task,
         }
     }
-}
 
-/// 面ごとの公開ツール定義。実装関数は1つのまま、公開するスキーマだけを面で分ける
-/// (docs/spec/rebuild/tools.md 1節「確定方針」)。実行の振り分け([`execute`])と
-/// 同じ集合を並べる(`each_chat_runs_exactly_the_tools_it_exposes`が確かめる)。
-///
-/// 定義は固定なので、各ツールの`schema()`も面ごとの一覧も最初の1回だけ組み立てる(引数
-/// スキーマの無害化を伴い、実行のたびに引数の検証([`args::Args::parse`])でも引くため)。
-pub fn tool_definitions(surface: Surface) -> &'static [ToolDefinition] {
-    static GENERAL: LazyLock<Vec<ToolDefinition>> =
-        LazyLock::new(|| build_definitions(Surface::General));
-    static TASK: LazyLock<Vec<ToolDefinition>> = LazyLock::new(|| build_definitions(Surface::Task));
-    match surface {
-        Surface::General => &GENERAL,
-        Surface::Task => &TASK,
-        Surface::Mcp => &[],
+    /// 面ごとの公開ツール。実装関数は1つのまま、公開するスキーマだけを面で分ける
+    /// (docs/spec/rebuild/tools.md 1節「確定方針」)。
+    fn tools(self) -> &'static [InternalTool] {
+        match self {
+            Self::General => GENERAL,
+            Self::Task => TASK,
+            Self::Mcp => &[],
+        }
     }
 }
 
-fn build_definitions(surface: Surface) -> Vec<ToolDefinition> {
-    match surface {
-        Surface::General => vec![
-            ToolDefinition {
-                schema: get_task_list::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: get_task_detail::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: read_attachment::schema(),
-                kind: ToolKind::Fact,
-            },
-        ],
-        Surface::Task => vec![
-            ToolDefinition {
-                schema: get_task_list::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: get_current_task_detail::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: update_task::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: add_steps::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: update_step::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: delete_step::schema(),
-                kind: ToolKind::State,
-            },
-            ToolDefinition {
-                schema: read_attachment::schema(),
-                kind: ToolKind::Fact,
-            },
-        ],
-        Surface::Mcp => Vec::new(),
-    }
+const GENERAL: &[InternalTool] = &[
+    get_task_list::TOOL,
+    get_task_detail::TOOL,
+    read_attachment::TOOL,
+];
+
+const TASK: &[InternalTool] = &[
+    get_task_list::TOOL,
+    get_current_task_detail::TOOL,
+    update_task::TOOL,
+    add_steps::TOOL,
+    update_step::TOOL,
+    delete_step::TOOL,
+    read_attachment::TOOL,
+];
+
+fn find(chat: Chat, name: &str) -> Option<&'static InternalTool> {
+    Surface::of(chat)
+        .tools()
+        .iter()
+        .find(|tool| (tool.schema)().name() == name)
 }
 
 /// 会話で公開する内部ツールの一覧。タスクチャットの`task_id`はターン開始時に
 /// オーケストレーション層が束縛するため、引数として公開しない(architecture.md 7節)。
 pub fn schemas(chat: Chat) -> Vec<ToolSchema> {
-    tool_definitions(Surface::of(chat))
+    Surface::of(chat)
+        .tools()
         .iter()
-        .map(|def| def.schema.clone())
+        .map(|tool| (tool.schema)().clone())
         .collect()
 }
 
 /// 会話で公開する内部ツールの名前。外部ツールの名前空間化で衝突を避けるために使う
 /// (`external::ExternalToolset::build`)。
 pub fn names(chat: Chat) -> Vec<String> {
-    tool_definitions(Surface::of(chat))
+    Surface::of(chat)
+        .tools()
         .iter()
-        .map(|def| def.schema.name().to_string())
+        .map(|tool| (tool.schema)().name().to_string())
         .collect()
 }
 
 /// 会話で公開する内部ツールの分類。公開していない名前には`None`を返す。
 pub fn kind(chat: Chat, name: &str) -> Option<ToolKind> {
-    tool_definitions(Surface::of(chat))
-        .iter()
-        .find(|def| def.schema.name() == name)
-        .map(|def| def.kind)
+    find(chat, name).map(|tool| tool.kind)
 }
 
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]に
@@ -184,25 +164,19 @@ pub fn execute(
     tool_name: &str,
     arguments: &Value,
 ) -> Result<ToolOutput> {
-    // 更新系は、対象の確認から変更後の全体の読み直しまでを1単位にする。確認のあとや
-    // 返す全体に、別プロセスの書き込みが割り込まない(data-model.md 4節)。
-    let update = |execute: fn(&Connection, i64, &Value) -> Result<Value>, task_id| {
-        db::in_transaction(conn, |conn| execute(conn, task_id, arguments))
-    };
-    let result = match (chat, tool_name) {
-        (_, read_attachment::NAME) => {
+    let unknown = || CoreError::UnknownTool(tool_name.to_string());
+    let tool = find(chat, tool_name).ok_or_else(unknown)?;
+    let result = match (tool.run, chat) {
+        (Run::ReadAttachment, _) => {
             return read_attachment::execute(conn, chat, image_input, arguments)
         }
-        (_, get_task_list::NAME) => get_task_list::execute(conn, arguments),
-        (Chat::General, get_task_detail::NAME) => get_task_detail::execute(conn, arguments),
-        (Chat::Task(task_id), get_current_task_detail::NAME) => {
-            get_current_task_detail::execute(conn, task_id, arguments)
+        (Run::Read(run), _) => run(conn, arguments),
+        (Run::ReadTask(run), Chat::Task(task_id)) => run(conn, task_id, arguments),
+        (Run::UpdateTask(run), Chat::Task(task_id)) => {
+            db::in_transaction(conn, |conn| run(conn, task_id, arguments))
         }
-        (Chat::Task(task_id), update_task::NAME) => update(update_task::execute, task_id),
-        (Chat::Task(task_id), add_steps::NAME) => update(add_steps::execute, task_id),
-        (Chat::Task(task_id), update_step::NAME) => update(update_step::execute, task_id),
-        (Chat::Task(task_id), delete_step::NAME) => update(delete_step::execute, task_id),
-        (_, other) => Err(CoreError::UnknownTool(other.to_string())),
+        // タスクを対象にする形は総合チャットの面に並べていない。
+        (Run::ReadTask(_) | Run::UpdateTask(_), Chat::General) => Err(unknown()),
     };
     result.map(ToolOutput::from)
 }
@@ -230,7 +204,9 @@ mod tests {
     fn every_internal_tool_schema_builds() {
         // `ToolSchema::internal`は引数スキーマを読み直せないと止まる。どの面の定義も組み立てる。
         for surface in [Surface::General, Surface::Task, Surface::Mcp] {
-            build_definitions(surface);
+            for tool in surface.tools() {
+                (tool.schema)();
+            }
         }
         assert!(!schemas(Chat::General).is_empty());
         assert!(!schemas(Chat::Task(1)).is_empty());
@@ -244,8 +220,8 @@ mod tests {
         let task_id = db::tasks::create_task(&conn).unwrap().id;
         let all_names: Vec<String> = [Surface::General, Surface::Task]
             .into_iter()
-            .flat_map(tool_definitions)
-            .map(|def| def.schema.name().to_string())
+            .flat_map(Surface::tools)
+            .map(|tool| (tool.schema)().name().to_string())
             .collect();
         for chat in [Chat::General, Chat::Task(task_id)] {
             let exposed = names(chat);

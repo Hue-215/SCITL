@@ -119,7 +119,7 @@ MCP版:             update_task(task_id, title?, description?, deadline?, status
 - 分類はツールレジストリ側の属性であり、`messages` テーブルの構造自体には分類ロジックを
   持たせない。事実系の結果を履歴に載せるために別の行は書かない(`data-model.md` 2節
   「事実系の結果を次ターン以降の履歴に載せる場合も、行を複製しない」)
-- 内部ツールの分類は`tools::ToolDefinition`に、外部(MCP)ツールは一律に事実系として
+- 内部ツールの分類は各ツールの`tools::InternalTool`に、外部(MCP)ツールは一律に事実系として
   `tools::external::ExternalToolset`の項目に持たせる。実行したときに振り分け先の分類を
   実行記録の`tool_kind`に書き写し、履歴の組み立てはその値だけを見る。あとから名前で
   レジストリを引き直さないのは、改名したツールやモデルが作った架空の名前を推測で

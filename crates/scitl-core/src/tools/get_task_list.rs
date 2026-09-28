@@ -8,8 +8,15 @@ use crate::error::Result;
 use crate::llm::ToolSchema;
 
 use super::args::Args;
+use super::{InternalTool, Run, ToolKind};
 
 pub const NAME: &str = "get_task_list";
+
+pub(super) const TOOL: InternalTool = InternalTool {
+    schema,
+    kind: ToolKind::State,
+    run: Run::Read(execute),
+};
 
 /// 引数なし。文脈から決まる情報を持たないため面によらず同一のスキーマ
 /// (docs/spec/rebuild/tools.md 2節)。

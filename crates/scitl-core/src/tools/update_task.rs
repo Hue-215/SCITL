@@ -8,8 +8,15 @@ use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
 use super::args::Args;
+use super::{InternalTool, Run, ToolKind};
 
 pub const NAME: &str = "update_task";
+
+pub(super) const TOOL: InternalTool = InternalTool {
+    schema,
+    kind: ToolKind::State,
+    run: Run::UpdateTask(execute),
+};
 
 /// `clear`で消せる項目。タイトルは未設定に戻す操作を持たないので含めない。
 const CLEARABLE: &[&str] = &["deadline", "description"];

@@ -9,8 +9,15 @@ use crate::llm::ToolSchema;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
+use super::{InternalTool, Run, ToolKind};
 
 pub const NAME: &str = "delete_step";
+
+pub(super) const TOOL: InternalTool = InternalTool {
+    schema,
+    kind: ToolKind::State,
+    run: Run::UpdateTask(execute),
+};
 
 /// タスクチャット版のスキーマ。`task_id`を引数に含めない
 /// (docs/spec/rebuild/tools.md 1節)。
