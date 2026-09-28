@@ -4,7 +4,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ReasoningEffort;
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 use crate::llm::{
     ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
     ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,

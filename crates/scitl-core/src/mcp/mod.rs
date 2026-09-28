@@ -29,7 +29,7 @@ use secrecy::SecretString;
 use serde_json::{json, Map, Value};
 
 use crate::config::{McpEndpoint, McpServerConfig, SecretRef};
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 use crate::secrets;
 
 /// 接続・ツール一覧取得・ツール呼び出しそれぞれに設ける固定タイムアウト。応答しない

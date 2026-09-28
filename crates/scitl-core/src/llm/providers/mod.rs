@@ -8,7 +8,7 @@ use std::time::Duration;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::config::{ApiFormat, Config, ProviderConfig};
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 use crate::llm::{DetectedCapabilities, LlmAdapter};
 use crate::secrets;
 

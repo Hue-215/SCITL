@@ -1,7 +1,8 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-use super::{now_iso8601, CoreError, Result};
+use super::now_iso8601;
+use crate::error::{CoreError, Result};
 use crate::text::{collapse_whitespace, ellipsize, truncate_chars};
 
 #[derive(Debug, Clone, Serialize)]

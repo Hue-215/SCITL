@@ -5,8 +5,8 @@ use rusqlite::Connection;
 use scitl_core::attachments::{AttachmentStore, Attachments, StageOutcome};
 use scitl_core::config::{McpEndpoint, McpServerConfig, ReasoningEffort};
 use scitl_core::db;
-use scitl_core::db::error::CoreError;
 use scitl_core::db::messages::{Chat, Kind, Role};
+use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
     ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, ResponseEvent,

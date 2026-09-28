@@ -26,8 +26,8 @@ use crate::config::{
     self, validate_mcp_server_name, ApiFormat, Capability, Config, McpEndpoint, McpServerConfig,
     ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort, SecretRef, ToolConfig,
 };
-use crate::db::error::{CoreError, Result};
 use crate::db::messages::Chat;
+use crate::error::{CoreError, Result};
 use crate::i18n::Language;
 use crate::in_flight::InFlightSet;
 use crate::llm::providers::{self, SharedAdapter};

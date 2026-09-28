@@ -9,7 +9,7 @@ use rmcp::ServiceExt;
 use secrecy::ExposeSecret;
 
 use crate::config::SecretRef;
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 
 use super::{resolve_secrets, ClientService, CONNECT_TIMEOUT};
 

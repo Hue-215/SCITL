@@ -6,7 +6,7 @@
 use serde::Serialize;
 use url::Url;
 
-use crate::db::error::{CoreError, Result};
+use crate::error::{CoreError, Result};
 
 /// 開いてよいかどうかと、その理由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

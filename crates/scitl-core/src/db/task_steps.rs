@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-use super::{now_iso8601, tasks, CoreError, Result};
+use super::{now_iso8601, tasks};
+use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskStep {

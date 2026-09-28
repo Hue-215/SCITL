@@ -5,7 +5,8 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::attachments::{self, AttachmentView};
-use super::{now_iso8601, CoreError, Result};
+use super::now_iso8601;
+use crate::error::{CoreError, Result};
 
 /// 発言が属する会話。`messages.task_id`がNULLなら総合チャット(data-model.md messages)。
 /// `Option<i64>`で持たないのは、渡し忘れの`None`が総合チャットへの書き込みに化けるのを

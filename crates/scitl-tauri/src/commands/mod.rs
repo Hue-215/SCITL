@@ -8,7 +8,8 @@ pub mod tasks;
 
 use std::sync::Arc;
 
-use scitl_core::db::{self, error::Result, Connection};
+use scitl_core::db::{self, Connection};
+use scitl_core::error::Result;
 use scitl_core::settings::Settings;
 use tauri::State;
 

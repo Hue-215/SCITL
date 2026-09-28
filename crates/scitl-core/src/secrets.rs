@@ -12,7 +12,7 @@ use keyring_core::api::CredentialStore;
 use keyring_core::Entry;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 
 /// OS資格情報ストア上でのサービス名。複数アプリと資格情報が混ざらないよう固定する。
 const SERVICE: &str = "scitl-task-companion";

@@ -2,7 +2,7 @@
 //! 種別コードと`CoreError`からの分類をここ1箇所に閉じる(`principles.md` 5節)。文言は
 //! 言語ファイルの`turn_error.{種別コード}`にあり、画面は種別コードから表示言語の文言を引く。
 
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 use crate::i18n::{self, Language};
 use crate::llm::{LlmError, Readiness};
 

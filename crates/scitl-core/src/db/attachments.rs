@@ -7,7 +7,8 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::messages::Chat;
-use super::{now_iso8601, CoreError, Result};
+use super::now_iso8601;
+use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

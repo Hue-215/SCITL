@@ -1,5 +1,4 @@
 pub mod attachments;
-pub mod error;
 pub mod messages;
 pub mod task_steps;
 pub mod tasks;
@@ -10,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-pub use error::{CoreError, Result};
+use crate::error::Result;
 
 const INIT_SQL: &str = include_str!("../../../../migrations/0001_init.sql");
 const TOOL_EXECUTION_ROLE_SQL: &str =
@@ -116,6 +115,7 @@ pub fn open_in_memory() -> Result<Connection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::CoreError;
 
     #[test]
     fn migrations_are_valid() {

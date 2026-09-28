@@ -1,8 +1,8 @@
 use rusqlite::Connection;
 
-use crate::db::error::Result;
 use crate::db::messages::Chat;
 use crate::db::now_iso8601;
+use crate::error::Result;
 use crate::llm::PromptText;
 use crate::tools::{get_current_task_detail::task_detail, get_task_list::task_list};
 

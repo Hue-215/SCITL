@@ -2,6 +2,7 @@ pub mod attachments;
 pub mod blocking;
 pub mod config;
 pub mod db;
+pub mod error;
 pub mod export;
 pub mod i18n;
 pub mod in_flight;
@@ -15,4 +16,4 @@ pub mod settings;
 pub mod text;
 pub mod tools;
 
-pub use db::error::CoreError;
+pub use error::CoreError;

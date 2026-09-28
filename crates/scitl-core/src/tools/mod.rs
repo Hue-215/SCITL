@@ -15,9 +15,9 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::db::error::{CoreError, Result};
 use crate::db::messages::Chat;
 use crate::db::task_steps;
+use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
 /// ツール実行結果を次ターン以降の入力履歴に残すか否かの分類(docs/spec/rebuild/tools.md 4節)。

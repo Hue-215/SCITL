@@ -1,8 +1,8 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::Result;
 use crate::db::tasks;
+use crate::error::Result;
 use crate::llm::ToolSchema;
 
 use super::args::Args;
@@ -48,7 +48,7 @@ pub fn task_list(conn: &Connection) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::db;
-    use crate::db::error::CoreError;
+    use crate::error::CoreError;
 
     #[test]
     fn rejects_unknown_argument() {

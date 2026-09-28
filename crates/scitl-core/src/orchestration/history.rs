@@ -7,8 +7,8 @@ use rusqlite::Connection;
 
 use crate::attachments::{self, AttachmentStore, Delivery};
 use crate::db::attachments::{self as db_attachments, Attachment, AttachmentContent};
-use crate::db::error::Result;
 use crate::db::messages::{self, Chat, Kind, Message, Opener, Role};
+use crate::error::Result;
 use crate::llm::{
     AttachmentNote, ChatMessage, InlineImage, PromptText, ToolArguments, ToolCallRequest,
 };

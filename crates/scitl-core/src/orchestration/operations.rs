@@ -13,10 +13,10 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Chat, Kind, NewMessage, OperationSource, Origin, Role};
 use crate::db::tasks::{self, Task};
 use crate::db::{in_transaction, with_conn, SharedConnection};
+use crate::error::{CoreError, Result};
 use crate::in_flight::InFlightSet;
 use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn::begin_generating;
