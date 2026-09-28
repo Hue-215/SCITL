@@ -4,6 +4,8 @@ mod prompt;
 pub mod providers;
 mod token_estimate;
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 pub use capabilities::{
@@ -65,7 +67,7 @@ pub enum FinishReason {
 /// `Assistant`の`tool_calls`と`Tool`を持つ。DBの`messages`テーブルには保存しない
 /// (次ターン以降の入力履歴に残さないのはdocs/spec/principles.md 3節、テーブルへの
 /// 不保存はdocs/spec/rebuild/data-model.md 2節)。
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ChatMessage {
     System(String),
     /// ユーザー発言。送信日時と添付の情報を本文の外に置いた囲みとして、組み立て済みの形で運ぶ
@@ -103,24 +105,30 @@ impl ChatMessage {
 
 /// ユーザー発言・ツール結果と一緒に送る画像。MIMEは実体の先頭バイトから決めたもの
 /// (`attachments::image_mime_type`)に限る。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+///
+/// data URLは作るときに1度だけ組み立てて共有する。履歴はツールの往復のラウンドごとに
+/// 複製されるので、画像の本体まで写さないため。
+#[derive(Debug, Clone, PartialEq)]
 pub struct InlineImage {
-    mime_type: &'static str,
-    base64: String,
+    data_url: Arc<str>,
 }
 
 impl InlineImage {
     /// 画像として扱う形式でなければ`None`。
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         use base64::Engine;
+        let mut data_url = format!(
+            "data:{};base64,",
+            crate::attachments::image_mime_type(bytes)?
+        );
+        base64::engine::general_purpose::STANDARD.encode_string(bytes, &mut data_url);
         Some(Self {
-            mime_type: crate::attachments::image_mime_type(bytes)?,
-            base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            data_url: data_url.into(),
         })
     }
 
-    pub fn data_url(&self) -> String {
-        format!("data:{};base64,{}", self.mime_type, self.base64)
+    pub fn data_url(&self) -> &str {
+        &self.data_url
     }
 }
 

@@ -101,7 +101,7 @@ impl Attachments {
         let attachment = with_conn(db, move |conn| attachments::get(conn, id)).await?;
         let hash = file_hash(attachment.content, id, AttachmentKind::Image)?;
         let store = self.store.clone();
-        blocking::run(move || Ok(store.read_image(&hash)?.data_url())).await
+        blocking::run(move || Ok(store.read_image(&hash)?.data_url().to_string())).await
     }
 
     /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。

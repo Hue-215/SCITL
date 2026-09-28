@@ -184,17 +184,25 @@ fn write_attachment(
     store: &AttachmentStore,
     dir: &Path,
 ) -> Option<Vec<String>> {
-    let bytes = match &attachment.content {
-        AttachmentContent::Text(text) => text.as_bytes().to_vec(),
-        AttachmentContent::File { hash } => store.read(hash).ok()?,
-    };
     let segments = vec![
         ATTACHMENTS_DIR.to_string(),
         attachment.view.id.to_string(),
         safe_file_name(&attachment.view.original_name),
     ];
     let file = segments.iter().fold(dir.to_path_buf(), |p, s| p.join(s));
-    write_bytes(&file, &bytes).ok()?;
+    match &attachment.content {
+        AttachmentContent::Text(text) => write_bytes(&file, text.as_bytes()).ok()?,
+        AttachmentContent::File { hash } => {
+            create_parent(&file).ok()?;
+            if store.copy_to(hash, &file).is_err() {
+                // 同梱できなかった添付の入れ物を空のまま残さない(添付ごとのフォルダなので空)。
+                if let Some(parent) = file.parent() {
+                    let _ = fs::remove_dir(parent);
+                }
+                return None;
+            }
+        }
+    }
     Some(segments)
 }
 
@@ -238,10 +246,15 @@ fn write_file(path: &Path, body: &str) -> Result<()> {
 }
 
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(io_error("create an export folder"))?;
-    }
+    create_parent(path)?;
     fs::write(path, bytes).map_err(io_error("write an export file"))
+}
+
+fn create_parent(path: &Path) -> Result<()> {
+    match path.parent() {
+        Some(parent) => fs::create_dir_all(parent).map_err(io_error("create an export folder")),
+        None => Ok(()),
+    }
 }
 
 /// 失敗の文言にパスを載せない(エラーは画面にそのまま出る)。

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::ReasoningEffort;
 use crate::db::error::CoreError;
 use crate::llm::{
-    ChatMessage, ErrorDetail, FinishReason, InlineImage, LlmAdapter, LlmError, PromptText,
-    Readiness, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
+    ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
+    ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
@@ -378,7 +378,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
     for message in messages {
         match message {
             ChatMessage::Tool { images, .. } => {
-                tool_images.extend(images.iter().map(InlineImage::data_url));
+                tool_images.extend(images.iter().map(|image| image.data_url().to_string()));
             }
             _ => flush_tool_images(&mut out, &mut tool_images),
         }
@@ -451,7 +451,10 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
         ChatMessage::User { text, images } => RequestMessage::User {
             content: UserContent::new(
                 text.as_str().to_string(),
-                images.iter().map(InlineImage::data_url).collect(),
+                images
+                    .iter()
+                    .map(|image| image.data_url().to_string())
+                    .collect(),
             ),
         },
         ChatMessage::Assistant {
@@ -642,6 +645,7 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+    use crate::llm::InlineImage;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
