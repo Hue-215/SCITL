@@ -57,7 +57,7 @@ impl From<Value> for ToolOutput {
 }
 
 pub struct ToolDefinition {
-    pub schema: ToolSchema,
+    pub schema: &'static ToolSchema,
     pub kind: ToolKind,
 }
 
@@ -83,7 +83,8 @@ impl Surface {
 /// (docs/spec/rebuild/tools.md 1節「確定方針」)。実行の振り分け([`execute`])と
 /// 同じ集合を並べる(`each_chat_runs_exactly_the_tools_it_exposes`が確かめる)。
 ///
-/// 定義は固定なので、面ごとに最初の1回だけ組み立てる(引数スキーマの無害化を伴うため)。
+/// 定義は固定なので、各ツールの`schema()`も面ごとの一覧も最初の1回だけ組み立てる(引数
+/// スキーマの無害化を伴い、実行のたびに引数の検証([`args::Args::parse`])でも引くため)。
 pub fn tool_definitions(surface: Surface) -> &'static [ToolDefinition] {
     static GENERAL: LazyLock<Vec<ToolDefinition>> =
         LazyLock::new(|| build_definitions(Surface::General));

@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -11,20 +13,23 @@ pub const NAME: &str = "get_task_list";
 
 /// 引数なし。文脈から決まる情報を持たないため面によらず同一のスキーマ
 /// (docs/spec/rebuild/tools.md 2節)。
-pub fn schema() -> ToolSchema {
-    ToolSchema::internal(
-        NAME,
-        "List the tasks that are not archived.",
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        }),
-    )
+pub fn schema() -> &'static ToolSchema {
+    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
+        ToolSchema::internal(
+            NAME,
+            "List the tasks that are not archived.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        )
+    });
+    &SCHEMA
 }
 
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
-    Args::parse(arguments, &[])?;
+    Args::parse(arguments, schema())?;
 
     task_list(conn)
 }

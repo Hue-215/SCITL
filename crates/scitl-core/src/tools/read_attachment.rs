@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -14,24 +16,27 @@ pub const NAME: &str = "read_attachment";
 
 /// 総合チャット・タスクチャットで同じ形(docs/spec/rebuild/tools.md 2節)。対象の会話は
 /// 文脈から固定するので引数に取らず、添付IDだけを選ばせる。
-pub fn schema() -> ToolSchema {
-    ToolSchema::internal(
-        NAME,
-        "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
-         scitl:attachments block. The result has the same fields as that block. A text \
-         attachment returns its text in \"content\", and an image is shown to you with the \
-         result. What you read is available in this turn only; read it again in a later turn \
-         if you need it. Use this to look at an image whose \"delivered\" is \"name_only\". \
-         Other kinds of files cannot be read.",
-        json!({
-            "type": "object",
-            "properties": {
-                "attachment_id": { "type": "integer" }
-            },
-            "required": ["attachment_id"],
-            "additionalProperties": false
-        }),
-    )
+pub fn schema() -> &'static ToolSchema {
+    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
+        ToolSchema::internal(
+            NAME,
+            "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
+             scitl:attachments block. The result has the same fields as that block. A text \
+             attachment returns its text in \"content\", and an image is shown to you with the \
+             result. What you read is available in this turn only; read it again in a later turn \
+             if you need it. Use this to look at an image whose \"delivered\" is \"name_only\". \
+             Other kinds of files cannot be read.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "attachment_id": { "type": "integer" }
+                },
+                "required": ["attachment_id"],
+                "additionalProperties": false
+            }),
+        )
+    });
+    &SCHEMA
 }
 
 /// 渡し方は発言に付いた添付と同じく`attachments::delivery`で決める。読み込んだ中身は
@@ -48,7 +53,7 @@ pub fn execute(
     image_input: bool,
     arguments: &Value,
 ) -> Result<ToolOutput> {
-    let args = Args::parse(arguments, &["attachment_id"])?;
+    let args = Args::parse(arguments, schema())?;
     let attachment = db_attachments::get_in_chat(conn, chat, args.required_i64("attachment_id")?)?;
     let view = &attachment.view;
     let delivered = attachments::delivery(view.kind, image_input, true);

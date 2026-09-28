@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -10,32 +12,33 @@ use super::get_current_task_detail::task_detail;
 
 pub const NAME: &str = "add_steps";
 
-const KNOWN_ARGS: &[&str] = &["descriptions"];
-
 /// タスクチャット版のスキーマ。`task_id`を引数に含めない
 /// (docs/spec/rebuild/tools.md 1節)。説明は常に配列のみを受ける
 /// (同2節「変更点の詳細」— 文字列/配列の多相引数をやめる)。
-pub fn schema() -> ToolSchema {
-    ToolSchema::internal(
-        NAME,
-        "Add steps to the currently open task.",
-        json!({
-            "type": "object",
-            "properties": {
-                "descriptions": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "minItems": 1
-                }
-            },
-            "required": ["descriptions"],
-            "additionalProperties": false
-        }),
-    )
+pub fn schema() -> &'static ToolSchema {
+    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
+        ToolSchema::internal(
+            NAME,
+            "Add steps to the currently open task.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "descriptions": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1
+                    }
+                },
+                "required": ["descriptions"],
+                "additionalProperties": false
+            }),
+        )
+    });
+    &SCHEMA
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let args = Args::parse(arguments, KNOWN_ARGS)?;
+    let args = Args::parse(arguments, schema())?;
 
     let descriptions = args.required_string_array("descriptions")?;
 

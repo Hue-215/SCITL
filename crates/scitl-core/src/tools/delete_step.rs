@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -10,27 +12,28 @@ use super::get_current_task_detail::task_detail;
 
 pub const NAME: &str = "delete_step";
 
-const KNOWN_ARGS: &[&str] = &["step_id"];
-
 /// タスクチャット版のスキーマ。`task_id`を引数に含めない
 /// (docs/spec/rebuild/tools.md 1節)。
-pub fn schema() -> ToolSchema {
-    ToolSchema::internal(
-        NAME,
-        "Delete a step of the currently open task.",
-        json!({
-            "type": "object",
-            "properties": {
-                "step_id": { "type": "integer" }
-            },
-            "required": ["step_id"],
-            "additionalProperties": false
-        }),
-    )
+pub fn schema() -> &'static ToolSchema {
+    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
+        ToolSchema::internal(
+            NAME,
+            "Delete a step of the currently open task.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "step_id": { "type": "integer" }
+                },
+                "required": ["step_id"],
+                "additionalProperties": false
+            }),
+        )
+    });
+    &SCHEMA
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let args = Args::parse(arguments, KNOWN_ARGS)?;
+    let args = Args::parse(arguments, schema())?;
     let step_id = args.required_i64("step_id")?;
 
     super::require_step_in_task(conn, task_id, step_id)?;

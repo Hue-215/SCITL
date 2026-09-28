@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -12,24 +14,27 @@ pub const NAME: &str = "get_task_detail";
 /// 総合チャット版(docs/spec/rebuild/tools.md 2節)。総合チャットは特定のタスクに紐づかず、
 /// 対象を文脈から決められないので、`task_id`をモデルに選ばせる。読み取り専用なので、
 /// 取り違えても書き込みは起きない。
-pub fn schema() -> ToolSchema {
-    ToolSchema::internal(
-        NAME,
-        "Get the details of a task, including its description and steps.",
-        json!({
-            "type": "object",
-            "properties": {
-                "task_id": { "type": "integer" }
-            },
-            "required": ["task_id"],
-            "additionalProperties": false
-        }),
-    )
+pub fn schema() -> &'static ToolSchema {
+    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
+        ToolSchema::internal(
+            NAME,
+            "Get the details of a task, including its description and steps.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "integer" }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false
+            }),
+        )
+    });
+    &SCHEMA
 }
 
 /// アーカイブ済みのタスクも引ける(一覧には出ないが、会話で名前が挙がることはある)。
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
-    let args = Args::parse(arguments, &["task_id"])?;
+    let args = Args::parse(arguments, schema())?;
     task_detail(conn, args.required_i64("task_id")?)
 }
 
