@@ -183,19 +183,7 @@ pub async fn edit_user_message(
             let target = find_in_chat(conn, chat, message_id)?;
             expect_normal(&target, &[Role::User])?;
             messages::soft_delete_normal_from(conn, chat, target.id)?;
-            let message_id = messages::insert_message(
-                conn,
-                NewMessage {
-                    task_id: chat.task_id(),
-                    role: Role::User,
-                    content: &new_text,
-                    kind: Kind::Normal,
-                    origin: Origin::User,
-                    error_kind: None,
-                    error_detail: None,
-                    reasoning: None,
-                },
-            )?;
+            let message_id = insert_user_message(conn, chat, &new_text)?;
             let carried = db_attachments::copy_to_message(conn, target.id, message_id)?;
             // 断るとトランザクションごと戻り、元の発言は消えない。
             require_content(&new_text, carried)
