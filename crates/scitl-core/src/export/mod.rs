@@ -37,7 +37,7 @@ pub struct ExportSummary {
     pub folder: String,
     pub tasks: usize,
     pub attachments: usize,
-    /// 実体を読めず、同梱できなかった添付の数。
+    /// 実体を読めない・書けないために同梱できなかった添付の数。
     pub missing_attachments: usize,
 }
 
@@ -120,78 +120,82 @@ fn write(snapshot: &Snapshot, store: &AttachmentStore, root: &Path) -> Result<Ex
     finished
 }
 
-/// 書いた添付の数と、実体を読めなかった添付の数を返す。
+/// 書いた添付の数と、書けなかった添付の数を返す。
 fn write_files(snapshot: &Snapshot, store: &AttachmentStore, dir: &Path) -> Result<(usize, usize)> {
     let mut counts = (0, 0);
-    let general = entries(&snapshot.general, store, dir, &mut counts)?;
+    let general = entries(&snapshot.general, store, dir, &mut counts);
     write_file(
         &dir.join("general-chat.md"),
         &markdown::render_general_chat(&general),
     )?;
     for (task, steps, chat) in &snapshot.tasks {
-        let conversation = entries(chat, store, dir, &mut counts)?;
+        let conversation = entries(chat, store, dir, &mut counts);
         let body = markdown::render_task(task, steps, &conversation);
         write_file(&dir.join(task_file_name(task)), &body)?;
     }
     Ok(counts)
 }
 
-/// 会話の行に、書き出した添付へのリンクを添える。添付は発言ごとの`attachments/<添付のID>/`に
-/// 元の名前(どのOSでも置ける形にしたもの)で書く。テキストの添付はDBの本文から書き戻す。
-/// 実体を読めない添付は、書き出し全体を止めずにリンクの無い項目にする(残りのデータの
-/// 持ち出しを優先する)。
+/// 会話の行に、書き出した添付へのリンクを添える。
 fn entries<'a>(
     chat: &'a ChatRows,
     store: &AttachmentStore,
     dir: &Path,
     (written, missing): &mut (usize, usize),
-) -> Result<Vec<Entry<'a>>> {
+) -> Vec<Entry<'a>> {
     chat.messages
         .iter()
         .map(|message| {
-            let links = chat
+            let attachments = chat
                 .attachments
                 .get(&message.id)
                 .map(Vec::as_slice)
                 .unwrap_or_default()
                 .iter()
                 .map(|attachment| {
-                    let bytes = match &attachment.content {
-                        AttachmentContent::Text(text) => Some(text.clone().into_bytes()),
-                        AttachmentContent::File { hash } => store.read(hash).ok(),
-                    };
-                    let path = match bytes {
-                        Some(bytes) => {
-                            let segments = vec![
-                                ATTACHMENTS_DIR.to_string(),
-                                attachment.view.id.to_string(),
-                                safe_file_name(&attachment.view.original_name),
-                            ];
-                            let file = segments.iter().fold(dir.to_path_buf(), |p, s| p.join(s));
-                            write_bytes(&file, &bytes)?;
-                            *written += 1;
-                            Some(segments)
-                        }
-                        None => {
-                            *missing += 1;
-                            None
-                        }
-                    };
-                    Ok(AttachmentLink {
+                    let path = write_attachment(attachment, store, dir);
+                    if path.is_some() {
+                        *written += 1;
+                    } else {
+                        *missing += 1;
+                    }
+                    AttachmentLink {
                         name: attachment.view.original_name.clone(),
                         kind: attachment.view.kind,
                         mime_type: attachment.view.mime_type.clone(),
                         size_bytes: attachment.view.size_bytes,
                         path,
-                    })
+                    }
                 })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Entry {
+                .collect();
+            Entry {
                 message,
-                attachments: links,
-            })
+                attachments,
+            }
         })
         .collect()
+}
+
+/// 添付を`attachments/<添付のID>/`に元の名前(どのOSでも置ける形にしたもの)で書き、その相対パスの
+/// 区間を返す。テキストの添付はDBの本文から書き戻す。実体を読めない・書けない添付は`None`にし、
+/// 書き出し全体は止めない(残りのデータの持ち出しを優先する)。
+fn write_attachment(
+    attachment: &Attachment,
+    store: &AttachmentStore,
+    dir: &Path,
+) -> Option<Vec<String>> {
+    let bytes = match &attachment.content {
+        AttachmentContent::Text(text) => text.as_bytes().to_vec(),
+        AttachmentContent::File { hash } => store.read(hash).ok()?,
+    };
+    let segments = vec![
+        ATTACHMENTS_DIR.to_string(),
+        attachment.view.id.to_string(),
+        safe_file_name(&attachment.view.original_name),
+    ];
+    let file = segments.iter().fold(dir.to_path_buf(), |p, s| p.join(s));
+    write_bytes(&file, &bytes).ok()?;
+    Some(segments)
 }
 
 /// `task-<ID>-<タイトル>.md`。IDで一意になり、タイトルは一覧で見分けるためだけに付ける。
@@ -207,6 +211,8 @@ fn task_file_name(task: &Task) -> String {
 }
 
 /// 一時フォルダを`root/<stamp>`へ移す。同じ秒の書き出しが既にあれば`-2`・`-3`…を付ける。
+/// 移し先を確かめてから移すまでの間に別の書き出しが同じ名前を取ることがあるので、移せなかった
+/// ときも名前が埋まっていれば次の番号を試す(中身のあるフォルダへは移せないので上書きはしない)。
 fn move_into_place(temp: &Path, root: &Path, stamp: &str) -> Result<String> {
     for n in 1.. {
         let name = if n == 1 {
@@ -218,8 +224,11 @@ fn move_into_place(temp: &Path, root: &Path, stamp: &str) -> Result<String> {
         if target.exists() {
             continue;
         }
-        fs::rename(temp, &target).map_err(io_error("finish the export folder"))?;
-        return Ok(name);
+        match fs::rename(temp, &target) {
+            Ok(()) => return Ok(name),
+            Err(_) if target.exists() => continue,
+            Err(e) => return Err(io_error("finish the export folder")(e)),
+        }
     }
     unreachable!("the folder name counter is unbounded")
 }
@@ -432,7 +441,9 @@ mod tests {
             task.contains(&format!("](attachments/{}/a%20b.png)", ids[1])),
             "{task}"
         );
-        assert!(task.contains("gone\\.png (application/octet-stream, 1 bytes, file not found)"));
+        assert!(
+            task.contains("gone\\.png (application/octet-stream, size in bytes: 1, not exported)")
+        );
     }
 
     #[test]

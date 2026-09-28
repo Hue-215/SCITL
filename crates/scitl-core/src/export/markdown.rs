@@ -1,5 +1,4 @@
-//! 書き出すMarkdownの組み立て。書き出したファイルは、画面側の描画の無害化(architecture.md 9節)を
-//! 持たない他のビューアで開かれる前提に立つ(10節の表「Markdownファイル」)。無害化はここに閉じる。
+//! 書き出すMarkdownの組み立て。無害化(architecture.md 10節の表「Markdownファイル」)はここに閉じる。
 //!
 //! - 利用者・モデルが決められる1行の値(タイトル・締切・工程・添付名等)は[`inline_text`]を通す。
 //!   SCITL自身が作る値(日時・中身から決めたMIME)はそのまま書く
@@ -139,7 +138,10 @@ fn attachment_item(attachment: &AttachmentLink) -> String {
     if name.is_empty() {
         name = "(unnamed)".to_string();
     }
-    let facts = format!("{}, {} bytes", attachment.mime_type, attachment.size_bytes);
+    let facts = format!(
+        "{}, size in bytes: {}",
+        attachment.mime_type, attachment.size_bytes
+    );
     match &attachment.path {
         Some(segments) => {
             let target: Vec<String> = segments.iter().map(|s| encode_path_segment(s)).collect();
@@ -150,22 +152,32 @@ fn attachment_item(attachment: &AttachmentLink) -> String {
             };
             format!("{bang}[{name}]({}) ({facts})", target.join("/"))
         }
-        None => format!("{name} ({facts}, file not found)"),
+        None => format!("{name} ({facts}, not exported)"),
     }
 }
 
 /// 1行の自由入力を、Markdownの構造として読まれない形にする。見えない書式文字を除いて1行に畳み
-/// ([`visible_line`])、ASCIIの句読点をすべてバックスラッシュでエスケープする。CommonMarkは
-/// ASCIIの句読点すべてのエスケープを認めるので、文字の種類を選ばずに一律に掛ければ、見出し・
-/// リスト・強調・リンク・画像・生HTML・表・実体参照のどれにもならない。
+/// ([`visible_line`])、ASCIIの句読点をバックスラッシュでエスケープする。CommonMarkはASCIIの
+/// 句読点すべてのエスケープを認めるので、文字の種類を選ばずに一律に掛ければ、見出し・リスト・
+/// 強調・リンク・画像・生HTML・表・実体参照のどれにもならない。
+///
+/// 括弧だけは例外にする。`\(`・`\[`は、数式を描くビューア(MathJax・KaTeX)が数式の区切りとして
+/// 読む。`(`・`)`はそれだけでは構造を作らないので残し、`[`・`]`は数値文字参照にする(文字参照は
+/// 構造を作らない)。
 fn inline_text(s: &str) -> String {
     let line = visible_line(s);
     let mut out = String::with_capacity(line.len());
     for c in line.chars() {
-        if c.is_ascii_punctuation() {
-            out.push('\\');
+        match c {
+            '(' | ')' => out.push(c),
+            '[' => out.push_str("&#91;"),
+            ']' => out.push_str("&#93;"),
+            c if c.is_ascii_punctuation() => {
+                out.push('\\');
+                out.push(c);
+            }
+            c => out.push(c),
         }
-        out.push(c);
     }
     out
 }
@@ -236,14 +248,20 @@ mod tests {
         assert_eq!(inline_text("1. item"), "1\\. item");
         assert_eq!(
             inline_text("<script>alert(1)</script>"),
-            "\\<script\\>alert\\(1\\)\\<\\/script\\>"
+            "\\<script\\>alert(1)\\<\\/script\\>"
         );
         assert_eq!(
             inline_text("![x](http://e.test/t.png)"),
-            "\\!\\[x\\]\\(http\\:\\/\\/e\\.test\\/t\\.png\\)"
+            "\\!&#91;x&#93;(http\\:\\/\\/e\\.test\\/t\\.png)"
         );
         assert_eq!(inline_text("&lt;"), "\\&lt\\;");
         assert_eq!(inline_text("a | b"), "a \\| b");
+        // 数式の区切り(`\\(`・`\\[`)を作らない。
+        assert_eq!(inline_text("f(x) [a]"), "f(x) &#91;a&#93;");
+        assert_eq!(
+            inline_text("[[note]] ![[embed]]"),
+            "&#91;&#91;note&#93;&#93; \\!&#91;&#91;embed&#93;&#93;"
+        );
     }
 
     #[test]
@@ -399,15 +417,15 @@ mod tests {
         // 空白だけの本文(添付だけを送った発言)はコードブロックにしない。
         assert!(!out.contains("```"), "{out}");
         assert!(
-            out.contains("- ![a b\\.png](attachments/5/a%20b.png) (image/png, 3 bytes)\n"),
+            out.contains("- ![a b\\.png](attachments/5/a%20b.png) (image/png, size in bytes: 3)\n"),
             "{out}"
         );
         assert!(
-            out.contains("- [\\]\\(x\\)](attachments/6/%5D%28x%29) (image/png, 3 bytes)\n"),
+            out.contains("- [&#93;(x)](attachments/6/%5D%28x%29) (image/png, size in bytes: 3)\n"),
             "{out}"
         );
         assert!(
-            out.contains("- gone\\.bin (image/png, 3 bytes, file not found)\n"),
+            out.contains("- gone\\.bin (image/png, size in bytes: 3, not exported)\n"),
             "{out}"
         );
     }

@@ -120,7 +120,7 @@ export interface ExportSummary {
   folder: string
   tasks: number
   attachments: number
-  // 実体を読めず、同梱できなかった添付の数
+  // 実体を読めない・書けないために同梱できなかった添付の数
   missing_attachments: number
 }
 
