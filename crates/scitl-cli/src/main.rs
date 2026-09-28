@@ -1,7 +1,7 @@
 //! SCITLのCLI。GUIと同じcoreを直接呼び、GUIを開かずに同じ検証を通って操作・確認できる
 //! 状態を保つ(architecture.md 1節)。応答生成(送信・再試行)は行わない。
 //!
-//! 出力はJSONに揃え、端末へは[`print_json`]・[`print_error`]だけから書く。
+//! 出力はJSONに揃え、端末へは[`print_json`]・[`print_error`]・[`print_clap`]だけから書く。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -70,7 +70,11 @@ enum ChatCommand {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // `Cli::parse`はヘルプ・引数のエラーを自分で端末へ書くので、書く前に受け取る。
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => return print_clap(&e),
+    };
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -83,10 +87,11 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<(), CliError> {
     let data = DataLayout::new(match cli.data_dir {
         Some(dir) => dir,
-        None => paths::default_data_dir().ok_or(CliError::NoDataDir)?,
+        None => paths::default_data_dir()?,
     });
     // 無い場所を開くと空のDBを作ってしまう。打ち間違えた`--data-dir`で黙って空の一覧を
-    // 返さないよう、ディレクトリが無ければ断る。
+    // 返さないよう、ディレクトリが無ければ断る。既定の場所もGUIを一度起動するまでは無いが、
+    // その間はタスクも無いので断って困らない。
     if !data.root().is_dir() {
         return Err(CliError::MissingDataDir(data.root().to_path_buf()));
     }
@@ -126,8 +131,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 
 #[derive(Debug, thiserror::Error)]
 enum CliError {
-    #[error("this OS has no directory for application data; pass --data-dir")]
-    NoDataDir,
+    #[error("{0}; pass --data-dir")]
+    NoDataDir(#[from] paths::NoAppDir),
     #[error("data directory {} does not exist", .0.display())]
     MissingDataDir(PathBuf),
     #[error(transparent)]
@@ -144,4 +149,16 @@ fn print_json(value: &impl Serialize) {
 /// エラーの表示文はタスクのタイトル等の値を含みうるので、出力と同じく見えない文字を見せる形にする。
 fn print_error(error: &CliError) {
     eprintln!("error: {}", text::reveal_invisible(&error.to_string()));
+}
+
+/// clapが組み立てたヘルプ・引数のエラー。エラーは受け取った引数の値をそのまま含むので、
+/// 他の出力と同じく見えない文字を見せる形にする。
+fn print_clap(error: &clap::Error) -> ExitCode {
+    let rendered = text::reveal_invisible(&error.render().to_string());
+    if error.use_stderr() {
+        eprint!("{rendered}");
+    } else {
+        print!("{rendered}");
+    }
+    ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(1))
 }

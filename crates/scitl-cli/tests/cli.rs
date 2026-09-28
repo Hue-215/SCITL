@@ -111,3 +111,17 @@ fn a_failed_operation_exits_with_failure_and_writes_to_stderr() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("task 1 not found"));
 }
+
+#[test]
+fn argument_errors_reach_the_terminal_escaped() {
+    let data = DataDir::new();
+
+    let output = data.run(&["task", "show", "1\u{1B}[31m"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        !stderr.contains('\u{1B}') && stderr.contains("\\u001B"),
+        "{stderr}"
+    );
+}

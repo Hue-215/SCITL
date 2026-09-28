@@ -7,15 +7,24 @@ use std::path::{Path, PathBuf};
 /// Rustの定数を参照できないので、scitl-tauriのテストが照合する。
 pub const APP_IDENTIFIER: &str = "dev.niigo.scitl";
 
+/// OSがアプリのデータ・キャッシュの置き場所を持たない。
+#[derive(Debug, thiserror::Error)]
+#[error("this OS has no directory for application data")]
+pub struct NoAppDir;
+
 /// 既定のデータディレクトリ。Tauriの`app_data_dir`と同じく、OSごとの場所(`dirs::data_dir`)に
-/// 識別子を繋ぐ。OSが場所を持たなければ`None`。
-pub fn default_data_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|dir| dir.join(APP_IDENTIFIER))
+/// 識別子を繋ぐ。
+pub fn default_data_dir() -> Result<PathBuf, NoAppDir> {
+    dirs::data_dir()
+        .map(|dir| dir.join(APP_IDENTIFIER))
+        .ok_or(NoAppDir)
 }
 
 /// 既定のキャッシュディレクトリ。Tauriの`app_cache_dir`と同じ決め方。
-pub fn default_cache_dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|dir| dir.join(APP_IDENTIFIER))
+pub fn default_cache_dir() -> Result<PathBuf, NoAppDir> {
+    dirs::cache_dir()
+        .map(|dir| dir.join(APP_IDENTIFIER))
+        .ok_or(NoAppDir)
 }
 
 /// データディレクトリの中の並び。

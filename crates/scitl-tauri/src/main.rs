@@ -14,8 +14,6 @@ use scitl_core::paths::{self, DataLayout};
 use scitl_core::settings::Settings;
 use tauri::Manager;
 
-const NO_DATA_DIR: &str = "this OS has no directory for application data";
-
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
 /// (DBは`db::with_conn`、設定は`settings::Settings`、生成中の会話は`in_flight`)。
 pub struct AppState {
@@ -33,14 +31,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(navigation::guard())
         .setup(|app| {
-            let data = DataLayout::new(paths::default_data_dir().ok_or(NO_DATA_DIR)?);
+            let data = DataLayout::new(paths::default_data_dir()?);
             std::fs::create_dir_all(data.root())?;
             let conn = scitl_core::db::open(data.database())?;
 
             let settings = Settings::load(data.config());
             let attachments = Arc::new(Attachments::new(AttachmentStore::new(
                 data.attachments(),
-                paths::revealed_attachments(&paths::default_cache_dir().ok_or(NO_DATA_DIR)?),
+                paths::revealed_attachments(&paths::default_cache_dir()?),
             )));
 
             app.manage(AppState {
