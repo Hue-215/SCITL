@@ -14,17 +14,15 @@ use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
-    ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, ToolArguments,
-    ToolCallRequest, ToolSchema,
+    ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, ToolArguments, ToolCallRequest,
 };
 use crate::mcp::McpSessions;
-use crate::orchestration::history::{self, HistoryOptions};
-use crate::orchestration::history_trim::trim_history;
+use crate::orchestration::history;
 use crate::orchestration::mcp_access::McpAccess;
-use crate::orchestration::state_prompt::build_system_prompt;
 use crate::orchestration::tool_record::{ToolExecutionRecord, ToolExecutionView};
 use crate::orchestration::turn_error::{self, TurnFailure};
-use crate::orchestration::{SystemPrompts, TurnContext, TurnEvent, TurnEvents};
+use crate::orchestration::turn_request::TurnRequest;
+use crate::orchestration::{TurnContext, TurnEvent, TurnEvents};
 use crate::tools::{self, external::ExternalToolset, ToolKind, ToolOutput};
 
 /// 送信する発言。本文と、送信前に預けた添付のトークン(`attachments::Attachments::stage`)。
@@ -85,19 +83,7 @@ async fn save_user_message(
     with_conn(db, move |conn| {
         in_transaction(conn, |conn| {
             require_chat(conn, chat)?;
-            let message_id = messages::insert_message(
-                conn,
-                NewMessage {
-                    task_id: chat.task_id(),
-                    role: Role::User,
-                    content: &text,
-                    kind: Kind::Normal,
-                    origin: Origin::User,
-                    error_kind: None,
-                    error_detail: None,
-                    reasoning: None,
-                },
-            )?;
+            let message_id = insert_user_message(conn, chat, &text)?;
             for row in &rows {
                 db_attachments::insert(conn, message_id, row)?;
             }
@@ -105,6 +91,23 @@ async fn save_user_message(
         })
     })
     .await
+}
+
+/// ユーザー発言の行を書く。会話が存在するかは呼び出し側が確かめる([`require_chat`])。
+pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> Result<i64> {
+    messages::insert_message(
+        conn,
+        NewMessage {
+            task_id: chat.task_id(),
+            role: Role::User,
+            content: text,
+            kind: Kind::Normal,
+            origin: Origin::User,
+            error_kind: None,
+            error_detail: None,
+            reasoning: None,
+        },
+    )
 }
 
 /// [`create_task`]の結果。
@@ -269,7 +272,7 @@ pub async fn delete_message(
 }
 
 /// ユーザー発言には本文か添付のどちらかが要る。本文が空白だけでも、添付があれば送れる。
-fn require_content(text: &str, attachment_count: usize) -> Result<()> {
+pub(super) fn require_content(text: &str, attachment_count: usize) -> Result<()> {
     if text.trim().is_empty() && attachment_count == 0 {
         return Err(CoreError::InvalidMessageOperation(
             "a message needs text or attachments".to_string(),
@@ -289,7 +292,7 @@ pub(super) fn begin_generating(
 
 /// 会話に行を書く前に、タスクが存在し削除されていないかを確かめる。削除と操作が
 /// 行き違うと、外部キーは通るので削除済みのタスクに行が書かれてしまう。
-fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
+pub(super) fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
     if let Chat::Task(task_id) = chat {
         tasks::get_task(conn, task_id)?;
     }
@@ -365,7 +368,7 @@ async fn generate_turn_response(
 }
 
 /// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
-fn ready_adapter<'a>(
+pub(super) fn ready_adapter<'a>(
     ctx: &TurnContext<'a>,
 ) -> std::result::Result<&'a dyn LlmAdapter, TurnFailure> {
     let adapter = ctx.adapter.clone()?;
@@ -431,7 +434,7 @@ impl Attempt {
 /// 一覧はキャッシュ(Issue #104)を優先し、無ければ取得してキャッシュに載せる。
 /// 接続・取得に失敗したサーバーはこのターンでは公開しない。ここでターン全体を失敗させると、
 /// 外部サーバーが1つ落ちているだけでチャットが使えなくなるため(principles.md 3節)。
-async fn prepare_external_tools(
+pub(super) async fn prepare_external_tools(
     mcp: &McpAccess<'_>,
     chat: Chat,
     sessions: &mut McpSessions,
@@ -464,11 +467,6 @@ async fn prepare_external_tools(
     ExternalToolset::build(fetched, &tools::names(chat))
 }
 
-/// ツールの上限に達したあとの最後の呼び出しで、システムプロンプトの末尾に足す一節。
-/// ツールを渡さない理由を伝えないと、モデルがツールを呼ぶつもりの文を返しがちになる。
-const ROUND_LIMIT_NOTE: &str = "The tool call limit for this turn has been reached, so no tools \
-     are available now. Reply to the user based on the tool results so far.";
-
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
 /// 分けてあるだけで、1ターンの流れとしては地続き。
 async fn run_tool_rounds(
@@ -480,32 +478,11 @@ async fn run_tool_rounds(
     sessions: &mut McpSessions,
 ) -> Result<()> {
     let chat = attempt.chat;
-    // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
-    // 衝突の排除は`ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
-    // (対応しないモデルにツールを渡すと、リクエストごと拒否するサーバーがある)。
-    let tools_available = ctx.capabilities.tools;
     // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
     // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
-    let options = HistoryOptions {
-        tools_available,
-        image_input: ctx.capabilities.image,
-        opening: ctx.opening_message.to_string(),
-    };
-    // 添付画像の読み出しはファイルI/Oなので、DBのロックの外でブロッキング処理として行う。
-    let store = ctx.attachments.store();
-    let history =
-        blocking::run(move || Ok(history::build_history(stored, &options, &store))).await?;
-    let mut exposed_tools = Vec::new();
-    if tools_available {
-        exposed_tools.extend(tools::schemas(chat));
-        exposed_tools.extend(external.schemas());
-    }
-
-    // `run_turn`はawaitをまたぐため、'staticなクロージャに載せられるよう所有した文字列に
-    // 変換しておく(`SystemPrompts`自体はDBスレッドとやり取りするラウンドごとに組み直す)。
-    let base_owned = ctx.prompts.base.map(str::to_string);
-    let task_chat_owned = ctx.prompts.task_chat.map(str::to_string);
+    let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
+    let tools_available = request.tools_available();
     // 同一ターン内のツール呼び出し往復。分類(状態系/事実系)によらずモデルに返す
     // (docs/spec/rebuild/tools.md 4節「同一ターン内では分類によらず結果を返す」)。
     // このターンのリクエスト組み立てにのみ使い、DBの`messages`テーブルには書かない
@@ -520,49 +497,12 @@ async fn run_tool_rounds(
     // まとめて保存する(docs/spec/rebuild/data-model.md「1ターン内の往復で保存するもの」)。
     let mut reply_parts: Vec<String> = Vec::new();
 
-    // 上限のラウンドまでツールを実行したら、ツールを渡さずにもう一度だけ呼ぶ
-    // (docs/spec/rebuild/tools.md 4節)。`u64`で数えるのは、上限が`u32::MAX`でも
-    // 最後の1回を数えられるようにするため。ツールに対応しないモデルは、最初の呼び出しが
-    // その最後の1回になる。
-    let tool_rounds = if tools_available {
-        u64::from(ctx.limits.max_rounds_per_turn)
-    } else {
-        0
-    };
+    let tool_rounds = request.tool_rounds(ctx);
     for round in 1..=tool_rounds + 1 {
         let final_call = round > tool_rounds;
-        let mut system_prompt_text = with_conn(db.clone(), {
-            let base_owned = base_owned.clone();
-            let task_chat_owned = task_chat_owned.clone();
-            move |conn| {
-                let prompts = SystemPrompts {
-                    base: base_owned.as_deref(),
-                    task_chat: task_chat_owned.as_deref(),
-                };
-                build_system_prompt(conn, chat, &prompts, tools_available)
-            }
-        })
-        .await?;
-        if final_call && tools_available {
-            system_prompt_text.push_str("\n\n");
-            system_prompt_text.push_str(ROUND_LIMIT_NOTE);
-        }
-
-        let offered: &[ToolSchema] = if final_call { &[] } else { &exposed_tools };
-        let system = ChatMessage::System(system_prompt_text);
-        // システムプロンプトとこのラウンドまでの往復はラウンドごとに伸びるので、間引きも
-        // ラウンドごとにやり直す。
-        let kept = trim_history(
-            &history,
-            ctx.capabilities.context_length,
-            std::iter::once(&system).chain(&round_trip),
-            offered,
-        );
-
-        let mut messages_to_send = Vec::with_capacity(1 + kept.len() + round_trip.len());
-        messages_to_send.push(system);
-        messages_to_send.extend(kept.iter().cloned());
-        messages_to_send.extend(round_trip.iter().cloned());
+        let (messages_to_send, offered) = request
+            .round(db.clone(), ctx, &round_trip, final_call)
+            .await?;
 
         // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
         let mut events = Vec::new();

@@ -9,14 +9,14 @@ use scitl_core::db::messages::{Chat, Kind, Role};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, ResponseEvent,
-    ToolArguments, ToolSchema, DEFAULT_CAPABILITIES,
+    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, RequestPreview,
+    ResponseEvent, ToolArguments, ToolSchema, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
-    create_task, delete_message, discard_events, edit_user_message, open_task_chat, retry_reply,
-    run_turn, McpAccess, SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent,
-    TurnFailure, UserInput,
+    create_task, delete_message, discard_events, edit_user_message, open_task_chat,
+    preview_request, retry_reply, run_turn, McpAccess, PreviewOptions, SystemPrompts, TaskCreation,
+    ToolLimits, TurnContext, TurnEvent, TurnFailure, UserInput,
 };
 use serde_json::json;
 
@@ -3107,4 +3107,145 @@ async fn an_image_that_cannot_be_read_is_reported_to_the_model() {
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, chat).unwrap();
     assert_eq!(reply_of(&messages), "確認しました");
+}
+
+/// プレビューに渡された発言列・ツールと、各呼び出しで送られたものを記録する。返信は常に同じ文。
+#[derive(Default)]
+struct PreviewingAdapter {
+    previewed: Mutex<Vec<(Vec<ChatMessage>, Vec<String>)>>,
+    sent: Mutex<Vec<(Vec<ChatMessage>, Vec<String>)>>,
+}
+
+fn tool_names(tools: &[ToolSchema]) -> Vec<String> {
+    tools.iter().map(|t| t.name().to_string()).collect()
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for PreviewingAdapter {
+    fn readiness(&self) -> Readiness {
+        Readiness::Ready
+    }
+
+    async fn send(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<(), CoreError> {
+        self.sent
+            .lock()
+            .unwrap()
+            .push((messages.to_vec(), tool_names(tools)));
+        emit(
+            on_event,
+            vec![
+                ResponseEvent::TextDelta {
+                    text: "了解しました".to_string(),
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                },
+            ],
+        )
+    }
+
+    fn request_preview(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
+    ) -> Option<RequestPreview> {
+        self.previewed
+            .lock()
+            .unwrap()
+            .push((messages.to_vec(), tool_names(tools)));
+        Some(RequestPreview {
+            body: serde_json::Value::Null,
+        })
+    }
+}
+
+/// システムプロンプト(現在時刻を含む)を除き、送信日時の値を伏せた発言列。プレビューとターンで
+/// 仮の発言を書いた時刻は秒をまたぎうる。
+fn comparable(messages: &[ChatMessage]) -> String {
+    let debug = format!("{:?}", &messages[1..]);
+    let mut out = String::new();
+    let mut rest = debug.as_str();
+    while let Some(start) = rest.find("sent_at=\\\"") {
+        let value_start = start + "sent_at=\\\"".len();
+        out.push_str(&rest[..value_start]);
+        let value_len = rest[value_start..].find('\\').unwrap();
+        rest = &rest[value_start + value_len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn message_count(db: &db::SharedConnection) -> i64 {
+    db.lock()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+        .unwrap()
+}
+
+/// プレビューは、次のターンが最初に送る発言列とツールを、何も保存せずに組み立てる(Issue #23)。
+#[tokio::test]
+async fn preview_shows_what_the_next_turn_sends_without_saving() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = PreviewingAdapter::default();
+    let ctx = context(&adapter);
+    let chat = Chat::Task(task_id);
+    run_turn(db.clone(), &ctx, chat, "最初の発言".to_string())
+        .await
+        .unwrap();
+    let saved = message_count(&db);
+
+    let preview = preview_request(
+        db.clone(),
+        &ctx,
+        chat,
+        PreviewOptions {
+            message: Some("次の発言".to_string()),
+            external_tools: false,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!preview.external_tools);
+    assert_eq!(message_count(&db), saved);
+
+    run_turn(db.clone(), &ctx, chat, "次の発言".to_string())
+        .await
+        .unwrap();
+    let previewed = adapter.previewed.into_inner().unwrap().remove(0);
+    let sent = adapter.sent.into_inner().unwrap().remove(1);
+    assert!(comparable(&previewed.0).contains("次の発言"));
+    // 伏せたあとに値の無い属性が残っていれば、伏せる処理が働いている。
+    assert!(comparable(&previewed.0).contains("sent_at=\\\"\\\""));
+    assert_eq!(comparable(&previewed.0), comparable(&sent.0));
+    assert_eq!(previewed.1, sent.1);
+}
+
+#[tokio::test]
+async fn preview_reports_why_the_chat_cannot_be_used() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+
+    let outcome = preview_request(
+        Arc::new(Mutex::new(conn)),
+        &context_without_provider(),
+        Chat::Task(task_id),
+        PreviewOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        matches!(outcome, Err(TurnFailure::NoProvider)),
+        "{outcome:?}"
+    );
 }

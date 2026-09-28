@@ -125,3 +125,27 @@ fn argument_errors_reach_the_terminal_escaped() {
         "{stderr}"
     );
 }
+
+#[test]
+fn preview_without_a_provider_reports_why_and_saves_nothing() {
+    let data = DataDir::new();
+    let task_id = {
+        let conn = db::open(DataLayout::new(&data.0).database()).unwrap();
+        db::tasks::create_task(&conn).unwrap().id
+    };
+
+    let output = data.run(&[
+        "chat",
+        "preview",
+        "--task",
+        &task_id.to_string(),
+        "--message",
+        "こんにちは",
+    ]);
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).is_empty());
+    let messages = stdout_json(&data.run(&["chat", "show", "--task", &task_id.to_string()]));
+    assert_eq!(messages, serde_json::json!([]));
+}

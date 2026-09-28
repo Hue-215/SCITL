@@ -7,7 +7,7 @@ use crate::config::ReasoningEffort;
 use crate::error::CoreError;
 use crate::llm::{
     ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
+    RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
@@ -501,6 +501,29 @@ struct RequestFunction {
     parameters: serde_json::Value,
 }
 
+const CHAT_COMPLETIONS: &str = "chat/completions";
+
+/// プレビューの本文で、画像を置く位置(`ContentPart::ImageUrl`)のdata URLだけを形式と長さに
+/// 縮める(`LlmAdapter::request_preview`)。
+fn abbreviate_images(body: &mut serde_json::Value) {
+    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return;
+    };
+    let parts = messages
+        .iter_mut()
+        .filter_map(|m| m.get_mut("content").and_then(|c| c.as_array_mut()))
+        .flatten();
+    for part in parts {
+        if part.get("type").and_then(|t| t.as_str()) != Some("image_url") {
+            continue;
+        }
+        if let Some(serde_json::Value::String(url)) = part.pointer_mut("/image_url/url") {
+            let head = url.split(',').next().unwrap_or_default();
+            *url = format!("{head},… ({} bytes)", url.len());
+        }
+    }
+}
+
 fn request_body<'a>(
     model: &'a str,
     messages: &[ChatMessage],
@@ -577,6 +600,18 @@ impl LlmAdapter for OpenAiCompatAdapter {
         }
     }
 
+    fn request_preview(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSchema],
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Option<RequestPreview> {
+        let body = request_body(&self.model, messages, tools, reasoning_effort);
+        let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
+        abbreviate_images(&mut body);
+        Some(RequestPreview { body })
+    }
+
     async fn send(
         &self,
         messages: &[ChatMessage],
@@ -586,7 +621,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
     ) -> Result<(), CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
-        let endpoint = endpoint(&self.base_url, "chat/completions")?;
+        let endpoint = endpoint(&self.base_url, CHAT_COMPLETIONS)?;
         let request = super::with_api_key(self.client.post(endpoint), &self.api_key);
         let transport_error = |e| LlmError::from_transport(e, self.api_key.expose_secret());
         let response = request.json(&body).send().await.map_err(transport_error)?;
@@ -689,6 +724,60 @@ mod tests {
                 .unwrap();
         adapter.send(&[], &[], None, &mut |_| {}).await.unwrap();
         handle.join().unwrap()
+    }
+
+    #[test]
+    fn request_preview_is_the_body_send_would_post_without_the_key() {
+        let adapter = OpenAiCompatAdapter::new(
+            "http://127.0.0.1:1/v1",
+            SecretString::from("sk-preview-secret"),
+            "local-model",
+            TEST_TIMEOUT,
+        )
+        .unwrap();
+        let messages = [ChatMessage::user(PromptText::user_message("hi", None))];
+
+        let preview = adapter
+            .request_preview(&messages, &[], Some(ReasoningEffort::Low))
+            .unwrap();
+
+        let expected = request_body("local-model", &messages, &[], Some(ReasoningEffort::Low));
+        assert_eq!(preview.body, serde_json::to_value(expected).unwrap());
+        assert!(!serde_json::to_string(&preview)
+            .unwrap()
+            .contains("sk-preview-secret"));
+    }
+
+    /// 縮めるのは画像を置く位置だけ。`data:`で始まる本文を縮めると、モデルに渡る文を
+    /// プレビューから隠せる。
+    #[test]
+    fn request_preview_abbreviates_only_images() {
+        let adapter = OpenAiCompatAdapter::new(
+            "http://127.0.0.1:1/v1",
+            SecretString::from(""),
+            "local-model",
+            TEST_TIMEOUT,
+        )
+        .unwrap();
+        let text = format!("data:text/plain,{}", "x".repeat(200));
+        let messages = [
+            ChatMessage::User {
+                text: PromptText::user_message(&text, None),
+                images: vec![png()],
+            },
+            ChatMessage::Assistant {
+                content: Some(text.clone()),
+                tool_calls: Vec::new(),
+            },
+        ];
+
+        let body = adapter.request_preview(&messages, &[], None).unwrap().body;
+
+        let parts = &body["messages"][0]["content"];
+        assert!(parts[0]["text"].as_str().unwrap().contains(&text));
+        let image = parts[1]["image_url"]["url"].as_str().unwrap();
+        assert!(image.starts_with("data:image/png;base64,… ("), "{image}");
+        assert_eq!(body["messages"][1]["content"], text);
     }
 
     #[tokio::test]

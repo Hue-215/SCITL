@@ -57,6 +57,24 @@ pub(crate) fn in_transaction<T>(
     Ok(out)
 }
 
+/// 書き込みの権利を取ったトランザクションの中で`f`を実行し、結果によらず巻き戻す。書いた
+/// 状態を読んだ結果だけが要り、書いたもの自体は残さない場合に使う(送信内容のプレビュー)。
+pub(crate) fn in_rolled_back_transaction<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    // SQLiteは入れ子の`BEGIN`を受け付けず、外側の一部だけを巻き戻す手段も無い。
+    if !conn.is_autocommit() {
+        return Err(CoreError::Internal(
+            "cannot roll back part of an outer transaction".to_string(),
+        ));
+    }
+    // 捨てる書き込みでも、読んだ時点から他プロセスの書き込みを止める点は`in_transaction`と同じ。
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    f(&tx)
+    // `tx`は確定せずに落とすので、ここで巻き戻る。
+}
+
 /// 番号順のマイグレーション。`user_version`は、この列の先頭から何個を適用済みかを表す
 /// (data-model.md 5節)。
 const MIGRATIONS: &[&str] = &[
