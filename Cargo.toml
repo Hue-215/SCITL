@@ -38,6 +38,10 @@ sha2 = "0.10"
 # 添付画像をdata URLにする(画面のサムネイルと、モデルへの埋め込み)。同じ版がhyper-utilの依存として
 # 既にビルドされている。上流の版が上がったら合わせて上げる(`cargo tree -d -i base64`で確認)
 base64 = "0.22"
+# 添付画像の正規化(向きの補正・縮小・形式の統一。`scitl-core/src/attachments/normalize.rs`)。
+# 受け付ける画像形式(PNG・JPEG・GIF・WebP)のデコーダーだけを有効にする。既定のfeatureは
+# 使わない形式のデコーダーと並列化(rayon)を引き込むため切る
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
 # 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
 # (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため)。
@@ -57,3 +61,15 @@ process-wrap = { version = "10.0", default-features = false, features = [
     "job-object",
     "kill-on-drop",
 ] }
+
+# 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
+# デコード・縮小・エンコードに関わるクレートだけは最適化する
+[profile.dev.package]
+image = { opt-level = 3 }
+zune-jpeg = { opt-level = 3 }
+png = { opt-level = 3 }
+fdeflate = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
+gif = { opt-level = 3 }
+weezl = { opt-level = 3 }
+image-webp = { opt-level = 3 }

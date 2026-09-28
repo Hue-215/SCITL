@@ -274,6 +274,8 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
   `attachments/<file_hash>` に置き、同じ内容の添付は実体を共有する(`architecture.md` 12節)。
   実体を消してよいのは、同じ `file_hash` を指す行が1つも無くなったときだけ
 - `mime_type` は中身の先頭バイトから決めた値(`attachments::classify`)。拡張子からは決めない
+- 画像は預かる時点で正規化する(`architecture.md` 12節)。`mime_type`・`size_bytes`・`file_hash` は
+  正規化した後の実体のもので、元のファイルのものではない
 - 編集で新しい発言へ引き継ぐときは行を写し、実体は共有する(`db::attachments::copy_to_message`)
 
 ## 3. 索引

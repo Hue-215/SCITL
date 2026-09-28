@@ -4,6 +4,9 @@
 //!
 //! 中身は送信までメモリにだけ持ち、実体の置き場所には送信のときに書く。選んだ時点で書くと、
 //! 取り消した・送らずに終えた添付の実体が、どの行からも指されないまま残り続けるため。
+//!
+//! 画像は預かる時点で正規化し([`normalize_image`])、以降は正規化したものだけを扱う。
+//! 大きさ・MIME・内容のハッシュも正規化した後のもの。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -12,6 +15,7 @@ use serde::Serialize;
 use ulid::Ulid;
 
 use super::classify::{classify, Classified, LIMITS};
+use super::normalize::normalize_image;
 use super::store::AttachmentStore;
 use crate::db::attachments::{AttachmentContent, AttachmentKind, NewAttachment};
 use crate::db::error::{CoreError, Result};
@@ -107,6 +111,7 @@ impl Staged {
                 },
             });
         }
+        let (classified, bytes) = normalized(classified, bytes);
         let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
         self.lock().insert(
@@ -171,6 +176,31 @@ impl Staged {
     }
 }
 
+/// 画像なら正規化したものに置き換える。デコードできない画像は拒まず「その他」として預かる。
+/// その他は中身をデコードしないので、壊れた画像や展開爆弾を置いておいても害が無く、画面も
+/// 中身がモデルに渡らないことを既存の表示で伝えられる。
+fn normalized(classified: Classified, bytes: Vec<u8>) -> (Classified, Vec<u8>) {
+    if classified.kind != AttachmentKind::Image {
+        return (classified, bytes);
+    }
+    match normalize_image(&bytes) {
+        Some(image) => (
+            Classified {
+                kind: AttachmentKind::Image,
+                mime_type: image.mime_type,
+            },
+            image.bytes,
+        ),
+        None => (
+            Classified {
+                kind: AttachmentKind::Other,
+                mime_type: classified.mime_type,
+            },
+            bytes,
+        ),
+    }
+}
+
 fn size_of(bytes: &[u8]) -> i64 {
     i64::try_from(bytes.len()).expect("bounded by the size limit")
 }
@@ -223,14 +253,66 @@ mod tests {
         assert_eq!(rows[0].content, AttachmentContent::Text("aaa".to_string()));
         assert!(!root.exists(), "text must not touch the store");
 
-        let image = token_of(
-            staged
-                .stage("p.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
-                .unwrap(),
-        );
+        let image = token_of(staged.stage("p.png".into(), png(4, 4)).unwrap());
         let rows = staged.take(&[image]).unwrap().store(&store).unwrap();
         assert!(matches!(&rows[0].content, AttachmentContent::File { hash } if hash.len() == 64));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::DynamicImage::new_rgb8(width, height)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn stages_images_as_normalized() {
+        let staged = Staged::default();
+        let outcome = staged.stage("big.png".into(), png(3000, 100)).unwrap();
+        let StageOutcome::Staged {
+            token,
+            kind,
+            mime_type,
+            size_bytes,
+        } = outcome
+        else {
+            panic!("expected staged, got {outcome:?}");
+        };
+        assert_eq!(
+            (kind, mime_type.as_str()),
+            (AttachmentKind::Image, "image/png")
+        );
+        let taken = staged.take(&[token]).unwrap();
+        let bytes = &taken.0[0].1.bytes;
+        assert_eq!(size_bytes, bytes.len() as i64);
+        assert_eq!(image::load_from_memory(bytes).unwrap().width(), 1568);
+    }
+
+    #[test]
+    fn stages_undecodable_images_as_other() {
+        let staged = Staged::default();
+        let broken = b"\x89PNG\r\n\x1a\nbody".to_vec();
+        let outcome = staged.stage("broken.png".into(), broken.clone()).unwrap();
+        let StageOutcome::Staged {
+            token,
+            kind,
+            mime_type,
+            ..
+        } = outcome
+        else {
+            panic!("expected staged, got {outcome:?}");
+        };
+        assert_eq!(
+            (kind, mime_type.as_str()),
+            (AttachmentKind::Other, "image/png")
+        );
+        let taken = staged.take(&[token]).unwrap();
+        assert_eq!(&*taken.0[0].1.bytes, broken.as_slice());
     }
 
     #[test]

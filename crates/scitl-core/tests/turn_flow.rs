@@ -2581,6 +2581,18 @@ fn staged_token(outcome: StageOutcome) -> String {
     }
 }
 
+/// 画像として預かられる(正規化でデコードできる)PNG。
+fn png() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    image::DynamicImage::new_rgb8(2, 2)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    bytes
+}
+
 /// 添付はユーザー発言と一緒に保存され、送信前の集合から外れる(Issue #21)。本文が
 /// 空でも添付があれば送れる。
 #[tokio::test]
@@ -2595,11 +2607,7 @@ async fn run_turn_saves_attachments_with_the_user_message() {
             .stage("memo.txt".into(), b"memo".to_vec())
             .unwrap(),
     );
-    let image = staged_token(
-        ctx.attachments
-            .stage("photo.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
-            .unwrap(),
-    );
+    let image = staged_token(ctx.attachments.stage("photo.png".into(), png()).unwrap());
 
     run_turn(
         db.clone(),
@@ -2826,11 +2834,7 @@ async fn attachments_reach_the_model_with_the_message() {
             .stage("memo.txt".into(), b"memo".to_vec())
             .unwrap(),
     );
-    let image = staged_token(
-        ctx.attachments
-            .stage("photo.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
-            .unwrap(),
-    );
+    let image = staged_token(ctx.attachments.stage("photo.png".into(), png()).unwrap());
 
     run_turn(
         db.clone(),

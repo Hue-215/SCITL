@@ -16,7 +16,7 @@ use crate::AppState;
 const FILE_NAME_HEADER: &str = "x-scitl-file-name";
 
 /// 選んだファイルを預け、判定の結果を返す。本文はファイルの中身そのもの。判定は中身全体を
-/// 走査する(UTF-8の検査)ので、ブロッキング処理として呼ぶ。
+/// 走査し(UTF-8の検査)、画像はデコードし直す(正規化)ので、ブロッキング処理として呼ぶ。
 #[tauri::command]
 pub async fn stage_attachment(
     state: State<'_, AppState>,
