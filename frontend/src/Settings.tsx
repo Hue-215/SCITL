@@ -106,6 +106,39 @@ export default function Settings({ onClose }: SettingsProps) {
     }
   }
 
+  // 追加の結果は、エラーをフォームの直下に出すため、ここでは握らず呼び出し元へ返す。
+  const applyAdded = async (action: () => Promise<SettingsView>) => {
+    const next = await action()
+    setSettings(next)
+    setError(null)
+    return next
+  }
+
+  // MCPサーバーのツール一覧の取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す。
+  // どのサーバーで失敗したかが分かるように。legacy/frontend.md 4節)。追加した直後の自動取得も
+  // 同じ表示にし、取得中にタブを切り替えても結果が失われないよう、タブではなくここで持つ。
+  const [fetchingTools, setFetchingTools] = useState<string[]>([])
+  const [toolFetchErrors, setToolFetchErrors] = useState<Record<string, string>>({})
+
+  const fetchTools = async (serverId: string) => {
+    setFetchingTools((prev) => [...prev, serverId])
+    setToolFetchErrors((prev) => {
+      const next = { ...prev }
+      delete next[serverId]
+      return next
+    })
+    try {
+      setSettings(await fetchMcpTools(serverId))
+    } catch (e) {
+      setToolFetchErrors((prev) => ({
+        ...prev,
+        [serverId]: t('common.fetch_failed', { error: failureText(e) }),
+      }))
+    } finally {
+      setFetchingTools((prev) => prev.filter((id) => id !== serverId))
+    }
+  }
+
   return (
     <div className="settings">
       <header className="settings-header">
@@ -167,8 +200,7 @@ export default function Settings({ onClose }: SettingsProps) {
               <ProvidersTab
                 settings={settings}
                 onAddProvider={async (name, format, baseUrl, apiKey) => {
-                  // 追加のエラーはフォームの直下に出すため、ここでは握らず呼び出し元へ返す。
-                  setSettings(await addProvider(name, format, baseUrl, apiKey))
+                  await applyAdded(() => addProvider(name, format, baseUrl, apiKey))
                 }}
                 onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
                 onUpdateModels={runOrReportError}
@@ -182,12 +214,13 @@ export default function Settings({ onClose }: SettingsProps) {
                   )
                 }
                 onAddServer={async (name, endpoint) => {
-                  // 追加のエラーはフォームの直下に出すため、ここでは握らず呼び出し元へ返す。
+                  // 追加したら続けて1回ツール一覧を取得する(legacy/frontend.md 4節「追加時に
+                  // 自動で1回接続テスト」)。失敗しても登録は残し、エラーはそのカードに出す。
                   // 追加したサーバーは、追加前に無かったidで見分ける。
                   const before = new Set(settings.mcp_servers.map((s) => s.id))
-                  const next = await addMcpServer(name, endpoint)
-                  setSettings(next)
-                  return next.mcp_servers.find((s) => !before.has(s.id))?.id ?? null
+                  const next = await applyAdded(() => addMcpServer(name, endpoint))
+                  const added = next.mcp_servers.find((s) => !before.has(s.id))
+                  if (added) void fetchTools(added.id)
                 }}
                 onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
                 onSetServerEnabled={(id, enabled) =>
@@ -196,11 +229,9 @@ export default function Settings({ onClose }: SettingsProps) {
                 onSetToolEnabled={(id, toolName, enabled) =>
                   runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
                 }
-                onFetchTools={async (id) => {
-                  // 取得のエラーはカード内に出すため、ここでは握らず呼び出し元へ返す
-                  // (どのサーバーで失敗したかが分かるように。legacy/frontend.md 4節)。
-                  setSettings(await fetchMcpTools(id))
-                }}
+                fetchingTools={fetchingTools}
+                toolFetchErrors={toolFetchErrors}
+                onFetchTools={(id) => void fetchTools(id)}
               />
             )}
           </div>
@@ -1058,12 +1089,13 @@ const MCP_NAME_CHARS = /^[A-Za-z0-9_]+$/
 interface McpTabProps {
   settings: SettingsView
   onSaveLimits: (maxRoundsPerTurn: number | null, totalTimeoutSecs: number | null) => void
-  // 追加したサーバーのidを返す。
-  onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<string | null>
+  onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<void>
   onDeleteServer: (serverId: string) => void
   onSetServerEnabled: (serverId: string, enabled: boolean) => void
   onSetToolEnabled: (serverId: string, toolName: string, enabled: boolean) => void
-  onFetchTools: (serverId: string) => Promise<void>
+  fetchingTools: string[]
+  toolFetchErrors: Record<string, string>
+  onFetchTools: (serverId: string) => void
 }
 
 function McpTab({
@@ -1073,39 +1105,10 @@ function McpTab({
   onDeleteServer,
   onSetServerEnabled,
   onSetToolEnabled,
+  fetchingTools,
+  toolFetchErrors,
   onFetchTools,
 }: McpTabProps) {
-  // ツール一覧の取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す)。
-  // 追加した直後の自動取得もカードの取得と同じ表示にするため、カードではなくここで持つ。
-  const [fetching, setFetching] = useState<string[]>([])
-  const [fetchErrors, setFetchErrors] = useState<Record<string, string>>({})
-
-  const fetchTools = async (serverId: string) => {
-    setFetching((prev) => [...prev, serverId])
-    setFetchErrors((prev) => {
-      const next = { ...prev }
-      delete next[serverId]
-      return next
-    })
-    try {
-      await onFetchTools(serverId)
-    } catch (e) {
-      setFetchErrors((prev) => ({
-        ...prev,
-        [serverId]: t('common.fetch_failed', { error: failureText(e) }),
-      }))
-    } finally {
-      setFetching((prev) => prev.filter((id) => id !== serverId))
-    }
-  }
-
-  // 追加したら続けて1回ツール一覧を取得する(legacy/frontend.md 4節「追加時に自動で1回
-  // 接続テスト」)。失敗しても登録は残し、エラーはそのサーバーのカードに出す。
-  const addServer = async (name: string, endpoint: NewMcpEndpoint) => {
-    const serverId = await onAddServer(name, endpoint)
-    if (serverId !== null) void fetchTools(serverId)
-  }
-
   return (
     <div className="settings-panel">
       <p className="settings-hint">{t('settings.tools.intro')}</p>
@@ -1118,9 +1121,9 @@ function McpTab({
             onDelete={() => onDeleteServer(server.id)}
             onSetEnabled={(enabled) => onSetServerEnabled(server.id, enabled)}
             onSetToolEnabled={(toolName, enabled) => onSetToolEnabled(server.id, toolName, enabled)}
-            fetching={fetching.includes(server.id)}
-            fetchError={fetchErrors[server.id] ?? null}
-            onFetchTools={() => void fetchTools(server.id)}
+            fetching={fetchingTools.includes(server.id)}
+            fetchError={toolFetchErrors[server.id] ?? null}
+            onFetchTools={() => onFetchTools(server.id)}
           />
         ))}
         {settings.mcp_servers.length === 0 && (
@@ -1131,7 +1134,7 @@ function McpTab({
       <AddMcpServerForm
         existingNames={settings.mcp_servers.map((s) => s.name)}
         nameMaxChars={settings.mcp_server_name_max_chars}
-        onAdd={addServer}
+        onAdd={onAddServer}
       />
 
       {/* ツール呼び出し全体の上限(legacy/frontend.md 4節「共通設定」)。内部ツールにも
