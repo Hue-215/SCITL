@@ -3,6 +3,7 @@
 mod commands;
 mod navigation;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use scitl_core::attachments::{AttachmentStore, Attachments};
@@ -21,6 +22,8 @@ pub struct AppState {
     pub generating: InFlightSet<Chat>,
     /// 送信前の添付と実体の置き場所(`orchestration::TurnContext::attachments`)。
     pub attachments: Arc<Attachments>,
+    /// Markdownエクスポートの書き出し先。画面からは変えられない(architecture.md 13節)。
+    pub export_dir: PathBuf,
 }
 
 fn main() {
@@ -42,6 +45,7 @@ fn main() {
                 settings: Arc::new(settings),
                 generating: InFlightSet::new(),
                 attachments,
+                export_dir: app_data_dir.join("export"),
             });
             Ok(())
         })
@@ -64,6 +68,8 @@ fn main() {
             commands::attachments::read_text_attachment,
             commands::attachments::read_image_attachment,
             commands::attachments::reveal_attachment,
+            commands::export::export_markdown,
+            commands::export::open_export_folder,
             commands::settings::get_settings,
             commands::settings::update_general_settings,
             commands::settings::get_display_language,
