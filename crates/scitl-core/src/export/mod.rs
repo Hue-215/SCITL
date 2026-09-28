@@ -23,6 +23,7 @@ use crate::db::task_steps::{self, TaskStep};
 use crate::db::tasks::{self, Task};
 use crate::db::{now_iso8601, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
+use crate::text;
 use markdown::{AttachmentLink, Entry};
 
 const ATTACHMENTS_DIR: &str = "attachments";
@@ -211,7 +212,7 @@ fn write_attachment(
 fn task_file_name(task: &Task) -> String {
     let stem = match &task.title {
         Some(title) => {
-            let title: String = title.chars().take(TITLE_CHARS_IN_FILE_NAME).collect();
+            let (title, _) = text::truncate_chars(title, TITLE_CHARS_IN_FILE_NAME);
             safe_file_name(&format!("task-{}-{title}", task.id))
         }
         None => format!("task-{}", task.id),
