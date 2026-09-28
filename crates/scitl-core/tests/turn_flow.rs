@@ -2863,10 +2863,10 @@ async fn attachments_reach_the_model_with_the_message() {
     assert!(images[0].data_url().starts_with("data:image/png;base64,"));
 }
 
-/// 過去の画像は、添付の読み込みツールで読み直せる(Issue #213)。画像は読んだターンでだけ
-/// ツール結果と一緒に送り、次のターンの履歴には結果だけが残る。
+/// 過去の添付は、添付の読み込みツールで読み直せる(Issue #213)。中身(本文・画像)は読んだ
+/// ターンでだけ送り、次のターンの履歴には名前などの情報だけが残る。
 #[tokio::test]
-async fn an_earlier_image_can_be_read_again_only_for_that_turn() {
+async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let chat = Chat::Task(task_id);
@@ -2876,6 +2876,11 @@ async fn an_earlier_image_can_be_read_again_only_for_that_turn() {
     let attachments = context_without_provider().attachments;
 
     let first = TextAdapter::one("見ました");
+    let text = staged_token(
+        attachments
+            .stage("memo.txt".into(), b"memo".to_vec())
+            .unwrap(),
+    );
     let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
     run_turn(
         db.clone(),
@@ -2887,21 +2892,22 @@ async fn an_earlier_image_can_be_read_again_only_for_that_turn() {
         chat,
         UserInput {
             text: "これ".to_string(),
-            attachments: vec![image],
+            attachments: vec![text, image],
         },
     )
     .await
     .unwrap();
-    let attachment_id = {
+    let (text_id, image_id) = {
         let conn = db.lock().unwrap();
         let views = db::attachments::views_for_chat(&conn, chat).unwrap();
-        views.values().next().unwrap()[0].id
+        let views = views.values().next().unwrap();
+        (views[0].id, views[1].id)
     };
 
-    let reader = ScriptedToolsAdapter::new(vec![(
-        "read_attachment",
-        json!({ "attachment_id": attachment_id }),
-    )]);
+    let reader = ScriptedToolsAdapter::new(vec![
+        ("read_attachment", json!({ "attachment_id": text_id })),
+        ("read_attachment", json!({ "attachment_id": image_id })),
+    ]);
     run_turn(
         db.clone(),
         &TurnContext {
@@ -2922,14 +2928,20 @@ async fn an_earlier_image_can_be_read_again_only_for_that_turn() {
         };
         assert!(text.as_str().contains(r#""delivered":"name_only""#));
         assert!(images.is_empty());
-        let ChatMessage::Tool {
-            content, images, ..
-        } = sent[1].last().unwrap()
-        else {
-            panic!("expected the tool result last");
-        };
-        assert!(content.as_str().contains(r#""delivered":"image""#));
-        assert_eq!(images.len(), 1);
+        let results: Vec<_> = sent[1]
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Tool {
+                    content, images, ..
+                } => Some((content.as_str(), images.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].0.contains(r#""content":"memo""#));
+        assert_eq!(results[0].1, 0);
+        assert!(results[1].0.contains(r#""delivered":"image""#));
+        assert_eq!(results[1].1, 1);
     }
 
     let next = TextAdapter::one("はい");
@@ -2955,9 +2967,13 @@ async fn an_earlier_image_can_be_read_again_only_for_that_turn() {
             _ => None,
         })
         .collect();
-    assert_eq!(results.len(), 1);
-    assert!(results[0].0.as_str().contains(r#""name":"photo.png""#));
-    assert!(results[0].1.is_empty());
+    assert_eq!(results.len(), 2);
+    assert!(results[0].0.as_str().contains(r#""name":"memo.txt""#));
+    assert!(results[1].0.as_str().contains(r#""name":"photo.png""#));
+    for (content, images) in results {
+        assert!(!content.as_str().contains(r#""content":"#));
+        assert!(images.is_empty());
+    }
 }
 
 /// 読み込んだ画像の実体を読めなくても、ツールの失敗としてモデルに返し、ターンは続ける

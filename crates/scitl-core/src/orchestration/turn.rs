@@ -689,7 +689,7 @@ async fn run_tool_rounds(
         for (call, outcome) in executed {
             round_trip.push(ChatMessage::Tool {
                 tool_call_id: call.id,
-                content: PromptText::json(&outcome.result),
+                content: PromptText::json(outcome.turn_result()),
                 images: outcome.images,
             });
         }
@@ -731,7 +731,7 @@ async fn execute_call(
                      the tool was not run. Call it again with valid JSON arguments."
                 )
             });
-            return Ok(CallOutcome::without_images(result, None));
+            return Ok(CallOutcome::plain(result, None));
         }
     };
     let Some((server_id, tool_name, kind)) = external.route(&call.name) else {
@@ -749,29 +749,37 @@ async fn execute_call(
 
     let Some(server) = ctx.mcp.servers.iter().find(|s| s.id == server_id) else {
         let result = json!({ "error": format!("MCP server not found: {server_id}") });
-        return Ok(CallOutcome::without_images(result, None));
+        return Ok(CallOutcome::plain(result, None));
     };
     let result = sessions
         .call_tool(server, tool_name, arguments)
         .await
         .unwrap_or_else(|e| json!({ "error": e.to_string() }));
-    Ok(CallOutcome::without_images(result, Some(kind)))
+    Ok(CallOutcome::plain(result, Some(kind)))
 }
 
-/// ツール1件の実行の結果。`images`はモデルへの往復にだけ載せ、実行記録には残さない。
+/// ツール1件の実行の結果。`turn_result`と`images`はこのターンのモデルへの往復にだけ載せ、
+/// 実行記録には残さない([`ToolOutput`])。
 struct CallOutcome {
     result: serde_json::Value,
     tool_kind: Option<ToolKind>,
+    turn_result: Option<serde_json::Value>,
     images: Vec<InlineImage>,
 }
 
 impl CallOutcome {
-    fn without_images(result: serde_json::Value, tool_kind: Option<ToolKind>) -> Self {
+    /// 実行記録と往復で同じ結果を返し、画像を伴わない。
+    fn plain(result: serde_json::Value, tool_kind: Option<ToolKind>) -> Self {
         Self {
             result,
             tool_kind,
+            turn_result: None,
             images: Vec::new(),
         }
+    }
+
+    fn turn_result(&self) -> &serde_json::Value {
+        self.turn_result.as_ref().unwrap_or(&self.result)
     }
 }
 
@@ -783,7 +791,10 @@ async fn read_tool_images(
     store: AttachmentStore,
 ) -> Result<CallOutcome> {
     if output.image_hashes.is_empty() {
-        return Ok(CallOutcome::without_images(output.result, tool_kind));
+        return Ok(CallOutcome {
+            turn_result: output.turn_result,
+            ..CallOutcome::plain(output.result, tool_kind)
+        });
     }
     let hashes = output.image_hashes;
     let read = blocking::run(move || {
@@ -797,9 +808,10 @@ async fn read_tool_images(
         Ok(images) => CallOutcome {
             result: output.result,
             tool_kind,
+            turn_result: output.turn_result,
             images,
         },
-        Err(e) => CallOutcome::without_images(json!({ "error": e.to_string() }), tool_kind),
+        Err(e) => CallOutcome::plain(json!({ "error": e.to_string() }), tool_kind),
     })
 }
 

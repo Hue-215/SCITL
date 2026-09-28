@@ -31,12 +31,16 @@ pub enum ToolKind {
 }
 
 /// 内部ツール1回の実行結果。
+///
+/// 結果を得たターンでだけモデルへ渡す中身(添付の本文・画像)は、実行記録に残さない
+/// (docs/spec/rebuild/tools.md「添付の読み込み」)。
 pub struct ToolOutput {
-    /// モデルへ返し、実行記録に残す結果。
+    /// 実行記録に残す結果。事実系なら次ターン以降の履歴にも載る。
     pub result: Value,
-    /// 結果と一緒にモデルへ見せる画像(添付の実体のハッシュ)。実体の読み出しはファイルI/Oなので、
-    /// DBのロックの外で呼び出し元が行う。実行記録には残さず、結果を得たターンでだけ送る
-    /// (docs/spec/rebuild/tools.md「添付の読み込み」)。
+    /// このターンの往復で`result`の代わりにモデルへ返す結果。`None`なら`result`を返す。
+    pub turn_result: Option<Value>,
+    /// 結果と一緒にこのターンでだけモデルへ見せる画像(添付の実体のハッシュ)。実体の
+    /// 読み出しはファイルI/Oなので、DBのロックの外で呼び出し元が行う。
     pub image_hashes: Vec<String>,
 }
 
@@ -44,6 +48,7 @@ impl From<Value> for ToolOutput {
     fn from(result: Value) -> Self {
         Self {
             result,
+            turn_result: None,
             image_hashes: Vec::new(),
         }
     }

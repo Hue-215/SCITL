@@ -19,8 +19,9 @@ pub fn schema() -> ToolSchema {
         NAME,
         "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
          scitl:attachments block. The result has the same fields as that block. A text \
-         attachment returns its text in \"content\". An image is shown to you with the result, \
-         in this turn only; use this to look at an image whose \"delivered\" is \"name_only\". \
+         attachment returns its text in \"content\", and an image is shown to you with the \
+         result. What you read is available in this turn only; read it again in a later turn \
+         if you need it. Use this to look at an image whose \"delivered\" is \"name_only\". \
          Other kinds of files cannot be read.",
         json!({
             "type": "object",
@@ -37,7 +38,10 @@ pub fn schema() -> ToolSchema {
 /// このターンでモデルに渡すので、直近の発言の添付と同じ扱いにする。名前しか渡せない添付
 /// (画像に対応しないモデルでの画像・その他の形式)は、読んでも何も増えないので失敗にする。
 ///
-/// 画像は実体のハッシュを[`ToolOutput::image_hashes`]に添えて返し、読み出しは呼び出し元に任せる。
+/// 中身(テキストの本文・画像)はこのターンでだけ渡し、実行記録には名前などの情報だけを残す。
+/// 実行記録は事実系として次ターン以降の履歴に載るので、本文を残すと、元の発言を削除しても
+/// 本文が送られ続けるため。画像は実体のハッシュを[`ToolOutput::image_hashes`]に添えて返し、
+/// 読み出しは呼び出し元に任せる。
 pub fn execute(
     conn: &Connection,
     chat: Chat,
@@ -63,17 +67,21 @@ pub fn execute(
             ))
         }
     };
-    let note = AttachmentNote {
-        id: view.id,
-        name: &view.original_name,
-        kind: view.kind,
-        mime_type: &view.mime_type,
-        size_bytes: view.size_bytes,
-        delivered,
-        content,
+    let note = |content| {
+        let note = AttachmentNote {
+            id: view.id,
+            name: &view.original_name,
+            kind: view.kind,
+            mime_type: &view.mime_type,
+            size_bytes: view.size_bytes,
+            delivered,
+            content,
+        };
+        serde_json::to_value(note).expect("an attachment note serializes to JSON")
     };
     Ok(ToolOutput {
-        result: serde_json::to_value(note).expect("an attachment note serializes to JSON"),
+        result: note(None),
+        turn_result: content.map(|text| note(Some(text))),
         image_hashes,
     })
 }
@@ -156,9 +164,13 @@ mod tests {
             AttachmentContent::Text("本文".to_string()),
         );
         let output = f.read(id, false).unwrap();
+        let turn_result = output.turn_result.unwrap();
+        assert_eq!(turn_result["id"], id);
+        assert_eq!(turn_result["delivered"], "content");
+        assert_eq!(turn_result["content"], "本文");
+        // 実行記録には本文を残さない。
         assert_eq!(output.result["id"], id);
-        assert_eq!(output.result["delivered"], "content");
-        assert_eq!(output.result["content"], "本文");
+        assert!(output.result.get("content").is_none());
         assert!(output.image_hashes.is_empty());
     }
 
