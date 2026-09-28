@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -559,18 +560,37 @@ fn context_without_provider() -> TurnContext<'static> {
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
         generating: Box::leak(Box::new(InFlightSet::new())),
-        attachments: Box::leak(Box::new(temp_attachments())),
+        attachments: Box::leak(Box::new(unwritable_attachments())),
         events: &discard_events,
     }
 }
 
-/// テストごとに別の一時ディレクトリを置き場所にする。添付を預けないテストでは作られない。
-fn temp_attachments() -> Attachments {
-    let root = std::env::temp_dir().join(format!("scitl-turn-flow-{}", ulid::Ulid::new()));
+/// 実体を書こうとすると失敗する置き場所(通常のファイルの下を指す)。文脈はリークさせて
+/// 使い回すので、ここに一時ディレクトリを持たせると消えずに残る。実体を書くテスト(画像を
+/// 預けるもの)は[`TempAttachments`]を使う。
+fn unwritable_attachments() -> Attachments {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     Attachments::new(AttachmentStore::new(
-        root.join("blobs"),
-        root.join("revealed"),
+        file.join("blobs"),
+        file.join("revealed"),
     ))
+}
+
+/// 一時ディレクトリに置いた添付の置き場所。落とすと中身ごと消える。
+struct TempAttachments {
+    dir: tempfile::TempDir,
+    attachments: Attachments,
+}
+
+impl TempAttachments {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let attachments = Attachments::new(AttachmentStore::new(
+            dir.path().join("blobs"),
+            dir.path().join("revealed"),
+        ));
+        Self { dir, attachments }
+    }
 }
 
 /// ターンが知らせたイベントを`sink`に溜める受け口。
@@ -2667,7 +2687,11 @@ async fn run_turn_saves_attachments_with_the_user_message() {
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
     let adapter = TextAdapter::one("受け取りました");
-    let ctx = context(&adapter);
+    let temp = TempAttachments::new();
+    let ctx = TurnContext {
+        attachments: &temp.attachments,
+        ..context(&adapter)
+    };
     let text = staged_token(
         ctx.attachments
             .stage("memo.txt".into(), b"memo".to_vec())
@@ -2891,8 +2915,10 @@ async fn attachments_reach_the_model_with_the_message() {
     let adapter = TextAdapter::one("見ました");
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.image = true;
+    let temp = TempAttachments::new();
     let ctx = TurnContext {
         capabilities,
+        attachments: &temp.attachments,
         ..context(&adapter)
     };
     let text = staged_token(
@@ -2935,7 +2961,8 @@ async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
     let db = Arc::new(Mutex::new(conn));
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.image = true;
-    let attachments = context_without_provider().attachments;
+    let temp = TempAttachments::new();
+    let attachments = &temp.attachments;
 
     let first = TextAdapter::one("見ました");
     let text = staged_token(
@@ -3048,10 +3075,8 @@ async fn an_image_that_cannot_be_read_is_reported_to_the_model() {
     let db = Arc::new(Mutex::new(conn));
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.image = true;
-    let root = std::env::temp_dir().join(format!("scitl-turn-flow-{}", ulid::Ulid::new()));
-    let attachments: &'static Attachments = Box::leak(Box::new(Attachments::new(
-        AttachmentStore::new(root.join("blobs"), root.join("revealed")),
-    )));
+    let temp = TempAttachments::new();
+    let attachments = &temp.attachments;
 
     let first = TextAdapter::one("見ました");
     let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
@@ -3075,7 +3100,7 @@ async fn an_image_that_cannot_be_read_is_reported_to_the_model() {
         let views = db::attachments::views_for_chat(&conn, chat).unwrap();
         views.values().next().unwrap()[0].id
     };
-    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(temp.dir.path().join("blobs")).unwrap();
 
     let reader = ScriptedToolsAdapter::new(vec![(
         "read_attachment",

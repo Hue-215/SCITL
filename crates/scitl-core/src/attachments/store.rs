@@ -168,28 +168,29 @@ fn truncate_keeping_extension(name: &str, max: usize) -> String {
     format!("{}{extension}", &stem[..end])
 }
 
+/// テスト用の、一時ディレクトリに置いた実体の置き場所。落とすと中身ごと消える。
+#[cfg(test)]
+pub(crate) struct TempStore {
+    dir: tempfile::TempDir,
+    pub(crate) store: AttachmentStore,
+}
+
+#[cfg(test)]
+impl TempStore {
+    pub(crate) fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path().join("blobs"), dir.path().join("revealed"));
+        Self { dir, store }
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct TempStore {
-        root: PathBuf,
-        store: AttachmentStore,
-    }
-
-    impl TempStore {
-        fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("scitl-attachments-{}", Ulid::new()));
-            let store = AttachmentStore::new(root.join("blobs"), root.join("revealed"));
-            Self { root, store }
-        }
-    }
-
-    impl Drop for TempStore {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
-    }
 
     #[test]
     fn names_contents_by_their_full_sha256_and_stores_them_once() {
@@ -203,7 +204,7 @@ mod tests {
         assert_eq!(t.store.read(&hash).unwrap(), b"abc");
 
         // 一時ファイルは残らず、実体は1つだけ。
-        let entries: Vec<_> = fs::read_dir(t.root.join("blobs")).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(t.root().join("blobs")).unwrap().collect();
         assert_eq!(entries.len(), 1);
     }
 

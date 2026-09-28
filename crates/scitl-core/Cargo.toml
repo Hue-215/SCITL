@@ -32,4 +32,5 @@ dbus-secret-service-keyring-store = { workspace = true }
 windows-native-keyring-store = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "test-util"] }

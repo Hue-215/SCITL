@@ -126,7 +126,6 @@ fn inherited_env_allowlist() -> &'static [&'static str] {
 /// 黙って崩れていないことを、偽のMCPサーバーを実際に起動して確かめる。
 #[cfg(all(test, unix))]
 mod tests {
-    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     use secrecy::SecretString;
@@ -150,27 +149,25 @@ if [ "$2" = linger ]; then sleep 60; fi
 "#;
 
     /// 偽のサーバーのスクリプトと出力を置く、テストごとの一時ディレクトリ。
-    struct Scratch(PathBuf);
+    struct Scratch(tempfile::TempDir);
 
     impl Scratch {
-        fn new(name: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("scitl-stdio-{name}-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("server.sh"), FAKE_SERVER).unwrap();
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("server.sh"), FAKE_SERVER).unwrap();
             Self(dir)
         }
 
         fn args(&self, mode: &str) -> Vec<String> {
             vec![
-                self.0.join("server.sh").display().to_string(),
-                self.0.display().to_string(),
+                self.0.path().join("server.sh").display().to_string(),
+                self.0.path().display().to_string(),
                 mode.to_string(),
             ]
         }
 
         fn read(&self, file: &str) -> String {
-            std::fs::read_to_string(self.0.join(file)).unwrap()
+            std::fs::read_to_string(self.0.path().join(file)).unwrap()
         }
 
         fn grandchild(&self) -> String {
@@ -181,12 +178,11 @@ if [ "$2" = linger ]; then sleep 60; fi
     impl Drop for Scratch {
         fn drop(&mut self) {
             // テストが途中で落ちても孫プロセスを残さない。
-            if let Ok(pid) = std::fs::read_to_string(self.0.join("grandchild")) {
+            if let Ok(pid) = std::fs::read_to_string(self.0.path().join("grandchild")) {
                 let _ = std::process::Command::new("kill")
                     .args(["-KILL", pid.trim()])
                     .status();
             }
-            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
@@ -242,7 +238,7 @@ if [ "$2" = linger ]; then sleep 60; fi
         let allowlist = inherited_env_allowlist();
         assert!(std::env::vars().any(|(n, _)| !allowlist.contains(&n.as_str())));
 
-        let scratch = Scratch::new("env");
+        let scratch = Scratch::new();
         let refs = [SecretRef {
             name: "FAKE_TOKEN".to_string(),
             key_ref: "stdio-test-token".to_string(),
@@ -267,7 +263,7 @@ if [ "$2" = linger ]; then sleep 60; fi
 
     #[tokio::test]
     async fn closing_kills_the_grandchildren_of_a_server_that_does_not_exit() {
-        let scratch = Scratch::new("linger");
+        let scratch = Scratch::new();
         let mut service = connect_fake(&scratch, "linger", &[]).await;
         let grandchild = scratch.grandchild();
         assert!(is_alive(&grandchild));

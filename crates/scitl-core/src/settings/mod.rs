@@ -901,11 +901,11 @@ mod tests {
 
     // 鍵を渡さない操作だけを試す(資格情報ストアに触れない)。
 
-    fn temp_settings() -> (Settings, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("scitl-settings-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
-        (Settings::load(path.clone()), path)
+    /// 3つ目は設定ファイルを置いた一時ディレクトリ。落とすと消えるので、テストの間は持っておく。
+    fn temp_settings() -> (Settings, PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        (Settings::load(path.clone()), path, dir)
     }
 
     fn ready_adapter(settings: &Settings) -> SharedAdapter {
@@ -929,7 +929,7 @@ mod tests {
     /// 思考に対応するモデルには強さを必ず送り、対応しないモデルには送らない。
     #[test]
     fn reasoning_effort_is_sent_only_to_models_that_think() {
-        let (_, path) = temp_settings();
+        let (_, path, _dir) = temp_settings();
         let config_with = |model_lines: &str| {
             format!(
                 r#"
@@ -973,7 +973,7 @@ name = "m"
 
     #[test]
     fn chat_model_selection_switches_provider_and_model_together() {
-        let (settings, path) = temp_settings();
+        let (settings, path, _dir) = temp_settings();
         let a = add_local_provider(&settings, "A").providers[0].id.clone();
         let b = add_local_provider(&settings, "B").providers[1].id.clone();
         settings.add_models(&a, &["a1"]).unwrap();
@@ -998,7 +998,7 @@ name = "m"
 
     #[test]
     fn chat_models_list_visible_models_and_the_selected_one_even_if_hidden() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let a = add_local_provider(&settings, "A").providers[0].id.clone();
         let b = add_local_provider(&settings, "B").providers[1].id.clone();
         settings.add_models(&a, &["qwen3:8b"]).unwrap();
@@ -1047,7 +1047,7 @@ name = "m"
 
     #[test]
     fn first_provider_and_model_become_active_and_are_saved() {
-        let (settings, path) = temp_settings();
+        let (settings, path, _dir) = temp_settings();
         let view = add_local_provider(&settings, "Local");
         let id = view.providers[0].id.clone();
         assert_eq!(view.active_provider_id.as_deref(), Some(id.as_str()));
@@ -1073,7 +1073,7 @@ name = "m"
 
     #[test]
     fn adding_several_models_registers_all_or_none() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let id = add_local_provider(&settings, "Local").providers[0]
             .id
             .clone();
@@ -1103,7 +1103,7 @@ name = "m"
 
     #[test]
     fn deleting_active_provider_activates_first_remaining() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let first = add_local_provider(&settings, "A").providers[0].id.clone();
         let second = add_local_provider(&settings, "B").providers[1].id.clone();
 
@@ -1119,7 +1119,7 @@ name = "m"
 
     #[test]
     fn removing_active_model_falls_back_to_first() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let id = add_local_provider(&settings, "A").providers[0].id.clone();
         settings.add_models(&id, &["m1"]).unwrap();
         settings.add_models(&id, &["m2"]).unwrap();
@@ -1131,7 +1131,7 @@ name = "m"
 
     #[test]
     fn rejects_zero_limits_and_timeout() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         assert!(settings
             .update_general(general_update(None, Some(0)))
             .is_err());
@@ -1153,7 +1153,7 @@ name = "m"
 
     #[test]
     fn blank_prompts_and_prompts_equal_to_their_defaults_are_saved_as_unset() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let view = settings
             .update_general(GeneralUpdate {
                 task_chat_system_prompt: Some(
@@ -1183,7 +1183,7 @@ name = "m"
 
     #[test]
     fn language_is_saved_apart_from_the_other_general_settings() {
-        let (settings, path) = temp_settings();
+        let (settings, path, _dir) = temp_settings();
         assert_eq!(settings.display_language(), Language::DEFAULT);
 
         settings.update_language(Language::En).unwrap();
@@ -1197,7 +1197,7 @@ name = "m"
 
     #[test]
     fn failed_save_leaves_current_settings_unchanged() {
-        let (settings, path) = temp_settings();
+        let (settings, path, _dir) = temp_settings();
         // 保存先をディレクトリにして書き込みを失敗させる。
         std::fs::create_dir_all(&path).unwrap();
         assert!(settings
@@ -1208,7 +1208,7 @@ name = "m"
 
     #[test]
     fn mcp_server_name_must_be_unique() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let endpoint = || NewMcpEndpoint::Stdio {
             command: "npx".to_string(),
             args: Vec::new(),
@@ -1221,7 +1221,7 @@ name = "m"
 
     #[test]
     fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let view = settings
             .add_mcp_server(
                 "tools",
@@ -1255,9 +1255,8 @@ name = "m"
     /// 上書きしない(Issue #155)。
     #[test]
     fn unreadable_config_file_starts_empty_and_refuses_to_save() {
-        let dir = std::env::temp_dir().join(format!("scitl-settings-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         std::fs::write(&path, "providers = [").unwrap();
 
         let settings = Settings::load(path.clone());
@@ -1278,9 +1277,8 @@ name = "m"
     /// ものとして扱う。無関係な変更は通し、削除すれば直る(Issue #155)。
     #[test]
     fn broken_active_provider_does_not_block_startup_or_unrelated_changes() {
-        let dir = std::env::temp_dir().join(format!("scitl-settings-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         // ホスト名宛のhttpは検証で弾かれる(net::validate_external_url)。
         std::fs::write(
             &path,
@@ -1321,7 +1319,7 @@ name = "m"
 
     #[test]
     fn adapter_is_rebuilt_only_when_its_inputs_change() {
-        let (settings, _) = temp_settings();
+        let (settings, _, _dir) = temp_settings();
         let id = add_local_provider(&settings, "A").providers[0].id.clone();
         let before = ready_adapter(&settings);
 
@@ -1354,7 +1352,7 @@ name = "m"
 
     #[test]
     fn capability_overrides_are_kept_only_while_they_differ_from_the_default() {
-        let (settings, path) = temp_settings();
+        let (settings, path, _dir) = temp_settings();
         let id = add_local_provider(&settings, "Local").providers[0]
             .id
             .clone();
@@ -1403,7 +1401,7 @@ name = "m"
     /// 自動検出の結果は、手動設定を外す基準と、ターンに渡す能力の両方に効く。
     #[test]
     fn detected_capabilities_are_the_layer_below_manual_settings() {
-        let (settings, _path) = temp_settings();
+        let (settings, _path, _dir) = temp_settings();
         let id = add_local_provider(&settings, "Local").providers[0]
             .id
             .clone();
