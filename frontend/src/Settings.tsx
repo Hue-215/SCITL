@@ -611,7 +611,7 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
           </ul>
         </>
       )}
-      <div className="model-picker-actions">
+      <div className="button-row model-picker-actions">
         {candidates.length > 0 && (
           <button
             type="button"

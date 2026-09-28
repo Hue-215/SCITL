@@ -396,7 +396,7 @@ export default function App() {
                       autoFocus
                     />
                     <MessageAttachments attachments={message.attachments} />
-                    <div className="entry-actions">
+                    <div className="button-row entry-actions">
                       <button type="button" onClick={() => setEditingId(null)}>
                         {t('common.cancel')}
                       </button>
@@ -421,7 +421,7 @@ export default function App() {
                   <MessageAttachments attachments={message.attachments} />
                   <time className="entry-time">{formatDateTime(message.created_at)}</time>
                   {canEditOrDelete && (
-                    <div className="entry-actions">
+                    <div className="button-row entry-actions">
                       <button
                         type="button"
                         disabled={disableActions}
@@ -473,7 +473,7 @@ export default function App() {
                   )}
                   <time className="entry-time">{formatDateTime(finalMessage.created_at)}</time>
                   {canRetryOrDelete && (
-                    <div className="entry-actions">
+                    <div className="button-row entry-actions">
                       <button
                         type="button"
                         disabled={disableActions}

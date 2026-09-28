@@ -97,7 +97,7 @@ export function ConfirmDialog({
   return (
     <Dialog title={title} onClose={onCancel}>
       <p>{message}</p>
-      <div className="dialog-actions">
+      <div className="button-row dialog-actions">
         <button type="button" onClick={onCancel}>
           {t('common.cancel')}
         </button>
