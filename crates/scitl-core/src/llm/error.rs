@@ -203,7 +203,8 @@ mod tests {
     }
 
     fn client(url: &str, timeout: Duration) -> reqwest::Client {
-        crate::net::hardened_client(url, Some(timeout)).unwrap()
+        crate::net::hardened_client(&crate::net::ExternalUrl::parse(url).unwrap(), Some(timeout))
+            .unwrap()
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config::{McpEndpoint, McpServerConfig, SecretRef};
 use crate::error::CoreError;
+use crate::net::ExternalUrl;
 use crate::secrets;
 use crate::text;
 
@@ -305,12 +306,10 @@ fn truncate_result_text(result: &str) -> String {
 }
 
 /// streamable_http方式のURLを検証する(実際に接続する前、サーバー登録時のIPC層から呼ぶ)。
-/// 検証本体は[`crate::net::validate_external_url`]に集約する(LLMプロバイダーのbase_url
+/// 検証本体は[`ExternalUrl::parse`]に集約する(LLMプロバイダーのbase_url
 /// 検証と共有)。
 pub fn validate_streamable_http_url(url: &str) -> Result<(), CoreError> {
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|e| CoreError::Mcp(format!("url is not a valid URL: {e}")))?;
-    crate::net::validate_external_url(&parsed).map_err(CoreError::Mcp)
+    ExternalUrl::parse(url).map(drop).map_err(CoreError::Mcp)
 }
 
 /// リクエストの構造やMCPプロトコル自体が管理するヘッダー名。ユーザーが登録した

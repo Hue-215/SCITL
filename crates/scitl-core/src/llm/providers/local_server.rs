@@ -24,7 +24,7 @@ use url::Url;
 
 use crate::error::CoreError;
 use crate::llm::{DetectedCapabilities, LlmError};
-use crate::net::{self, HostClass};
+use crate::net::{self, ExternalUrl, HostClass};
 
 /// 検出1回の問い合わせごとの上限。手元のサーバーはすぐに答えるので短くてよく、
 /// ターンの開始([`crate::settings::Settings::snapshot_for_turn`])を長く待たせないため。
@@ -51,9 +51,10 @@ pub async fn detect(
     if !is_detectable(base_url) {
         return Ok(None);
     }
+    let base_url = ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)?;
     let probe = Probe {
-        client: net::hardened_client(base_url, Some(DETECT_TIMEOUT))?,
-        root: server_root(base_url)?,
+        client: net::hardened_client(&base_url, Some(DETECT_TIMEOUT))?,
+        root: server_root(&base_url),
         api_key,
     };
 
@@ -91,13 +92,12 @@ pub async fn detect(
 
 /// OpenAI互換APIは`/v1`の下にあり、独自APIはその1つ上にある。`base_url`が`/v1`で
 /// 終わらなければそのまま使う(リバースプロキシで前置きのパスが付いていても崩さない)。
-fn server_root(base_url: &str) -> Result<Url, CoreError> {
-    let mut url = Url::parse(base_url)
-        .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
+fn server_root(base_url: &ExternalUrl) -> Url {
+    let mut url = base_url.as_url().clone();
     let path = url.path().trim_end_matches('/');
     let root = path.strip_suffix("/v1").unwrap_or(path);
     url.set_path(&format!("{root}/"));
-    Ok(url)
+    url
 }
 
 struct Probe<'a> {
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn server_root_strips_only_a_trailing_v1() {
-        let root = |u| server_root(u).unwrap().to_string();
+        let root = |u| server_root(&ExternalUrl::parse(u).unwrap()).to_string();
         assert_eq!(root("http://localhost:11434/v1"), "http://localhost:11434/");
         assert_eq!(
             root("http://localhost:11434/v1/"),

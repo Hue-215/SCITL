@@ -10,6 +10,7 @@ use secrecy::ExposeSecret;
 
 use crate::config::SecretRef;
 use crate::error::CoreError;
+use crate::net::ExternalUrl;
 
 use super::{resolve_secrets, ClientService, CONNECT_TIMEOUT};
 
@@ -19,8 +20,9 @@ pub(super) async fn connect(
 ) -> Result<ClientService, CoreError> {
     // リクエスト全体の上限は掛けない(`net::hardened_client`参照)。各段の上限は
     // 呼び出し側(`mod.rs`)の`tokio::time::timeout`が持つ。
+    let parsed = ExternalUrl::parse(url).map_err(CoreError::Mcp)?;
     let client =
-        crate::net::hardened_client(url, None).map_err(|e| CoreError::Mcp(e.to_string()))?;
+        crate::net::hardened_client(&parsed, None).map_err(|e| CoreError::Mcp(e.to_string()))?;
 
     let resolved = resolve_secrets(header_refs).await?;
     let mut headers = HashMap::with_capacity(resolved.len());
