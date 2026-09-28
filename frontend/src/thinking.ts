@@ -24,9 +24,8 @@ export type DisplayItem = TurnGroup | PlainEntry
 /// 記録は`turn_id`を持たないため常に独立した`plain`項目になる
 /// (docs/spec/rebuild/data-model.md「ターン境界」の3分類)。
 ///
-/// 連続した行ではなく`turn_id`でまとめる。別プロセス(CLI等)の操作の記録はターンの途中にも
-/// 書かれうるので、連続で切るとターンが2つに割れ、前半の最終行(ツール実行記録)が返信として
-/// 描かれる。ターンはその最初の行の位置に1つだけ置き、途中に挟まった行はターンの後に並ぶ。
+/// 連続した行ではなく`turn_id`でまとめ、ターンは最初の行の位置に1つだけ置く。別プロセスの
+/// 操作の記録がターンの途中に挟まりうるため(data-model.md「応答生成以外の経路での操作の記録」)。
 export function groupMessages(messages: Message[]): DisplayItem[] {
   const items: DisplayItem[] = []
   const turns = new Map<string, TurnGroup>()
