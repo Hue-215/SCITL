@@ -183,8 +183,8 @@ pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
 /// [`list_for_chat`]の、添付を埋めない形。添付を中身ごと別に引く呼び出し側
 /// (`orchestration::history`)が、同じ添付を2回引かないために使う。
 pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {MESSAGE_COLUMNS}
          FROM messages
          WHERE task_id IS ?1
            AND deleted_at IS NULL
@@ -204,8 +204,8 @@ pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Me
                )
              )
            )
-         ORDER BY created_at ASC, id ASC",
-    )?;
+         ORDER BY created_at ASC, id ASC"
+    ))?;
     let rows = stmt
         .query_map([chat.task_id()], message_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -215,14 +215,13 @@ pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Me
 /// idで1件取得する(論理削除済みは対象外)。編集・再試行・削除いずれも、操作対象の
 /// 現在の役割・種別を確認するためにまずこれを通る。
 pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
-    let found = conn.query_row(
-        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
-         FROM messages
-         WHERE id = ?1 AND deleted_at IS NULL",
-        [id],
-        message_from_row,
-    )
-    .optional()?;
+    let found = conn
+        .query_row(
+            &format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ?1 AND deleted_at IS NULL"),
+            [id],
+            message_from_row,
+        )
+        .optional()?;
     found
         .map(|mut m| {
             m.attachments = attachments::views_for_message(conn, m.id)?;
@@ -231,7 +230,10 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
         .transpose()
 }
 
-/// `SELECT`の列の並びは`list_for_chat`・`find_message`で共通。添付は呼び出し側が埋める。
+/// [`message_from_row`]が読む列の並び。
+const MESSAGE_COLUMNS: &str = "id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at";
+
+/// 添付は呼び出し側が埋める。
 fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
     Ok(Message {
         id: row.get(0)?,

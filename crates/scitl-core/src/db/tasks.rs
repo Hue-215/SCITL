@@ -161,8 +161,7 @@ pub fn create_task(conn: &Connection) -> Result<Task> {
 
 pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
-        "SELECT id, title, description, deadline, archived_at, deleted_at, created_at, updated_at
-         FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+        &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND deleted_at IS NULL"),
         [task_id],
         row_to_task,
     )
@@ -173,11 +172,9 @@ pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
 /// 削除済みを除く全タスクの行を作成日時昇順で返す。[`list_tasks`]と同じ範囲・順で、
 /// 一覧に出さない列(説明・作成/更新日時)まで要る呼び出し側(エクスポート)が使う。
 pub fn list_all(conn: &Connection) -> Result<Vec<Task>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, title, description, deadline, archived_at, deleted_at, created_at, updated_at
-         FROM tasks WHERE deleted_at IS NULL
-         ORDER BY created_at ASC",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {TASK_COLUMNS} FROM tasks WHERE deleted_at IS NULL ORDER BY created_at ASC"
+    ))?;
     let rows = stmt
         .query_map([], row_to_task)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -348,15 +345,21 @@ fn fallback_label(first_user_message: &str) -> Option<String> {
 /// 削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる値はここで取る)。
 pub fn delete_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
-        "UPDATE tasks SET deleted_at = ?1, updated_at = ?1
-         WHERE id = ?2 AND deleted_at IS NULL
-         RETURNING id, title, description, deadline, archived_at, deleted_at, created_at, updated_at",
+        &format!(
+            "UPDATE tasks SET deleted_at = ?1, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL
+             RETURNING {TASK_COLUMNS}"
+        ),
         rusqlite::params![now_iso8601(), task_id],
         row_to_task,
     )
     .optional()?
     .ok_or(CoreError::TaskNotFound(task_id))
 }
+
+/// [`row_to_task`]が読む列の並び。
+const TASK_COLUMNS: &str =
+    "id, title, description, deadline, archived_at, deleted_at, created_at, updated_at";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
