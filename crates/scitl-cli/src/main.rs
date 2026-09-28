@@ -1,5 +1,6 @@
 //! SCITLのCLI。GUIと同じcoreを直接呼び、GUIを開かずに同じ検証を通って操作・確認できる
-//! 状態を保つ(architecture.md 1節)。応答生成(送信・再試行)は行わない。
+//! 状態を保つ(architecture.md 1節)。応答生成(送信・再試行)は行わない。送信内容の
+//! プレビューは、モデルを呼ばずに次のターンのリクエストを組み立てて見せる。
 //!
 //! 出力はJSONに揃え、端末へは[`print_json`]・[`print_error`]・[`print_clap`]だけから書く。
 
@@ -10,11 +11,13 @@ use std::sync::{Arc, Mutex};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
+use scitl_core::attachments::{AttachmentStore, Attachments};
 use scitl_core::db::messages::{Chat, OperationSource};
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::in_flight::InFlightSet;
-use scitl_core::orchestration::{self, operations};
+use scitl_core::orchestration::{self, discard_events, operations, PreviewOptions};
 use scitl_core::paths::{self, DataLayout};
+use scitl_core::settings::Settings;
 use scitl_core::tools::get_current_task_detail::task_detail;
 use scitl_core::{text, CoreError};
 
@@ -65,6 +68,19 @@ enum ChatCommand {
         /// Task whose conversation to show. Without it, the general chat.
         #[arg(long, value_name = "ID")]
         task: Option<i64>,
+    },
+    /// Show the request the next turn would send to the model, without sending it or saving
+    /// anything. Images are shortened to their length.
+    Preview {
+        /// Task whose conversation to preview. Without it, the general chat.
+        #[arg(long, value_name = "ID")]
+        task: Option<i64>,
+        /// The next message to send. Without it, the conversation as saved.
+        #[arg(long, value_name = "TEXT")]
+        message: Option<String>,
+        /// Connect to the enabled MCP servers to include their tools.
+        #[arg(long)]
+        external_tools: bool,
     },
 }
 
@@ -125,8 +141,47 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 db::with_conn(db, move |conn| orchestration::list_chat(conn, chat)).await?;
             print_json(&messages);
         }
+        Command::Chat(ChatCommand::Preview {
+            task,
+            message,
+            external_tools,
+        }) => {
+            let chat = task.map_or(Chat::General, Chat::Task);
+            let settings = Settings::load(data.config());
+            let snapshot = settings.snapshot_for_turn().await;
+            let attachments = Attachments::new(AttachmentStore::new(
+                data.attachments(),
+                paths::revealed_attachments(&paths::default_cache_dir()?),
+            ));
+            let ctx = snapshot.turn_context(&generating, &attachments, &discard_events);
+            let options = PreviewOptions {
+                message,
+                external_tools,
+            };
+            let preview = orchestration::preview_request(db, &ctx, chat, options)
+                .await?
+                .map_err(|failure| CliError::ChatUnavailable(failure.user_message()))?;
+            let mut preview = serde_json::to_value(preview).expect("previews serialize to JSON");
+            shorten_data_urls(&mut preview);
+            print_json(&preview);
+        }
     }
     Ok(())
+}
+
+/// 画像はdata URLとして本文に埋まり、1枚で数MBになる。端末に流しても読めないので、形式と
+/// 長さだけを残す。
+fn shorten_data_urls(value: &mut serde_json::Value) {
+    const KEEP: usize = 64;
+    match value {
+        serde_json::Value::String(s) if s.starts_with("data:") && s.len() > KEEP => {
+            let head = s.split(',').next().unwrap_or_default();
+            *s = format!("{head},… ({} bytes)", s.len());
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(shorten_data_urls),
+        serde_json::Value::Object(fields) => fields.values_mut().for_each(shorten_data_urls),
+        _ => {}
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -135,6 +190,9 @@ enum CliError {
     NoDataDir(#[from] paths::NoAppDir),
     #[error("data directory {} does not exist", .0.display())]
     MissingDataDir(PathBuf),
+    /// ターンならエラー発言になる理由(プロバイダー・モデルの未選択等)。
+    #[error("{0}")]
+    ChatUnavailable(String),
     #[error(transparent)]
     Core(#[from] CoreError),
 }
