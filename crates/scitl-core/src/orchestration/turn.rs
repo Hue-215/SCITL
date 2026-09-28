@@ -210,6 +210,10 @@ pub async fn edit_user_message(
 /// 返信は成功時のアシスタント発言と失敗時のエラー発言のどちらでもよい。どちらも1試行に
 /// 1行だけの通常発言で(data-model.md「1ターン内の往復で保存するもの」)、作り直し方は
 /// 変わらない。
+///
+/// 削除はカスケードしないので、ターンのユーザー発言だけが消されていることがある。返信以降を
+/// 消した残りが応答すべき発言で終わらなければ断る(`history::awaits_reply`)。新規送信と編集は
+/// 必ずユーザー発言を用意してから生成するので、この確認は再試行にだけ要る。
 pub async fn retry_reply(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -226,6 +230,12 @@ pub async fn retry_reply(
             })?;
             let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
             messages::soft_delete_normal_from(conn, chat, message_id)?;
+            // 断るとトランザクションごと戻り、返信は消えない。
+            if !history::awaits_reply(conn, chat)? {
+                return Err(CoreError::InvalidMessageOperation(
+                    "nothing to reply to: the message this reply answered was deleted".to_string(),
+                ));
+            }
             Ok(Attempt {
                 chat,
                 turn_id,

@@ -29,14 +29,34 @@ pub(super) struct StoredChat {
 /// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。総合チャットは聞き取りを
 /// 持たず、必ずユーザー発言から始まるので補わない。
 pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
-    let starts_with_opening = match chat {
-        Chat::Task(task_id) => messages::opener(conn, task_id)? != Some(Opener::User),
-        Chat::General => false,
-    };
     Ok(StoredChat {
         messages: messages::list_rows_for_chat(conn, chat)?,
         attachments: db_attachments::for_chat(conn, chat)?,
-        starts_with_opening,
+        starts_with_opening: starts_with_opening(conn, chat)?,
+    })
+}
+
+fn starts_with_opening(conn: &Connection, chat: Chat) -> Result<bool> {
+    Ok(match chat {
+        Chat::Task(task_id) => messages::opener(conn, task_id)? != Some(Opener::User),
+        Chat::General => false,
+    })
+}
+
+/// 今の履歴を送ったとき、モデルが応答すべき発言で終わるか。会話の発言(ユーザー発言と
+/// アシスタント発言)の最後がユーザー発言なら応答すべき発言があり、アシスタント発言なら無い。
+/// 会話の発言が1つも無ければ、先頭に補う開始の発言が応答すべき発言になる。
+///
+/// 応答すべき発言が無い履歴を送ると、サーバーによっては最後のアシスタント発言の続きを
+/// 書かせる指示として扱い、ユーザー発言が1つも無ければチャットテンプレートがエラーにする。
+pub(super) fn awaits_reply(conn: &Connection, chat: Chat) -> Result<bool> {
+    let last = messages::list_rows_for_chat(conn, chat)?
+        .into_iter()
+        .rev()
+        .find(|m| m.kind == Kind::Normal && matches!(m.role, Role::User | Role::Assistant));
+    Ok(match last {
+        Some(m) => m.role == Role::User,
+        None => starts_with_opening(conn, chat)?,
     })
 }
 

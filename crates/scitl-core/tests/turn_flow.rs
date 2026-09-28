@@ -2080,6 +2080,62 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     assert_eq!(contents, vec!["応答1", "2回目", "応答2"]);
 }
 
+/// ユーザー発言だけを消したターンの返信は、再試行すると応答すべき発言が無いので断る
+/// (Issue #182)。モデルは呼ばず、返信も消えない。
+#[tokio::test]
+async fn retry_reply_is_refused_when_the_turn_lost_its_user_message() {
+    for turns in [1, 2] {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let db = Arc::new(Mutex::new(conn));
+        for n in 1..=turns {
+            run_turn(
+                db.clone(),
+                &context(&TextAdapter::one(&format!("応答{n}"))),
+                Chat::Task(task_id),
+                format!("{n}回目"),
+            )
+            .await
+            .unwrap();
+        }
+        let (last_user_id, last_reply_id) = {
+            let conn = db.lock().unwrap();
+            let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+            let user = messages.iter().rfind(|m| m.role == Role::User).unwrap();
+            let reply = messages
+                .iter()
+                .rfind(|m| m.role == Role::Assistant)
+                .unwrap();
+            (user.id, reply.id)
+        };
+        delete_message(
+            db.clone(),
+            &InFlightSet::new(),
+            Chat::Task(task_id),
+            last_user_id,
+        )
+        .await
+        .unwrap();
+
+        let adapter = TextAdapter::one("作り直した応答");
+        let result = retry_reply(
+            db.clone(),
+            &context(&adapter),
+            Chat::Task(task_id),
+            last_reply_id,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CoreError::InvalidMessageOperation(_))),
+            "{turns} turns: {result:?}"
+        );
+        assert!(adapter.sent_histories().is_empty());
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        assert_eq!(messages.last().unwrap().id, last_reply_id);
+    }
+}
+
 /// 同じタスクで応答を生成中なら、次のターンは何も書かずに断る(Issue #152)。
 /// 別のタスクは妨げず、ターンが終われば同じタスクでもまた始められる。
 #[tokio::test]
