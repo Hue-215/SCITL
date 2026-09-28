@@ -51,8 +51,7 @@ pub(crate) fn in_transaction<T>(
     if !conn.is_autocommit() {
         return f(conn);
     }
-    // 読むより前に書き込みの権利を取る。WALでは、読んだあとに別プロセスが書いていると
-    // 書き込みへの切り替えがbusy_timeoutを待たずに失敗する(読んだ版が古くなっているため)。
+    // 読むより前に書き込みの権利を取る(data-model.md 4節)。
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let out = f(&tx)?;
     tx.commit()?;
