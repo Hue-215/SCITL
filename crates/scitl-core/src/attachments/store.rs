@@ -9,6 +9,7 @@ use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
 use crate::llm::InlineImage;
+use crate::text::is_invisible_format;
 
 #[derive(Debug, Clone)]
 pub struct AttachmentStore {
@@ -101,8 +102,10 @@ fn io_error(action: &'static str) -> impl Fn(std::io::Error) -> CoreError {
 pub(crate) fn safe_file_name(name: &str) -> String {
     const MAX_BYTES: usize = 200;
     const FALLBACK: &str = "attachment";
+    // 双方向制御文字は、名前の見た目を並べ替える(`report\u{202E}fdp.exe`が`reportexe.pdf`に見える)。
     let replaced: String = name
         .chars()
+        .filter(|&c| !is_invisible_format(c))
         .map(|c| {
             if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
                 '_'
@@ -221,6 +224,7 @@ mod tests {
         assert_eq!(safe_file_name("COM1"), "_COM1");
         assert_eq!(safe_file_name("COM10.txt"), "COM10.txt");
         assert_eq!(safe_file_name("資料.docx"), "資料.docx");
+        assert_eq!(safe_file_name("report\u{202E}fdp.exe"), "reportfdp.exe");
     }
 
     #[test]
