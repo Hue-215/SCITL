@@ -3,6 +3,7 @@ mod history;
 mod history_trim;
 mod mcp_access;
 pub mod operations;
+mod preview;
 mod prompt_defaults;
 mod state_prompt;
 mod tool_limits;
@@ -15,6 +16,7 @@ mod turn_request;
 
 pub use chat_view::{list_chat, MessageView};
 pub use mcp_access::McpAccess;
+pub use preview::{preview_request, Preview, PreviewOptions};
 pub(crate) use prompt_defaults::stored_prompt;
 pub use prompt_defaults::{default_opening_message, default_task_chat_prompt, opening_message};
 pub use state_prompt::SystemPrompts;

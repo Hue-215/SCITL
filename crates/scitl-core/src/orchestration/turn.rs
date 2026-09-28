@@ -83,19 +83,7 @@ async fn save_user_message(
     with_conn(db, move |conn| {
         in_transaction(conn, |conn| {
             require_chat(conn, chat)?;
-            let message_id = messages::insert_message(
-                conn,
-                NewMessage {
-                    task_id: chat.task_id(),
-                    role: Role::User,
-                    content: &text,
-                    kind: Kind::Normal,
-                    origin: Origin::User,
-                    error_kind: None,
-                    error_detail: None,
-                    reasoning: None,
-                },
-            )?;
+            let message_id = insert_user_message(conn, chat, &text)?;
             for row in &rows {
                 db_attachments::insert(conn, message_id, row)?;
             }
@@ -103,6 +91,23 @@ async fn save_user_message(
         })
     })
     .await
+}
+
+/// ユーザー発言の行を書く。会話が存在するかは呼び出し側が確かめる([`require_chat`])。
+pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> Result<i64> {
+    messages::insert_message(
+        conn,
+        NewMessage {
+            task_id: chat.task_id(),
+            role: Role::User,
+            content: text,
+            kind: Kind::Normal,
+            origin: Origin::User,
+            error_kind: None,
+            error_detail: None,
+            reasoning: None,
+        },
+    )
 }
 
 /// [`create_task`]の結果。
@@ -267,7 +272,7 @@ pub async fn delete_message(
 }
 
 /// ユーザー発言には本文か添付のどちらかが要る。本文が空白だけでも、添付があれば送れる。
-fn require_content(text: &str, attachment_count: usize) -> Result<()> {
+pub(super) fn require_content(text: &str, attachment_count: usize) -> Result<()> {
     if text.trim().is_empty() && attachment_count == 0 {
         return Err(CoreError::InvalidMessageOperation(
             "a message needs text or attachments".to_string(),
@@ -287,7 +292,7 @@ pub(super) fn begin_generating(
 
 /// 会話に行を書く前に、タスクが存在し削除されていないかを確かめる。削除と操作が
 /// 行き違うと、外部キーは通るので削除済みのタスクに行が書かれてしまう。
-fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
+pub(super) fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
     if let Chat::Task(task_id) = chat {
         tasks::get_task(conn, task_id)?;
     }
@@ -363,7 +368,7 @@ async fn generate_turn_response(
 }
 
 /// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
-fn ready_adapter<'a>(
+pub(super) fn ready_adapter<'a>(
     ctx: &TurnContext<'a>,
 ) -> std::result::Result<&'a dyn LlmAdapter, TurnFailure> {
     let adapter = ctx.adapter.clone()?;
@@ -429,7 +434,7 @@ impl Attempt {
 /// 一覧はキャッシュ(Issue #104)を優先し、無ければ取得してキャッシュに載せる。
 /// 接続・取得に失敗したサーバーはこのターンでは公開しない。ここでターン全体を失敗させると、
 /// 外部サーバーが1つ落ちているだけでチャットが使えなくなるため(principles.md 3節)。
-async fn prepare_external_tools(
+pub(super) async fn prepare_external_tools(
     mcp: &McpAccess<'_>,
     chat: Chat,
     sessions: &mut McpSessions,
