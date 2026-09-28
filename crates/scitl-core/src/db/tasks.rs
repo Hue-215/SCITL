@@ -175,6 +175,20 @@ pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
     .ok_or(CoreError::TaskNotFound(task_id))
 }
 
+/// 削除済みを除く全タスクの行を作成日時昇順で返す。[`list_tasks`]と同じ範囲・順で、
+/// 一覧に出さない列(説明・作成/更新日時)まで要る呼び出し側(エクスポート)が使う。
+pub fn list_all(conn: &Connection) -> Result<Vec<Task>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, description, deadline, archived_at, deleted_at, created_at, updated_at
+         FROM tasks WHERE deleted_at IS NULL
+         ORDER BY created_at ASC",
+    )?;
+    let rows = stmt
+        .query_map([], row_to_task)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// 画面のヘッダー向け。存在しない・削除済みなら`get_task`と同じく`TaskNotFound`。
 pub fn get_task_detail_view(conn: &Connection, task_id: i64) -> Result<TaskDetailView> {
     let task = get_task(conn, task_id)?;
