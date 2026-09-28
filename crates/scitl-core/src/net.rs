@@ -113,6 +113,19 @@ pub fn hardened_client(
         .map_err(|e| CoreError::Config(format!("failed to build HTTP client: {e}")))
 }
 
+/// 接続を拒否されるループバックのアドレスと、そのポートを握っているソケット。
+///
+/// ポートを確保してすぐ手放すと、並列に走る別のテストが同じポートで待ち受け直し、
+/// 拒否されるはずの接続を横取りすることがある。bindしたままlistenしないソケットを
+/// 持ち続ければ、ポートは他に割り当てられず、接続はRSTで拒否される。ソケットは
+/// 接続を試し終えるまで生かしておくこと。
+#[cfg(test)]
+pub(crate) fn refused_addr() -> (std::net::SocketAddr, tokio::net::TcpSocket) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind(([127, 0, 0, 1], 0).into()).unwrap();
+    (socket.local_addr().unwrap(), socket)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
