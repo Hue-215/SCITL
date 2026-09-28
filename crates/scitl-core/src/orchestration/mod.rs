@@ -11,6 +11,7 @@ pub mod turn;
 mod turn_context;
 pub mod turn_error;
 mod turn_event;
+mod turn_request;
 
 pub use chat_view::{list_chat, MessageView};
 pub use mcp_access::McpAccess;
