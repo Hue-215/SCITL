@@ -9,11 +9,13 @@
 
 use std::fmt::Write;
 
+use percent_encoding::{utf8_percent_encode, AsciiSet};
+
 use crate::db::attachments::AttachmentKind;
 use crate::db::messages::{Kind, Message, Role};
 use crate::db::task_steps::TaskStep;
 use crate::db::tasks::Task;
-use crate::text::visible_line;
+use crate::text::{encode_all_but, visible_line};
 
 /// 会話の1行と、その発言に付いた添付。
 pub(super) struct Entry<'a> {
@@ -194,15 +196,8 @@ fn fenced(info: &str, body: &str) -> String {
 /// リンク先のパスの1区間。RFC 3986の非予約文字だけを残し、ほかはUTF-8のバイトごとに符号化する。
 /// 空白・括弧・`<`等をリンク先の構文に触れさせないため。
 fn encode_path_segment(segment: &str) -> String {
-    let mut out = String::with_capacity(segment.len());
-    for b in segment.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
-        } else {
-            let _ = write!(out, "%{b:02X}");
-        }
-    }
-    out
+    const NOT_UNRESERVED: &AsciiSet = &encode_all_but(b"-._~");
+    utf8_percent_encode(segment, NOT_UNRESERVED).to_string()
 }
 
 #[cfg(test)]

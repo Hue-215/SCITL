@@ -3,10 +3,12 @@
 //! 再検証(`open_confirmed`)が同じ判定を通るよう、判定はこのファイルに閉じる。
 //! WebView側の判定結果は信用しない(architecture.md 8節)。
 
+use percent_encoding::{utf8_percent_encode, AsciiSet};
 use serde::Serialize;
 use url::Url;
 
 use crate::error::{CoreError, Result};
+use crate::text::encode_all_but;
 
 /// 開いてよいかどうかと、その理由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -122,15 +124,9 @@ pub fn open_confirmed(raw: &str) -> Result<()> {
 /// OSが起動コマンドへURLを差し込む際に引用の終端や引数の区切りとして解釈されうる。
 /// パーセント表記にしても、受け取る側にとってのURLの意味は変わらない。
 fn os_safe(url: &Url) -> String {
-    let mut out = String::with_capacity(url.as_str().len());
-    for b in url.as_str().bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=%".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+    // 残すのは非予約文字・予約文字と、既にある符号化の`%`。
+    const NOT_URL_CHARACTERS: &AsciiSet = &encode_all_but(b"-._~:/?#[]@!$&'()*+,;=%");
+    utf8_percent_encode(url.as_str(), NOT_URL_CHARACTERS).to_string()
 }
 
 /// mailtoのクエリを、宛先・件名・本文に関わる標準の項目(RFC 6068)だけに絞る。

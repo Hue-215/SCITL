@@ -105,6 +105,19 @@ pub fn reveal_invisible(s: &str) -> String {
     out
 }
 
+/// 英数字と`kept`のASCII文字だけを残し、ほかを符号化するパーセント符号化の集合。`AsciiSet`は
+/// 符号化する文字の集合なので、残す文字をそのまま並べて書けるよう補集合から作る。ASCII以外は
+/// 集合によらず常に符号化される。
+pub(crate) const fn encode_all_but(kept: &[u8]) -> percent_encoding::AsciiSet {
+    let mut keep = percent_encoding::NON_ALPHANUMERIC.complement();
+    let mut i = 0;
+    while i < kept.len() {
+        keep = keep.add(kept[i]);
+        i += 1;
+    }
+    keep.complement()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

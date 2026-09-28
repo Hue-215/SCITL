@@ -19,6 +19,10 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 thiserror = "1"
 secrecy = "0.10"
 url = "2"
+# URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、添付のファイル名の
+# ヘッダー)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
+# (`cargo tree -d -i percent-encoding`で確認)
+percent-encoding = "2.3.2"
 ulid = "1"
 async-trait = "0.1"
 # 秘密情報の保存先(OSの資格情報ストア)。本体と、secrets.rsが設定するOSごとの保存先。

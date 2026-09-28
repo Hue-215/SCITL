@@ -3450,6 +3450,7 @@ dependencies = [
  "image",
  "keyring-core",
  "open",
+ "percent-encoding",
  "process-wrap",
  "reqwest",
  "rmcp",
@@ -3470,6 +3471,7 @@ dependencies = [
 name = "scitl-tauri"
 version = "0.1.0"
 dependencies = [
+ "percent-encoding",
  "scitl-core",
  "secrecy",
  "serde_json",

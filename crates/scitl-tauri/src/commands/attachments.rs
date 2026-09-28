@@ -89,22 +89,14 @@ pub async fn reveal_attachment(
         .map_err(|e| e.to_string())
 }
 
-/// `encodeURIComponent`の逆。UTF-8として読めなければ`None`。
+/// `encodeURIComponent`の逆。UTF-8として読めなければ`None`。`%`の後に16進2桁が続かない並びは
+/// 符号化されていない文字としてそのまま残る(画面は必ず`encodeURIComponent`で符号化して送るので、
+/// その形は届かない)。
 fn percent_decode(encoded: &str) -> Option<String> {
-    let bytes = encoded.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
+    percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .ok()
+        .map(Into::into)
 }
 
 #[cfg(test)]
@@ -118,8 +110,8 @@ mod tests {
             Some("資料 v2.pdf")
         );
         assert_eq!(percent_decode("a%2Bb%25").as_deref(), Some("a+b%"));
-        assert_eq!(percent_decode("bad%2"), None);
-        assert_eq!(percent_decode("bad%zz"), None);
         assert_eq!(percent_decode("%FF"), None);
+        // 16進2桁の続かない`%`は、名前の一部としてそのまま残る。
+        assert_eq!(percent_decode("bad%zz").as_deref(), Some("bad%zz"));
     }
 }
