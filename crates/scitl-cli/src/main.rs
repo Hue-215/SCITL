@@ -1,0 +1,147 @@
+//! SCITLのCLI。GUIと同じcoreを直接呼び、GUIを開かずに同じ検証を通って操作・確認できる
+//! 状態を保つ(architecture.md 1節)。応答生成(送信・再試行)は行わない。
+//!
+//! 出力はJSONに揃え、端末へは[`print_json`]・[`print_error`]だけから書く。
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
+
+use clap::{Parser, Subcommand};
+use serde::Serialize;
+
+use scitl_core::db::messages::{Chat, OperationSource};
+use scitl_core::db::{self, SharedConnection};
+use scitl_core::in_flight::InFlightSet;
+use scitl_core::orchestration::{self, operations};
+use scitl_core::paths::{self, DataLayout};
+use scitl_core::tools::get_current_task_detail::task_detail;
+use scitl_core::{text, CoreError};
+
+#[derive(Parser)]
+#[command(
+    name = "scitl-cli",
+    version,
+    about = "Command line interface for SCITL Task Companion"
+)]
+struct Cli {
+    /// Data directory to open. Defaults to the one the desktop app uses.
+    #[arg(long, global = true, value_name = "DIR")]
+    data_dir: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// List, show and change tasks.
+    #[command(subcommand)]
+    Task(TaskCommand),
+    /// Show conversations.
+    #[command(subcommand)]
+    Chat(ChatCommand),
+}
+
+#[derive(Subcommand)]
+enum TaskCommand {
+    /// List tasks that are not deleted, including archived ones.
+    List,
+    /// Show a task with its steps, in the form the model receives.
+    Show { id: i64 },
+    /// Change the title of a task.
+    Rename { id: i64, title: String },
+    /// Archive a task.
+    Archive { id: i64 },
+    /// Unarchive a task.
+    Unarchive { id: i64 },
+    /// Delete a task. It stays in the database and can be restored.
+    Delete { id: i64 },
+}
+
+#[derive(Subcommand)]
+enum ChatCommand {
+    /// Show the messages of a conversation as the app displays them.
+    Show {
+        /// Task whose conversation to show. Without it, the general chat.
+        #[arg(long, value_name = "ID")]
+        task: Option<i64>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match run(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            print_error(&e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(cli: Cli) -> Result<(), CliError> {
+    let data = DataLayout::new(match cli.data_dir {
+        Some(dir) => dir,
+        None => paths::default_data_dir().ok_or(CliError::NoDataDir)?,
+    });
+    // 無い場所を開くと空のDBを作ってしまう。打ち間違えた`--data-dir`で黙って空の一覧を
+    // 返さないよう、ディレクトリが無ければ断る。
+    if !data.root().is_dir() {
+        return Err(CliError::MissingDataDir(data.root().to_path_buf()));
+    }
+    let db: SharedConnection = Arc::new(Mutex::new(db::open(data.database())?));
+    // CLIは応答を生成しないので、この集合は常に空。別プロセス(GUI)が生成中かどうかは
+    // 見えない(data-model.md 4節)。
+    let generating = InFlightSet::new();
+
+    match cli.command {
+        Command::Task(TaskCommand::List) => {
+            print_json(&db::with_conn(db, db::tasks::list_tasks).await?);
+        }
+        Command::Task(TaskCommand::Show { id }) => {
+            print_json(&db::with_conn(db, move |conn| task_detail(conn, id)).await?);
+        }
+        Command::Task(TaskCommand::Rename { id, title }) => {
+            operations::rename_task(db, &generating, OperationSource::Cli, id, title).await?;
+        }
+        Command::Task(TaskCommand::Archive { id }) => {
+            operations::set_task_archived(db, &generating, OperationSource::Cli, id, true).await?;
+        }
+        Command::Task(TaskCommand::Unarchive { id }) => {
+            operations::set_task_archived(db, &generating, OperationSource::Cli, id, false).await?;
+        }
+        Command::Task(TaskCommand::Delete { id }) => {
+            operations::delete_task(db, &generating, OperationSource::Cli, id).await?;
+        }
+        Command::Chat(ChatCommand::Show { task }) => {
+            let chat = task.map_or(Chat::General, Chat::Task);
+            let messages =
+                db::with_conn(db, move |conn| orchestration::list_chat(conn, chat)).await?;
+            print_json(&messages);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum CliError {
+    #[error("this OS has no directory for application data; pass --data-dir")]
+    NoDataDir,
+    #[error("data directory {} does not exist", .0.display())]
+    MissingDataDir(PathBuf),
+    #[error(transparent)]
+    Core(#[from] CoreError),
+}
+
+/// 見えない文字を端末へ書かないよう、JSONのエスケープの形にしてから書く
+/// (architecture.md 10節「端末」)。
+fn print_json(value: &impl Serialize) {
+    let json = serde_json::to_string_pretty(value).expect("views serialize to JSON");
+    println!("{}", text::reveal_invisible(&json));
+}
+
+/// エラーの表示文はタスクのタイトル等の値を含みうるので、出力と同じく見えない文字を見せる形にする。
+fn print_error(error: &CliError) {
+    eprintln!("error: {}", text::reveal_invisible(&error.to_string()));
+}
