@@ -134,22 +134,22 @@ impl Probe<'_> {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<Option<T>, CoreError> {
-        let request = super::with_api_key(request, self.api_key);
-        let key = self.api_key.expose_secret();
-        let transport_error = |e| CoreError::Llm(LlmError::from_transport(e, key));
-        let response = request.send().await.map_err(transport_error)?;
-        let status = response.status();
+        let response = super::send_with_key(request, self.api_key).await?;
         if matches!(
-            status,
+            response.status(),
             StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
         ) {
             return Ok(None);
         }
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(LlmError::from_status(status, &text, key).into());
-        }
-        let body = response.bytes().await.map_err(transport_error)?;
+        let key = self.api_key.expose_secret();
+        let response = super::reject_failure(response, |status, body| {
+            LlmError::from_status(status, body, key)
+        })
+        .await?;
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| LlmError::from_transport(e, key))?;
         Ok(serde_json::from_slice(&body).ok())
     }
 }

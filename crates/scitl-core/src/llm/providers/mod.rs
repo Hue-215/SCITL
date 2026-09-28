@@ -5,11 +5,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
+use serde::de::DeserializeOwned;
 
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::error::CoreError;
-use crate::llm::{DetectedCapabilities, LlmAdapter};
+use crate::llm::{DetectedCapabilities, LlmAdapter, LlmError};
 use crate::secrets;
 
 use openai_compat::OpenAiCompatAdapter;
@@ -132,18 +134,49 @@ async fn load_api_key_off_thread(provider: &ProviderConfig) -> Result<SecretStri
     Ok(api_key)
 }
 
-/// 鍵を付ける。認証不要のローカル推論サーバー向けに、鍵が空なら`Authorization`ヘッダーごと
-/// 付けない(`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
-fn with_api_key(
+/// 鍵を添えて送る。届かなかったとき(接続・タイムアウト等)は、鍵を伏せた[`LlmError`]にする。
+/// 応答の状態コードは見ない([`reject_failure`])。
+async fn send_with_key(
     request: reqwest::RequestBuilder,
     api_key: &SecretString,
-) -> reqwest::RequestBuilder {
+) -> Result<reqwest::Response, LlmError> {
     let key = api_key.expose_secret();
-    if key.is_empty() {
+    // 認証不要のローカル推論サーバー向けに、鍵が空なら`Authorization`ヘッダーごと付けない
+    // (`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
+    let request = if key.is_empty() {
         request
     } else {
         request.bearer_auth(key)
+    };
+    request
+        .send()
+        .await
+        .map_err(|e| LlmError::from_transport(e, key))
+}
+
+/// 非成功の状態コードの応答を、本文とともに`classify`で分類したエラーにする。本文でしか
+/// 分からない種類を見ないなら、`classify`は[`LlmError::from_status`]でよい。
+async fn reject_failure(
+    response: reqwest::Response,
+    classify: impl FnOnce(StatusCode, &str) -> LlmError,
+) -> Result<reqwest::Response, LlmError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
     }
+    let body = response.text().await.unwrap_or_default();
+    Err(classify(status, &body))
+}
+
+/// 成功の応答の本文をJSONとして読む。読めなければ鍵を伏せた[`LlmError`]にする。
+async fn read_json<T: DeserializeOwned>(
+    response: reqwest::Response,
+    api_key: &SecretString,
+) -> Result<T, LlmError> {
+    response
+        .json()
+        .await
+        .map_err(|e| LlmError::from_transport(e, api_key.expose_secret()))
 }
 
 /// 2つ目は「鍵があるはずなのに読めなかった」。

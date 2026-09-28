@@ -75,18 +75,14 @@ const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
     let base_url = parse_base_url(base_url)?;
     let client = crate::net::hardened_client(&base_url, Some(LIST_MODELS_TIMEOUT))?;
-    let request = super::with_api_key(client.get(endpoint(&base_url, "models")?), api_key);
+    let response =
+        super::send_with_key(client.get(endpoint(&base_url, "models")?), api_key).await?;
     let key = api_key.expose_secret();
-    let transport_error = |e| LlmError::from_transport(e, key);
-    let response = request.send().await.map_err(transport_error)?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(LlmError::from_status(status, &text, key).into());
-    }
-
-    let parsed: ModelList = response.json().await.map_err(transport_error)?;
+    let response = super::reject_failure(response, |status, body| {
+        LlmError::from_status(status, body, key)
+    })
+    .await?;
+    let parsed: ModelList = super::read_json(response, api_key).await?;
     let mut names: Vec<String> = parsed
         .data
         .into_iter()
@@ -615,18 +611,14 @@ impl LlmAdapter for OpenAiCompatAdapter {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
         let endpoint = endpoint(&self.base_url, CHAT_COMPLETIONS)?;
-        let request = super::with_api_key(self.client.post(endpoint), &self.api_key);
-        let transport_error = |e| LlmError::from_transport(e, self.api_key.expose_secret());
-        let response = request.json(&body).send().await.map_err(transport_error)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            let key = self.api_key.expose_secret();
-            return Err(http_error(status, &text, key, reasoning_effort.is_some()).into());
-        }
-
-        let parsed: CompletionResponse = response.json().await.map_err(transport_error)?;
+        let request = self.client.post(endpoint).json(&body);
+        let response = super::send_with_key(request, &self.api_key).await?;
+        let key = self.api_key.expose_secret();
+        let response = super::reject_failure(response, |status, body| {
+            http_error(status, body, key, reasoning_effort.is_some())
+        })
+        .await?;
+        let parsed: CompletionResponse = super::read_json(response, &self.api_key).await?;
 
         let choice = parsed
             .choices
