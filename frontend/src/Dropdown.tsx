@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 
 export interface DropdownOption {
   key: string
@@ -8,6 +16,9 @@ export interface DropdownOption {
 }
 
 interface DropdownProps {
+  // 項目名の要素のid。渡すと、読み上げの名前を「項目名 選択中の値」にする(ボタンの名前は
+  // 中身の文字、つまり選択中の値だけになり、何を選ぶ欄かが伝わらないため)。
+  labelledBy?: string
   // 閉じたボタンに出す文言。
   label: ReactNode
   title?: string
@@ -36,6 +47,7 @@ interface DropdownProps {
 // 開いている一覧は、外を押すか、フォーカスが外へ移ると閉じる。隣り合う一覧のうち1つだけが
 // 開いている状態(legacy/frontend.md 1節「片方を開くともう片方は自動で閉じる」)はこれで保つ。
 export default function Dropdown({
+  labelledBy,
   label,
   title,
   disabled,
@@ -45,6 +57,7 @@ export default function Dropdown({
   ...listProps
 }: DropdownProps) {
   const [open, setOpen] = useState(false)
+  const valueId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
 
@@ -83,9 +96,12 @@ export default function Dropdown({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-labelledby={labelledBy && `${labelledBy} ${valueId}`}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="dropdown-label">{label}</span>
+        <span id={valueId} className="dropdown-label">
+          {label}
+        </span>
         <span aria-hidden="true">{arrow}</span>
       </button>
       {open && <DropdownList {...listProps} direction={direction} align={align} onClose={close} />}
@@ -149,7 +165,7 @@ function DropdownList({
       onKeyDown={onKeyDown}
     >
       {options.length === 0 ? (
-        <p className="list-empty dropdown-empty">{emptyText}</p>
+        emptyText && <p className="list-empty dropdown-empty">{emptyText}</p>
       ) : (
         <ul className="dropdown-options" role="listbox" ref={listRef}>
           {options.map((option) => {

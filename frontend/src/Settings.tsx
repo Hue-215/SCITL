@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import {
   addMcpServer,
@@ -299,6 +299,7 @@ function PromptField({ label, value, onChange, onBlur, caption }: PromptFieldPro
 // 空欄と既定の文面のままの値は、Rust側が未設定として保存する(`Settings::update_general`)。
 function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
   const { general } = settings
+  const languageLabelId = useId()
   const [systemPrompt, setSystemPrompt] = useState(general.system_prompt ?? '')
   const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
     general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
@@ -324,9 +325,10 @@ function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
 
   return (
     <div className="settings-panel">
-      <label className="settings-field">
-        <span>{t('settings.general.language_label')}</span>
+      <div className="settings-field">
+        <span id={languageLabelId}>{t('settings.general.language_label')}</span>
         <Dropdown
+          labelledBy={languageLabelId}
           label={languageName(general.language)}
           options={LANGUAGES.map((language) => ({ key: language, label: languageName(language) }))}
           selectedKey={general.language}
@@ -338,7 +340,7 @@ function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
         {general.language !== currentLanguage() && (
           <p className="settings-hint">{t('settings.general.language_restart_note')}</p>
         )}
-      </label>
+      </div>
 
       <PromptField
         label={t('settings.general.system_prompt_label')}
@@ -924,6 +926,7 @@ interface AddProviderFormProps {
 }
 
 function AddProviderForm({ onAdd }: AddProviderFormProps) {
+  const apiFormatLabelId = useId()
   const [name, setName] = useState('')
   const [apiFormat, setApiFormat] = useState<ApiFormat>('open_ai_compat')
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL_BY_FORMAT.open_ai_compat)
@@ -945,9 +948,10 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
         <span>{t('settings.provider.display_name_hint')}</span>
         <input value={name} onChange={(e) => setName(e.target.value)} required />
       </label>
-      <label className="settings-field">
-        <span>{t('settings.provider.api_format_field_label')}</span>
+      <div className="settings-field">
+        <span id={apiFormatLabelId}>{t('settings.provider.api_format_field_label')}</span>
         <Dropdown
+          labelledBy={apiFormatLabelId}
           label={t(API_FORMAT_LABELS[apiFormat])}
           options={Object.entries(API_FORMAT_LABELS).map(([key, label]) => ({ key, label: t(label) }))}
           selectedKey={apiFormat}
@@ -959,7 +963,7 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
           direction="down"
           align="start"
         />
-      </label>
+      </div>
       <label className="settings-field">
         <span>{t('settings.provider.base_url_label')}</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
@@ -1217,6 +1221,7 @@ interface AddMcpServerFormProps {
 }
 
 function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFormProps) {
+  const transportLabelId = useId()
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<Transport>('stdio')
   const [command, setCommand] = useState('')
@@ -1287,9 +1292,10 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
           required
         />
       </label>
-      <label className="settings-field">
-        <span>{t('settings.tools.transport_label')}</span>
+      <div className="settings-field">
+        <span id={transportLabelId}>{t('settings.tools.transport_label')}</span>
         <Dropdown
+          labelledBy={transportLabelId}
           label={t(TRANSPORT_LABELS[transport])}
           options={Object.entries(TRANSPORT_LABELS).map(([key, label]) => ({ key, label: t(label) }))}
           selectedKey={transport}
@@ -1297,7 +1303,7 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
           direction="down"
           align="start"
         />
-      </label>
+      </div>
 
       {transport === 'stdio' ? (
         <>
