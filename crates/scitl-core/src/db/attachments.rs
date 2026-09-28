@@ -95,40 +95,50 @@ pub fn insert(conn: &Connection, message_id: i64, new: &NewAttachment) -> Result
     Ok(conn.last_insert_rowid())
 }
 
-/// 1つの会話(`?1`)の、論理削除していない発言に付いた添付を引く`SELECT`。列は発言のidと、
-/// 2列目から[`attachment_from_row`]の並び。
-const SELECT_IN_CHAT: &str = "SELECT a.message_id, a.id, a.original_name, a.mime_type, a.kind,
-        a.size_bytes, a.content_text, a.file_hash
-    FROM attachments a
+/// 1つの会話(`?1`)の、論理削除していない発言に付いた添付に絞る`FROM`・`WHERE`。
+const IN_CHAT: &str = "FROM attachments a
     JOIN messages m ON m.id = a.message_id
     WHERE m.task_id IS ?1 AND m.deleted_at IS NULL";
+/// [`view_from_row`]の並び。`concat!`に渡すため、定数ではなくマクロで持つ。
+macro_rules! view_columns {
+    () => {
+        "a.id, a.original_name, a.mime_type, a.kind, a.size_bytes"
+    };
+}
+const VIEW_COLUMNS: &str = view_columns!();
+/// [`attachment_from_row`]の並び(表示用の列に中身を足したもの)。
+const CONTENT_COLUMNS: &str = concat!(view_columns!(), ", a.content_text, a.file_hash");
 
 /// 1つの会話の、論理削除していない発言に付いた添付を、中身ごと発言ごとにまとめる。添付の
 /// 並びは付けた順。表示から外れる行(古い試行等)の分も入るが、引く側が自分の行の分だけを使う。
 pub fn for_chat(conn: &Connection, chat: Chat) -> Result<HashMap<i64, Vec<Attachment>>> {
-    let mut stmt = conn.prepare(&format!("{SELECT_IN_CHAT} ORDER BY a.id"))?;
-    let rows = stmt.query_map([chat.task_id()], |row| {
-        Ok((row.get::<_, i64>(0)?, attachment_from_row(row, 1)?))
-    })?;
-    let mut out: HashMap<i64, Vec<Attachment>> = HashMap::new();
-    for row in rows {
-        let (message_id, attachment) = row?;
-        out.entry(message_id).or_default().push(attachment);
-    }
-    Ok(out)
+    group_in_chat(conn, chat, CONTENT_COLUMNS, attachment_from_row)
 }
 
-/// [`for_chat`]の、画面に渡す形。
+/// [`for_chat`]の、画面に渡す形。中身は引かない(会話を読み直すたびに呼ばれるため)。
 pub fn views_for_chat(conn: &Connection, chat: Chat) -> Result<HashMap<i64, Vec<AttachmentView>>> {
-    Ok(for_chat(conn, chat)?
-        .into_iter()
-        .map(|(message_id, attachments)| {
-            (
-                message_id,
-                attachments.into_iter().map(|a| a.view).collect(),
-            )
-        })
-        .collect())
+    group_in_chat(conn, chat, VIEW_COLUMNS, view_from_row)
+}
+
+/// `columns`を2列目から並べて引き、発言ごとにまとめる。
+fn group_in_chat<T>(
+    conn: &Connection,
+    chat: Chat,
+    columns: &str,
+    from_row: fn(&rusqlite::Row, usize) -> rusqlite::Result<T>,
+) -> Result<HashMap<i64, Vec<T>>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT a.message_id, {columns} {IN_CHAT} ORDER BY a.id"
+    ))?;
+    let rows = stmt.query_map([chat.task_id()], |row| {
+        Ok((row.get::<_, i64>(0)?, from_row(row, 1)?))
+    })?;
+    let mut out: HashMap<i64, Vec<T>> = HashMap::new();
+    for row in rows {
+        let (message_id, item) = row?;
+        out.entry(message_id).or_default().push(item);
+    }
+    Ok(out)
 }
 
 /// 1つの発言の添付。付けた順。
@@ -159,9 +169,9 @@ pub fn get(conn: &Connection, id: i64) -> Result<Attachment> {
 /// 文脈から固定するため(docs/spec/principles.md 3節)。
 pub fn get_in_chat(conn: &Connection, chat: Chat, id: i64) -> Result<Attachment> {
     conn.query_row(
-        &format!("{SELECT_IN_CHAT} AND a.id = ?2"),
+        &format!("SELECT {CONTENT_COLUMNS} {IN_CHAT} AND a.id = ?2"),
         rusqlite::params![chat.task_id(), id],
-        |row| attachment_from_row(row, 1),
+        |row| attachment_from_row(row, 0),
     )
     .optional()?
     .ok_or(CoreError::AttachmentNotFound(id))

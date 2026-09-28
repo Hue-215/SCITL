@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import LinkDialog from './LinkDialog'
@@ -11,7 +11,10 @@ const REMARK_PLUGINS = [remarkGfm, remarkInertHtml, remarkSoftBreaks]
 // 発言本文のMarkdown描画(Issue #39)。react-markdownはHTML文字列を経由せずReactの
 // 要素を直接組み立てるため、innerHTMLへの注入経路を持たない。生のHTML・画像は
 // remarkInertHtmlが構文木の段階で無害化する。
-export default function Markdown({ text }: { text: string }) {
+//
+// 本文が変わらない限り描き直さない(`memo`)。会話欄は入力欄と同じ親の下にあり、1文字打つ
+// たびに全発言を解析し直すと、会話が長いほど入力が重くなるため。
+export default memo(function Markdown({ text }: { text: string }) {
   const [linkUrl, setLinkUrl] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -68,4 +71,4 @@ export default function Markdown({ text }: { text: string }) {
       {linkUrl !== null && <LinkDialog url={linkUrl} onClose={() => setLinkUrl(null)} />}
     </div>
   )
-}
+})
