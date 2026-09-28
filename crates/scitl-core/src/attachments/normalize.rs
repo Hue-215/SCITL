@@ -9,7 +9,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageFormat, ImageReader, Limits};
 
 use super::classify::image_mime_type;
 
@@ -21,6 +21,11 @@ const MAX_LONG_EDGE: u32 = 1568;
 /// (展開爆弾)。8K(約3300万)や高解像度のスマホ写真(〜5000万)は通る値にする。
 /// ヘッダーの寸法で判定し、画素を展開する前に止める。
 const MAX_PIXELS: u64 = 50_000_000;
+
+/// デコーダーが一度に確保してよい大きさ。画素数の上限の画像を16ビットのRGBA(1画素8バイト)で
+/// 展開できる大きさにする。GIFのフレームのように、判定した寸法とは別に大きさを宣言できる
+/// 確保も、ここで止める。
+const MAX_DECODE_BYTES: u64 = 512 * 1024 * 1024;
 
 const JPEG_QUALITY: u8 = 90;
 
@@ -37,9 +42,11 @@ pub(super) struct Normalized {
 pub(super) fn normalize_image(bytes: &[u8]) -> Option<Normalized> {
     // 形式は先頭バイトから決めたものを渡し、デコーダーに推測させない。
     let format = ImageFormat::from_mime_type(image_mime_type(bytes)?)?;
-    let mut decoder = ImageReader::with_format(Cursor::new(bytes), format)
-        .into_decoder()
-        .ok()?;
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_DECODE_BYTES);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().ok()?;
     let (width, height) = decoder.dimensions();
     if u64::from(width) * u64::from(height) > MAX_PIXELS {
         return None;
@@ -184,6 +191,19 @@ mod tests {
         assert!(normalize_image(&gif).is_some());
         // 論理画面の幅と高さ(6〜9バイト目)を65535×65535に書き換える。中身は1画素のまま。
         gif[6..10].copy_from_slice(&[0xff; 4]);
+        assert!(normalize_image(&gif).is_none());
+    }
+
+    #[test]
+    fn refuses_frames_larger_than_the_declared_screen() {
+        // 論理画面は1×1、2色のパレット。フレームだけが65535×65535を宣言する。
+        let gif = [
+            b"GIF89a\x01\x00\x01\x00\x80\x00\x00".as_slice(),
+            b"\x00\x00\x00\xff\xff\xff",
+            b"\x2c\x00\x00\x00\x00\xff\xff\xff\xff\x00",
+            b"\x02\x02\x44\x01\x00\x3b",
+        ]
+        .concat();
         assert!(normalize_image(&gif).is_none());
     }
 
