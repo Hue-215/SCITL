@@ -2,6 +2,7 @@
 //! 開くときの読み出しをここに閉じる。行の読み書きは`db::attachments`。
 
 mod classify;
+mod normalize;
 mod staging;
 mod store;
 

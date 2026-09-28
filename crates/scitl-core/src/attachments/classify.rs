@@ -47,7 +47,8 @@ pub struct Classified {
 
 /// 画像として扱う形式。OpenAI互換APIが画像入力として受け付ける形式に限る。SVGはスクリプトや
 /// 外部参照を持てるうえAPIも受け付けないので、ここに入れない(テキストとして扱われる)。
-/// これ以外の画像は、正規化(Issue #45)が入るまで「その他」になる。
+/// これ以外の画像(BMP・TIFF・HEIC等)は「その他」。画像は預かる時点でPNGかJPEGに正規化する
+/// (`normalize`)が、正規化に渡す形式もここで決める。
 const IMAGE_SIGNATURES: &[(&[u8], &str)] = &[
     (b"\x89PNG\r\n\x1a\n", "image/png"),
     (b"\xff\xd8\xff", "image/jpeg"),

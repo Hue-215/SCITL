@@ -61,3 +61,15 @@ process-wrap = { version = "10.0", default-features = false, features = [
     "job-object",
     "kill-on-drop",
 ] }
+
+# 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
+# デコード・縮小・エンコードに関わるクレートだけは最適化する
+[profile.dev.package]
+image = { opt-level = 3 }
+zune-jpeg = { opt-level = 3 }
+png = { opt-level = 3 }
+fdeflate = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
+gif = { opt-level = 3 }
+weezl = { opt-level = 3 }
+image-webp = { opt-level = 3 }
