@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 scitl-core = { path = "../scitl-core" }
 tauri = { version = "2", features = [] }
 secrecy = { workspace = true }
+percent-encoding = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

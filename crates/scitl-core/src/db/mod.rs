@@ -118,30 +118,11 @@ fn migrate_to(conn: &Connection, target: usize) -> Result<()> {
 /// ISO8601 UTC(`YYYY-MM-DDTHH:MM:SSZ`)。生成箇所をここに集約する
 /// (docs/spec/rebuild/data-model.md 1節)。
 pub fn now_iso8601() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before unix epoch");
-    format_unix_utc(now.as_secs())
+    iso8601(chrono::Utc::now())
 }
 
-fn format_unix_utc(secs: u64) -> String {
-    // 外部クレート無しでUTCの日時文字列を組み立てる(civil_from_days, Howard Hinnant方式)。
-    let days = (secs / 86400) as i64;
-    let rem = secs % 86400;
-    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m_num = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m_num <= 2 { y + 1 } else { y };
-
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m_num, d, h, m, s)
+fn iso8601(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// 接続を開き、PRAGMAとマイグレーションを適用する
@@ -265,6 +246,15 @@ mod tests {
 
         drop(migrating);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 辞書順が時系列順になる固定幅の形(data-model.md 1節)。秒未満は書かず、UTCは`Z`で書く。
+    #[test]
+    fn timestamps_are_fixed_width_utc_seconds() {
+        let at = chrono::DateTime::from_timestamp(1_790_000_000, 999_999_999).unwrap();
+        assert_eq!(iso8601(at), "2026-09-21T14:13:20Z");
+        let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap();
+        assert_eq!(iso8601(epoch), "1970-01-01T00:00:00Z");
     }
 
     #[test]

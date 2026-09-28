@@ -3445,11 +3445,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "chrono",
  "dbus-secret-service-keyring-store",
  "dirs",
  "image",
  "keyring-core",
  "open",
+ "percent-encoding",
  "process-wrap",
  "reqwest",
  "rmcp",
@@ -3470,6 +3472,7 @@ dependencies = [
 name = "scitl-tauri"
 version = "0.1.0"
 dependencies = [
+ "percent-encoding",
  "scitl-core",
  "secrecy",
  "serde_json",
