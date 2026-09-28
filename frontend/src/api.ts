@@ -6,6 +6,7 @@ import type {
   Capability,
   Chat,
   ChatModelsView,
+  ExportSummary,
   Language,
   LinkInspection,
   Message,
@@ -107,6 +108,15 @@ export function readImageAttachment(attachmentId: number): Promise<string> {
 
 export function revealAttachment(attachmentId: number): Promise<void> {
   return invoke('reveal_attachment', { attachmentId })
+}
+
+// 書き出し先は画面からは選ばない(architecture.md 13節)。
+export function exportMarkdown(): Promise<ExportSummary> {
+  return invoke('export_markdown')
+}
+
+export function openExportFolder(): Promise<void> {
+  return invoke('open_export_folder')
 }
 
 export function listChatMessages(chat: Chat): Promise<Message[]> {
