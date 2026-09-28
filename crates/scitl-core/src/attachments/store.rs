@@ -59,6 +59,14 @@ impl AttachmentStore {
         fs::read(self.blob_path(hash)?).map_err(io_error("read an attachment"))
     }
 
+    /// 実体を`dest`へ複製する(元の名前での書き出し)。メモリに読み込まずにファイルのまま写す。
+    /// `dest`の親ディレクトリは呼び出し側が作る。
+    pub fn copy_to(&self, hash: &str, dest: &Path) -> Result<()> {
+        fs::copy(self.blob_path(hash)?, dest)
+            .map(drop)
+            .map_err(io_error("copy an attachment"))
+    }
+
     /// 実体を画像として読む。形式は保存した値ではなく実体の先頭バイトから決め直す
     /// ([`InlineImage::from_bytes`])ので、画像として扱う形式でなければ失敗にする。
     pub fn read_image(&self, hash: &str) -> Result<InlineImage> {
@@ -73,9 +81,8 @@ impl AttachmentStore {
         let dir = self.revealed.join(attachment_id.to_string());
         let path = dir.join(safe_file_name(original_name));
         if !path.exists() {
-            let bytes = self.read(hash)?;
             fs::create_dir_all(&dir).map_err(io_error("create the reveal directory"))?;
-            fs::write(&path, bytes).map_err(io_error("write the revealed attachment"))?;
+            self.copy_to(hash, &path)?;
         }
         open::that_detached(&dir).map_err(io_error("open the folder"))
     }
