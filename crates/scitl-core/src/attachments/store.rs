@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
 use crate::db::error::{CoreError, Result};
+use crate::llm::InlineImage;
 
 #[derive(Debug, Clone)]
 pub struct AttachmentStore {
@@ -55,6 +56,14 @@ impl AttachmentStore {
 
     pub fn read(&self, hash: &str) -> Result<Vec<u8>> {
         fs::read(self.blob_path(hash)?).map_err(io_error("read an attachment"))
+    }
+
+    /// 実体を画像として読む。形式は保存した値ではなく実体の先頭バイトから決め直す
+    /// ([`InlineImage::from_bytes`])ので、画像として扱う形式でなければ失敗にする。
+    pub fn read_image(&self, hash: &str) -> Result<InlineImage> {
+        InlineImage::from_bytes(&self.read(hash)?).ok_or_else(|| {
+            CoreError::Attachment("stored file is not an image of a supported format".to_string())
+        })
     }
 
     /// 添付を元の名前(安全にした形)で書き出し、入っているフォルダをOSで開く。

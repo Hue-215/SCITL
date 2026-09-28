@@ -156,8 +156,8 @@ fn load_image(attachment: &Attachment, store: &AttachmentStore) -> Option<Inline
     let AttachmentContent::File { hash } = &attachment.content else {
         return None;
     };
-    match store.read(hash) {
-        Ok(bytes) => InlineImage::from_bytes(&bytes),
+    match store.read_image(hash) {
+        Ok(image) => Some(image),
         Err(e) => {
             eprintln!("failed to read attachment {}: {e}", attachment.view.id);
             None

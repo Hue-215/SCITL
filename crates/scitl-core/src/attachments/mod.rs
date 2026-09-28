@@ -18,7 +18,6 @@ use crate::blocking;
 use crate::db::attachments::{self, AttachmentContent, AttachmentKind, NewAttachment};
 use crate::db::error::{CoreError, Result};
 use crate::db::{with_conn, SharedConnection};
-use crate::llm::InlineImage;
 
 /// 添付をモデルへどう渡すか(Issue #21)。履歴の組み立てと、画面が添付に出す警告
 /// (`settings::ChatModelsView`)の両方がこれで決める。
@@ -101,12 +100,7 @@ impl Attachments {
         let attachment = with_conn(db, move |conn| attachments::get(conn, id)).await?;
         let hash = file_hash(attachment.content, id, AttachmentKind::Image)?;
         let store = self.store.clone();
-        blocking::run(move || {
-            let image = InlineImage::from_bytes(&store.read(&hash)?)
-                .ok_or_else(|| not_of_kind(id, AttachmentKind::Image))?;
-            Ok(image.data_url())
-        })
-        .await
+        blocking::run(move || Ok(store.read_image(&hash)?.data_url())).await
     }
 
     /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。
