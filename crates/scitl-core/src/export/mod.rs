@@ -265,24 +265,22 @@ fn io_error(action: &'static str) -> impl Fn(std::io::Error) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachments::TempStore;
     use crate::db;
     use crate::db::attachments::{AttachmentKind, NewAttachment};
     use crate::db::messages::{Kind, NewMessage, Origin, Role};
     use crate::db::tasks::{TaskStatus, TaskUpdate};
 
     struct Fixture {
-        root: PathBuf,
+        temp: TempStore,
         conn: Connection,
-        store: AttachmentStore,
     }
 
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("scitl-export-{}", Ulid::new()));
             Self {
-                store: AttachmentStore::new(root.join("blobs"), root.join("revealed")),
+                temp: TempStore::new(),
                 conn: db::open_in_memory().unwrap(),
-                root,
             }
         }
 
@@ -349,16 +347,10 @@ mod tests {
 
         fn export(&self) -> (ExportSummary, PathBuf) {
             let snapshot = Snapshot::read(&self.conn).unwrap();
-            let out = self.root.join("export");
-            let summary = write(&snapshot, &self.store, &out).unwrap();
+            let out = self.temp.root().join("export");
+            let summary = write(&snapshot, &self.temp.store, &out).unwrap();
             let folder = out.join(&summary.folder);
             (summary, folder)
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
         }
     }
 
@@ -419,7 +411,7 @@ mod tests {
         let chat = Chat::Task(f.task("添付"));
         let m = f.say(chat, "see these");
         f.attach(m, "notes.txt", AttachmentContent::Text("本文".to_string()));
-        let hash = f.store.put(b"\x89PNG\r\n\x1a\nbody").unwrap();
+        let hash = f.temp.store.put(b"\x89PNG\r\n\x1a\nbody").unwrap();
         f.attach(m, "a b.png", AttachmentContent::File { hash });
         f.attach(
             m,
@@ -466,7 +458,7 @@ mod tests {
         let (second, _) = f.export();
         assert_ne!(first.folder, second.folder);
         assert!(!first.folder.contains(':'));
-        let names: Vec<String> = fs::read_dir(f.root.join("export"))
+        let names: Vec<String> = fs::read_dir(f.temp.root().join("export"))
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();

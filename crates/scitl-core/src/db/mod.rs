@@ -187,9 +187,8 @@ mod tests {
 
     #[test]
     fn in_transaction_keeps_other_processes_out_from_the_first_read() {
-        let dir = std::env::temp_dir().join(format!("scitl-db-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("scitl.sqlite3");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scitl.sqlite3");
         let conn = open(&path).unwrap();
         let other_process = open(&path).unwrap();
         other_process
@@ -213,16 +212,12 @@ mod tests {
             task_steps::add_steps(conn, task_id, &["買い出し".to_string()])
         })
         .unwrap();
-
-        drop((conn, other_process));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn opening_during_another_process_migration_does_not_apply_it_twice() {
-        let dir = std::env::temp_dir().join(format!("scitl-db-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("scitl.sqlite3");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scitl.sqlite3");
         let migrating = Connection::open(&path).unwrap();
         migrating
             .pragma_update(None, "journal_mode", "WAL")
@@ -243,9 +238,6 @@ mod tests {
 
         let opened = late.join().unwrap();
         assert!(opened.is_ok(), "{opened:?}");
-
-        drop(migrating);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// 辞書順が時系列順になる固定幅の形(data-model.md 1節)。秒未満は書かず、UTCは`Z`で書く。

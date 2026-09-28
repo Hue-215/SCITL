@@ -352,16 +352,16 @@ mod tests {
 
     #[test]
     fn load_missing_file_returns_default_config() {
-        let dir = tempdir();
-        let config = load(&dir.join("config.toml")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let config = load(&dir.path().join("config.toml")).unwrap();
         assert!(config.providers.is_empty());
         assert!(config.active_provider_id.is_none());
     }
 
     #[test]
     fn save_then_load_roundtrips() {
-        let dir = tempdir();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         let config = Config {
             providers: vec![ProviderConfig {
                 id: "default".to_string(),
@@ -427,8 +427,8 @@ mod tests {
 
     #[test]
     fn save_overwrites_existing_file_without_leaving_temp_file() {
-        let dir = tempdir();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         save(&path, &Config::default()).unwrap();
         let config = Config {
             active_provider_id: Some("p".to_string()),
@@ -440,7 +440,7 @@ mod tests {
             load(&path).unwrap().active_provider_id.as_deref(),
             Some("p")
         );
-        let names: Vec<_> = std::fs::read_dir(&dir)
+        let names: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name())
             .collect();
@@ -544,19 +544,13 @@ models = ["a"]
         assert!(toml::from_str::<Config>(text).is_err());
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("scitl-config-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     /// `task_chat_system_prompt`追加前のTOML(このキーを含まない)が引き続き読めることを
     /// 保証する。`Option<T>`フィールドは`#[serde(default)]`が無くても欠損時`None`になる
     /// serde_deriveの挙動に頼っているため、将来型を変える際の回帰検知として残す。
     #[test]
     fn load_reads_config_without_task_chat_system_prompt_key() {
-        let dir = tempdir();
-        let path = dir.join("config.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
             r#"

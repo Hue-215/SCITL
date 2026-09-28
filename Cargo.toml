@@ -83,6 +83,9 @@ process-wrap = { version = "10.0", default-features = false, features = [
     "kill-on-drop",
 ] }
 
+# テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
+tempfile = "3"
+
 # 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
 # デコード・縮小・エンコードに関わるクレートだけは最適化する
 [profile.dev.package]

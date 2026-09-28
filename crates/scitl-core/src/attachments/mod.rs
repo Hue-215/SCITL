@@ -14,6 +14,8 @@ pub(crate) use staging::Taken;
 pub use staging::{Rejection, StageOutcome};
 pub(crate) use store::safe_file_name;
 pub use store::AttachmentStore;
+#[cfg(test)]
+pub(crate) use store::TempStore;
 
 use crate::blocking;
 use crate::db::attachments::{self, AttachmentContent, AttachmentKind, NewAttachment};

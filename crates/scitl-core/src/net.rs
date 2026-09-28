@@ -212,16 +212,7 @@ mod tests {
 
     /// 1回だけ接続を受け、`response`をそのまま書いて閉じる最小限のHTTPサーバー。
     fn spawn_once(response: &'static str) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 1024];
-                let _ = stream.read(&mut buf);
-                let _ = stream.write_all(response.as_bytes());
-            }
-        });
-        format!("http://{addr}/")
+        spawn_once_delayed(response, Duration::ZERO)
     }
 
     /// `spawn_once`と同じだが、応答を返す前に`delay`だけ待つ。
@@ -273,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_env_var_is_ignored() {
-        let url = spawn_once("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+        let url = spawn_once(NO_CONTENT);
         // このプロセス内の他のテストはenv varを触らないため、並行実行下でも安全
         // (今後env varを操作するテストを足す場合は要注意)。
         // SAFETY: `set_var`/`remove_var`はプロセス全体のグローバル状態を変更するため
