@@ -115,27 +115,7 @@ pub enum ReasoningEffort {
 }
 
 /// 能力の手動設定。`None`は「手動では決めていない」。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelOverrides {
-    pub image: Option<bool>,
-    pub tools: Option<bool>,
-    pub thinking: Option<bool>,
-    pub context_length: Option<u32>,
-}
-
-impl ModelOverrides {
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
-    pub fn flag_mut(&mut self, capability: Capability) -> &mut Option<bool> {
-        match capability {
-            Capability::Image => &mut self.image,
-            Capability::Tools => &mut self.tools,
-            Capability::Thinking => &mut self.thinking,
-        }
-    }
-}
+pub type ModelOverrides = crate::llm::CapabilityLayer;
 
 /// 応答タイムアウトの既定値(秒)。未設定のときに使う実体はここ1箇所だけ。
 /// タイムアウト自体は常に掛ける(HTTPクライアントの既定は無制限で、応答しない
