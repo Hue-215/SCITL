@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 secrecy = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }
+chrono = { workspace = true }
 ulid = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }

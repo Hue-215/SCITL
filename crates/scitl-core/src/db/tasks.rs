@@ -298,24 +298,14 @@ fn validate_deadline(raw: &str) -> Result<()> {
         return Err(invalid());
     }
 
+    // 形は上で確かめたので、ここでは実在する日付か(月の範囲・月末・閏日)だけを見る。chronoの
+    // 書式パースは1桁の月日も受け付けるため、形の確認には使わない。
     let year: i32 = raw[0..4].parse().map_err(|_| invalid())?;
     let month: u32 = raw[5..7].parse().map_err(|_| invalid())?;
     let day: u32 = raw[8..10].parse().map_err(|_| invalid())?;
-    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
-        return Err(invalid());
-    }
-    Ok(())
-}
-
-/// グレゴリオ暦の閏年規則。`db::now_iso8601`が使う日付計算とは向きが逆(あちらは
-/// 通算日から日付を作る)ため、共有せずここに置く。
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    }
+    chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .map(drop)
+        .ok_or_else(invalid)
 }
 
 /// 画面でタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を

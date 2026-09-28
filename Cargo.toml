@@ -23,6 +23,11 @@ url = "2"
 # ヘッダー)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
 # (`cargo tree -d -i percent-encoding`で確認)
 percent-encoding = "2.3.2"
+# UTC日時の文字列化と、締切の日付が実在するかの確認(`scitl-core/src/db/`)。同じ版がrmcpの依存として
+# 既にビルドされている。ローカルのタイムゾーンは読まない(タイムスタンプはUTC、締切は日付だけ。
+# data-model.md 1節)ので、OSのタイムゾーンを調べる`clock`(`iana-time-zone`等を引き込む)ではなく
+# `now`だけを有効にする
+chrono = { version = "0.4.45", default-features = false, features = ["now"] }
 ulid = "1"
 async-trait = "0.1"
 # 秘密情報の保存先(OSの資格情報ストア)。本体と、secrets.rsが設定するOSごとの保存先。
