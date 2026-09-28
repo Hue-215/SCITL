@@ -3,7 +3,6 @@
 //! 型として存在させない。実際の鍵の出し入れは[`crate::secrets`]の責務。
 
 use std::collections::BTreeSet;
-use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
@@ -309,42 +308,14 @@ pub fn load(path: &Path) -> Result<Config, CoreError> {
 
 /// 設定ファイルを保存する。呼び出し元が親ディレクトリの存在を保証する。
 ///
-/// 同じディレクトリの一時ファイルに書き切ってから置き換える。直接上書きすると、書き込み
-/// 途中で落ちたときに`config.toml`が壊れ、起動時の読み込みエラーは設定画面から直せない。
+/// 書き込み途中で落ちても`config.toml`が壊れないように書く([`crate::files::write_durably`])。
+/// 起動時の読み込みエラーは設定画面から直せない。置き換えまで同期するのは、呼び出し元が
+/// 保存の直後に古い設定だけが参照していた秘密情報を消すため(置き換えが電源断で巻き戻ると、
+/// 設定が消えた鍵を指して残る)。
 pub fn save(path: &Path, config: &Config) -> Result<(), CoreError> {
     let text = toml::to_string_pretty(config).map_err(|e| CoreError::Config(e.to_string()))?;
-    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
-    tmp_name.push(".tmp");
-    let tmp_path = path.with_file_name(tmp_name);
-
-    let written = std::fs::File::create(&tmp_path).and_then(|mut file| {
-        file.write_all(text.as_bytes())?;
-        file.sync_all()
-    });
-    let replaced = written.and_then(|()| std::fs::rename(&tmp_path, path));
-    if let Err(e) = replaced {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(CoreError::Config(e.to_string()));
-    }
-    sync_parent_dir(path);
-    Ok(())
+    crate::files::write_durably(path, text.as_bytes()).map_err(|e| CoreError::Config(e.to_string()))
 }
-
-/// 置き換え自体を永続化する。呼び出し元は保存の直後に、古い設定だけが参照していた
-/// 秘密情報を消すため、置き換えが電源断で巻き戻ると設定が消えた鍵を指して残る。
-/// 失敗しても保存は済んでいるので、エラーにはしない。
-#[cfg(unix)]
-fn sync_parent_dir(path: &Path) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
-            eprintln!("failed to sync config directory: {e}");
-        }
-    }
-}
-
-/// Windowsではディレクトリを開いてfsyncできない(`MoveFileEx`の置き換えに任せる)。
-#[cfg(not(unix))]
-fn sync_parent_dir(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {

@@ -257,9 +257,8 @@ fn create_parent(path: &Path) -> Result<()> {
     }
 }
 
-/// 失敗の文言にパスを載せない(エラーは画面にそのまま出る)。
 fn io_error(action: &'static str) -> impl Fn(std::io::Error) -> CoreError {
-    move |e| CoreError::Export(format!("failed to {action}: {:?}", e.kind()))
+    move |e| CoreError::Export(crate::files::describe_io_error(action, &e))
 }
 
 #[cfg(test)]
