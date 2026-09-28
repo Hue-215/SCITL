@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import {
   addMcpServer,
@@ -38,6 +38,7 @@ import type {
 } from './types'
 import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
+import Dropdown from './Dropdown'
 import { currentLanguage, languageName, LANGUAGES, t, type MessageKey } from './i18n'
 
 interface SettingsProps {
@@ -46,6 +47,17 @@ interface SettingsProps {
 
 const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
   open_ai_compat: 'https://api.openai.com/v1',
+}
+
+const API_FORMAT_LABELS: Record<ApiFormat, MessageKey> = {
+  open_ai_compat: 'settings.provider.formats.open_ai_compat',
+}
+
+type Transport = McpServerView['endpoint']['transport']
+
+const TRANSPORT_LABELS: Record<Transport, MessageKey> = {
+  stdio: 'settings.tools.transport_stdio',
+  streamable_http: 'settings.tools.transport_http',
 }
 
 // httpの許可範囲(crates/scitl-core/src/net.rsのclassify_host)が変わったときに
@@ -99,7 +111,7 @@ export default function Settings({ onClose }: SettingsProps) {
       <header className="settings-header">
         <button
           type="button"
-          className="icon-button settings-back"
+          className="icon-button"
           onClick={onClose}
           aria-label={t('settings.back_tooltip')}
           title={t('settings.back_tooltip')}
@@ -287,6 +299,7 @@ function PromptField({ label, value, onChange, onBlur, caption }: PromptFieldPro
 // 空欄と既定の文面のままの値は、Rust側が未設定として保存する(`Settings::update_general`)。
 function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
   const { general } = settings
+  const languageLabelId = useId()
   const [systemPrompt, setSystemPrompt] = useState(general.system_prompt ?? '')
   const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
     general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
@@ -312,23 +325,22 @@ function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
 
   return (
     <div className="settings-panel">
-      <label className="settings-field">
-        <span>{t('settings.general.language_label')}</span>
-        <select
-          value={general.language}
-          onChange={(e) => onSaveLanguage(e.target.value as Language)}
-        >
-          {LANGUAGES.map((language) => (
-            <option key={language} value={language}>
-              {languageName(language)}
-            </option>
-          ))}
-        </select>
+      <div className="settings-field">
+        <span id={languageLabelId}>{t('settings.general.language_label')}</span>
+        <Dropdown
+          labelledBy={languageLabelId}
+          label={languageName(general.language)}
+          options={LANGUAGES.map((language) => ({ key: language, label: languageName(language) }))}
+          selectedKey={general.language}
+          onSelect={(key) => onSaveLanguage(key as Language)}
+          direction="down"
+          align="start"
+        />
         {/* 画面は起動時の言語で描かれているので、保存した言語と違う間だけ出す */}
         {general.language !== currentLanguage() && (
           <p className="settings-hint">{t('settings.general.language_restart_note')}</p>
         )}
-      </label>
+      </div>
 
       <PromptField
         label={t('settings.general.system_prompt_label')}
@@ -765,10 +777,12 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
           <table className="model-table">
             <thead>
               <tr>
-                <th>{t('settings.model.col_visible')}</th>
+                <th className="model-check-col">{t('settings.model.col_visible')}</th>
                 <th>{t('settings.model.col_model')}</th>
                 {CAPABILITY_COLUMNS.map(({ capability, label }) => (
-                  <th key={capability}>{t(label)}</th>
+                  <th key={capability} className="model-check-col">
+                    {t(label)}
+                  </th>
                 ))}
                 <th>{t('settings.model.col_context_length')}</th>
                 <th aria-label={t('settings.model.col_actions')} />
@@ -810,7 +824,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
 
   return (
     <tr className={model.visible ? undefined : 'model-hidden'}>
-      <td>
+      <td className="model-check-col">
         <input
           type="checkbox"
           checked={model.visible}
@@ -823,7 +837,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
       </td>
       <td className="model-name">{shown}</td>
       {CAPABILITY_COLUMNS.map(({ capability, checkboxLabel }) => (
-        <td key={capability}>
+        <td key={capability} className="model-check-col">
           <span className="model-capability">
             <input
               type="checkbox"
@@ -912,6 +926,7 @@ interface AddProviderFormProps {
 }
 
 function AddProviderForm({ onAdd }: AddProviderFormProps) {
+  const apiFormatLabelId = useId()
   const [name, setName] = useState('')
   const [apiFormat, setApiFormat] = useState<ApiFormat>('open_ai_compat')
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL_BY_FORMAT.open_ai_compat)
@@ -933,19 +948,22 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
         <span>{t('settings.provider.display_name_hint')}</span>
         <input value={name} onChange={(e) => setName(e.target.value)} required />
       </label>
-      <label className="settings-field">
-        <span>{t('settings.provider.api_format_field_label')}</span>
-        <select
-          value={apiFormat}
-          onChange={(e) => {
-            const format = e.target.value as ApiFormat
+      <div className="settings-field">
+        <span id={apiFormatLabelId}>{t('settings.provider.api_format_field_label')}</span>
+        <Dropdown
+          labelledBy={apiFormatLabelId}
+          label={t(API_FORMAT_LABELS[apiFormat])}
+          options={Object.entries(API_FORMAT_LABELS).map(([key, label]) => ({ key, label: t(label) }))}
+          selectedKey={apiFormat}
+          onSelect={(key) => {
+            const format = key as ApiFormat
             setApiFormat(format)
             setBaseUrl(DEFAULT_BASE_URL_BY_FORMAT[format])
           }}
-        >
-          <option value="open_ai_compat">{t('settings.provider.formats.open_ai_compat')}</option>
-        </select>
-      </label>
+          direction="down"
+          align="start"
+        />
+      </div>
       <label className="settings-field">
         <span>{t('settings.provider.base_url_label')}</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
@@ -1203,8 +1221,9 @@ interface AddMcpServerFormProps {
 }
 
 function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFormProps) {
+  const transportLabelId = useId()
   const [name, setName] = useState('')
-  const [transport, setTransport] = useState<'stdio' | 'streamable_http'>('stdio')
+  const [transport, setTransport] = useState<Transport>('stdio')
   const [command, setCommand] = useState('')
   const [argsText, setArgsText] = useState('')
   const [envText, setEnvText] = useState('')
@@ -1273,16 +1292,18 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
           required
         />
       </label>
-      <label className="settings-field">
-        <span>{t('settings.tools.transport_label')}</span>
-        <select
-          value={transport}
-          onChange={(e) => setTransport(e.target.value as 'stdio' | 'streamable_http')}
-        >
-          <option value="stdio">{t('settings.tools.transport_stdio')}</option>
-          <option value="streamable_http">{t('settings.tools.transport_http')}</option>
-        </select>
-      </label>
+      <div className="settings-field">
+        <span id={transportLabelId}>{t('settings.tools.transport_label')}</span>
+        <Dropdown
+          labelledBy={transportLabelId}
+          label={t(TRANSPORT_LABELS[transport])}
+          options={Object.entries(TRANSPORT_LABELS).map(([key, label]) => ({ key, label: t(label) }))}
+          selectedKey={transport}
+          onSelect={(key) => setTransport(key as Transport)}
+          direction="down"
+          align="start"
+        />
+      </div>
 
       {transport === 'stdio' ? (
         <>

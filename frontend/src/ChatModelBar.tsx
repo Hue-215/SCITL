@@ -37,7 +37,6 @@ export default function ChatModelBar({
   onSelected: (selected: SelectedModel | null) => void
 }) {
   const [view, setView] = useState<ChatModelsView | null>(null)
-  const [open, setOpen] = useState<'model' | 'effort' | null>(null)
 
   const reload = useCallback(async () => {
     try {
@@ -65,8 +64,6 @@ export default function ChatModelBar({
 
   const selected = view?.selected ?? null
   const choices = view?.choices ?? []
-  const toggle = (which: 'model' | 'effort') => (next: boolean) =>
-    setOpen((current) => (next ? which : current === which ? null : current))
 
   return (
     // 左右余白は外側(mainの直接の子)が持ち、一覧の位置と幅の基準は内側の行にする。
@@ -74,8 +71,7 @@ export default function ChatModelBar({
     <div className="chat-model-bar">
       <div className="chat-model-bar-row">
         <Dropdown
-          open={open === 'model'}
-          onOpenChange={toggle('model')}
+          toggleClassName="chat-model-toggle"
           label={selected ? selected.label : t('select.model_unset')}
           title={
             selected
@@ -96,13 +92,12 @@ export default function ChatModelBar({
             const choice = choices.find((c) => choiceKey(c) === key)
             if (choice) void change(() => selectChatModel(choice.provider_id, choice.model))
           }}
-          searchPlaceholder={t('select.model_search_hint')}
           emptyText={t('select.models_empty')}
+          direction="up"
           align="start"
         />
         <Dropdown
-          open={open === 'effort'}
-          onOpenChange={toggle('effort')}
+          toggleClassName="chat-model-toggle"
           label={
             !selected
               ? t('select.thinking_label')
@@ -126,7 +121,7 @@ export default function ChatModelBar({
               setReasoningEffort(selected.provider_id, selected.model, key as ReasoningEffort),
             )
           }}
-          emptyText=""
+          direction="up"
           align="end"
         />
       </div>

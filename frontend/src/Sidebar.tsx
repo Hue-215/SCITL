@@ -100,7 +100,7 @@ export default function Sidebar({
         </div>
       </div>
 
-      <button type="button" className="sidebar-add" onClick={onAddTask} disabled={adding}>
+      <button type="button" className="primary sidebar-add" onClick={onAddTask} disabled={adding}>
         + {t('sidebar.new_task_button')}
       </button>
     </nav>

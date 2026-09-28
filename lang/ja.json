@@ -55,7 +55,6 @@
   "select.effort.low": "低",
   "select.effort.medium": "中",
   "select.effort.off": "オフ",
-  "select.model_search_hint": "モデルを検索",
   "select.model_tooltip": "{model}（{provider}）",
   "select.model_unset": "モデル未設定",
   "select.models_empty": "選べるモデルがありません。設定の「APIプロバイダー」から追加・表示できます。",
