@@ -252,7 +252,8 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 - 画面からの操作は、そのタスクが応答を生成中なら断る(`orchestration::operations`)。
   ターンの途中に`turn_id`の無い行が挟まると、ターンの表示が割れるため。ただしこれは同じ
   プロセス内の経路でしか防げず、別プロセス(CLI #23、MCPサーバー #73)の書き込みには効かない。
-  表示の側で割れないようにする対応は別に要る
+  画面は連続した行ではなく`turn_id`でターンをまとめ、途中に挟まった行をターンの後に並べる
+  (`frontend/src/thinking.ts`の`groupMessages`)
 
 ### attachments(添付ファイル)
 
