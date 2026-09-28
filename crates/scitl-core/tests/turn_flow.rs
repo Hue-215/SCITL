@@ -2959,3 +2959,74 @@ async fn an_earlier_image_can_be_read_again_only_for_that_turn() {
     assert!(results[0].0.as_str().contains(r#""name":"photo.png""#));
     assert!(results[0].1.is_empty());
 }
+
+/// 読み込んだ画像の実体を読めなくても、ツールの失敗としてモデルに返し、ターンは続ける
+/// (principles.md 3節「失敗しても会話を止めない」)。
+#[tokio::test]
+async fn an_image_that_cannot_be_read_is_reported_to_the_model() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.image = true;
+    let root = std::env::temp_dir().join(format!("scitl-turn-flow-{}", ulid::Ulid::new()));
+    let attachments: &'static Attachments = Box::leak(Box::new(Attachments::new(
+        AttachmentStore::new(root.join("blobs"), root.join("revealed")),
+    )));
+
+    let first = TextAdapter::one("見ました");
+    let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&first)
+        },
+        chat,
+        UserInput {
+            text: "これ".to_string(),
+            attachments: vec![image],
+        },
+    )
+    .await
+    .unwrap();
+    let attachment_id = {
+        let conn = db.lock().unwrap();
+        let views = db::attachments::views_for_chat(&conn, chat).unwrap();
+        views.values().next().unwrap()[0].id
+    };
+    std::fs::remove_dir_all(&root).unwrap();
+
+    let reader = ScriptedToolsAdapter::new(vec![(
+        "read_attachment",
+        json!({ "attachment_id": attachment_id }),
+    )]);
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&reader)
+        },
+        chat,
+        "さっきの画像をもう一度".to_string(),
+    )
+    .await
+    .unwrap();
+    {
+        let sent = reader.sent.lock().unwrap();
+        let ChatMessage::Tool {
+            content, images, ..
+        } = sent[1].last().unwrap()
+        else {
+            panic!("expected the tool result last");
+        };
+        assert!(content.as_str().contains(r#""error""#));
+        assert!(images.is_empty());
+    }
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    assert_eq!(reply_of(&messages), "確認しました");
+}
