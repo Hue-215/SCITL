@@ -43,8 +43,11 @@
 | 文字 | `--font-family`, `--font-family-mono`, `--font-size-sm/md/lg/xl`, `--line-height-tight/normal` |
 | 余白 | `--space-1`〜`--space-5` |
 | アイコン・操作部品の寸法 | `--icon-size-sm/md/lg`(グリフ), `--control-size-md`(当たり判定の箱) |
-| 線 | `--border-width`, `--focus-ring-width` |
+| 線 | `--border-width` |
+| 角丸(吹き出しだけ) | `--bubble-radius`(近い側マージンの半分を式で持つ) |
+| 奥行き | `--shadow-raise`, `--shadow-sink`, `--shadow-lift`, `--shadow-focus`(`theme.ts`が明暗ごとに発行) |
 | チャット吹き出しのマージン | `--bubble-margin-near`, `--bubble-margin-far`(近い側の2倍を式で持つ) |
+| 入力欄とモデル選択の間・モデル選択と窓の下端の間 | `--compose-bottom-gap` |
 | 複数行入力欄が伸びる範囲 | `--textarea-min-height`, `--textarea-max-height`(全欄共通の1組) |
 | 検索欄付きの選択一覧が伸びる上限 | `--option-list-max-height` |
 | レイアウトの基準値 | `--sidebar-width`, `--settings-rail-width`, `--content-min-width`, `--content-max-width` |
@@ -61,6 +64,34 @@
 
 値どうしの関係(遠い側マージンは近い側の2倍、など)は、**関係そのものを式で持つ**
 (`../principles.md` 8節)。別々のトークンに分けると、片方だけ変えたときに関係が崩れる。
+
+### 塗りと奥行き
+
+背景は画面全体で1色(`--color-bg`)にし、サイドバーや設定メニューも塗らずに仕切り線だけで
+区切る。部品の輪郭は**背景との塗りの差**で作り、影は奥行きの補助に留める。影だけで輪郭を
+作ると(部品と背景が同じ色)、押せる場所が分からなくなる。
+
+| 塗り | 使う所 |
+|---|---|
+| `--color-bg` | 背景。一覧の入れ物(ドロップダウン・ダイアログ)も同じ |
+| `--color-surface-alt` | 浮いた部品(ボタン・セレクト)と、アシスタントの吹き出し |
+| `--color-surface` | 沈んだ部品(入力欄・チェックボックス)と、選択中の項目 |
+
+| 奥行き | 意味 | 使う所 |
+|---|---|---|
+| `--shadow-raise`(浮き) | 押せる | ボタン全般。平らなボタンのホバー中 |
+| `--shadow-sink`(沈み) | 値を入れる所・選ばれている | 入力欄、チェックボックス、選択中の項目、押している最中の部品 |
+| `--shadow-lift`(持ち上げ) | 押せない面 | 塗りのある吹き出し。浮きより弱く見せる |
+| `--shadow-focus` | フォーカス | 上の影に重ねて出す(`index.css`の`:focus-visible`) |
+
+ライトは下向きの影、ダークは影が背景に沈んで見えないため縁の光(浮きは上辺、沈みは下辺)で
+表す。どちらを出すかは`theme.ts`が決め、画面のコードは明暗を意識しない。
+
+**平らなボタン**(一覧の行・左カラムの総合と⚙・設定のタブ・発言の操作・モデル選択)は、
+並べたときに塗りがうるさくならないよう、普段は塗りも影も持たない。ホバーで浮き、押すと
+沈み、選択中は沈んだまま残る。ホバーは`@media (hover: hover)`の中だけで効かせる(タッチ
+端末ではタップした項目が浮いたまま残るため)。対象のクラスは`index.css`画面層の先頭で
+1箇所にまとめてある。
 
 ## 3. 余白の持たせ方
 
@@ -112,14 +143,14 @@ WebViewはOSのテーマでフォーム部品を描く。既定に頼らない(`
 |---|---|
 | `button` / `input`(text等) / `select` / `textarea` | `appearance: none`(`-webkit-` 併記)で自前描画。`font: inherit` が無いとOS既定フォントになる |
 | `input[type=search]` | 他の `input` と同じく自前描画。WebKitが描く消去ボタン(`::-webkit-search-cancel-button`)と装飾は色を渡せないため消す |
-| `input[type=radio]` / `[type=checkbox]` | ネイティブ描画のまま。色は `accent-color` でテーマに追従させ、全要素の角丸リセットからは `border-radius: revert` で外す |
+| `input[type=checkbox]` | `appearance: none`で自前描画。沈んだ箱(入力欄と同じ塗りと影)の中にチェックの線を描く。選択状態は部品自身(`:checked`)が持ち、スクリプト側では描き分けない |
+| `input[type=radio]` | ネイティブ描画のまま。丸い形が部品の意味なので直角にしない。色は `accent-color` でテーマに追従させ、全要素の角丸リセットからは `border-radius: revert` で外す |
 | `select` の▼ | `appearance: none` で消えるため、グラデーションの三角形で自前描画(色トークンを渡せるよう、SVGのdata URIではなく `currentColor` を使う) |
 | 開いた `select` の一覧 | OSが描く。CSSからは色しか渡せず、形は変えられない |
-| フォーカスリング | UA既定の青はテーマ色と無関係なので、`:focus-visible` をトークン色で描き直す |
+| フォーカスリング | UA既定の青はテーマ色と無関係なので、`:focus-visible` を`--shadow-focus`の光で描き直す。浮き・沈みの影と重ねるため、部品の種類ごとに組み合わせを書く |
 
-角丸は現在どこでも使わない。ネイティブ描画の部品は指定しないとOS側の角丸が付くため、
-基盤層で明示的に `border-radius: 0` にしている(角丸トークンの導入可否は本格的な
-UI作り込みフェーズで検討する)。
+角丸は吹き出し(`--bubble-radius`)だけに使い、ほかは直角にする。ネイティブ描画の部品は
+指定しないとOS側の角丸が付くため、基盤層で明示的に `border-radius: 0` にしている。
 
 WebKitGTK固有の挙動は、Chromiumでの確認では分からない。次の機能を使ったときは実機で
 見ること: `appearance`, `accent-color`, `border-radius` のネイティブ部品への適用,

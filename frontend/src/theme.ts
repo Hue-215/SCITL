@@ -1,7 +1,8 @@
 // 単色シードから明暗2種のカラースキームを生成し、CSS変数として適用する(Issue #79)。
 // 役割(background/surface/text/primary...)ごとに彩度・明度を決め打ちし、シードの色相(と
 // 危険色を除く彩度)だけを引き継ぐ。デザイントークンを1箇所に集約する方針
-// (docs/spec/principles.md 6節)の一部。
+// (docs/spec/principles.md 6節)の一部。奥行きの影(--shadow-*)も明暗で中身が変わるため、
+// 同じ切り替えに乗せてここで発行する。
 //
 // シードの色味が乗るのは背景・面・境界線・プライマリだけで、文字(on*を含む)は
 // 無彩色で固定する。文字に色を付けると読みにくく、かつシードの選び方で
@@ -31,7 +32,9 @@ const DANGER_HUE = 4
 
 const ROLES = {
   bg: { light: { saturationFactor: 0.08, lightness: 98 }, dark: { saturationFactor: 0.12, lightness: 9 } },
-  surface: { light: { saturationFactor: 0.1, lightness: 95 }, dark: { saturationFactor: 0.14, lightness: 14 } },
+  // surfaceは沈んだ部品(入力欄・選択中の項目)、surfaceAltは浮いた部品(ボタン)の塗り。
+  // どちらも背景(bg)との差で部品の輪郭を作り、影は奥行きの補助に留める(ui.md 2節)。
+  surface: { light: { saturationFactor: 0.1, lightness: 94 }, dark: { saturationFactor: 0.14, lightness: 14 } },
   surfaceAlt: { light: { saturationFactor: 0.12, lightness: 90 }, dark: { saturationFactor: 0.16, lightness: 21 } },
   border: { light: { saturationFactor: 0.14, lightness: 82 }, dark: { saturationFactor: 0.16, lightness: 32 } },
   // 文字ロールは無彩色に固定する(saturationFactor: 0)。文字に色味が乗ると読みにくく、
@@ -63,6 +66,32 @@ const DANGER_ROLES = {
     dark: { saturation: 35, lightness: 92 },
   },
 } satisfies DangerRoleSet
+
+// 奥行きの表現。ライトは影、ダークは影が背景に沈んで見えないため縁の光で代える。
+// 浮き(raise)は押せる部品、沈み(sink)は値を入れる所と選択中の項目、持ち上げ(lift)は
+// 押せない面(吹き出し)に使い、liftはraiseより弱く見えるようにする。
+type Elevation = { raise: string; sink: string; lift: string; focus: string }
+
+function buildElevation(h: number, s: number, mode: 'light' | 'dark'): Elevation {
+  const hue = h.toFixed(1)
+  if (mode === 'light') {
+    // 影の色は純粋な黒より背景になじむよう、シードの色相を薄く残す。
+    const shade = (alpha: number) => `hsl(${hue} ${(s * 0.24).toFixed(1)}% 20% / ${alpha})`
+    return {
+      raise: `0 2px 4px -1px ${shade(0.19)}`,
+      sink: `inset 0 2px 4px -2px ${shade(0.34)}, inset 0 1px 1px ${shade(0.1)}`,
+      lift: `0 2px 5px -1px ${shade(0.24)}`,
+      focus: `0 0 8px hsl(${hue} ${s.toFixed(1)}% 50% / 0.45)`,
+    }
+  }
+  const light = (alpha: number) => `hsl(0 0% 100% / ${alpha})`
+  return {
+    raise: `inset 0 1px 0 ${light(0.16)}`,
+    sink: `inset 0 -1px 0 ${light(0.12)}`,
+    lift: `inset 0 1px 0 ${light(0.1)}`,
+    focus: `0 0 8px hsl(${hue} ${s.toFixed(1)}% 65% / 0.5)`,
+  }
+}
 
 function hexToHueSaturation(hex: string): { h: number; s: number } {
   const r = parseInt(hex.slice(1, 3), 16) / 255
@@ -102,14 +131,27 @@ function buildPalette(seedHex: string, mode: 'light' | 'dark'): Record<string, s
   return palette
 }
 
+function buildElevationVars(seedHex: string, mode: 'light' | 'dark'): Record<string, string> {
+  const { h, s } = hexToHueSaturation(seedHex)
+  const elevation = buildElevation(h, s, mode)
+  const vars: Record<string, string> = {}
+  for (const [name, value] of Object.entries(elevation)) {
+    vars[`--shadow-${name}`] = value
+  }
+  return vars
+}
+
 function roleNameToCssVar(name: string): string {
   return `--color-${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
 }
 
-function applyPalette(palette: Record<string, string>): void {
+function applyPalette(palette: Record<string, string>, elevation: Record<string, string>): void {
   const root = document.documentElement.style
   for (const [name, value] of Object.entries(palette)) {
     root.setProperty(roleNameToCssVar(name), value)
+  }
+  for (const [name, value] of Object.entries(elevation)) {
+    root.setProperty(name, value)
   }
 }
 
@@ -117,8 +159,11 @@ function applyPalette(palette: Record<string, string>): void {
 export function applyTheme(seedHex: string): void {
   const light = buildPalette(seedHex, 'light')
   const dark = buildPalette(seedHex, 'dark')
+  const lightElevation = buildElevationVars(seedHex, 'light')
+  const darkElevation = buildElevationVars(seedHex, 'dark')
   const media = window.matchMedia('(prefers-color-scheme: dark)')
-  const update = () => applyPalette(media.matches ? dark : light)
+  const update = () =>
+    media.matches ? applyPalette(dark, darkElevation) : applyPalette(light, lightElevation)
   update()
   media.addEventListener('change', update)
 }

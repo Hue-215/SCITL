@@ -99,7 +99,7 @@ export default function Settings({ onClose }: SettingsProps) {
       <header className="settings-header">
         <button
           type="button"
-          className="icon-button settings-back"
+          className="icon-button"
           onClick={onClose}
           aria-label={t('settings.back_tooltip')}
           title={t('settings.back_tooltip')}

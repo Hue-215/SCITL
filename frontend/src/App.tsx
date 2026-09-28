@@ -521,54 +521,56 @@ export default function App() {
 
         <StagedAttachmentChips staged={staged} deliveries={deliveries} disabled={disableActions} />
 
-        <form
-          className="chat-compose"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void send()
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              staged.add(Array.from(e.target.files ?? []))
-              // 同じファイルをもう一度選んでも変更として届くように空へ戻す。
-              e.target.value = ''
+        <div className="chat-compose-area">
+          <form
+            className="chat-compose"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void send()
             }}
-          />
-          <button
-            type="button"
-            disabled={disableActions || !staged.canAdd}
-            title={t('attachment.add_tooltip')}
-            onClick={() => fileInputRef.current?.click()}
           >
-            {t('attachment.add_button')}
-          </button>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (isCommitEnter(e) && !e.shiftKey) {
-                e.preventDefault()
-                void send()
-              }
-            }}
-            disabled={disableActions}
-            placeholder={t('chat.input_hint')}
-          />
-          <button type="submit" disabled={!canSend}>
-            {t('chat.send_button')}
-          </button>
-        </form>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                staged.add(Array.from(e.target.files ?? []))
+                // 同じファイルをもう一度選んでも変更として届くように空へ戻す。
+                e.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              disabled={disableActions || !staged.canAdd}
+              title={t('attachment.add_tooltip')}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {t('attachment.add_button')}
+            </button>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (isCommitEnter(e) && !e.shiftKey) {
+                  e.preventDefault()
+                  void send()
+                }
+              }}
+              disabled={disableActions}
+              placeholder={t('chat.input_hint')}
+            />
+            <button type="submit" disabled={!canSend}>
+              {t('chat.send_button')}
+            </button>
+          </form>
 
-        <ChatModelBar
-          onError={setError}
-          onChanged={() => setAddBlocked(null)}
-          onSelected={onModelSelected}
-        />
+          <ChatModelBar
+            onError={setError}
+            onChanged={() => setAddBlocked(null)}
+            onSelected={onModelSelected}
+          />
+        </div>
       </main>
     </div>
   )

@@ -10,6 +10,8 @@
  *   --color-primary, --color-on-primary,
  *   --color-primary-container, --color-on-primary-container,
  *   --color-danger, --color-danger-container, --color-on-danger-container
+ * 同じく theme.ts が発行する奥行きのトークン(buildElevationと対応):
+ *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
  */
 
 @font-face {
@@ -69,18 +71,19 @@
   /* 境界線の幅は1段階しか使わない。色は役割側(--color-border等)で決める。 */
   --border-width: 1px;
 
-  /* フォーカスリング。境界線と同じ太さだと枠に埋もれて分からないため別枠で持つ。 */
-  --focus-ring-width: 0.125rem;
-
-  /* 角丸トークンは未導入。本格的なUI作り込みフェーズで角丸を使うかどうかごと検討する
-     ため、それまでは全要素直角で進める。ネイティブ描画のフォーム部品は指定しないと
-     OS側の角丸が付くため、index.cssの基盤層で明示的に0にしている。 */
+  /* 角丸は吹き出しだけに使い、ほかは直角のままにする(ui.md 2節)。半径は吹き出しの
+     近い側マージンの半分で、マージンを変えたときに一緒に追従させる。 */
+  --bubble-radius: calc(var(--bubble-margin-near) / 2);
 
   /* チャット吹き出しの左右マージン。話者側(近い側)より反対側(遠い側)を2倍にする
      (色だけに頼らない話者の判別)。2倍という関係そのものを式で持ち、片方だけ動いて
      関係が崩れないようにする。近い側はスクロールバーに被らない幅が要る。 */
   --bubble-margin-near: var(--space-4);
   --bubble-margin-far: calc(var(--bubble-margin-near) * 2);
+
+  /* 入力欄とその下のモデル選択の間隔。モデル選択と窓の下端の間も同じ値にする
+     (上下の余白が揃っていないと、どちらかに寄って見えるため)。 */
+  --compose-bottom-gap: var(--space-1);
 
   /* レスポンシブ計算の基準値。frontend.md 5節「レスポンシブ」の入力値をここに集約する。
      吹き出し・設定本文の幅は入れ物に追従させるため、CSSで直接使うのは上限値
