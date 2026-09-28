@@ -5,7 +5,7 @@ pub enum CoreError {
     #[error("database error: {0}")]
     Db(#[from] rusqlite::Error),
     #[error("migration error: {0}")]
-    Migration(#[from] rusqlite_migration::Error),
+    Migration(String),
     #[error("task {0} not found")]
     TaskNotFound(i64),
     #[error("task step {0} not found")]
