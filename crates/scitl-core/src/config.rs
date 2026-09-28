@@ -250,16 +250,21 @@ pub struct McpServerConfig {
     pub enabled_tools: BTreeSet<String>,
 }
 
-/// サーバー識別子の制約(legacy/frontend.md 4節: 16字以内、英数字とアンダースコアのみ)。
-/// UIでの入力チェックはセキュリティ境界ではないため、Rust側でも検証する。
+/// サーバー識別子の長さの上限(legacy/frontend.md 4節)。画面は入力欄の上限と案内文にこの値を
+/// 使う(`settings::SettingsView`)。
+pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
+
+/// サーバー識別子の制約(legacy/frontend.md 4節: [`MCP_SERVER_NAME_MAX_CHARS`]字以内、
+/// 英数字とアンダースコアのみ)。UIでの入力チェックはセキュリティ境界ではないため、
+/// Rust側でも検証する。英数字だけなので、バイト数と文字数は同じ。
 pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
-    if name.is_empty() || name.len() > 16 {
-        return Err(CoreError::Config(
-            "MCP server name must be 1-16 characters".to_string(),
-        ));
+    if name.is_empty() || name.len() > MCP_SERVER_NAME_MAX_CHARS {
+        return Err(CoreError::InvalidSettings(format!(
+            "MCP server name must be 1-{MCP_SERVER_NAME_MAX_CHARS} characters"
+        )));
     }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Err(CoreError::Config(
+        return Err(CoreError::InvalidSettings(
             "MCP server name must be alphanumeric or underscore".to_string(),
         ));
     }

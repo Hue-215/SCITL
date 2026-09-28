@@ -279,6 +279,7 @@ export interface SettingsView {
   providers: ProviderView[]
   active_provider_id: string | null
   mcp_servers: McpServerView[]
+  mcp_server_name_max_chars: number
 }
 
 // crates/scitl-core/src/link.rs の LinkVerdict / LinkInspection。

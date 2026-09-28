@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::attachments::{self, Delivery};
 use crate::config::{
     ApiFormat, Config, McpEndpoint, McpServerConfig, ModelConfig, ProviderConfig, ReasoningEffort,
-    DEFAULT_RESPONSE_TIMEOUT_SECS,
+    DEFAULT_RESPONSE_TIMEOUT_SECS, MCP_SERVER_NAME_MAX_CHARS,
 };
 use crate::db::attachments::AttachmentKind;
 use crate::i18n::Language;
@@ -136,6 +136,8 @@ pub struct SettingsView {
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
     pub mcp_servers: Vec<McpServerView>,
+    /// サーバー識別子の長さの上限。画面は入力欄の上限と案内文に使い、値を写さない。
+    pub mcp_server_name_max_chars: usize,
 }
 
 /// チャット入力欄の下のモデル選択・思考の強さ選択(Issue #64)。設定画面の[`SettingsView`]
@@ -282,6 +284,7 @@ pub(super) fn build(
             .iter()
             .map(|s| mcp_server_view(s, catalog))
             .collect(),
+        mcp_server_name_max_chars: MCP_SERVER_NAME_MAX_CHARS,
     }
 }
 
