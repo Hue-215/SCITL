@@ -98,7 +98,7 @@ fn io_error(action: &'static str) -> impl Fn(std::io::Error) -> CoreError {
 
 /// どのOSでも1つのファイル名として置ける形にする。元の名前(利用者が付けたもの)は
 /// DBにそのまま残り、これは書き出すときだけに使う。
-fn safe_file_name(name: &str) -> String {
+pub(crate) fn safe_file_name(name: &str) -> String {
     const MAX_BYTES: usize = 200;
     const FALLBACK: &str = "attachment";
     let replaced: String = name
