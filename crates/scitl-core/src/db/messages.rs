@@ -117,16 +117,18 @@ pub enum Origin<'a> {
     Operation(OperationSource),
 }
 
-/// 応答生成以外の経路の印(`messages.source`)。CLI(#23)・MCP(#73)を実装したら値を足す。
+/// 応答生成以外の経路の印(`messages.source`)。MCP(#73)を実装したら値を足す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationSource {
     Ui,
+    Cli,
 }
 
 impl OperationSource {
     fn as_str(self) -> &'static str {
         match self {
             Self::Ui => "ui",
+            Self::Cli => "cli",
         }
     }
 }
