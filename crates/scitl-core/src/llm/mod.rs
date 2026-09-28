@@ -285,6 +285,27 @@ pub trait LlmAdapter: Send + Sync {
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<(), CoreError>;
+
+    /// [`Self::send`]が同じ引数で送るリクエストを、送らずに返す(送信内容のプレビュー。
+    /// Issue #23)。実際のプロバイダーは必ず実装し、`send`と同じ組み立てを通す。既定の`None`は
+    /// テスト用のアダプタのためのもの。
+    fn request_preview(
+        &self,
+        _messages: &[ChatMessage],
+        _tools: &[ToolSchema],
+        _reasoning_effort: Option<ReasoningEffort>,
+    ) -> Option<Result<RequestPreview, CoreError>> {
+        None
+    }
+}
+
+/// 送らずに組み立てたリクエスト。認証情報(ヘッダー)は持たない。本文はアダプタの
+/// リクエストの型から直列化したもので、秘密情報(`secrecy::SecretString`)は直列化できないため
+/// 型の上で本文に乗らない。
+#[derive(Debug, Serialize)]
+pub struct RequestPreview {
+    pub url: String,
+    pub body: serde_json::Value,
 }
 
 #[cfg(test)]

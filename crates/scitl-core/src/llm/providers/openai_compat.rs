@@ -7,7 +7,7 @@ use crate::config::ReasoningEffort;
 use crate::error::CoreError;
 use crate::llm::{
     ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
+    RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
@@ -501,6 +501,8 @@ struct RequestFunction {
     parameters: serde_json::Value,
 }
 
+const CHAT_COMPLETIONS: &str = "chat/completions";
+
 fn request_body<'a>(
     model: &'a str,
     messages: &[ChatMessage],
@@ -577,6 +579,21 @@ impl LlmAdapter for OpenAiCompatAdapter {
         }
     }
 
+    fn request_preview(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSchema],
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Option<Result<RequestPreview, CoreError>> {
+        let body = request_body(&self.model, messages, tools, reasoning_effort);
+        Some(
+            endpoint(&self.base_url, CHAT_COMPLETIONS).map(|url| RequestPreview {
+                url: url.to_string(),
+                body: serde_json::to_value(body).expect("request body serializes to JSON"),
+            }),
+        )
+    }
+
     async fn send(
         &self,
         messages: &[ChatMessage],
@@ -586,7 +603,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
     ) -> Result<(), CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
-        let endpoint = endpoint(&self.base_url, "chat/completions")?;
+        let endpoint = endpoint(&self.base_url, CHAT_COMPLETIONS)?;
         let request = super::with_api_key(self.client.post(endpoint), &self.api_key);
         let transport_error = |e| LlmError::from_transport(e, self.api_key.expose_secret());
         let response = request.json(&body).send().await.map_err(transport_error)?;
@@ -689,6 +706,30 @@ mod tests {
                 .unwrap();
         adapter.send(&[], &[], None, &mut |_| {}).await.unwrap();
         handle.join().unwrap()
+    }
+
+    #[test]
+    fn request_preview_is_the_body_send_would_post_without_the_key() {
+        let adapter = OpenAiCompatAdapter::new(
+            "http://127.0.0.1:1/v1",
+            SecretString::from("sk-preview-secret"),
+            "local-model",
+            TEST_TIMEOUT,
+        )
+        .unwrap();
+        let messages = [ChatMessage::user(PromptText::user_message("hi", None))];
+
+        let preview = adapter
+            .request_preview(&messages, &[], Some(ReasoningEffort::Low))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(preview.url, "http://127.0.0.1:1/v1/chat/completions");
+        let expected = request_body("local-model", &messages, &[], Some(ReasoningEffort::Low));
+        assert_eq!(preview.body, serde_json::to_value(expected).unwrap());
+        assert!(!serde_json::to_string(&preview)
+            .unwrap()
+            .contains("sk-preview-secret"));
     }
 
     #[tokio::test]
