@@ -220,16 +220,22 @@ if [ "$2" = linger ]; then sleep 60; fi
             .collect()
     }
 
-    async fn connect_fake(
-        scratch: &Scratch,
-        mode: &str,
-        env_refs: &[SecretRef],
-    ) -> Result<ClientService, CoreError> {
-        connect("/bin/sh", &scratch.args(mode), env_refs).await
+    /// 偽のサーバーの応答がrmcpの期待とずれると、接続は失敗せずに待ち続ける。テストが
+    /// 止まらずに失敗するよう、上限を設ける。
+    async fn connect_fake(scratch: &Scratch, mode: &str, env_refs: &[SecretRef]) -> ClientService {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            connect("/bin/sh", &scratch.args(mode), env_refs),
+        )
+        .await
+        .expect("the fake server did not complete initialize")
+        .unwrap()
     }
 
     #[tokio::test]
     async fn only_the_allowlist_and_registered_values_reach_the_server() {
+        // 既定の保存先はプロセス全体で1つで、元に戻せない。このテストバイナリで秘密情報を
+        // 読み書きするテストは、以降すべてこのモックを使う。
         keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
         crate::secrets::store("stdio-test-token", &SecretString::from("s3cret")).unwrap();
         // 親プロセスには許可リスト外の変数がある(無ければ、このテストは何も確かめない)。
@@ -241,7 +247,7 @@ if [ "$2" = linger ]; then sleep 60; fi
             name: "FAKE_TOKEN".to_string(),
             key_ref: "stdio-test-token".to_string(),
         }];
-        let mut service = connect_fake(&scratch, "exit", &refs).await.unwrap();
+        let mut service = connect_fake(&scratch, "exit", &refs).await;
         let _ = service.close_with_timeout(Duration::from_secs(5)).await;
 
         let env = scratch.read("env");
@@ -262,7 +268,7 @@ if [ "$2" = linger ]; then sleep 60; fi
     #[tokio::test]
     async fn closing_kills_the_grandchildren_of_a_server_that_does_not_exit() {
         let scratch = Scratch::new("linger");
-        let mut service = connect_fake(&scratch, "linger", &[]).await.unwrap();
+        let mut service = connect_fake(&scratch, "linger", &[]).await;
         let grandchild = scratch.grandchild();
         assert!(is_alive(&grandchild));
 
