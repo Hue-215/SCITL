@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::messages::Chat;
-use super::now_iso8601;
+use super::{now_iso8601, text_column_enum};
 use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -19,24 +19,11 @@ pub enum AttachmentKind {
     Other,
 }
 
-impl AttachmentKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Image => "image",
-            Self::Other => "other",
-        }
-    }
-
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "text" => Some(Self::Text),
-            "image" => Some(Self::Image),
-            "other" => Some(Self::Other),
-            _ => None,
-        }
-    }
-}
+text_column_enum!(AttachmentKind {
+    Text => "text",
+    Image => "image",
+    Other => "other",
+});
 
 /// 添付の中身。テキストとそれ以外が排他であることを
 /// `CHECK ((content_text IS NOT NULL) <> (file_hash IS NOT NULL))`と同じく型で表す。
@@ -88,7 +75,7 @@ pub fn insert(conn: &Connection, message_id: i64, new: &NewAttachment) -> Result
             message_id,
             new.original_name,
             new.mime_type,
-            new.kind.as_str(),
+            new.kind,
             new.size_bytes,
             content_text,
             file_hash,
@@ -221,15 +208,11 @@ fn attachment_from_row(row: &rusqlite::Row, start: usize) -> rusqlite::Result<At
 
 /// `SELECT`の`start`列目から`id, original_name, mime_type, kind, size_bytes`が並んでいる前提。
 fn view_from_row(row: &rusqlite::Row, start: usize) -> rusqlite::Result<AttachmentView> {
-    let kind: String = row.get(start + 3)?;
     Ok(AttachmentView {
         id: row.get(start)?,
         original_name: row.get(start + 1)?,
         mime_type: row.get(start + 2)?,
-        // CHECK制約で3つのどれかに限られている。
-        kind: AttachmentKind::parse(&kind).ok_or_else(|| {
-            rusqlite::Error::InvalidColumnType(start + 3, kind, rusqlite::types::Type::Text)
-        })?,
+        kind: row.get(start + 3)?,
         size_bytes: row.get(start + 4)?,
     })
 }

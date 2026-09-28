@@ -1,11 +1,10 @@
 use std::fmt;
 
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::attachments::{self, AttachmentView};
-use super::now_iso8601;
+use super::{now_iso8601, text_column_enum};
 use crate::error::{CoreError, Result};
 
 /// 発言が属する会話。`messages.task_id`がNULLなら総合チャット(data-model.md messages)。
@@ -49,30 +48,12 @@ pub enum Role {
     Error,
 }
 
-impl Role {
-    /// DBの`role`列の値。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-            Role::Tool => "tool",
-            Role::Error => "error",
-        }
-    }
-}
-
-impl FromSql for Role {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // CHECK制約で4つのどれかに限られている。
-        match value.as_str()? {
-            "user" => Ok(Role::User),
-            "assistant" => Ok(Role::Assistant),
-            "tool" => Ok(Role::Tool),
-            "error" => Ok(Role::Error),
-            other => Err(FromSqlError::Other(format!("unknown role: {other}").into())),
-        }
-    }
-}
+text_column_enum!(Role {
+    User => "user",
+    Assistant => "assistant",
+    Tool => "tool",
+    Error => "error",
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -82,26 +63,10 @@ pub enum Kind {
     ToolExecution,
 }
 
-impl Kind {
-    /// DBの`kind`列の値。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::Normal => "normal",
-            Kind::ToolExecution => "tool_execution",
-        }
-    }
-}
-
-impl FromSql for Kind {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // CHECK制約で2つのどれかに限られている。
-        match value.as_str()? {
-            "normal" => Ok(Kind::Normal),
-            "tool_execution" => Ok(Kind::ToolExecution),
-            other => Err(FromSqlError::Other(format!("unknown kind: {other}").into())),
-        }
-    }
-}
+text_column_enum!(Kind {
+    Normal => "normal",
+    ToolExecution => "tool_execution",
+});
 
 /// 行の出どころ(`docs/spec/rebuild/data-model.md`「ターン境界」の3分類)。`source`と
 /// `turn_id`/`attempt_no`の組み合わせはこれだけから決まり、取り違えた組み合わせは書けない。
@@ -127,14 +92,10 @@ pub enum OperationSource {
     Cli,
 }
 
-impl OperationSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ui => "ui",
-            Self::Cli => "cli",
-        }
-    }
-}
+text_column_enum!(OperationSource {
+    Ui => "ui",
+    Cli => "cli",
+});
 
 pub struct NewMessage<'a> {
     pub chat: Chat,
@@ -178,7 +139,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
             turn_id,
             attempt_no,
         } => (None, Some(turn_id), Some(attempt_no)),
-        Origin::Operation(source) => (Some(source.as_str()), None, None),
+        Origin::Operation(source) => (Some(source), None, None),
     };
     conn.execute(
         "INSERT INTO messages
@@ -186,9 +147,9 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             msg.chat.task_id(),
-            msg.role.as_str(),
+            msg.role,
             msg.content,
-            msg.kind.as_str(),
+            msg.kind,
             source,
             msg.reasoning,
             msg.error_kind,
