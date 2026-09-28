@@ -18,7 +18,7 @@ use super::classify::{classify, Classified, LIMITS};
 use super::normalize::normalize_image;
 use super::store::AttachmentStore;
 use crate::db::attachments::{AttachmentContent, AttachmentKind, NewAttachment};
-use crate::db::error::{CoreError, Result};
+use crate::error::{CoreError, Result};
 
 /// [`Staged::stage`]の結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -8,10 +8,10 @@ use ulid::Ulid;
 use crate::attachments::{AttachmentStore, Taken};
 use crate::blocking;
 use crate::db::attachments as db_attachments;
-use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
 use crate::db::tasks::{self, Task};
 use crate::db::{in_transaction, with_conn, SharedConnection};
+use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
     ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, ToolArguments,

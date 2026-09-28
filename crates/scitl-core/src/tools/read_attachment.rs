@@ -3,8 +3,8 @@ use serde_json::{json, Value};
 
 use crate::attachments::{self, Delivery};
 use crate::db::attachments::{self as db_attachments, AttachmentContent, AttachmentKind};
-use crate::db::error::{CoreError, Result};
 use crate::db::messages::Chat;
+use crate::error::{CoreError, Result};
 use crate::llm::{AttachmentNote, ToolSchema};
 
 use super::args::Args;

@@ -23,7 +23,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::ChildStderr;
 
 use crate::config::SecretRef;
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 
 use super::{resolve_secrets, ClientService};
 

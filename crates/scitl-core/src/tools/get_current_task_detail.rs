@@ -1,8 +1,8 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::error::Result;
 use crate::db::{task_steps, tasks};
+use crate::error::Result;
 use crate::llm::ToolSchema;
 
 use super::args::Args;
@@ -41,7 +41,7 @@ pub fn task_detail(conn: &Connection, task_id: i64) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::db;
-    use crate::db::error::CoreError;
+    use crate::error::CoreError;
 
     fn seed_task(conn: &Connection) -> i64 {
         db::tasks::create_task(conn).unwrap().id

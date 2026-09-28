@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use crate::db::error::{CoreError, Result};
+use crate::error::{CoreError, Result};
 
 /// ツール引数の検証(docs/spec/rebuild/tools.md 3節)。各ツールは受ける引数の名前と型だけを
 /// 書き、検証の規則はここに閉じる。型が期待と違う場合は変換を試みずエラーにする

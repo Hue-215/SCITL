@@ -1,3 +1,5 @@
+//! crate共通のエラー型。DB・LLM・MCP・設定・添付のどの層も、呼び出し元へはこの型で返す。
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error("database error: {0}")]

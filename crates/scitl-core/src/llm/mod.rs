@@ -17,7 +17,7 @@ pub use prompt::{user_message_format_note, AttachmentNote, PromptText};
 pub use token_estimate::{estimate_message, estimate_tools};
 
 use crate::config::ReasoningEffort;
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 
 /// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び
 /// (docs/spec/principles.md 3節「応答はイベントの並びとして受け取る」、Issue #8)。

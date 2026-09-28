@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use url::Url;
 
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 use crate::llm::{DetectedCapabilities, LlmError};
 use crate::net::{self, HostClass};
 

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
-use crate::db::error::{CoreError, Result};
+use crate::error::{CoreError, Result};
 use crate::llm::InlineImage;
 use crate::text::is_invisible_format;
 

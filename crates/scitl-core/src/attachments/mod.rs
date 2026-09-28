@@ -17,8 +17,8 @@ pub use store::AttachmentStore;
 
 use crate::blocking;
 use crate::db::attachments::{self, AttachmentContent, AttachmentKind, NewAttachment};
-use crate::db::error::{CoreError, Result};
 use crate::db::{with_conn, SharedConnection};
+use crate::error::{CoreError, Result};
 
 /// 添付をモデルへどう渡すか(Issue #21)。履歴の組み立てと、画面が添付に出す警告
 /// (`settings::ChatModelsView`)の両方がこれで決める。

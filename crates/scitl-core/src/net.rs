@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use url::Url;
 
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 

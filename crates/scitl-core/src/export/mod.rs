@@ -18,11 +18,11 @@ use ulid::Ulid;
 use crate::attachments::{safe_file_name, AttachmentStore, Attachments};
 use crate::blocking;
 use crate::db::attachments::{self, Attachment, AttachmentContent};
-use crate::db::error::{CoreError, Result};
 use crate::db::messages::{self, Chat, Message};
 use crate::db::task_steps::{self, TaskStep};
 use crate::db::tasks::{self, Task};
 use crate::db::{now_iso8601, with_conn, SharedConnection};
+use crate::error::{CoreError, Result};
 use markdown::{AttachmentLink, Entry};
 
 const ATTACHMENTS_DIR: &str = "attachments";

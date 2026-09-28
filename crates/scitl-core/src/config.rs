@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::error::CoreError;
+use crate::error::CoreError;
 use crate::i18n::Language;
 
 /// 対応するプロバイダーAPIの方言。現状はOpenAI互換チャットコンプリーションAPIのみ
