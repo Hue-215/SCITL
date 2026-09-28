@@ -105,18 +105,6 @@ pub struct TaskDetailView {
     pub fallback_label: Option<String>,
 }
 
-/// タスク`t`の最初のユーザー発言を引く相関サブクエリ。フォールバックの元になる発言の選び方を
-/// 一覧と詳細で食い違わせないため、ここだけに書く。添付だけを送った発言は本文が空白だけに
-/// なりうるので飛ばす(名前にならない)。
-const FIRST_USER_MESSAGE: &str = "(SELECT m.content FROM messages m
-                  WHERE m.task_id = t.id
-                    AND m.role = 'user'
-                    AND m.kind = 'normal'
-                    AND m.deleted_at IS NULL
-                    AND TRIM(m.content, ' ' || char(9) || char(10) || char(13)) <> ''
-                  ORDER BY m.created_at ASC, m.id ASC
-                  LIMIT 1)";
-
 /// タスク`t`の工程の完了数と総数を引く相関サブクエリ。一覧とヘッダーで数え方を
 /// 食い違わせないため、ここだけに書く。
 const STEPS_DONE: &str = "(SELECT COUNT(*) FROM task_steps s
@@ -128,29 +116,31 @@ const STEPS_TOTAL: &str = "(SELECT COUNT(*) FROM task_steps s
 /// 振り分けはフロントエンド側(archived_atの有無)で行う。
 pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT t.id, t.title, t.deadline, t.archived_at,
-                {STEPS_DONE}, {STEPS_TOTAL}, {FIRST_USER_MESSAGE}
+        "SELECT t.id, t.title, t.deadline, t.archived_at, {STEPS_DONE}, {STEPS_TOTAL}
          FROM tasks t
          WHERE t.deleted_at IS NULL
          ORDER BY t.created_at ASC"
     ))?;
     let rows = stmt
         .query_map([], |row| {
-            let first_user_message: Option<String> = row.get(6)?;
-            Ok(TaskListItem {
-                summary: TaskSummary {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    deadline: row.get(2)?,
-                    archived_at: row.get(3)?,
-                    steps_done: row.get(4)?,
-                    steps_total: row.get(5)?,
-                },
-                fallback_label: first_user_message.as_deref().and_then(fallback_label),
+            Ok(TaskSummary {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                deadline: row.get(2)?,
+                archived_at: row.get(3)?,
+                steps_done: row.get(4)?,
+                steps_total: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+    rows.into_iter()
+        .map(|summary| {
+            Ok(TaskListItem {
+                fallback_label: fallback_label_of(conn, summary.id)?,
+                summary,
+            })
+        })
+        .collect()
 }
 
 /// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う
@@ -192,19 +182,16 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Task>> {
 /// 画面のヘッダー向け。存在しない・削除済みなら`get_task`と同じく`TaskNotFound`。
 pub fn get_task_detail_view(conn: &Connection, task_id: i64) -> Result<TaskDetailView> {
     let task = get_task(conn, task_id)?;
-    let (steps_done, steps_total, first_user_message): (i64, i64, Option<String>) = conn
-        .query_row(
-            &format!(
-            "SELECT {STEPS_DONE}, {STEPS_TOTAL}, {FIRST_USER_MESSAGE} FROM tasks t WHERE t.id = ?1"
-        ),
-            [task_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+    let (steps_done, steps_total): (i64, i64) = conn.query_row(
+        &format!("SELECT {STEPS_DONE}, {STEPS_TOTAL} FROM tasks t WHERE t.id = ?1"),
+        [task_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
     Ok(TaskDetailView {
         task,
         steps_done,
         steps_total,
-        fallback_label: first_user_message.as_deref().and_then(fallback_label),
+        fallback_label: fallback_label_of(conn, task_id)?,
     })
 }
 
@@ -334,7 +321,26 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 /// 付け、続きがあることを示す。
 const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 
-/// 最初のユーザー発言から、タイトルの代わりに出せる1行を作る。DBには書き戻さない
+/// タイトルの代わりに出す1行を、ユーザー発言を古い順に見て最初に作れたもので決める。
+/// 一覧とヘッダーで選び方を食い違わせないため、どちらもここを通す。空白だけの発言
+/// (添付だけを送った発言等)は名前にならないので飛ばす。その判定は[`fallback_label`]だけが
+/// 持つ(SQLの`TRIM`はUnicodeの空白を落とせず、写すと食い違う)。
+fn fallback_label_of(conn: &Connection, task_id: i64) -> Result<Option<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT content FROM messages
+         WHERE task_id = ?1 AND role = 'user' AND kind = 'normal' AND deleted_at IS NULL
+         ORDER BY created_at ASC, id ASC",
+    )?;
+    let mut rows = stmt.query([task_id])?;
+    while let Some(row) = rows.next()? {
+        if let Some(label) = fallback_label(&row.get::<_, String>(0)?) {
+            return Ok(Some(label));
+        }
+    }
+    Ok(None)
+}
+
+/// ユーザー発言から、タイトルの代わりに出せる1行を作る。DBには書き戻さない
 /// 表示専用の処理(Issue #61)。空白しか無い発言では`None`を返す。
 fn fallback_label(first_user_message: &str) -> Option<String> {
     let squeezed = collapse_whitespace(first_user_message);
@@ -825,6 +831,26 @@ mod tests {
 
         assert_eq!(
             list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
+            Some("写真の件")
+        );
+    }
+
+    #[test]
+    fn fallback_skips_a_message_of_only_non_ascii_whitespace() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, "\u{3000}\u{00A0}");
+        seed_user_message(&conn, id, "写真の件");
+
+        assert_eq!(
+            list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
+            Some("写真の件")
+        );
+        assert_eq!(
+            get_task_detail_view(&conn, id)
+                .unwrap()
+                .fallback_label
+                .as_deref(),
             Some("写真の件")
         );
     }

@@ -175,7 +175,7 @@ pub async fn edit_user_message(
     let _generating = begin_generating(ctx.generating, chat)?;
     with_conn(db.clone(), move |conn| {
         let target = find_in_chat(conn, chat, message_id)?;
-        expect_normal(&target, &["user"])?;
+        expect_normal(&target, &[Role::User])?;
 
         // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
         in_transaction(conn, |conn| {
@@ -220,7 +220,7 @@ pub async fn retry_reply(
     let _generating = begin_generating(ctx.generating, chat)?;
     let attempt = with_conn(db.clone(), move |conn| {
         let target = find_in_chat(conn, chat, message_id)?;
-        expect_normal(&target, &["assistant", "error"])?;
+        expect_normal(&target, &[Role::Assistant, Role::Error])?;
         let turn_id = target.turn_id.clone().ok_or_else(|| {
             CoreError::InvalidMessageOperation("reply has no turn_id to retry".to_string())
         })?;
@@ -301,11 +301,12 @@ fn find_in_chat(conn: &Connection, chat: Chat, message_id: i64) -> Result<Messag
 }
 
 /// `edit_user_message`/`retry_reply`共通の役割・種別の確認。
-fn expect_normal(target: &Message, expected_roles: &[&str]) -> Result<()> {
-    if target.kind != "normal" || !expected_roles.contains(&target.role.as_str()) {
+fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
+    if target.kind != Kind::Normal || !expected_roles.contains(&target.role) {
+        let roles: Vec<&str> = expected_roles.iter().map(|r| r.as_str()).collect();
         return Err(CoreError::InvalidMessageOperation(format!(
             "target must be a normal {} message",
-            expected_roles.join("/")
+            roles.join("/")
         )));
     }
     Ok(())

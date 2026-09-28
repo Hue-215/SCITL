@@ -1,5 +1,6 @@
 use std::fmt;
 
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -46,12 +47,26 @@ pub enum Role {
 }
 
 impl Role {
-    fn as_str(self) -> &'static str {
+    /// DBの`role`列の値。
+    pub fn as_str(self) -> &'static str {
         match self {
             Role::User => "user",
             Role::Assistant => "assistant",
             Role::Tool => "tool",
             Role::Error => "error",
+        }
+    }
+}
+
+impl FromSql for Role {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        // CHECK制約で4つのどれかに限られている。
+        match value.as_str()? {
+            "user" => Ok(Role::User),
+            "assistant" => Ok(Role::Assistant),
+            "tool" => Ok(Role::Tool),
+            "error" => Ok(Role::Error),
+            other => Err(FromSqlError::Other(format!("unknown role: {other}").into())),
         }
     }
 }
@@ -64,10 +79,22 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn as_str(self) -> &'static str {
+    /// DBの`kind`列の値。
+    pub fn as_str(self) -> &'static str {
         match self {
             Kind::Normal => "normal",
             Kind::ToolExecution => "tool_execution",
+        }
+    }
+}
+
+impl FromSql for Kind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        // CHECK制約で2つのどれかに限られている。
+        match value.as_str()? {
+            "normal" => Ok(Kind::Normal),
+            "tool_execution" => Ok(Kind::ToolExecution),
+            other => Err(FromSqlError::Other(format!("unknown kind: {other}").into())),
         }
     }
 }
@@ -123,9 +150,9 @@ pub struct NewMessage<'a> {
 pub struct Message {
     pub id: i64,
     pub task_id: Option<i64>,
-    pub role: String,
+    pub role: Role,
     pub content: String,
-    pub kind: String,
+    pub kind: Kind,
     pub source: Option<String>,
     pub reasoning: Option<String>,
     pub error_kind: Option<String>,
@@ -263,7 +290,7 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
 /// 操作にする(`deleted_at`をNULLに戻せば復元できる。復元UIは本Issueの範囲外)。
 pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
     let msg = find_message(conn, id)?.ok_or(CoreError::MessageNotFound(id))?;
-    if msg.kind != "normal" || !matches!(msg.role.as_str(), "user" | "assistant" | "error") {
+    if msg.kind != Kind::Normal || !matches!(msg.role, Role::User | Role::Assistant | Role::Error) {
         return Err(CoreError::InvalidMessageOperation(
             "delete is only allowed for normal user/assistant/error messages".to_string(),
         ));
@@ -314,7 +341,7 @@ pub enum Opener {
 /// 行は残るので、答えが変わらない。応答生成以外の経路での操作の記録はこの会話の発言ではないので
 /// 見ない。
 pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
-    let role: Option<String> = conn
+    let role: Option<Role> = conn
         .query_row(
             "SELECT role FROM messages
              WHERE task_id = ?1 AND (role = 'user' OR turn_id IS NOT NULL)
@@ -325,7 +352,7 @@ pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
         )
         .optional()?;
     Ok(role.map(|role| {
-        if role == Role::User.as_str() {
+        if role == Role::User {
             Opener::User
         } else {
             Opener::Reply
@@ -559,7 +586,7 @@ mod tests {
 
         let messages = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].role, "error");
+        assert_eq!(messages[0].role, Role::Error);
         assert_eq!(messages[0].error_kind.as_deref(), Some("no_api_key"));
         assert_eq!(
             messages[0].error_detail.as_deref(),

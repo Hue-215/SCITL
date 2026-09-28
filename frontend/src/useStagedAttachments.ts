@@ -66,13 +66,12 @@ export function useStagedAttachments(): StagedAttachments {
         }
       }
       // どの種別でも受け付けない大きさなら、中身を読む前に弾く(種別ごとの上限はRust側が見る)。
-      const largest = limits && Math.max(limits.text_bytes, limits.image_bytes, limits.other_bytes)
-      if (largest !== null && file.size > largest) {
+      if (limits && file.size > limits.largest_bytes) {
         return {
           key,
           name,
           state: 'rejected',
-          message: t('attachment.too_large', { limit: formatBytes(largest) }),
+          message: t('attachment.too_large', { limit: formatBytes(limits.largest_bytes) }),
         }
       }
       stageAttachment(file).then(

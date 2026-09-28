@@ -9,7 +9,7 @@ mod store;
 use rusqlite::Connection;
 use serde::Serialize;
 
-pub use classify::{classify, image_mime_type, Classified, Limits, LIMITS};
+pub use classify::{classify, image_mime_type, Classified, Limits, PickingLimits, LIMITS};
 pub(crate) use staging::Taken;
 pub use staging::{Rejection, StageOutcome};
 pub(crate) use store::safe_file_name;

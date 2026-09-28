@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::db::attachments::AttachmentKind;
 
 /// 受け付ける大きさの上限。設定からは変えられない仮の値(Issue #5で設定へ移す)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// テキストは本文をDBに置き、毎ターン全文をモデルへ送るので、他より小さく絞る。
     pub text_bytes: u64,
@@ -33,10 +33,21 @@ impl Limits {
         }
     }
 
-    /// どの種別でも受け付けない大きさ。画面が中身を読む前に弾くのに使う。
-    pub fn largest_bytes(&self) -> u64 {
-        self.text_bytes.max(self.image_bytes).max(self.other_bytes)
+    /// 画面がファイルの中身を読む前に確かめる上限。
+    pub fn for_picking(&self) -> PickingLimits {
+        PickingLimits {
+            largest_bytes: self.text_bytes.max(self.image_bytes).max(self.other_bytes),
+            per_message: self.per_message,
+        }
     }
+}
+
+/// 画面へ渡す上限。種別は中身を読むまで分からないので、種別ごとの上限は渡さず
+/// (預けたときの判定の結果として返る)、どの種別でも受け付けない大きさだけを渡す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PickingLimits {
+    pub largest_bytes: u64,
+    pub per_message: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

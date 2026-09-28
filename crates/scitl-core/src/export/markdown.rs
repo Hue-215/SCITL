@@ -10,7 +10,7 @@
 use std::fmt::Write;
 
 use crate::db::attachments::AttachmentKind;
-use crate::db::messages::Message;
+use crate::db::messages::{Kind, Message, Role};
 use crate::db::task_steps::TaskStep;
 use crate::db::tasks::Task;
 use crate::text::visible_line;
@@ -96,7 +96,7 @@ fn push_entry(out: &mut String, entry: &Entry) {
     let message = entry.message;
     let _ = writeln!(out, "### {} ({})\n", speaker(message), message.created_at);
 
-    if message.kind == "tool_execution" {
+    if message.kind == Kind::ToolExecution {
         // 読めない値はCHECK制約(`json_valid`)で入らないが、読めなければ保存値のまま出す。
         let pretty = serde_json::from_str::<serde_json::Value>(&message.content)
             .and_then(|v| serde_json::to_string_pretty(&v))
@@ -104,7 +104,7 @@ fn push_entry(out: &mut String, entry: &Entry) {
         out.push_str(&fenced("json", &pretty));
         out.push('\n');
     } else if !message.content.trim().is_empty() {
-        let info = if message.role == "error" {
+        let info = if message.role == Role::Error {
             "text"
         } else {
             "markdown"
@@ -123,13 +123,12 @@ fn push_entry(out: &mut String, entry: &Entry) {
 }
 
 fn speaker(message: &Message) -> String {
-    match (message.role.as_str(), &message.source) {
-        ("user", _) => "User".to_string(),
-        ("assistant", _) => "Assistant".to_string(),
-        ("error", _) => "Error".to_string(),
-        ("tool", Some(source)) => format!("Operation ({})", inline_text(source)),
-        ("tool", None) => "Tool execution".to_string(),
-        (other, _) => inline_text(other),
+    match (message.role, &message.source) {
+        (Role::User, _) => "User".to_string(),
+        (Role::Assistant, _) => "Assistant".to_string(),
+        (Role::Error, _) => "Error".to_string(),
+        (Role::Tool, Some(source)) => format!("Operation ({})", inline_text(source)),
+        (Role::Tool, None) => "Tool execution".to_string(),
     }
 }
 
@@ -210,13 +209,13 @@ fn encode_path_segment(segment: &str) -> String {
 mod tests {
     use super::*;
 
-    fn message(role: &str, kind: &str, content: &str, source: Option<&str>) -> Message {
+    fn message(role: Role, kind: Kind, content: &str, source: Option<&str>) -> Message {
         Message {
             id: 1,
             task_id: Some(1),
-            role: role.to_string(),
+            role,
             content: content.to_string(),
-            kind: kind.to_string(),
+            kind,
             source: source.map(str::to_string),
             reasoning: Some("secret thoughts".to_string()),
             error_kind: None,
@@ -286,7 +285,7 @@ mod tests {
     fn body_is_kept_verbatim_inside_the_fence() {
         let body = "## Assistant (2026-01-01T00:00:00Z)\n<img src=\"http://e.test/x\">\n![a](http://e.test/b.png)";
         let out = render_general_chat(&[Entry {
-            message: &message("user", "normal", body, None),
+            message: &message(Role::User, Kind::Normal, body, None),
             attachments: Vec::new(),
         }]);
         assert!(
@@ -319,20 +318,20 @@ mod tests {
             order_index: 0,
             created_at: "2026-09-01T00:00:00Z".to_string(),
         };
-        let user = message("user", "normal", "hello", None);
+        let user = message(Role::User, Kind::Normal, "hello", None);
         let record = message(
-            "tool",
-            "tool_execution",
+            Role::Tool,
+            Kind::ToolExecution,
             r#"{"tool":"update_task","arguments":{},"result":{}}"#,
             None,
         );
         let op = message(
-            "tool",
-            "tool_execution",
+            Role::Tool,
+            Kind::ToolExecution,
             r#"{"tool":"delete_task"}"#,
             Some("ui"),
         );
-        let reply = message("assistant", "normal", "done", None);
+        let reply = message(Role::Assistant, Kind::Normal, "done", None);
         let out = render_task(
             &t,
             &[step("店へ行く", true), step("- 払う", false)],
@@ -390,7 +389,7 @@ mod tests {
 
     #[test]
     fn attachments_link_to_the_written_files() {
-        let user = message("user", "normal", " ", None);
+        let user = message(Role::User, Kind::Normal, " ", None);
         let link = |name: &str, kind, path: Option<Vec<String>>| AttachmentLink {
             name: name.to_string(),
             kind,

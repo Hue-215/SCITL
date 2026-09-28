@@ -6,7 +6,7 @@ use scitl_core::attachments::{AttachmentStore, Attachments, StageOutcome};
 use scitl_core::config::{McpEndpoint, McpServerConfig, ReasoningEffort};
 use scitl_core::db;
 use scitl_core::db::error::CoreError;
-use scitl_core::db::messages::Chat;
+use scitl_core::db::messages::{Chat, Kind, Role};
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
     ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, ResponseEvent,
@@ -581,7 +581,7 @@ fn recording(sink: &Mutex<Vec<TurnEvent>>) -> impl Fn(TurnEvent) + Send + Sync +
 /// 保存された返信(ターンの最終行)の本文。
 fn reply_of(messages: &[db::messages::Message]) -> &str {
     let last = messages.last().unwrap();
-    assert_eq!(last.role, "assistant");
+    assert_eq!(last.role, Role::Assistant);
     &last.content
 }
 
@@ -730,7 +730,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
     let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
     let saved = messages
         .iter()
-        .find(|m| m.kind == "tool_execution")
+        .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let executed = &events[2];
     assert_eq!(executed["id"], saved.id);
@@ -863,7 +863,7 @@ async fn state_tool_results_stay_in_their_own_turn() {
     let record = db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .into_iter()
-        .find(|m| m.kind == "tool_execution")
+        .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let record: serde_json::Value = serde_json::from_str(&record.content).unwrap();
     assert_eq!(record["tool_kind"], "state");
@@ -898,7 +898,7 @@ async fn history_carries_send_time_beside_the_user_text() {
         db::messages::list_for_chat(&conn, Chat::Task(task_id))
             .unwrap()
             .into_iter()
-            .filter(|m| m.role == "user")
+            .filter(|m| m.role == Role::User)
             .map(|m| m.created_at)
             .collect()
     };
@@ -963,7 +963,7 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let tool_execution_count = messages
         .iter()
-        .filter(|m| m.kind == "tool_execution")
+        .filter(|m| m.kind == Kind::ToolExecution)
         .count();
     assert_eq!(tool_execution_count, 2);
 }
@@ -1016,7 +1016,7 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     // 実行記録の`result`に`error`キーが立つ(画面の「エラーの有無」表示の前提、Issue #42)。
     let record = messages
         .iter()
-        .find(|m| m.kind == "tool_execution")
+        .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let content: serde_json::Value = serde_json::from_str(&record.content).unwrap();
     assert!(content["result"].get("error").is_some(), "got {content}");
@@ -1070,7 +1070,7 @@ async fn reserved_tags_in_tool_results_are_neutralized_only_on_the_way_to_the_mo
     let record = db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .into_iter()
-        .find(|m| m.kind == "tool_execution")
+        .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let content: serde_json::Value = serde_json::from_str(&record.content).unwrap();
     assert_eq!(content["result"]["steps"][0]["description"], json!(forged));
@@ -1112,14 +1112,14 @@ async fn run_turn_reports_malformed_tool_arguments_to_the_model_without_running_
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let record = messages
         .iter()
-        .find(|m| m.kind == "tool_execution")
+        .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let content: serde_json::Value = serde_json::from_str(&record.content).unwrap();
     assert_eq!(content["arguments"], "{\"title\": ");
     assert!(content["result"].get("error").is_some(), "got {content}");
     assert!(messages
         .iter()
-        .any(|m| m.role == "assistant" && m.kind == "normal"));
+        .any(|m| m.role == Role::Assistant && m.kind == Kind::Normal));
 }
 
 /// ツールを呼ぶラウンドで本文も添え、次のラウンドで`final_text`を返すアダプタ。
@@ -1217,7 +1217,7 @@ async fn text_written_alongside_tool_calls_is_kept_in_the_reply() {
 async fn earlier_text_counts_as_the_reply_when_the_last_round_is_empty() {
     let messages = run_narrating_turn(None).await;
     let last = messages.last().unwrap();
-    assert_eq!(last.role, "assistant");
+    assert_eq!(last.role, Role::Assistant);
     assert_eq!(last.content, "工程を追加しますね");
 }
 
@@ -1239,7 +1239,7 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("auth"));
     // 詳細は定型文言とは別の列に持つ(Issue #159)。
     assert_eq!(
@@ -1267,7 +1267,7 @@ async fn run_turn_persists_error_message_for_empty_response() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("empty_response"));
 }
 
@@ -1290,7 +1290,7 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(
         error_message.error_kind.as_deref(),
         Some("tool_round_limit")
@@ -1324,7 +1324,7 @@ async fn tool_calls_from_a_model_without_tool_support_are_not_a_round_limit() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("tools_disabled"));
     assert_eq!(tool_execution_count(&messages), 0);
 }
@@ -1355,7 +1355,7 @@ async fn run_turn_honors_the_configured_max_tool_rounds() {
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(tool_execution_count(&messages), 2);
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(
         error_message.error_kind.as_deref(),
         Some("tool_round_limit")
@@ -1389,7 +1389,7 @@ async fn run_turn_persists_error_message_when_the_tool_time_budget_is_exhausted(
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("tool_timeout"));
     // 最初のツールを実行しきる前に打ち切るので、実行記録は残らない。
     assert_eq!(tool_execution_count(&messages), 0);
@@ -1421,7 +1421,7 @@ async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("tool_timeout"));
     // 1回目は最後まで走る(途中で打ち切らないので、実行記録が必ず残る)。
     assert_eq!(tool_execution_count(&messages), 1);
@@ -1430,7 +1430,7 @@ async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
 fn tool_execution_count(messages: &[db::messages::Message]) -> usize {
     messages
         .iter()
-        .filter(|m| m.kind == "tool_execution")
+        .filter(|m| m.kind == Kind::ToolExecution)
         .count()
 }
 
@@ -1453,7 +1453,7 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("no_provider"));
 }
 
@@ -1479,7 +1479,7 @@ async fn run_turn_persists_the_reason_the_adapter_cannot_be_used() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(
         error_message.error_kind.as_deref(),
         Some("settings_unreadable")
@@ -1505,7 +1505,7 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == "error").unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("no_model"));
 }
 
@@ -1630,7 +1630,7 @@ async fn edit_user_message_truncates_and_regenerates() {
     let user_message_id = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == "user").unwrap().id
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
     };
 
     edit_user_message(
@@ -1685,7 +1685,7 @@ async fn failed_edit_leaves_the_conversation_untouched() {
         )
         .unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == "user").unwrap().id
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
     };
 
     let result = edit_user_message(
@@ -1856,7 +1856,11 @@ async fn edit_user_message_rejects_assistant_target() {
     let assistant_message_id = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == "assistant").unwrap().id
+        messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
     };
 
     let result = edit_user_message(
@@ -1890,7 +1894,7 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     let (assistant_message_id, original_turn_id) = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        let m = messages.iter().find(|m| m.role == "assistant").unwrap();
+        let m = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
         (m.id, m.turn_id.clone().unwrap())
     };
 
@@ -1906,7 +1910,7 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[0].role, Role::User);
     assert_eq!(messages[1].content, "応答B");
     assert_eq!(
         messages[1].turn_id.as_deref(),
@@ -1934,7 +1938,7 @@ async fn retry_reply_rejects_user_target() {
     let user_message_id = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == "user").unwrap().id
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
     };
 
     let result = retry_reply(
@@ -1967,7 +1971,7 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     let (error_message_id, original_turn_id) = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        let m = messages.iter().find(|m| m.role == "error").unwrap();
+        let m = messages.iter().find(|m| m.role == Role::Error).unwrap();
         (m.id, m.turn_id.clone().unwrap())
     };
 
@@ -2012,7 +2016,7 @@ async fn delete_message_removes_an_error_reply() {
     let error_message_id = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == "error").unwrap().id
+        messages.iter().find(|m| m.role == Role::Error).unwrap().id
     };
 
     delete_message(
@@ -2057,7 +2061,7 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     let first_user_id = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == "user").unwrap().id
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
     };
 
     delete_message(
@@ -2150,7 +2154,7 @@ async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
     let user_message_id = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == "user").unwrap().id
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
     };
 
     let generating = InFlightSet::new();
@@ -2200,7 +2204,7 @@ async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
         )
         .unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        let reply = messages.iter().find(|m| m.role == "assistant").unwrap();
+        let reply = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
         (reply.id, reply.turn_id.clone().unwrap())
     };
 
@@ -2258,7 +2262,7 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(tool_execution_count(&messages), 2);
     let reply = messages.last().unwrap();
-    assert_eq!(reply.role, "assistant");
+    assert_eq!(reply.role, Role::Assistant);
     assert_eq!(reply.content, "ここまでの結果でお答えします");
 }
 
@@ -2293,15 +2297,15 @@ async fn models_without_tool_support_are_called_once_without_tools() {
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(tool_execution_count(&messages), 0);
-    assert_eq!(messages.last().unwrap().role, "assistant");
+    assert_eq!(messages.last().unwrap().role, Role::Assistant);
 }
 
-fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<String> {
+fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
     let conn = db.lock().unwrap();
     db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .into_iter()
-        .map(|m| m.role)
+        .map(|m| m.role.as_str())
         .collect()
 }
 
@@ -2520,7 +2524,7 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     assert_eq!(reply_of(&messages), "確認しました");
     let results: Vec<serde_json::Value> = messages
         .iter()
-        .filter(|m| m.kind == "tool_execution")
+        .filter(|m| m.kind == Kind::ToolExecution)
         .map(|m| serde_json::from_str::<serde_json::Value>(&m.content).unwrap()["result"].clone())
         .collect();
     assert_eq!(results[0]["task"]["id"], task_id);
@@ -2629,7 +2633,7 @@ async fn run_turn_saves_attachments_with_the_user_message() {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         let user = &messages[0];
-        assert_eq!(user.role, "user");
+        assert_eq!(user.role, Role::User);
         let names: Vec<&str> = user
             .attachments
             .iter()

@@ -992,8 +992,9 @@ function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: 
   return { pairs, errors }
 }
 
-const MCP_NAME_MAX_LENGTH = 16
-const MCP_NAME_PATTERN = new RegExp(`^[A-Za-z0-9_]{1,${MCP_NAME_MAX_LENGTH}}$`)
+// 使える文字だけを見る(長さの上限はRust側から受け取る)。登録の可否はRust側
+// (`config::validate_mcp_server_name`)が決め直す。ここで見るのは、表示言語の文言で理由を出すため。
+const MCP_NAME_CHARS = /^[A-Za-z0-9_]+$/
 
 interface McpTabProps {
   settings: SettingsView
@@ -1034,7 +1035,11 @@ function McpTab({
         )}
       </ul>
 
-      <AddMcpServerForm existingNames={settings.mcp_servers.map((s) => s.name)} onAdd={onAddServer} />
+      <AddMcpServerForm
+        existingNames={settings.mcp_servers.map((s) => s.name)}
+        nameMaxChars={settings.mcp_server_name_max_chars}
+        onAdd={onAddServer}
+      />
 
       {/* ツール呼び出し全体の上限(legacy/frontend.md 4節「共通設定」)。内部ツールにも
           効くので、MCPサーバーの一覧より後ろ、タブの末尾に置く。サーバーの追加とは
@@ -1193,10 +1198,11 @@ function McpServerCard({
 
 interface AddMcpServerFormProps {
   existingNames: string[]
+  nameMaxChars: number
   onAdd: (name: string, endpoint: NewMcpEndpoint) => void
 }
 
-function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
+function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFormProps) {
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<'stdio' | 'streamable_http'>('stdio')
   const [command, setCommand] = useState('')
@@ -1221,8 +1227,8 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
     const validationErrors: string[] = []
     if (trimmedName === '') {
       validationErrors.push(t('settings.tools.id_required'))
-    } else if (!MCP_NAME_PATTERN.test(trimmedName)) {
-      validationErrors.push(t('settings.tools.id_invalid', { max: MCP_NAME_MAX_LENGTH }))
+    } else if (trimmedName.length > nameMaxChars || !MCP_NAME_CHARS.test(trimmedName)) {
+      validationErrors.push(t('settings.tools.id_invalid', { max: nameMaxChars }))
     } else if (existingNames.includes(trimmedName)) {
       validationErrors.push(t('settings.tools.id_duplicate', { id: trimmedName }))
     }
@@ -1259,11 +1265,11 @@ function AddMcpServerForm({ existingNames, onAdd }: AddMcpServerFormProps) {
     <form className="provider-add-form settings-section-break" onSubmit={submit}>
       <h2>{t('settings.tools.add_server_heading')}</h2>
       <label className="settings-field">
-        <span>{t('settings.tools.server_id_hint', { max: MCP_NAME_MAX_LENGTH })}</span>
+        <span>{t('settings.tools.server_id_hint', { max: nameMaxChars })}</span>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          maxLength={MCP_NAME_MAX_LENGTH}
+          maxLength={nameMaxChars}
           required
         />
       </label>
