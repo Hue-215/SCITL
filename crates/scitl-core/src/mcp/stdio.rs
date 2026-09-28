@@ -121,3 +121,161 @@ fn inherited_env_allowlist() -> &'static [&'static str] {
         &["PATH", "HOME"]
     }
 }
+
+/// 多層防御(環境変数を継承させない・プロセスグループごと終了させる)が、依存の更新で
+/// 黙って崩れていないことを、偽のMCPサーバーを実際に起動して確かめる。
+#[cfg(all(test, unix))]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    use secrecy::SecretString;
+
+    use super::*;
+
+    /// `initialize`にだけ応答する偽のMCPサーバー。受け取った環境変数と、自分が起動した
+    /// 孫プロセスのPIDを、第1引数のディレクトリに書き出す。第2引数が`linger`なら、
+    /// 標準入力が閉じられても終了せずに居座る。
+    const FAKE_SERVER: &str = r#"
+out="$1"
+env > "$out/env"
+sleep 60 &
+echo $! > "$out/grandchild"
+read -r line
+id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+version=$(printf '%s\n' "$line" | sed -n 's/.*"protocolVersion":"\([^"]*\)".*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"%s","capabilities":{},"serverInfo":{"name":"fake","version":"0"}}}\n' "$id" "$version"
+while read -r line; do :; done
+if [ "$2" = linger ]; then sleep 60; fi
+"#;
+
+    /// 偽のサーバーのスクリプトと出力を置く、テストごとの一時ディレクトリ。
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("scitl-stdio-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("server.sh"), FAKE_SERVER).unwrap();
+            Self(dir)
+        }
+
+        fn args(&self, mode: &str) -> Vec<String> {
+            vec![
+                self.0.join("server.sh").display().to_string(),
+                self.0.display().to_string(),
+                mode.to_string(),
+            ]
+        }
+
+        fn read(&self, file: &str) -> String {
+            std::fs::read_to_string(self.0.join(file)).unwrap()
+        }
+
+        fn grandchild(&self) -> String {
+            self.read("grandchild").trim().to_string()
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            // テストが途中で落ちても孫プロセスを残さない。
+            if let Ok(pid) = std::fs::read_to_string(self.0.join("grandchild")) {
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", pid.trim()])
+                    .status();
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// プロセスが生きているか。終了して回収を待つだけのゾンビは終了扱いにする。
+    fn is_alive(pid: &str) -> bool {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout);
+        let stat = stat.trim();
+        !stat.is_empty() && !stat.starts_with('Z')
+    }
+
+    /// 終了は非同期に進むので、上限までポーリングして待つ。
+    async fn wait_until_gone(pid: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if !is_alive(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    fn names(env: &str) -> Vec<&str> {
+        env.lines()
+            .filter_map(|l| l.split_once('='))
+            .map(|(n, _)| n)
+            .collect()
+    }
+
+    /// 偽のサーバーの応答がrmcpの期待とずれると、接続は失敗せずに待ち続ける。テストが
+    /// 止まらずに失敗するよう、上限を設ける。
+    async fn connect_fake(scratch: &Scratch, mode: &str, env_refs: &[SecretRef]) -> ClientService {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            connect("/bin/sh", &scratch.args(mode), env_refs),
+        )
+        .await
+        .expect("the fake server did not complete initialize")
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_the_allowlist_and_registered_values_reach_the_server() {
+        // 既定の保存先はプロセス全体で1つで、元に戻せない。このテストバイナリで秘密情報を
+        // 読み書きするテストは、以降すべてこのモックを使う。
+        keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+        crate::secrets::store("stdio-test-token", &SecretString::from("s3cret")).unwrap();
+        // 親プロセスには許可リスト外の変数がある(無ければ、このテストは何も確かめない)。
+        let allowlist = inherited_env_allowlist();
+        assert!(std::env::vars().any(|(n, _)| !allowlist.contains(&n.as_str())));
+
+        let scratch = Scratch::new("env");
+        let refs = [SecretRef {
+            name: "FAKE_TOKEN".to_string(),
+            key_ref: "stdio-test-token".to_string(),
+        }];
+        let mut service = connect_fake(&scratch, "exit", &refs).await;
+        let _ = service.close_with_timeout(Duration::from_secs(5)).await;
+
+        let env = scratch.read("env");
+        assert!(env.lines().any(|l| l == "FAKE_TOKEN=s3cret"), "{env}");
+        if let Ok(path) = std::env::var("PATH") {
+            assert!(env.lines().any(|l| l == format!("PATH={path}")), "{env}");
+        }
+        // シェル自身が設定する変数は除く。
+        const SHELL_OWN: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
+        for name in names(&env) {
+            assert!(
+                allowlist.contains(&name) || name == "FAKE_TOKEN" || SHELL_OWN.contains(&name),
+                "{name} leaked into the server's environment"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_kills_the_grandchildren_of_a_server_that_does_not_exit() {
+        let scratch = Scratch::new("linger");
+        let mut service = connect_fake(&scratch, "linger", &[]).await;
+        let grandchild = scratch.grandchild();
+        assert!(is_alive(&grandchild));
+
+        let _ = service.close_with_timeout(Duration::from_secs(5)).await;
+        assert!(
+            wait_until_gone(&grandchild).await,
+            "grandchild {grandchild} survived"
+        );
+    }
+}
