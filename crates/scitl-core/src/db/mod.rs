@@ -5,12 +5,11 @@ pub mod tasks;
 
 pub use rusqlite::Connection;
 use rusqlite::{Transaction, TransactionBehavior};
-use rusqlite_migration::{Migrations, M};
 use std::path::Path;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 
 const INIT_SQL: &str = include_str!("../../../../migrations/0001_init.sql");
 const TOOL_EXECUTION_ROLE_SQL: &str =
@@ -58,14 +57,45 @@ pub(crate) fn in_transaction<T>(
     Ok(out)
 }
 
-static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-    Migrations::new(vec![
-        M::up(INIT_SQL),
-        M::up(TOOL_EXECUTION_ROLE_SQL),
-        M::up(ERROR_DETAIL_SQL),
-        M::up(MESSAGE_ORIGIN_SQL),
-    ])
-});
+/// 番号順のマイグレーション。`user_version`は、この列の先頭から何個を適用済みかを表す
+/// (data-model.md 5節)。
+const MIGRATIONS: &[&str] = &[
+    INIT_SQL,
+    TOOL_EXECUTION_ROLE_SQL,
+    ERROR_DETAIL_SQL,
+    MESSAGE_ORIGIN_SQL,
+];
+
+/// 先頭から`target`個目までのマイグレーションを適用する。適用済みの版の読み取りから
+/// 版の書き込みまでを1つのトランザクションに収め、GUIとCLIが同時に開いても、遅れた側は
+/// 先に適用された版を読んでから判断する(data-model.md 5節)。
+fn migrate_to(conn: &Connection, target: usize) -> Result<()> {
+    debug_assert!(target <= MIGRATIONS.len());
+    let applied_version =
+        |conn: &Connection| conn.query_row("PRAGMA user_version", [], |row| row.get::<_, usize>(0));
+    // 版は増える一方なので、既に届いていればロックを取らずに済ませる。他プロセスの書き込みを
+    // 待たずに開ける。
+    if applied_version(conn)? == target {
+        return Ok(());
+    }
+    in_transaction(conn, |conn| {
+        let applied = applied_version(conn)?;
+        if applied > MIGRATIONS.len() {
+            return Err(CoreError::Migration(format!(
+                "database schema version {applied} is newer than this build supports ({})",
+                MIGRATIONS.len()
+            )));
+        }
+        if applied >= target {
+            return Ok(());
+        }
+        for sql in &MIGRATIONS[applied..target] {
+            conn.execute_batch(sql)?;
+        }
+        conn.pragma_update(None, "user_version", target)?;
+        Ok(())
+    })
+}
 
 /// ISO8601 UTC(`YYYY-MM-DDTHH:MM:SSZ`)。生成箇所をここに集約する
 /// (docs/spec/rebuild/data-model.md 1節)。
@@ -99,18 +129,18 @@ fn format_unix_utc(secs: u64) -> String {
 /// 接続を開き、PRAGMAとマイグレーションを適用する
 /// (docs/spec/rebuild/data-model.md 4節・5節、architecture.md 4節)。
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
-    let mut conn = Connection::open(path)?;
+    let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(Duration::from_secs(5))?;
-    MIGRATIONS.to_latest(&mut conn)?;
+    migrate_to(&conn, MIGRATIONS.len())?;
     Ok(conn)
 }
 
 pub fn open_in_memory() -> Result<Connection> {
-    let mut conn = Connection::open_in_memory()?;
+    let conn = Connection::open_in_memory()?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    MIGRATIONS.to_latest(&mut conn)?;
+    migrate_to(&conn, MIGRATIONS.len())?;
     Ok(conn)
 }
 
@@ -120,14 +150,9 @@ mod tests {
     use crate::error::CoreError;
 
     #[test]
-    fn migrations_are_valid() {
-        MIGRATIONS.validate().unwrap();
-    }
-
-    #[test]
     fn existing_tool_execution_records_move_to_the_tool_role() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        MIGRATIONS.to_version(&mut conn, 1).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_to(&conn, 1).unwrap();
         conn.execute(
             "INSERT INTO messages (role, content, kind, turn_id, attempt_no, created_at)
              VALUES ('assistant', '{}', 'tool_execution', 't', 1, '2026-01-01T00:00:00Z')",
@@ -135,7 +160,7 @@ mod tests {
         )
         .unwrap();
 
-        MIGRATIONS.to_latest(&mut conn).unwrap();
+        migrate_to(&conn, MIGRATIONS.len()).unwrap();
 
         let role: String = conn
             .query_row("SELECT role FROM messages", [], |row| row.get(0))
@@ -192,5 +217,46 @@ mod tests {
 
         drop((conn, other_process));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn opening_during_another_process_migration_does_not_apply_it_twice() {
+        let dir = std::env::temp_dir().join(format!("scitl-db-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scitl.sqlite3");
+        let migrating = Connection::open(&path).unwrap();
+        migrating
+            .pragma_update(None, "journal_mode", "WAL")
+            .unwrap();
+        let latest = MIGRATIONS.len();
+        migrate_to(&migrating, latest - 1).unwrap();
+
+        // もう一方のプロセスが最後のマイグレーションを適用している途中に開く。
+        let tx = Transaction::new_unchecked(&migrating, TransactionBehavior::Immediate).unwrap();
+        tx.execute_batch(MIGRATIONS[latest - 1]).unwrap();
+        tx.pragma_update(None, "user_version", latest).unwrap();
+        let late = std::thread::spawn({
+            let path = path.clone();
+            move || open(path).map(drop)
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        tx.commit().unwrap();
+
+        let opened = late.join().unwrap();
+        assert!(opened.is_ok(), "{opened:?}");
+
+        drop(migrating);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_database_from_a_newer_build_is_not_opened() {
+        let conn = open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", MIGRATIONS.len() + 1)
+            .unwrap();
+
+        let result = migrate_to(&conn, MIGRATIONS.len());
+
+        assert!(matches!(result, Err(CoreError::Migration(_))), "{result:?}");
     }
 }
