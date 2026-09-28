@@ -4,6 +4,7 @@ pub mod task_steps;
 pub mod tasks;
 
 pub use rusqlite::Connection;
+use rusqlite::{Transaction, TransactionBehavior};
 use rusqlite_migration::{Migrations, M};
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -36,13 +37,13 @@ where
     .await
 }
 
-/// 複数文にわたる書き込みを1つの単位にする。途中の文が失敗すれば何も残さない
-/// (工程を一部だけ追加したのにツールは失敗を返す、といった食い違いを作らない)。
-/// 読んでから書く操作の直列化は、今はプロセス内で接続を包む`Mutex`が担っている。
-/// 複数プロセスを跨いだ排他の方式(`BEGIN IMMEDIATE`等)はIssue #74で決める(data-model.md 4節)。
+/// 読んで判断してから書く操作を1つの単位にする。途中の文が失敗すれば何も残さず
+/// (工程を一部だけ追加したのにツールは失敗を返す、といった食い違いを作らない)、
+/// 別プロセスの書き込みは`f`が終わるまで待たせる(data-model.md 4節)。
 ///
 /// 既にトランザクションの中で呼ばれたら、新しく始めずにその中で実行する(SQLiteは入れ子の
-/// `BEGIN`を受け付けない)。確定と巻き戻しは外側に任せる。
+/// `BEGIN`を受け付けない)。開始方法・確定・巻き戻しは外側に従うので、トランザクションは
+/// すべてこの関数で始める。
 pub(crate) fn in_transaction<T>(
     conn: &Connection,
     f: impl FnOnce(&Connection) -> Result<T>,
@@ -50,7 +51,8 @@ pub(crate) fn in_transaction<T>(
     if !conn.is_autocommit() {
         return f(conn);
     }
-    let tx = conn.unchecked_transaction()?;
+    // 読むより前に書き込みの権利を取る(data-model.md 4節)。
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let out = f(&tx)?;
     tx.commit()?;
     Ok(out)
@@ -157,5 +159,38 @@ mod tests {
         assert!(task_steps::list_for_task(&conn, task_id)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn in_transaction_keeps_other_processes_out_from_the_first_read() {
+        let dir = std::env::temp_dir().join(format!("scitl-db-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scitl.sqlite3");
+        let conn = open(&path).unwrap();
+        let other_process = open(&path).unwrap();
+        other_process
+            .busy_timeout(Duration::from_millis(50))
+            .unwrap();
+        let task_id = tasks::create_task(&conn).unwrap().id;
+
+        in_transaction(&conn, |conn| {
+            tasks::get_task(conn, task_id)?;
+
+            let interleaved = tasks::create_task(&other_process);
+            assert!(
+                matches!(
+                    &interleaved,
+                    Err(CoreError::Db(rusqlite::Error::SqliteFailure(e, _)))
+                        if e.code == rusqlite::ErrorCode::DatabaseBusy
+                ),
+                "{interleaved:?}"
+            );
+
+            task_steps::add_steps(conn, task_id, &["買い出し".to_string()])
+        })
+        .unwrap();
+
+        drop((conn, other_process));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

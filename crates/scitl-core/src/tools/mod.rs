@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::messages::Chat;
-use crate::db::task_steps;
+use crate::db::{self, task_steps};
 use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
@@ -183,6 +183,11 @@ pub fn execute(
     tool_name: &str,
     arguments: &Value,
 ) -> Result<ToolOutput> {
+    // 更新系は、対象の確認から変更後の全体の読み直しまでを1単位にする。確認のあとや
+    // 返す全体に、別プロセスの書き込みが割り込まない(data-model.md 4節)。
+    let update = |execute: fn(&Connection, i64, &Value) -> Result<Value>, task_id| {
+        db::in_transaction(conn, |conn| execute(conn, task_id, arguments))
+    };
     let result = match (chat, tool_name) {
         (_, read_attachment::NAME) => {
             return read_attachment::execute(conn, chat, image_input, arguments)
@@ -192,10 +197,10 @@ pub fn execute(
         (Chat::Task(task_id), get_current_task_detail::NAME) => {
             get_current_task_detail::execute(conn, task_id, arguments)
         }
-        (Chat::Task(task_id), update_task::NAME) => update_task::execute(conn, task_id, arguments),
-        (Chat::Task(task_id), add_steps::NAME) => add_steps::execute(conn, task_id, arguments),
-        (Chat::Task(task_id), update_step::NAME) => update_step::execute(conn, task_id, arguments),
-        (Chat::Task(task_id), delete_step::NAME) => delete_step::execute(conn, task_id, arguments),
+        (Chat::Task(task_id), update_task::NAME) => update(update_task::execute, task_id),
+        (Chat::Task(task_id), add_steps::NAME) => update(add_steps::execute, task_id),
+        (Chat::Task(task_id), update_step::NAME) => update(update_step::execute, task_id),
+        (Chat::Task(task_id), delete_step::NAME) => update(delete_step::execute, task_id),
         (_, other) => Err(CoreError::UnknownTool(other.to_string())),
     };
     result.map(ToolOutput::from)
