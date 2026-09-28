@@ -17,6 +17,7 @@
   "chat.pending_reply": "応答を待っています…",
   "chat.retry_button": "再試行",
   "chat.send_button": "送信",
+  "chat.source_cli": "CLI",
   "chat.source_mcp": "MCP",
   "chat.source_ui": "画面",
   "chat.source_unknown": "外部",

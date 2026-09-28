@@ -55,6 +55,7 @@ export function finalEntryOf(entries: Message[]): Message {
 /// 値そのものは出さない(MCP経由の`mcp:`の後ろは外部のクライアントが名乗る名前になる)。
 export function operationSourceLabel(source: string | null): MessageKey {
   if (source === 'ui') return 'chat.source_ui'
+  if (source === 'cli') return 'chat.source_cli'
   if (source === 'mcp' || source?.startsWith('mcp:')) return 'chat.source_mcp'
   return 'chat.source_unknown'
 }

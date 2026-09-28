@@ -17,6 +17,7 @@
   "chat.pending_reply": "Waiting for a reply…",
   "chat.retry_button": "Retry",
   "chat.send_button": "Send",
+  "chat.source_cli": "CLI",
   "chat.source_mcp": "MCP",
   "chat.source_ui": "UI",
   "chat.source_unknown": "External",

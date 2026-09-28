@@ -12,6 +12,9 @@ scitl-core = { path = "../scitl-core" }
 tauri = { version = "2", features = [] }
 secrecy = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [[bin]]
 name = "scitl-tauri"
 path = "src/main.rs"

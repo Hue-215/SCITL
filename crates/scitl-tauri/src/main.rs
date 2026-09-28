@@ -10,6 +10,7 @@ use scitl_core::attachments::{AttachmentStore, Attachments};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::SharedConnection;
 use scitl_core::in_flight::InFlightSet;
+use scitl_core::paths::{self, DataLayout};
 use scitl_core::settings::Settings;
 use tauri::Manager;
 
@@ -30,14 +31,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(navigation::guard())
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&app_data_dir)?;
-            let conn = scitl_core::db::open(app_data_dir.join("scitl.sqlite3"))?;
+            let data = DataLayout::new(paths::default_data_dir()?);
+            std::fs::create_dir_all(data.root())?;
+            let conn = scitl_core::db::open(data.database())?;
 
-            let settings = Settings::load(app_data_dir.join("config.toml"));
+            let settings = Settings::load(data.config());
             let attachments = Arc::new(Attachments::new(AttachmentStore::new(
-                app_data_dir.join("attachments"),
-                app.path().app_cache_dir()?.join("revealed-attachments"),
+                data.attachments(),
+                paths::revealed_attachments(&paths::default_cache_dir()?),
             )));
 
             app.manage(AppState {
@@ -45,7 +46,7 @@ fn main() {
                 settings: Arc::new(settings),
                 generating: InFlightSet::new(),
                 attachments,
-                export_dir: app_data_dir.join("export"),
+                export_dir: data.export(),
             });
             Ok(())
         })
@@ -98,4 +99,16 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    /// GUIとCLIが同じデータディレクトリを開くよう、coreの識別子をTauriの設定と照合する
+    /// (`scitl_core::paths::APP_IDENTIFIER`)。
+    #[test]
+    fn core_identifier_matches_tauri_config() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], scitl_core::paths::APP_IDENTIFIER);
+    }
 }
