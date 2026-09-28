@@ -69,8 +69,10 @@ enum ChatCommand {
         #[arg(long, value_name = "ID")]
         task: Option<i64>,
     },
-    /// Show the request the next turn would send to the model, without sending it or saving
-    /// anything. Images are shortened to their length.
+    /// Show the request body the next turn would send to the model, without sending it or
+    /// saving anything. Images are shortened to their type and length. Like a turn, this reads
+    /// the API key from the OS credential store and may ask the registered local inference
+    /// server for the model's capabilities.
     Preview {
         /// Task whose conversation to preview. Without it, the general chat.
         #[arg(long, value_name = "ID")]
@@ -161,27 +163,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             let preview = orchestration::preview_request(db, &ctx, chat, options)
                 .await?
                 .map_err(|failure| CliError::ChatUnavailable(failure.user_message()))?;
-            let mut preview = serde_json::to_value(preview).expect("previews serialize to JSON");
-            shorten_data_urls(&mut preview);
             print_json(&preview);
         }
     }
     Ok(())
-}
-
-/// 画像はdata URLとして本文に埋まり、1枚で数MBになる。端末に流しても読めないので、形式と
-/// 長さだけを残す。
-fn shorten_data_urls(value: &mut serde_json::Value) {
-    const KEEP: usize = 64;
-    match value {
-        serde_json::Value::String(s) if s.starts_with("data:") && s.len() > KEEP => {
-            let head = s.split(',').next().unwrap_or_default();
-            *s = format!("{head},… ({} bytes)", s.len());
-        }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(shorten_data_urls),
-        serde_json::Value::Object(fields) => fields.values_mut().for_each(shorten_data_urls),
-        _ => {}
-    }
 }
 
 #[derive(Debug, thiserror::Error)]

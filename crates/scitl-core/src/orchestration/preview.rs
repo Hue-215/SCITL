@@ -53,14 +53,17 @@ pub async fn preview_request(
     }
 
     let message = options.message;
-    let stored = with_conn(db.clone(), move |conn| {
-        in_rolled_back_transaction(conn, |conn| {
+    let stored = with_conn(db.clone(), move |conn| match &message {
+        Some(text) => in_rolled_back_transaction(conn, |conn| {
             require_chat(conn, chat)?;
-            if let Some(text) = &message {
-                insert_user_message(conn, chat, text)?;
-            }
+            insert_user_message(conn, chat, text)?;
             history::load(conn, chat)
-        })
+        }),
+        // 書かないなら、書き込みの権利を取って他プロセスを待たせる理由が無い。
+        None => {
+            require_chat(conn, chat)?;
+            history::load(conn, chat)
+        }
     })
     .await?;
 
@@ -82,7 +85,7 @@ pub async fn preview_request(
         .request_preview(&messages, offered, ctx.reasoning_effort)
         .ok_or_else(|| {
             CoreError::Internal("this provider cannot preview its requests".to_string())
-        })??;
+        })?;
     Ok(Ok(Preview {
         external_tools,
         request,

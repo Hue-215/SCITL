@@ -3155,15 +3155,14 @@ impl LlmAdapter for PreviewingAdapter {
         messages: &[ChatMessage],
         tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Option<Result<RequestPreview, CoreError>> {
+    ) -> Option<RequestPreview> {
         self.previewed
             .lock()
             .unwrap()
             .push((messages.to_vec(), tool_names(tools)));
-        Some(Ok(RequestPreview {
-            url: String::new(),
+        Some(RequestPreview {
             body: serde_json::Value::Null,
-        }))
+        })
     }
 }
 

@@ -286,25 +286,29 @@ pub trait LlmAdapter: Send + Sync {
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<(), CoreError>;
 
-    /// [`Self::send`]が同じ引数で送るリクエストを、送らずに返す(送信内容のプレビュー。
+    /// [`Self::send`]が同じ引数で送るリクエストの本文を、送らずに返す(送信内容のプレビュー。
     /// Issue #23)。実際のプロバイダーは必ず実装し、`send`と同じ組み立てを通す。既定の`None`は
     /// テスト用のアダプタのためのもの。
+    ///
+    /// 変えてよいのは画像の実体だけで、形式と長さに縮める(1枚で数MBになり、端末では読めない)。
+    /// 縮めるのは方言の上で画像を置く位置に限る。他の文字列まで縮めると、モデルに渡る文を
+    /// プレビューから隠せてしまう。要求URLは返さない(エラーの詳細と同じく、パスに鍵を置く
+    /// ゲートウェイがあるため)。
     fn request_preview(
         &self,
         _messages: &[ChatMessage],
         _tools: &[ToolSchema],
         _reasoning_effort: Option<ReasoningEffort>,
-    ) -> Option<Result<RequestPreview, CoreError>> {
+    ) -> Option<RequestPreview> {
         None
     }
 }
 
-/// 送らずに組み立てたリクエスト。認証情報(ヘッダー)は持たない。本文はアダプタの
+/// 送らずに組み立てたリクエストの本文。認証情報(ヘッダー)は持たない。本文はアダプタの
 /// リクエストの型から直列化したもので、秘密情報(`secrecy::SecretString`)は直列化できないため
 /// 型の上で本文に乗らない。
 #[derive(Debug, Serialize)]
 pub struct RequestPreview {
-    pub url: String,
     pub body: serde_json::Value,
 }
 

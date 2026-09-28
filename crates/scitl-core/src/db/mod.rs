@@ -63,10 +63,12 @@ pub(crate) fn in_rolled_back_transaction<T>(
     conn: &Connection,
     f: impl FnOnce(&Connection) -> Result<T>,
 ) -> Result<T> {
-    debug_assert!(
-        conn.is_autocommit(),
-        "cannot roll back part of an outer transaction"
-    );
+    // SQLiteは入れ子の`BEGIN`を受け付けず、外側の一部だけを巻き戻す手段も無い。
+    if !conn.is_autocommit() {
+        return Err(CoreError::Internal(
+            "cannot roll back part of an outer transaction".to_string(),
+        ));
+    }
     // 捨てる書き込みでも、読んだ時点から他プロセスの書き込みを止める点は`in_transaction`と同じ。
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     f(&tx)
