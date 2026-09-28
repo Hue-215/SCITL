@@ -15,6 +15,9 @@ pub enum CoreError {
     /// 添付の実体の読み書き・送信前の添付の取り出しの失敗。
     #[error("attachment error: {0}")]
     Attachment(String),
+    /// Markdownエクスポートの書き込みの失敗。
+    #[error("export error: {0}")]
+    Export(String),
     #[error("invalid message operation: {0}")]
     InvalidMessageOperation(String),
     /// その会話は既に応答を生成中(`orchestration::TurnContext::generating`)。

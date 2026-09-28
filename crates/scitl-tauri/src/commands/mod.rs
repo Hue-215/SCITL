@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod chat;
+pub mod export;
 pub mod link;
 pub mod mcp;
 pub mod settings;

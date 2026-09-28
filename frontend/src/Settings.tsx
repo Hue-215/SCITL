@@ -7,10 +7,12 @@ import {
   deleteMcpServer,
   deleteProvider,
   detectModelCapabilities,
+  exportMarkdown,
   failureText,
   fetchMcpTools,
   getSettings,
   listProviderModels,
+  openExportFolder,
   removeModel,
   resetModelCapabilities,
   setMcpServerEnabled,
@@ -27,6 +29,7 @@ import type {
   ApiFormat,
   AvailableModel,
   Capability,
+  ExportSummary,
   Language,
   McpServerView,
   ModelView,
@@ -362,6 +365,69 @@ function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
           />
         </div>
       </details>
+
+      <ExportSection />
+    </div>
+  )
+}
+
+type ExportResult = { ok: true; summary: ExportSummary } | { ok: false; message: string }
+
+// 押すと確認なしで書き出し、成否はこの欄に出す(legacy/frontend.md 2節)。タブ全体のエラー欄を
+// 使わないのは、設定の保存とは別の操作の結果だから。
+function ExportSection() {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<ExportResult | null>(null)
+
+  const runExport = async () => {
+    setRunning(true)
+    setResult(null)
+    try {
+      setResult({ ok: true, summary: await exportMarkdown() })
+    } catch (e) {
+      setResult({
+        ok: false,
+        message: t('settings.general.export_failed', { error: failureText(e) }),
+      })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const openFolder = async () => {
+    try {
+      await openExportFolder()
+    } catch (e) {
+      setResult({
+        ok: false,
+        message: t('settings.general.open_export_folder_failed', { error: failureText(e) }),
+      })
+    }
+  }
+
+  return (
+    <div className="settings-field settings-section-break">
+      <span>{t('settings.general.export_label')}</span>
+      <p className="settings-hint">{t('settings.general.export_caption')}</p>
+      <div className="button-row">
+        <button type="button" onClick={runExport} disabled={running}>
+          {running ? t('settings.general.exporting') : t('settings.general.export_button')}
+        </button>
+        <button type="button" onClick={openFolder}>
+          {t('settings.general.open_export_folder')}
+        </button>
+      </div>
+      {result?.ok === true && (
+        <p>{t('settings.general.export_done', { folder: result.summary.folder })}</p>
+      )}
+      {result?.ok === true && result.summary.missing_attachments > 0 && (
+        <p className="error">
+          {t('settings.general.export_missing_attachments', {
+            count: result.summary.missing_attachments,
+          })}
+        </p>
+      )}
+      {result?.ok === false && <p className="error">{result.message}</p>}
     </div>
   )
 }
@@ -611,7 +677,7 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
           </ul>
         </>
       )}
-      <div className="model-picker-actions">
+      <div className="button-row model-picker-actions">
         {candidates.length > 0 && (
           <button
             type="button"

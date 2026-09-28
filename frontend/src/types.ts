@@ -114,6 +114,16 @@ export interface PendingEntry {
   attachmentNames?: string[]
 }
 
+// crates/scitl-core/src/export/mod.rs の ExportSummary。
+export interface ExportSummary {
+  // 書き出したフォルダの名前
+  folder: string
+  tasks: number
+  attachments: number
+  // 実体を読めない・書けないために同梱できなかった添付の数
+  missing_attachments: number
+}
+
 // crates/scitl-core/src/attachments/classify.rs の Limits。
 export interface AttachmentLimits {
   text_bytes: number

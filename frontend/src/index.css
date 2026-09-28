@@ -286,11 +286,6 @@ option {
   overflow-wrap: anywhere;
 }
 
-.chat-header-actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
 /* 見出しの文字のまま押せるようにする(押すとその場で名前を編集する)。字の大きさ・太さは
    基盤層の font: inherit で見出しから受け継ぐ。 */
 .chat-header-title {
@@ -483,6 +478,12 @@ option {
   gap: var(--space-1);
 }
 
+/* 操作のボタンを横に並べる入れ物。寄せ方が違う箇所は、その差分だけを画面ごとのクラスに書く。 */
+.button-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* 一覧の1行を占めるボタン。サイドバー(タスク・アーカイブ折りたたみ)と、チャット入力欄の
    下の選択一覧(Dropdown.tsx)で形が同じ。 */
 .list-row {
@@ -660,11 +661,6 @@ option {
 .entry-time {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-}
-
-.entry-actions {
-  display: flex;
-  gap: var(--space-2);
 }
 
 .entry-actions button {
@@ -1066,9 +1062,7 @@ option {
 }
 
 .model-picker-actions {
-  display: flex;
   justify-content: flex-end;
-  gap: var(--space-2);
 }
 
 /* 節の始まりを示す仕切り線。線とその下の余白は、区切られる側のブロックが上端に持つ
@@ -1217,9 +1211,7 @@ button.danger {
 }
 
 .dialog-actions {
-  display: flex;
   justify-content: flex-end;
-  gap: var(--space-2);
 }
 
 /* URLは記号の途中でも折り返す(長いURLでダイアログが横に広がらないように)。 */

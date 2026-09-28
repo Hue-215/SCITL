@@ -175,6 +175,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::InvalidSettings(_) => unexpected("invalid_settings"),
         // リンクを開く操作でだけ起きる。ターンの経路には来ない。
         CoreError::Link(_) => unexpected("link"),
+        // エクスポートでだけ起きる。ターンの経路には来ない。
+        CoreError::Export(_) => unexpected("export"),
         CoreError::InvalidArgument { .. } => unexpected("invalid_argument"),
     }
 }

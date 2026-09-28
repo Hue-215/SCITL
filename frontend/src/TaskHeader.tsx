@@ -77,7 +77,7 @@ export default function TaskHeader({
             </button>
           )}
         </h1>
-        <div className="chat-header-actions">
+        <div className="button-row">
           <button type="button" disabled={disabled} onClick={() => onSetArchived(!archived)}>
             {archived ? t('task_header.unarchive') : t('task_header.archive')}
           </button>

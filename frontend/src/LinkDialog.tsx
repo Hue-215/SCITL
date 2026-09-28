@@ -73,7 +73,7 @@ export default function LinkDialog({ url, onClose }: LinkDialogProps) {
       {verdict?.kind === 'mail' && <p>{t('link.mailto_note')}</p>}
       {verdict?.kind === 'web' && !hasWarning && <p>{t('link.generic_warning')}</p>}
       {error && <p className="link-dialog-warning">{error}</p>}
-      <div className="dialog-actions">
+      <div className="button-row dialog-actions">
         <button type="button" onClick={onClose}>
           {t('common.cancel')}
         </button>
