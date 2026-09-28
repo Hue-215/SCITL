@@ -560,7 +560,7 @@ export default function App() {
               disabled={disableActions}
               placeholder={t('chat.input_hint')}
             />
-            <button type="submit" disabled={!canSend}>
+            <button type="submit" className="primary" disabled={!canSend}>
               {t('chat.send_button')}
             </button>
           </form>

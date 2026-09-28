@@ -7,8 +7,7 @@
  * 発行される色トークンの一覧(theme.ts のROLES/DANGER_ROLESと対応):
  *   --color-bg, --color-surface, --color-surface-alt, --color-border,
  *   --color-text, --color-text-secondary,
- *   --color-primary, --color-on-primary,
- *   --color-primary-container, --color-on-primary-container,
+ *   --color-primary, --color-primary-container, --color-on-primary-container,
  *   --color-danger, --color-danger-container, --color-on-danger-container
  * 同じく theme.ts が発行する奥行きのトークン(buildElevationと対応):
  *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
@@ -71,9 +70,10 @@
   /* 境界線の幅は1段階しか使わない。色は役割側(--color-border等)で決める。 */
   --border-width: 1px;
 
-  /* 角丸は吹き出しだけに使い、ほかは直角のままにする(ui.md 2節)。半径は吹き出しの
-     近い側マージンの半分で、マージンを変えたときに一緒に追従させる。 */
-  --bubble-radius: calc(var(--bubble-margin-near) / 2);
+  /* 角丸は1段階だけ。塗りか枠で輪郭を持つ部品すべてに同じ半径を使う(ui.md 6節)。
+     半径は吹き出しの近い側マージンの半分で、マージンを変えたときに一緒に追従させる
+     (吹き出しで直角だと尖って見えたのが角丸を入れた発端のため、吹き出しを基準にする)。 */
+  --radius: calc(var(--bubble-margin-near) / 2);
 
   /* チャット吹き出しの左右マージン。話者側(近い側)より反対側(遠い側)を2倍にする
      (色だけに頼らない話者の判別)。2倍という関係そのものを式で持ち、片方だけ動いて
@@ -108,8 +108,8 @@
   --textarea-min-height: 3rem;
   --textarea-max-height: 10rem;
 
-  /* 検索欄付きの選択一覧が伸びる上限(チャット入力欄の下の選択一覧、取得したモデルの
-     候補欄)。検索欄と7行ほどが収まる。 */
+  /* 選択肢の一覧が伸びる上限(開いた選択一覧、取得したモデルの候補欄)。候補欄では
+     検索欄と7行ほどが収まる。 */
   --option-list-max-height: 20rem;
 }
 

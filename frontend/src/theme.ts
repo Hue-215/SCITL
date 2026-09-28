@@ -46,7 +46,6 @@ const ROLES = {
     dark: { saturationFactor: 0, lightness: 68 },
   },
   primary: { light: { saturationFactor: 1, lightness: 45 }, dark: { saturationFactor: 0.85, lightness: 70 } },
-  onPrimary: { light: { saturationFactor: 0, lightness: 100 }, dark: { saturationFactor: 0, lightness: 15 } },
   primaryContainer: {
     light: { saturationFactor: 0.55, lightness: 90 },
     dark: { saturationFactor: 0.4, lightness: 28 },
@@ -69,7 +68,8 @@ const DANGER_ROLES = {
 
 // 奥行きの表現。ライトは影、ダークは影が背景に沈んで見えないため縁の光で代える。
 // 浮き(raise)は押せる部品、沈み(sink)は値を入れる所と選択中の項目、持ち上げ(lift)は
-// 押せない面(吹き出し)に使い、liftはraiseより弱く見えるようにする。
+// 押せない面(吹き出し)に使う。liftの強さは吹き出しが背景から離れて見える量で決めており、
+// raiseより強い(押せる部品とは大きさと置き場所で見分けられる。ui.md 2節)。
 type Elevation = { raise: string; sink: string; lift: string; focus: string }
 
 function buildElevation(h: number, s: number, mode: 'light' | 'dark'): Elevation {
@@ -117,53 +117,41 @@ function hexToHueSaturation(hex: string): { h: number; s: number } {
   return { h: h * 60, s: s * 100 }
 }
 
-function buildPalette(seedHex: string, mode: 'light' | 'dark'): Record<string, string> {
+function roleNameToCssVar(name: string): string {
+  return `--color-${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
+}
+
+/** 色(--color-*)と奥行き(--shadow-*)をまとめて、CSS変数名から値への対応にする。 */
+function buildThemeVars(seedHex: string, mode: 'light' | 'dark'): Record<string, string> {
   const { h, s } = hexToHueSaturation(seedHex)
-  const palette: Record<string, string> = {}
+  const vars: Record<string, string> = {}
   for (const [name, role] of Object.entries(ROLES)) {
     const { saturationFactor, lightness } = role[mode]
-    palette[name] = `hsl(${h.toFixed(1)} ${(s * saturationFactor).toFixed(1)}% ${lightness}%)`
+    vars[roleNameToCssVar(name)] = `hsl(${h.toFixed(1)} ${(s * saturationFactor).toFixed(1)}% ${lightness}%)`
   }
   for (const [name, role] of Object.entries(DANGER_ROLES)) {
     const { saturation, lightness } = role[mode]
-    palette[name] = `hsl(${DANGER_HUE} ${saturation}% ${lightness}%)`
+    vars[roleNameToCssVar(name)] = `hsl(${DANGER_HUE} ${saturation}% ${lightness}%)`
   }
-  return palette
-}
-
-function buildElevationVars(seedHex: string, mode: 'light' | 'dark'): Record<string, string> {
-  const { h, s } = hexToHueSaturation(seedHex)
-  const elevation = buildElevation(h, s, mode)
-  const vars: Record<string, string> = {}
-  for (const [name, value] of Object.entries(elevation)) {
+  for (const [name, value] of Object.entries(buildElevation(h, s, mode))) {
     vars[`--shadow-${name}`] = value
   }
   return vars
 }
 
-function roleNameToCssVar(name: string): string {
-  return `--color-${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
-}
-
-function applyPalette(palette: Record<string, string>, elevation: Record<string, string>): void {
+function applyVars(vars: Record<string, string>): void {
   const root = document.documentElement.style
-  for (const [name, value] of Object.entries(palette)) {
-    root.setProperty(roleNameToCssVar(name), value)
-  }
-  for (const [name, value] of Object.entries(elevation)) {
+  for (const [name, value] of Object.entries(vars)) {
     root.setProperty(name, value)
   }
 }
 
 /** シードからテーマを適用し、OSの明暗設定の変更にも追従させる。 */
 export function applyTheme(seedHex: string): void {
-  const light = buildPalette(seedHex, 'light')
-  const dark = buildPalette(seedHex, 'dark')
-  const lightElevation = buildElevationVars(seedHex, 'light')
-  const darkElevation = buildElevationVars(seedHex, 'dark')
+  const light = buildThemeVars(seedHex, 'light')
+  const dark = buildThemeVars(seedHex, 'dark')
   const media = window.matchMedia('(prefers-color-scheme: dark)')
-  const update = () =>
-    media.matches ? applyPalette(dark, darkElevation) : applyPalette(light, lightElevation)
+  const update = () => applyVars(media.matches ? dark : light)
   update()
   media.addEventListener('change', update)
 }

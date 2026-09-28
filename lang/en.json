@@ -55,7 +55,6 @@
   "select.effort.low": "Low",
   "select.effort.medium": "Medium",
   "select.effort.off": "Off",
-  "select.model_search_hint": "Search models",
   "select.model_tooltip": "{model} ({provider})",
   "select.model_unset": "No model selected",
   "select.models_empty": "No models to choose from. You can add or show them under \"API Providers\" in Settings.",
