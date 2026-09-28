@@ -9,6 +9,8 @@ pub mod read_attachment;
 pub mod update_step;
 pub mod update_task;
 
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -80,7 +82,20 @@ impl Surface {
 /// 面ごとの公開ツール定義。実装関数は1つのまま、公開するスキーマだけを面で分ける
 /// (docs/spec/rebuild/tools.md 1節「確定方針」)。実行の振り分け([`execute`])と
 /// 同じ集合を並べる(`each_chat_runs_exactly_the_tools_it_exposes`が確かめる)。
-pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
+///
+/// 定義は固定なので、面ごとに最初の1回だけ組み立てる(引数スキーマの無害化を伴うため)。
+pub fn tool_definitions(surface: Surface) -> &'static [ToolDefinition] {
+    static GENERAL: LazyLock<Vec<ToolDefinition>> =
+        LazyLock::new(|| build_definitions(Surface::General));
+    static TASK: LazyLock<Vec<ToolDefinition>> = LazyLock::new(|| build_definitions(Surface::Task));
+    match surface {
+        Surface::General => &GENERAL,
+        Surface::Task => &TASK,
+        Surface::Mcp => &[],
+    }
+}
+
+fn build_definitions(surface: Surface) -> Vec<ToolDefinition> {
     match surface {
         Surface::General => vec![
             ToolDefinition {
@@ -134,21 +149,24 @@ pub fn tool_definitions(surface: Surface) -> Vec<ToolDefinition> {
 /// オーケストレーション層が束縛するため、引数として公開しない(architecture.md 7節)。
 pub fn schemas(chat: Chat) -> Vec<ToolSchema> {
     tool_definitions(Surface::of(chat))
-        .into_iter()
-        .map(|def| def.schema)
+        .iter()
+        .map(|def| def.schema.clone())
         .collect()
 }
 
 /// 会話で公開する内部ツールの名前。外部ツールの名前空間化で衝突を避けるために使う
 /// (`external::ExternalToolset::build`)。
 pub fn names(chat: Chat) -> Vec<String> {
-    schemas(chat).iter().map(|t| t.name().to_string()).collect()
+    tool_definitions(Surface::of(chat))
+        .iter()
+        .map(|def| def.schema.name().to_string())
+        .collect()
 }
 
 /// 会話で公開する内部ツールの分類。公開していない名前には`None`を返す。
 pub fn kind(chat: Chat, name: &str) -> Option<ToolKind> {
     tool_definitions(Surface::of(chat))
-        .into_iter()
+        .iter()
         .find(|def| def.schema.name() == name)
         .map(|def| def.kind)
 }
@@ -206,7 +224,7 @@ mod tests {
     fn every_internal_tool_schema_builds() {
         // `ToolSchema::internal`は引数スキーマを読み直せないと止まる。どの面の定義も組み立てる。
         for surface in [Surface::General, Surface::Task, Surface::Mcp] {
-            tool_definitions(surface);
+            build_definitions(surface);
         }
         assert!(!schemas(Chat::General).is_empty());
         assert!(!schemas(Chat::Task(1)).is_empty());
