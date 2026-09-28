@@ -13,6 +13,50 @@ import type { StagedAttachments } from './useStagedAttachments'
 // なのでトークン化しない。
 const PREVIEW_DIALOG_WIDTH = 'min(48rem, 100%)'
 
+// 画像の添付のdata URLを、添付IDで使い回す。実体は内容ハッシュで置かれ変わらない。会話の
+// 切り替えや設定画面からの戻りで会話欄が作り直されるたびに、原寸の画像をIPCで取り直さない
+// ため。合計の長さに上限を置き、最後に使ったのが古いものから捨てる(Mapの並び順で持つ)。
+const IMAGE_CACHE_MAX_CHARS = 64 * 1024 * 1024
+const imageCache = new Map<number, Promise<string>>()
+// 読み終えた分の長さ。読み込み中の分は数えず、捨てる対象にもしない。
+const imageCacheSizes = new Map<number, number>()
+let imageCacheChars = 0
+
+function loadImage(attachmentId: number): Promise<string> {
+  const cached = imageCache.get(attachmentId)
+  if (cached) {
+    imageCache.delete(attachmentId)
+    imageCache.set(attachmentId, cached)
+    return cached
+  }
+  const loading = readImageAttachment(attachmentId)
+  imageCache.set(attachmentId, loading)
+  loading.then(
+    (url) => {
+      if (imageCache.get(attachmentId) !== loading) return
+      imageCacheSizes.set(attachmentId, url.length)
+      imageCacheChars += url.length
+      evictImages()
+    },
+    // 失敗は覚えない(次に開いたときに読み直す)。
+    () => {
+      if (imageCache.get(attachmentId) === loading) imageCache.delete(attachmentId)
+    },
+  )
+  return loading
+}
+
+function evictImages() {
+  for (const id of imageCache.keys()) {
+    if (imageCacheChars <= IMAGE_CACHE_MAX_CHARS) return
+    const size = imageCacheSizes.get(id)
+    if (size === undefined) continue
+    imageCache.delete(id)
+    imageCacheSizes.delete(id)
+    imageCacheChars -= size
+  }
+}
+
 /** 発言に付いた添付。押すと、画像は拡大、テキストは全文、その他は入っているフォルダを開く。 */
 export function MessageAttachments({ attachments }: { attachments: AttachmentView[] }) {
   if (attachments.length === 0) return null
@@ -44,7 +88,7 @@ function ImageChip({ attachment, size }: { attachment: AttachmentView; size: str
 
   useEffect(() => {
     let alive = true
-    readImageAttachment(attachment.id).then(
+    loadImage(attachment.id).then(
       (loaded) => alive && setUrl(loaded),
       (e) => alive && setError(failureText(e)),
     )
