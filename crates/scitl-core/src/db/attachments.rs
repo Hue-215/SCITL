@@ -95,17 +95,18 @@ pub fn insert(conn: &Connection, message_id: i64, new: &NewAttachment) -> Result
     Ok(conn.last_insert_rowid())
 }
 
+/// 1つの会話(`?1`)の、論理削除していない発言に付いた添付を引く`SELECT`。列は発言のidと、
+/// 2列目から[`attachment_from_row`]の並び。
+const SELECT_IN_CHAT: &str = "SELECT a.message_id, a.id, a.original_name, a.mime_type, a.kind,
+        a.size_bytes, a.content_text, a.file_hash
+    FROM attachments a
+    JOIN messages m ON m.id = a.message_id
+    WHERE m.task_id IS ?1 AND m.deleted_at IS NULL";
+
 /// 1つの会話の、論理削除していない発言に付いた添付を、中身ごと発言ごとにまとめる。添付の
 /// 並びは付けた順。表示から外れる行(古い試行等)の分も入るが、引く側が自分の行の分だけを使う。
 pub fn for_chat(conn: &Connection, chat: Chat) -> Result<HashMap<i64, Vec<Attachment>>> {
-    let mut stmt = conn.prepare(
-        "SELECT a.message_id, a.id, a.original_name, a.mime_type, a.kind, a.size_bytes,
-                a.content_text, a.file_hash
-         FROM attachments a
-         JOIN messages m ON m.id = a.message_id
-         WHERE m.task_id IS ?1 AND m.deleted_at IS NULL
-         ORDER BY a.id",
-    )?;
+    let mut stmt = conn.prepare(&format!("{SELECT_IN_CHAT} ORDER BY a.id"))?;
     let rows = stmt.query_map([chat.task_id()], |row| {
         Ok((row.get::<_, i64>(0)?, attachment_from_row(row, 1)?))
     })?;
@@ -148,6 +149,19 @@ pub fn get(conn: &Connection, id: i64) -> Result<Attachment> {
          FROM attachments WHERE id = ?1",
         [id],
         |row| attachment_from_row(row, 0),
+    )
+    .optional()?
+    .ok_or(CoreError::AttachmentNotFound(id))
+}
+
+/// 1つの会話の添付を1件引く。他の会話の添付と、論理削除した発言の添付は、見つからない
+/// ものとして扱う([`for_chat`]と同じ範囲)。モデルが添付IDを選ぶ経路で、対象の会話を
+/// 文脈から固定するため(docs/spec/principles.md 3節)。
+pub fn get_in_chat(conn: &Connection, chat: Chat, id: i64) -> Result<Attachment> {
+    conn.query_row(
+        &format!("{SELECT_IN_CHAT} AND a.id = ?2"),
+        rusqlite::params![chat.task_id(), id],
+        |row| attachment_from_row(row, 1),
     )
     .optional()?
     .ok_or(CoreError::AttachmentNotFound(id))
@@ -298,6 +312,30 @@ mod tests {
         assert_eq!(names, ["a.txt", "b.png"]);
         assert!(!views.contains_key(&second));
         assert!(views_for_chat(&conn, Chat::General).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gets_an_attachment_only_within_its_chat() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = db::tasks::create_task(&conn).unwrap().id;
+        let other_task = db::tasks::create_task(&conn).unwrap().id;
+        let kept = insert(&conn, user_message(&conn, task_id), &text("a.txt", "a")).unwrap();
+        let deleted_message = user_message(&conn, task_id);
+        let deleted = insert(&conn, deleted_message, &text("b.txt", "b")).unwrap();
+        messages::soft_delete_message(&conn, deleted_message).unwrap();
+
+        let chat = Chat::Task(task_id);
+        assert_eq!(get_in_chat(&conn, chat, kept).unwrap().view.id, kept);
+        for (chat, id) in [
+            (chat, deleted),
+            (Chat::Task(other_task), kept),
+            (Chat::General, kept),
+        ] {
+            assert!(
+                matches!(get_in_chat(&conn, chat, id), Err(CoreError::AttachmentNotFound(n)) if n == id),
+                "{chat}: {id}"
+            );
+        }
     }
 
     #[test]

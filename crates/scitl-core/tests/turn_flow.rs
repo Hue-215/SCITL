@@ -801,6 +801,7 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
         ChatMessage::Tool {
             tool_call_id,
             content,
+            ..
         } => {
             assert_eq!(tool_call_id.as_deref(), Some("call_1"));
             assert!(content.as_str().contains("買い出し"));
@@ -2505,7 +2506,10 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     .unwrap();
 
     let offered = adapter.offered.lock().unwrap();
-    assert_eq!(offered[0], vec!["get_task_list", "get_task_detail"]);
+    assert_eq!(
+        offered[0],
+        vec!["get_task_list", "get_task_detail", "read_attachment"]
+    );
     let system = system_prompt_content(&adapter.sent.lock().unwrap()[0][0]).to_string();
     assert!(system.contains("current tasks (not archived)"));
     assert!(!system.contains("current task state"));
@@ -2857,4 +2861,188 @@ async fn attachments_reach_the_model_with_the_message() {
     assert!(text.as_str().contains(r#""delivered":"image""#));
     assert_eq!(images.len(), 1);
     assert!(images[0].data_url().starts_with("data:image/png;base64,"));
+}
+
+/// 過去の添付は、添付の読み込みツールで読み直せる(Issue #213)。中身(本文・画像)は読んだ
+/// ターンでだけ送り、次のターンの履歴には名前などの情報だけが残る。
+#[tokio::test]
+async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.image = true;
+    let attachments = context_without_provider().attachments;
+
+    let first = TextAdapter::one("見ました");
+    let text = staged_token(
+        attachments
+            .stage("memo.txt".into(), b"memo".to_vec())
+            .unwrap(),
+    );
+    let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&first)
+        },
+        chat,
+        UserInput {
+            text: "これ".to_string(),
+            attachments: vec![text, image],
+        },
+    )
+    .await
+    .unwrap();
+    let (text_id, image_id) = {
+        let conn = db.lock().unwrap();
+        let views = db::attachments::views_for_chat(&conn, chat).unwrap();
+        let views = views.values().next().unwrap();
+        (views[0].id, views[1].id)
+    };
+
+    let reader = ScriptedToolsAdapter::new(vec![
+        ("read_attachment", json!({ "attachment_id": text_id })),
+        ("read_attachment", json!({ "attachment_id": image_id })),
+    ]);
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&reader)
+        },
+        chat,
+        "さっきの画像をもう一度".to_string(),
+    )
+    .await
+    .unwrap();
+    {
+        let sent = reader.sent.lock().unwrap();
+        // 読む前は、前の発言の画像は名前だけ。
+        let ChatMessage::User { text, images } = &sent[0][1] else {
+            panic!("expected the earlier user message, got {:?}", sent[0][1]);
+        };
+        assert!(text.as_str().contains(r#""delivered":"name_only""#));
+        assert!(images.is_empty());
+        let results: Vec<_> = sent[1]
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Tool {
+                    content, images, ..
+                } => Some((content.as_str(), images.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].0.contains(r#""content":"memo""#));
+        assert_eq!(results[0].1, 0);
+        assert!(results[1].0.contains(r#""delivered":"image""#));
+        assert_eq!(results[1].1, 1);
+    }
+
+    let next = TextAdapter::one("はい");
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&next)
+        },
+        chat,
+        "ありがとう".to_string(),
+    )
+    .await
+    .unwrap();
+    let history = next.sent_histories().remove(0);
+    let results: Vec<_> = history
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Tool {
+                content, images, ..
+            } => Some((content, images)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].0.as_str().contains(r#""name":"memo.txt""#));
+    assert!(results[1].0.as_str().contains(r#""name":"photo.png""#));
+    for (content, images) in results {
+        assert!(!content.as_str().contains(r#""content":"#));
+        assert!(images.is_empty());
+    }
+}
+
+/// 読み込んだ画像の実体を読めなくても、ツールの失敗としてモデルに返し、ターンは続ける
+/// (principles.md 3節「失敗しても会話を止めない」)。
+#[tokio::test]
+async fn an_image_that_cannot_be_read_is_reported_to_the_model() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.image = true;
+    let root = std::env::temp_dir().join(format!("scitl-turn-flow-{}", ulid::Ulid::new()));
+    let attachments: &'static Attachments = Box::leak(Box::new(Attachments::new(
+        AttachmentStore::new(root.join("blobs"), root.join("revealed")),
+    )));
+
+    let first = TextAdapter::one("見ました");
+    let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&first)
+        },
+        chat,
+        UserInput {
+            text: "これ".to_string(),
+            attachments: vec![image],
+        },
+    )
+    .await
+    .unwrap();
+    let attachment_id = {
+        let conn = db.lock().unwrap();
+        let views = db::attachments::views_for_chat(&conn, chat).unwrap();
+        views.values().next().unwrap()[0].id
+    };
+    std::fs::remove_dir_all(&root).unwrap();
+
+    let reader = ScriptedToolsAdapter::new(vec![(
+        "read_attachment",
+        json!({ "attachment_id": attachment_id }),
+    )]);
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            capabilities,
+            attachments,
+            ..context(&reader)
+        },
+        chat,
+        "さっきの画像をもう一度".to_string(),
+    )
+    .await
+    .unwrap();
+    {
+        let sent = reader.sent.lock().unwrap();
+        let ChatMessage::Tool {
+            content, images, ..
+        } = sent[1].last().unwrap()
+        else {
+            panic!("expected the tool result last");
+        };
+        assert!(content.as_str().contains(r#""error""#));
+        assert!(images.is_empty());
+    }
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    assert_eq!(reply_of(&messages), "確認しました");
 }

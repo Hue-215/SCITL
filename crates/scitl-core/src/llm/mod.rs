@@ -85,6 +85,9 @@ pub enum ChatMessage {
         /// (払い出さないプロバイダにはこのフィールド自体を送らない。architecture.md 3節)。
         tool_call_id: Option<String>,
         content: PromptText,
+        /// 結果として返す画像(添付の読み込み。Issue #213)。ツール結果に画像を載せられない
+        /// APIがあるため、リクエストでどう表すかはアダプタが決める。
+        images: Vec<InlineImage>,
     },
 }
 
@@ -98,7 +101,7 @@ impl ChatMessage {
     }
 }
 
-/// ユーザー発言と一緒に送る画像。MIMEは実体の先頭バイトから決めたもの
+/// ユーザー発言・ツール結果と一緒に送る画像。MIMEは実体の先頭バイトから決めたもの
 /// (`attachments::image_mime_type`)に限る。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InlineImage {
