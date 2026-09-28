@@ -83,8 +83,8 @@ async fn save_user_message(
     require_content(&text, taken.len())?;
     let rows = ctx.attachments.store_taken(taken).await?;
     with_conn(db, move |conn| {
-        require_chat(conn, chat)?;
         in_transaction(conn, |conn| {
+            require_chat(conn, chat)?;
             let message_id = messages::insert_message(
                 conn,
                 NewMessage {
@@ -174,11 +174,10 @@ pub async fn edit_user_message(
 ) -> Result<()> {
     let _generating = begin_generating(ctx.generating, chat)?;
     with_conn(db.clone(), move |conn| {
-        let target = find_in_chat(conn, chat, message_id)?;
-        expect_normal(&target, &[Role::User])?;
-
         // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
         in_transaction(conn, |conn| {
+            let target = find_in_chat(conn, chat, message_id)?;
+            expect_normal(&target, &[Role::User])?;
             messages::soft_delete_normal_from(conn, chat, target.id)?;
             let message_id = messages::insert_message(
                 conn,
@@ -219,20 +218,19 @@ pub async fn retry_reply(
 ) -> Result<()> {
     let _generating = begin_generating(ctx.generating, chat)?;
     let attempt = with_conn(db.clone(), move |conn| {
-        let target = find_in_chat(conn, chat, message_id)?;
-        expect_normal(&target, &[Role::Assistant, Role::Error])?;
-        let turn_id = target.turn_id.clone().ok_or_else(|| {
-            CoreError::InvalidMessageOperation("reply has no turn_id to retry".to_string())
-        })?;
-
-        // 採番を削除より先に済ませ、削除をこのクロージャ最後の書き込みにする。削除のあとで
-        // 失敗すると、エラー発言を残さないまま返信だけが会話から消える。
-        let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
-        messages::soft_delete_normal_from(conn, chat, message_id)?;
-        Ok(Attempt {
-            chat,
-            turn_id,
-            attempt_no,
+        in_transaction(conn, |conn| {
+            let target = find_in_chat(conn, chat, message_id)?;
+            expect_normal(&target, &[Role::Assistant, Role::Error])?;
+            let turn_id = target.turn_id.clone().ok_or_else(|| {
+                CoreError::InvalidMessageOperation("reply has no turn_id to retry".to_string())
+            })?;
+            let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
+            messages::soft_delete_normal_from(conn, chat, message_id)?;
+            Ok(Attempt {
+                chat,
+                turn_id,
+                attempt_no,
+            })
         })
     })
     .await?;
@@ -252,8 +250,10 @@ pub async fn delete_message(
 ) -> Result<()> {
     let _generating = begin_generating(generating, chat)?;
     with_conn(db, move |conn| {
-        let target = find_in_chat(conn, chat, message_id)?;
-        messages::soft_delete_message(conn, target.id)
+        in_transaction(conn, |conn| {
+            let target = find_in_chat(conn, chat, message_id)?;
+            messages::soft_delete_message(conn, target.id)
+        })
     })
     .await
 }
