@@ -5,9 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use ulid::Ulid;
 
 use crate::error::{CoreError, Result};
+use crate::files::{describe_io_error, write_durably};
 use crate::llm::InlineImage;
 use crate::text::is_invisible_format;
 
@@ -29,8 +29,8 @@ impl AttachmentStore {
 
     /// 実体を置いてハッシュ(SHA-256の小文字16進)を返す。同じ内容が既にあれば書かない。
     ///
-    /// 同じディレクトリの一時ファイルに書いてからハッシュの名前へ移す。途中まで書いたファイルが
-    /// ハッシュの名前で残ると「既に置いてある」とみなされ、以降の同じ内容の添付がすべて
+    /// 途中まで書いたファイルを残さない書き方をする([`write_durably`])。ハッシュの名前で
+    /// 壊れたファイルが残ると「既に置いてある」とみなされ、以降の同じ内容の添付がすべて
     /// 壊れた実体を共有してしまうため。
     pub fn put(&self, bytes: &[u8]) -> Result<String> {
         let hash = format!("{:x}", Sha256::digest(bytes));
@@ -39,19 +39,12 @@ impl AttachmentStore {
             return Ok(hash);
         }
         fs::create_dir_all(&self.blobs).map_err(io_error("create the attachment directory"))?;
-        let temp = self.blobs.join(format!(".{hash}.{}.tmp", Ulid::new()));
-        fs::write(&temp, bytes).map_err(io_error("write an attachment"))?;
-        match fs::rename(&temp, &path) {
+        match write_durably(&path, bytes) {
             Ok(()) => Ok(hash),
-            // Windowsは移し先が既にあると失敗する。同時に同じ内容を置いた相手が先に済ませた。
-            Err(_) if path.exists() => {
-                let _ = fs::remove_file(&temp);
-                Ok(hash)
-            }
-            Err(e) => {
-                let _ = fs::remove_file(&temp);
-                Err(io_error("store an attachment")(e))
-            }
+            // 置き換えに失敗しても、同時に同じ内容を置いた相手が先に済ませたなら同じ実体がある
+            // (Windowsは、相手が開いている移し先を置き換えられない)。
+            Err(_) if path.exists() => Ok(hash),
+            Err(e) => Err(io_error("store an attachment")(e)),
         }
     }
 
@@ -99,9 +92,8 @@ impl AttachmentStore {
     }
 }
 
-/// 失敗の文言にパスを載せない(エラーは画面にそのまま出る)。
 fn io_error(action: &'static str) -> impl Fn(std::io::Error) -> CoreError {
-    move |e| CoreError::Attachment(format!("failed to {action}: {:?}", e.kind()))
+    move |e| CoreError::Attachment(describe_io_error(action, &e))
 }
 
 /// どのOSでも1つのファイル名として置ける形にする。元の名前(利用者が付けたもの)は
