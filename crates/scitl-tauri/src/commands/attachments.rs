@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use scitl_core::attachments::{Limits, StageOutcome, LIMITS};
+use scitl_core::attachments::{PickingLimits, StageOutcome, LIMITS};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::State;
 
@@ -47,8 +47,8 @@ pub fn discard_staged_attachment(state: State<'_, AppState>, token: String) {
 
 /// 受け付ける大きさの上限。画面が大きすぎるファイルを読む前に弾くのに使う。
 #[tauri::command]
-pub fn get_attachment_limits() -> Limits {
-    LIMITS
+pub fn get_attachment_limits() -> PickingLimits {
+    LIMITS.for_picking()
 }
 
 #[tauri::command]

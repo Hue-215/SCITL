@@ -124,11 +124,9 @@ export interface ExportSummary {
   missing_attachments: number
 }
 
-// crates/scitl-core/src/attachments/classify.rs の Limits。
+// crates/scitl-core/src/attachments/classify.rs の PickingLimits。
 export interface AttachmentLimits {
-  text_bytes: number
-  image_bytes: number
-  other_bytes: number
+  largest_bytes: number
   per_message: number
 }
 
