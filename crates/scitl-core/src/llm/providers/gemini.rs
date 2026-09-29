@@ -284,15 +284,33 @@ fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
                 content: result,
                 images,
             } => {
-                steps.push(json!({
+                let call_id = tool_call_id.clone().unwrap_or_default();
+                let mut step = json!({
                     "type": "function_result",
-                    "call_id": tool_call_id.clone().unwrap_or_default(),
+                    "call_id": call_id,
                     "result": content(result.as_str(), images),
-                }));
+                });
+                if let Some(name) = called_name(&steps, &call_id) {
+                    step["name"] = json!(name);
+                }
+                steps.push(step);
             }
         }
     }
     ((!system.is_empty()).then_some(system), steps)
+}
+
+/// `call_id`の呼び出しの名前。結果は呼び出しの後ろに並ぶので、組み立て済みのステップから引く。
+/// 名前は定義の上では任意だが、公式ドキュメントの例はどれも結果に名前を添えている。
+fn called_name(steps: &[Value], call_id: &str) -> Option<String> {
+    steps
+        .iter()
+        .rev()
+        .find(|s| {
+            s.get("type").and_then(Value::as_str) == Some("function_call")
+                && s.get("id").and_then(Value::as_str) == Some(call_id)
+        })
+        .and_then(|s| s.get("name")?.as_str().map(str::to_string))
 }
 
 /// 本文を先に、画像をその後に並べる。
@@ -653,6 +671,7 @@ mod tests {
             json!({"type": "function_call", "id": "call_1", "name": "add_steps", "arguments": {"descriptions": ["draft"]}})
         );
         assert_eq!(input[3]["call_id"], "call_1");
+        assert_eq!(input[3]["name"], "add_steps");
         assert_eq!(
             input[3]["result"][0],
             json!({"type": "text", "text": "{\"ok\":true}"})
