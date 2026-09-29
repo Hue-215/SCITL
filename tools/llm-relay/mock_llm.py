@@ -51,7 +51,10 @@ def write_new(prefix, data):
 def expire(rid):
     """答えずに終わった req を、llm_relay.py next が拾わない名前にする。"""
     path = os.path.join(RELAY, f"req-{rid}.json")
-    os.rename(path, os.path.join(RELAY, f"req-{rid}.expired.json"))
+    try:
+        os.rename(path, os.path.join(RELAY, f"req-{rid}.expired.json"))
+    except FileNotFoundError:  # 手で消された等。拾わせないという目的は果たせている
+        pass
 
 
 def reset_box():
@@ -215,6 +218,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # 片付けは待ち受けに成功してから。二重に起動したとき、後の方がポートを取れずに終わる前に
+    # 動いている方のリクエストを片付けてしまわないように
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     reset_box()
     print(f"[mock] listening on 127.0.0.1:{PORT}, relay dir {RELAY}", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    server.serve_forever()

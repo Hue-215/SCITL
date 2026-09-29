@@ -155,7 +155,10 @@ def main():
         while True:
             p = pending()
             if p:
-                return show(p[0])
+                try:
+                    return show(p[0])
+                except FileNotFoundError:  # 見つけてから開くまでの間に時間切れになった
+                    continue
             if os.path.exists(os.path.join(RELAY, "done")):
                 print("DONE")
                 return
@@ -167,6 +170,8 @@ def main():
         rid = sys.argv[2]
         if not re.fullmatch(r"\d{4,}", rid):
             sys.exit(f"bad request id: {rid}")
+        if not os.path.exists(os.path.join(RELAY, f"req-{rid}.json")):
+            print(f"warning: request {rid} is expired or unknown; nobody is waiting for this reply")
         res = json.loads(sys.stdin.read())
         path = os.path.join(RELAY, f"res-{rid}.json")
         with open(path + ".tmp", "w") as f:
