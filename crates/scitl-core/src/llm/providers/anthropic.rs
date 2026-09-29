@@ -450,15 +450,11 @@ fn http_error(status: StatusCode, body: &str, api_key: &str, thinking: Thinking)
         if message.contains("prompt is too long") || message.contains("context window") {
             return LlmError::ContextExceeded(detail());
         }
-        match thinking {
-            // adaptiveの思考を持たないモデル(思考の指定は予算でしか受け付けない)。
-            Thinking::Adaptive(_) if message.contains("adaptive thinking is not supported") => {
-                return LlmError::ReasoningEffortRejected(detail());
-            }
-            Thinking::Adaptive(_) if message.contains("output_config.effort") => {
-                return LlmError::ReasoningEffortValueRejected(detail());
-            }
-            _ => {}
+        // adaptiveの思考を持たないモデル(思考の指定は予算でしか受け付けない)。
+        if matches!(thinking, Thinking::Adaptive(_))
+            && message.contains("adaptive thinking is not supported")
+        {
+            return LlmError::ReasoningEffortRejected(detail());
         }
     }
     LlmError::from_status(status, body, api_key)

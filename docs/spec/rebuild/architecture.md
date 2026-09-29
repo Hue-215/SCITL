@@ -212,7 +212,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   プロンプトが常に読まれる)、リクエスト全体にも`cache_control`を付けて、伸びていく会話の末尾に
   目印を自動で置かせる
 - 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は、途中まで書いた本文を渡さずに
-  `LlmError::Refused`にし、断られたことが分かるエラー発言にする。`max_tokens`と
+  `LlmError::Refused`にし、断られたことが分かるエラー発言にする(OpenAI互換の
+  `finish_reason: "content_filter"`も同じ扱い)。`max_tokens`と
   `model_context_window_exceeded`は長さによる打ち切り(`FinishReason::Length`)にする
 - 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする

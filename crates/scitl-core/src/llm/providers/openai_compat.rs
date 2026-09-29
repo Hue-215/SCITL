@@ -614,6 +614,17 @@ impl LlmAdapter for OpenAiCompatAdapter {
             .next()
             .ok_or(LlmError::EmptyResponse)?;
 
+        // 安全上の判定で打ち切られた応答は、途中まで書いた本文も渡さない(イベントを渡す前に
+        // 判定する)。
+        if choice.finish_reason.as_deref() == Some("content_filter") {
+            return Err(LlmError::Refused(ErrorDetail::http(
+                reqwest::StatusCode::OK,
+                "finish_reason: content_filter",
+                key,
+            ))
+            .into());
+        }
+
         // 思考を本文・ツール呼び出しより先に置く(非ストリーミングで生成順は分からないが、
         // 一般的な順序に合わせる)。
         if let Some(reasoning) = choice.message.reasoning_content {
@@ -637,8 +648,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
         let finish_reason = match choice.finish_reason.as_deref() {
             Some("tool_calls") => FinishReason::ToolCall,
             Some("length") => FinishReason::Length,
-            Some("stop") | None => FinishReason::Stop,
-            Some(_) => FinishReason::Stop,
+            Some(_) | None => FinishReason::Stop,
         };
         on_event(ResponseEvent::Done { finish_reason });
 
@@ -796,6 +806,27 @@ mod tests {
             ResponseEvent::ToolCall { name, arguments: ToolArguments::Malformed { raw, .. }, .. }
                 if name == "update_task" && raw == "{\"title\": "
         )));
+    }
+
+    #[tokio::test]
+    async fn a_content_filter_stop_is_a_refusal_without_passing_the_partial_reply() {
+        let (base_url, handle) = spawn_capturing(
+            r#"{"choices":[{"message":{"content":"partial"},"finish_reason":"content_filter"}]}"#,
+        );
+        let adapter =
+            OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT)
+                .unwrap();
+        let mut events = Vec::new();
+        let result = adapter
+            .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
+            .await;
+        handle.join().unwrap();
+
+        assert!(
+            matches!(result, Err(CoreError::Llm(LlmError::Refused(_)))),
+            "{result:?}"
+        );
+        assert!(events.is_empty());
     }
 
     #[tokio::test]

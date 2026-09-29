@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::error::CoreError;
-use crate::llm::{DetectedCapabilities, LlmAdapter, LlmError};
+use crate::llm::{DetectedCapabilities, ErrorDetail, LlmAdapter, LlmError};
 use crate::secrets;
 
 use anthropic::AnthropicAdapter;
@@ -172,14 +172,15 @@ async fn send_with_key(
     let request = match header {
         _ if key.is_empty() => request,
         KeyHeader::Bearer => request.bearer_auth(key),
-        // 載せられない文字を含む鍵は、送るときに組み立ての失敗(`InvalidRequest`)になる。
-        KeyHeader::XApiKey => match reqwest::header::HeaderValue::from_str(key) {
-            Ok(mut value) => {
-                value.set_sensitive(true);
-                request.header("x-api-key", value)
-            }
-            Err(_) => request.header("x-api-key", key),
-        },
+        KeyHeader::XApiKey => {
+            let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
+                LlmError::InvalidRequest(ErrorDetail::internal(
+                    "the API key contains characters that cannot be sent in a header",
+                ))
+            })?;
+            value.set_sensitive(true);
+            request.header("x-api-key", value)
+        }
     };
     request
         .send()
