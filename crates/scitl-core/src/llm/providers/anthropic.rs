@@ -35,7 +35,7 @@ impl AnthropicAdapter {
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
-        let base_url = parse_base_url(&base_url.into())?;
+        let base_url = super::parse_base_url(&base_url.into())?;
         let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
         Ok(Self {
             client,
@@ -44,19 +44,6 @@ impl AnthropicAdapter {
             model: model.into(),
         })
     }
-}
-
-/// `base_url`の検証。平文の`http://`で鍵を送れる範囲は[`ExternalUrl::parse`]が決める。
-pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
-    parse_base_url(base_url).map(drop)
-}
-
-fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
-    ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)
-}
-
-fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreError> {
-    base_url.join(path).map_err(CoreError::ProviderConfig)
 }
 
 const MESSAGES: &str = "v1/messages";
@@ -69,9 +56,6 @@ const API_VERSION: &str = "2023-06-01";
 /// 呼び出しで応答の待ち時間が長くなりすぎない値にする。
 const MAX_TOKENS: u32 = 16_000;
 
-/// 一覧・能力の問い合わせは生成を待たずに返るので、応答タイムアウトの設定は使わない。
-const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// 鍵と版のヘッダーを付けて送る。
 async fn send(
     request: reqwest::RequestBuilder,
@@ -80,7 +64,7 @@ async fn send(
     super::send_with_key(
         request.header("anthropic-version", API_VERSION),
         api_key,
-        KeyHeader::XApiKey,
+        KeyHeader::Named("x-api-key"),
     )
     .await
 }
@@ -89,17 +73,18 @@ async fn send(
 
 /// `GET /v1/models`で、提供されるモデルのIDを取得する。名前順に並べ、重複と空の名前を除く。
 pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
-    let base_url = parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(METADATA_TIMEOUT))?;
+    let base_url = super::parse_base_url(base_url)?;
+    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
     let mut names = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let mut url = endpoint(&base_url, MODELS)?;
+        let mut url = super::endpoint(&base_url, MODELS)?;
         url.query_pairs_mut().append_pair("limit", "1000");
         if let Some(after) = &after {
             url.query_pairs_mut().append_pair("after_id", after);
         }
-        let page: ModelPage = get_json(&client, url, api_key).await?;
+        let page: ModelPage =
+            super::read_success_json(send(client.get(url), api_key).await?, api_key).await?;
         names.extend(
             page.data
                 .into_iter()
@@ -122,11 +107,11 @@ pub async fn detect(
     api_key: &SecretString,
     models: &[String],
 ) -> Result<HashMap<String, DetectedCapabilities>, CoreError> {
-    let base_url = parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(METADATA_TIMEOUT))?;
+    let base_url = super::parse_base_url(base_url)?;
+    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
     let mut found = HashMap::new();
     for model in models {
-        let mut url = endpoint(&base_url, MODELS)?;
+        let mut url = super::endpoint(&base_url, MODELS)?;
         url.path_segments_mut()
             .map_err(|()| CoreError::ProviderConfig("failed to build endpoint".to_string()))?
             .push(model);
@@ -134,29 +119,10 @@ pub async fn detect(
         if response.status() == StatusCode::NOT_FOUND {
             continue;
         }
-        let key = api_key.expose_secret();
-        let response = super::reject_failure(response, |status, body| {
-            LlmError::from_status(status, body, key)
-        })
-        .await?;
-        let info: ModelInfo = super::read_json(response, api_key).await?;
+        let info: ModelInfo = super::read_success_json(response, api_key).await?;
         found.insert(model.clone(), info.detected());
     }
     Ok(found)
-}
-
-async fn get_json<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
-    url: reqwest::Url,
-    api_key: &SecretString,
-) -> Result<T, CoreError> {
-    let response = send(client.get(url), api_key).await?;
-    let key = api_key.expose_secret();
-    let response = super::reject_failure(response, |status, body| {
-        LlmError::from_status(status, body, key)
-    })
-    .await?;
-    Ok(super::read_json(response, api_key).await?)
 }
 
 #[derive(Deserialize)]
@@ -331,7 +297,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMess
                                 "type": "tool_use",
                                 "id": call.id.clone().unwrap_or_default(),
                                 "name": call.name,
-                                "input": tool_input(&call.arguments),
+                                "input": super::object_arguments(&call.arguments),
                             })
                         }));
                         blocks
@@ -399,15 +365,6 @@ fn image_block(image: &crate::llm::InlineImage) -> Value {
     })
 }
 
-/// `tool_use`の`input`はオブジェクトに限られる。この方言の応答から来た呼び出しは常に
-/// オブジェクトなので、そうでないのは別の方言で実行した記録だけで、空のオブジェクトとして送る。
-fn tool_input(arguments: &ToolArguments) -> Value {
-    match arguments {
-        ToolArguments::Valid { value } if value.is_object() => value.clone(),
-        _ => json!({}),
-    }
-}
-
 /// プレビューの本文で、画像の本体(`source.data`)だけを長さに縮める
 /// (`LlmAdapter::request_preview`)。
 fn abbreviate_images(value: &mut Value) {
@@ -473,7 +430,7 @@ impl AnthropicAdapter {
         thinking: Thinking,
     ) -> Result<MessageResponse, LlmError> {
         let body = request_body(&self.model, messages, tools, thinking);
-        let endpoint = endpoint(&self.base_url, MESSAGES).map_err(|_| {
+        let endpoint = super::endpoint(&self.base_url, MESSAGES).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
         let response = send(self.client.post(endpoint).json(&body), &self.api_key).await?;
@@ -598,64 +555,11 @@ impl LlmAdapter for AnthropicAdapter {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
+    use super::super::test_server::spawn_server;
     use super::*;
     use crate::llm::{InlineImage, ToolCallRequest, ToolSchema};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-    /// 受けたリクエスト1件。ヘッダー部(小文字)と本文。
-    struct Received {
-        headers: String,
-        body: Value,
-    }
-
-    /// `responses`の数だけ接続を受け、順に`(状態コード, 本文)`を返す。受けたリクエストを返す。
-    fn spawn_server(
-        responses: Vec<(u16, &'static str)>,
-    ) -> (String, std::thread::JoinHandle<Vec<Received>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let handle = std::thread::spawn(move || {
-            let mut received = Vec::new();
-            for (status, body) in responses {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut raw = Vec::new();
-                let mut buf = [0u8; 8192];
-                let header_end = loop {
-                    let n = stream.read(&mut buf).unwrap();
-                    raw.extend_from_slice(&buf[..n]);
-                    if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break i + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
-                let length = headers
-                    .lines()
-                    .find_map(|l| l.strip_prefix("content-length: "))
-                    .map_or(0, |v| v.trim().parse::<usize>().unwrap());
-                while raw.len() < header_end + length {
-                    let n = stream.read(&mut buf).unwrap();
-                    raw.extend_from_slice(&buf[..n]);
-                }
-                let request_body = serde_json::from_slice(&raw[header_end..header_end + length])
-                    .unwrap_or(Value::Null);
-                let response = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                received.push(Received {
-                    headers,
-                    body: request_body,
-                });
-            }
-            received
-        });
-        (format!("http://{addr}"), handle)
-    }
 
     fn adapter(base_url: &str, key: &str) -> AnthropicAdapter {
         AnthropicAdapter::new(

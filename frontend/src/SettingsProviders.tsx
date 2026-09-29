@@ -29,21 +29,36 @@ import { useAsyncAction } from './useAsyncAction'
 const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
   open_ai_compat: 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com',
+  gemini: 'https://generativelanguage.googleapis.com',
 }
 
 const API_FORMAT_LABELS: Record<ApiFormat, MessageKey> = {
   open_ai_compat: 'settings.provider.formats.open_ai_compat',
   anthropic: 'settings.provider.formats.anthropic',
+  gemini: 'settings.provider.formats.gemini',
 }
 
-// Anthropic形式のベースURLは`/v1`を含まない(アダプタが`v1/messages`を足す)。OpenAI互換の
-// 癖で`/v1`まで書くと、存在しないパスに送ることになる。登録は止めず、ヒントで知らせる。
-function hasExtraPath(format: ApiFormat, baseUrl: string): boolean {
-  if (format !== 'anthropic') return false
+// Anthropic・Gemini形式のベースURLはAPIの版のパスを含まない(アダプタが`v1/messages`・
+// `v1beta/interactions`を足す)。OpenAI互換の癖で版まで書くと、存在しないパスに送ることになる。
+// 登録は止めず、ヒントで知らせる。
+const EXTRA_PATH_HINTS: Partial<Record<ApiFormat, { pattern: RegExp; hint: MessageKey }>> = {
+  anthropic: {
+    pattern: /\/v1(\/messages)?\/?$/,
+    hint: 'settings.provider.base_url_extra_path_anthropic',
+  },
+  gemini: {
+    pattern: /\/v1(beta)?(\/interactions|\/openai)?\/?$/,
+    hint: 'settings.provider.base_url_extra_path_gemini',
+  },
+}
+
+function extraPathHint(format: ApiFormat, baseUrl: string): MessageKey | null {
+  const rule = EXTRA_PATH_HINTS[format]
+  if (!rule) return null
   try {
-    return /\/v1(\/messages)?\/?$/.test(new URL(baseUrl.trim()).pathname)
+    return rule.pattern.test(new URL(baseUrl.trim()).pathname) ? rule.hint : null
   } catch {
-    return false
+    return null
   }
 }
 
@@ -518,6 +533,7 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
   const [apiFormat, setApiFormat] = useState<ApiFormat>('open_ai_compat')
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL_BY_FORMAT.open_ai_compat)
   const [apiKey, setApiKey] = useState('')
+  const pathHint = extraPathHint(apiFormat, baseUrl)
   // 失敗はフォームの直下に出し、入力は残す(Rust側の検証で弾かれても打ち直さずに済むように)。
   // 入力を空にするのは成功したときだけ。
   const submission = useAsyncAction()
@@ -561,9 +577,7 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
       <label className="settings-field">
         <span>{t('settings.provider.base_url_label')}</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
-        {hasExtraPath(apiFormat, baseUrl) && (
-          <p className="settings-hint">{t('settings.provider.base_url_extra_path')}</p>
-        )}
+        {pathHint && <p className="settings-hint">{t(pathHint)}</p>}
         <p className="settings-hint">
           {httpPlainTextHint(t('settings.provider.api_key_secret'))}
         </p>

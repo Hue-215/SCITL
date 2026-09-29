@@ -171,9 +171,8 @@ messages)。
 
 - 検査は文書の読み取りなので、本物との差は残る。アダプタが固まったら本物のAPIで一度確かめる
 - ストリーミング・サーバーツール・Files API・プロンプトキャッシュは扱わない
-- Gemini形式は未実装。公式ドキュメント(`ai.google.dev`・`docs.cloud.google.com`)を読める環境で、
-  どのAPI(Interactions API / `generateContent` / OpenAI互換の窓口)に対応するかを決めてから
-  検査を書く(#81)
+- Gemini形式(アプリはInteractions APIに対応。`architecture.md`「Gemini形式」)の受け口は無い。
+  足すなら、Interactions APIのリファレンスと`api-errors`のページを出典に検査を書く
 - LLM役は本物のモデルではない。言い回しやツールの選び方は本物と違いうるので、プロンプトの
   評価には使わない
 
