@@ -4,4 +4,4 @@ import type { AttachmentKind } from "./AttachmentKind";
 /**
  * [`Staged::stage`]の結果。
  */
-export type StageOutcome = { "status": "staged", token: string, kind: AttachmentKind, mime_type: string, size_bytes: number, } | { "status": "rejected", } & ({ "reason": "too_large", kind: AttachmentKind, limit_bytes: number, });
+export type StageOutcome = { "status": "staged", token: string, kind: AttachmentKind, mime_type: string, size_bytes: number, } | { "status": "rejected", } & ({ "reason": "too_large", kind: AttachmentKind, limit_bytes: number, } | { "reason": "too_many", limit: number, });

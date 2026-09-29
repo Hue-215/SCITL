@@ -46,6 +46,8 @@ pub enum Rejection {
         kind: AttachmentKind,
         limit_bytes: u64,
     },
+    /// 預かっている数が、1つの発言に付けられる数に達している。
+    TooMany { limit: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +105,11 @@ impl Staged {
                 reason: "attachment name must not be empty".to_string(),
             });
         }
+        // 中身を読む前に見て、受け付けない添付の正規化に時間を使わない。数は挿入のときにも
+        // ロックの中で見直す(その間に別の添付が預けられうるため)。
+        if let Some(rejected) = too_many(&self.lock()) {
+            return Ok(rejected);
+        }
         let classified = classify(&bytes);
         let limit_bytes = LIMITS.bytes_for(classified.kind);
         if bytes.len() as u64 > limit_bytes {
@@ -116,7 +123,11 @@ impl Staged {
         let (classified, bytes) = normalized(classified, bytes);
         let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
-        self.lock().insert(
+        let mut entries = self.lock();
+        if let Some(rejected) = too_many(&entries) {
+            return Ok(rejected);
+        }
+        entries.insert(
             token.clone(),
             Entry {
                 name,
@@ -178,6 +189,17 @@ impl Staged {
     }
 }
 
+/// 預かれる数は、1つの発言に付けられる数まで。画面は入力欄の添付をそれより多く持たないので、
+/// これを超えて預けようとするのは乗っ取られた画面だけになる。預かる合計量も、この数と種別ごとの
+/// 上限で抑えられる(送信までメモリに持つので、際限なく預けさせない)。
+fn too_many(entries: &HashMap<String, Entry>) -> Option<StageOutcome> {
+    (entries.len() >= LIMITS.per_message).then_some(StageOutcome::Rejected {
+        reason: Rejection::TooMany {
+            limit: LIMITS.per_message,
+        },
+    })
+}
+
 /// 画像なら正規化したものに置き換える。デコードできない画像は拒まず「その他」として預かる。
 /// その他は中身をデコードしないので、壊れた画像や展開爆弾を置いておいても害が無く、画面も
 /// 中身がモデルに渡らないことを既存の表示で伝えられる。
@@ -234,6 +256,25 @@ mod tests {
         assert!(staged.take(std::slice::from_ref(&a)).is_ok());
         staged.discard(&b);
         assert!(staged.take(&[b]).is_err());
+    }
+
+    #[test]
+    fn stages_at_most_as_many_as_a_message_can_carry() {
+        let staged = Staged::default();
+        let tokens: Vec<String> = (0..LIMITS.per_message)
+            .map(|i| token_of(staged.stage(format!("{i}.txt"), b"a".to_vec()).unwrap()))
+            .collect();
+        assert_eq!(
+            staged.stage("over.txt".into(), b"a".to_vec()).unwrap(),
+            StageOutcome::Rejected {
+                reason: Rejection::TooMany {
+                    limit: LIMITS.per_message
+                }
+            }
+        );
+        // 送信や破棄で空いた分は、また預けられる。
+        staged.discard(&tokens[0]);
+        token_of(staged.stage("again.txt".into(), b"a".to_vec()).unwrap());
     }
 
     #[test]
