@@ -9,9 +9,11 @@
 画像は box/img-NNNN-K.<形式> に書き出し、本文にはそのパスを <image: パス> として出す。
 """
 import base64
+import binascii
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -19,10 +21,13 @@ RELAY = os.environ.get("RELAY_DIR", os.path.join(os.path.dirname(__file__), "box
 SEEN = os.path.join(RELAY, ".last_shown_hash")
 # 思考の強さ・出力の上限など、応答の書き方に関わる指定。あればヘッダーに出す。
 SHOWN_PARAMS = ("max_tokens", "reasoning_effort", "thinking", "output_config")
+# 画像の拡張子。形式はリクエストの値なので、そのままファイル名に使わない。
+IMAGE_EXTS = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
 
 
 def pending():
-    reqs = sorted(f[4:8] for f in os.listdir(RELAY) if f.startswith("req-") and f.endswith(".json"))
+    reqs = sorted((m.group(1) for f in os.listdir(RELAY) if (m := re.fullmatch(r"req-(\d+)\.json", f))),
+                  key=int)
     return [r for r in reqs if not os.path.exists(os.path.join(RELAY, f"res-{r}.json"))]
 
 
@@ -35,10 +40,14 @@ class Images:
 
     def save(self, media_type, data):
         self.count += 1
-        ext = media_type.split("/")[-1].replace("jpeg", "jpg")
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            return f"<image: undecodable {media_type}>"
+        ext = IMAGE_EXTS.get(media_type, "bin")
         path = os.path.abspath(os.path.join(RELAY, f"img-{self.rid}-{self.count}.{ext}"))
         with open(path, "wb") as f:
-            f.write(base64.b64decode(data))
+            f.write(raw)
         return f"<image: {path}>"
 
     def from_url(self, url):
@@ -156,6 +165,8 @@ def main():
             time.sleep(0.5)
     elif cmd == "reply":
         rid = sys.argv[2]
+        if not re.fullmatch(r"\d{4,}", rid):
+            sys.exit(f"bad request id: {rid}")
         res = json.loads(sys.stdin.read())
         path = os.path.join(RELAY, f"res-{rid}.json")
         with open(path + ".tmp", "w") as f:

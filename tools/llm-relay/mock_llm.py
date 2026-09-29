@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""OpenAI互換の疑似APIサーバー。受けたリクエストを relay/req-NNNN.json に書き、
-LLM役(サブエージェント)が relay/res-NNNN.json を書くまで待って、それを応答として返す。
+"""OpenAI互換の疑似APIサーバー。受けたリクエストを box/req-NNNN.json に書き、
+LLM役(サブエージェント)が box/res-NNNN.json を書くまで待って、それを応答として返す。
 
 応答ファイルの形(OpenAIの message を簡略化したもの):
   {"content": "本文" | null,
@@ -10,6 +10,7 @@ LLM役(サブエージェント)が relay/res-NNNN.json を書くまで待って
 """
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -32,30 +33,48 @@ os.makedirs(RELAY, exist_ok=True)
 lock = threading.Lock()
 
 
-def next_id(prefix="req-"):
+def write_new(prefix, data):
+    """box/<prefix>-NNNN.json を書いて NNNN を返す。番号は既存の最大+1 で、決めてから書き終えるまで
+    ロックを持つ。件数から決めると、消したファイルの番号を使い回して残った応答と取り違える。
+    res も見るのは、req を手で消しても残った応答と番号が重ならないようにするため。"""
     with lock:
-        n = len([f for f in os.listdir(RELAY) if f.startswith(prefix)]) + 1
-        return f"{n:04d}"
+        taken = [int(m.group(1)) for f in os.listdir(RELAY)
+                 if (m := re.match(rf"(?:{prefix}|res)-(\d+)\.", f))]
+        rid = f"{max(taken, default=0) + 1:04d}"
+        path = os.path.join(RELAY, f"{prefix}-{rid}.json")
+        with open(path + ".tmp", "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.rename(path + ".tmp", path)
+    return rid
 
 
-def record(prefix, data):
-    """断ったリクエスト等を box/<prefix>-NNNN.json に残す(LLM役には渡さない)。"""
-    rid = next_id(prefix + "-")
-    with open(os.path.join(RELAY, f"{prefix}-{rid}.json"), "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def expire(rid):
+    """答えずに終わった req を、llm_relay.py next が拾わない名前にする。"""
+    path = os.path.join(RELAY, f"req-{rid}.json")
+    os.rename(path, os.path.join(RELAY, f"req-{rid}.expired.json"))
+
+
+def reset_box():
+    """前回の実行の名残を片付ける。起動し直した時点で、前のリクエストを待っている相手はいない。
+    done は次の next を即座に終わらせ、.last_shown_hash は新しいLLM役にシステムプロンプトと
+    ツール定義を見せなくする。"""
+    for name in ("done", ".last_shown_hash"):
+        if os.path.exists(os.path.join(RELAY, name)):
+            os.remove(os.path.join(RELAY, name))
+    for f in os.listdir(RELAY):
+        m = re.fullmatch(r"req-(\d+)\.json", f)
+        if m and not os.path.exists(os.path.join(RELAY, f"res-{m.group(1)}.json")):
+            expire(m.group(1))
 
 
 def relay(body):
     """リクエストをLLM役へ渡し、応答ファイルを待つ。時間切れなら None。"""
-    rid = next_id()
-    req_path = os.path.join(RELAY, f"req-{rid}.json")
+    rid = write_new("req", body)
     res_path = os.path.join(RELAY, f"res-{rid}.json")
-    with open(req_path + ".tmp", "w") as f:
-        json.dump(body, f, ensure_ascii=False, indent=2)
-    os.rename(req_path + ".tmp", req_path)
     deadline = time.time() + WAIT_SECS
     while not os.path.exists(res_path):
         if time.time() > deadline:
+            expire(rid)
             return None
         time.sleep(0.3)
     time.sleep(0.1)
@@ -107,7 +126,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def from_local_client(self):
+        """ブラウザで開いたページからの投げ込みを断る。本文はシェルを持つLLM役にそのまま見せるため。
+        ブラウザは別オリジンへのPOSTに Origin を付け、DNSリバインディングでは Host が別の名前になる。"""
+        if self.headers.get("Origin") is None and \
+                self.headers.get("Host") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}"):
+            return True
+        sys.stderr.write(f"[mock] FORBIDDEN Host={self.headers.get('Host')} Origin={self.headers.get('Origin')}\n")
+        self.send_json(403, {"error": {"message": "[mock wording] requests from browsers are not accepted"}})
+        return False
+
     def do_GET(self):
+        if not self.from_local_client():
+            return
         path = self.path.rstrip("/")
         if path.endswith("/models"):
             return self.send_json(200, {"object": "list", "data": [{"id": "relay-model"}]})
@@ -120,11 +151,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
+        if not self.from_local_client():
+            return
         path = self.path.rstrip("/")
         if path.endswith("/messages"):
-            return self.anthropic_messages()
-        if not path.endswith("/chat/completions"):
+            handler = self.anthropic_messages
+        elif path.endswith("/chat/completions"):
+            handler = self.chat_completions
+        else:
             return self.send_json(404, {"error": {"message": "not found"}})
+        try:
+            handler()
+        except Exception as e:
+            # LLM役の応答の書き損じ等。例外のまま切断すると、アダプタ側では原因の分からない
+            # 通信エラーになる。OpenAI互換・Anthropic形式のどちらの読み方でも文面が取れる形で返す
+            sys.stderr.write(f"[mock] ERROR {e!r}\n")
+            self.send_json(500, {"type": "error",
+                                 "error": {"type": "api_error", "message": f"[mock] {e!r}"}})
+
+    def chat_completions(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         body["_auth_header_present"] = bool(self.headers.get("Authorization"))
         res = relay(body)
@@ -137,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(err.pop("status", 500), {"error": err})
         self.send_json(200, completion(res))
 
-    def anthropic_messages(self, extra_headers=None):
+    def anthropic_messages(self):
         """Anthropic形式。先に anthropic_rules の検査を通し、断るものはLLM役へ渡さない。"""
         request_id = rules.new_request_id()
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -147,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             body, thinking_on = rules.check_body(raw, lint)
             rules.check_thinking_round_trip(body["messages"])
         except rules.ApiError as err:
-            record("rejected", {"status": err.status, "error": err.message, "lint": lint,
+            write_new("rejected", {"status": err.status, "error": err.message, "lint": lint,
                                 "body": raw.decode(errors="replace")})
             sys.stderr.write(f"[mock] REJECTED {err.status} {err.kind}: {err.message}\n")
             return self.send_json(err.status, rules.error_body(err, request_id),
@@ -170,5 +215,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    reset_box()
     print(f"[mock] listening on 127.0.0.1:{PORT}, relay dir {RELAY}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

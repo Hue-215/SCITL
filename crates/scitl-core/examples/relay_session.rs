@@ -1,6 +1,6 @@
 //! 疑似API(LLM役が中継する`tools/llm-relay/mock_llm.py`)を相手に、本物のアダプタとターンの
 //! 処理を通して会話を進める試験用のドライバー。GUIの送信と同じ入口(`create_task`・
-//! `open_task_chat`・`run_turn`)を呼ぶ。使い方は`tools/llm-relay/README.md`。
+//! `open_task_chat`・`run_turn`)を呼ぶ。使い方は`docs/llm-relay.md`。
 //!
 //! ```text
 //! cargo run -p scitl-core --example relay_session -- <DATA_DIR> <BASE_URL> <STEP>...
