@@ -39,7 +39,7 @@ async fn main() {
     let adapter = OpenAiCompatAdapter::new(
         base_url,
         SecretString::from("relay-dummy-key".to_string()),
-        "relay-model",
+        "dummy-o",
         // LLM役は人間並みに遅いので長めに待つ。
         Duration::from_secs(900),
     )
