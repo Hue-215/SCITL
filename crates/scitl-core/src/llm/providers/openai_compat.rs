@@ -28,7 +28,7 @@ impl OpenAiCompatAdapter {
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
-        let base_url = parse_base_url(&base_url.into())?;
+        let base_url = super::parse_base_url(&base_url.into())?;
         let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
         Ok(Self {
             client,
@@ -39,42 +39,18 @@ impl OpenAiCompatAdapter {
     }
 }
 
-/// `base_url`の検証。平文の`http://`で鍵を送れる範囲(ループバックとプライベートIPリテラル)は
-/// [`ExternalUrl::parse`]が決める。
-pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
-    parse_base_url(base_url).map(drop)
-}
-
-fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
-    ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)
-}
-
-/// `base_url`の下の`chat/completions`等のパス。
-fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreError> {
-    base_url.join(path).map_err(CoreError::ProviderConfig)
-}
-
-/// 一覧は生成を待たずに返るので、生成を待つための応答タイムアウト
-/// (`config::GeneralConfig::response_timeout`)は使わない。
-const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// `GET {base_url}/models`で、プロバイダーが提供するモデル名を取得する。名前順に並べ、
 /// 重複と空の名前を除く。問い合わせ先は`base_url`の下だけで、通信先は増やさない。
 pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
-    let base_url = parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(LIST_MODELS_TIMEOUT))?;
+    let base_url = super::parse_base_url(base_url)?;
+    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
     let response = super::send_with_key(
-        client.get(endpoint(&base_url, "models")?),
+        client.get(super::endpoint(&base_url, "models")?),
         api_key,
         super::KeyHeader::Bearer,
     )
     .await?;
-    let key = api_key.expose_secret();
-    let response = super::reject_failure(response, |status, body| {
-        LlmError::from_status(status, body, key)
-    })
-    .await?;
-    let parsed: ModelList = super::read_json(response, api_key).await?;
+    let parsed: ModelList = super::read_success_json(response, api_key).await?;
     let mut names: Vec<String> = parsed
         .data
         .into_iter()
@@ -597,7 +573,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
     ) -> Result<Replay, CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
-        let endpoint = endpoint(&self.base_url, CHAT_COMPLETIONS)?;
+        let endpoint = super::endpoint(&self.base_url, CHAT_COMPLETIONS)?;
         let request = self.client.post(endpoint).json(&body);
         let response =
             super::send_with_key(request, &self.api_key, super::KeyHeader::Bearer).await?;
@@ -859,66 +835,6 @@ mod tests {
         server.join().unwrap();
 
         assert!(matches!(result, Err(CoreError::Llm(LlmError::Auth(_)))));
-    }
-
-    #[test]
-    fn accepts_https_base_url() {
-        assert!(validate_base_url("https://api.openai.com/v1").is_ok());
-    }
-
-    #[test]
-    fn accepts_http_loopback_base_url() {
-        assert!(validate_base_url("http://127.0.0.1:8080/v1").is_ok());
-        assert!(validate_base_url("http://localhost:8080/v1").is_ok());
-        assert!(validate_base_url("http://[::1]:8080/v1").is_ok());
-    }
-
-    #[test]
-    fn accepts_http_private_ip_literal_base_url() {
-        // 境界値はnet.rsで確かめ、ここではLLMプロバイダー側にも効いていることだけを見る。
-        assert!(validate_base_url("http://192.168.1.107:11434/v1").is_ok());
-    }
-
-    #[test]
-    fn rejects_http_hostname_base_url() {
-        // ホスト名(localhost以外)は名前解決しないため、平文では常に拒否する(IPリテラルは許す)。
-        let err = validate_base_url("http://example.com/v1").unwrap_err();
-        assert!(matches!(err, CoreError::ProviderConfig(_)));
-    }
-
-    #[test]
-    fn rejects_unsupported_scheme() {
-        let err = validate_base_url("ftp://example.com/v1").unwrap_err();
-        assert!(matches!(err, CoreError::ProviderConfig(_)));
-    }
-
-    #[test]
-    fn rejects_base_url_with_query_fragment_or_userinfo() {
-        assert!(validate_base_url("https://api.example.com/v1?key=secret").is_err());
-        assert!(validate_base_url("https://api.example.com/v1#frag").is_err());
-        assert!(validate_base_url("https://user:pass@api.example.com/v1").is_err());
-    }
-
-    #[test]
-    fn endpoint_joins_regardless_of_trailing_slash() {
-        assert_eq!(
-            endpoint(
-                &parse_base_url("https://api.openai.com/v1").unwrap(),
-                "chat/completions"
-            )
-            .unwrap()
-            .as_str(),
-            "https://api.openai.com/v1/chat/completions"
-        );
-        assert_eq!(
-            endpoint(
-                &parse_base_url("https://api.openai.com/v1/").unwrap(),
-                "chat/completions"
-            )
-            .unwrap()
-            .as_str(),
-            "https://api.openai.com/v1/chat/completions"
-        );
     }
 
     /// 思考の強さを指定したリクエストが400で返った。

@@ -14,7 +14,11 @@ use serde::de::DeserializeOwned;
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::error::CoreError;
 use crate::llm::{DetectedCapabilities, ErrorDetail, LlmAdapter, LlmError};
+use crate::net::ExternalUrl;
 use crate::secrets;
+
+#[cfg(test)]
+mod test_server;
 
 use anthropic::AnthropicAdapter;
 use gemini::GeminiAdapter;
@@ -29,12 +33,49 @@ pub struct ActiveAdapter {
     pub key_unavailable: bool,
 }
 
-/// 登録前の`base_url`の検証。方言ごとの規則は各アダプタが持ち、ここは振り分けるだけ。
+/// 登録前の`base_url`の検証。平文の`http://`で鍵を送れる範囲(ループバックとプライベート
+/// IPリテラル)は[`ExternalUrl::parse`]が決める。今はどの方言も同じ規則。
 pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), CoreError> {
     match api_format {
-        ApiFormat::OpenAiCompat => openai_compat::validate_base_url(base_url),
-        ApiFormat::Anthropic => anthropic::validate_base_url(base_url),
-        ApiFormat::Gemini => gemini::validate_base_url(base_url),
+        ApiFormat::OpenAiCompat | ApiFormat::Anthropic | ApiFormat::Gemini => {
+            parse_base_url(base_url).map(drop)
+        }
+    }
+}
+
+fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
+    ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)
+}
+
+/// `base_url`の下の`chat/completions`等のパス。
+fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreError> {
+    base_url.join(path).map_err(CoreError::ProviderConfig)
+}
+
+/// モデルの一覧・能力の問い合わせの上限。生成を待たずに返るので、生成を待つための応答
+/// タイムアウト(`config::GeneralConfig::response_timeout`)は使わない。
+const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 一覧・能力の問い合わせの応答を読む。失敗は状態コードだけで分類する。
+async fn read_success_json<T: DeserializeOwned>(
+    response: reqwest::Response,
+    api_key: &SecretString,
+) -> Result<T, CoreError> {
+    let key = api_key.expose_secret();
+    let response = reject_failure(response, |status, body| {
+        LlmError::from_status(status, body, key)
+    })
+    .await?;
+    Ok(read_json(response, api_key).await?)
+}
+
+/// ツール呼び出しの引数を、オブジェクトしか受け付けない方言に渡す形にする。その方言の応答から
+/// 来た呼び出しは常にオブジェクトなので、そうでないのは別の方言で実行した記録だけで、空の
+/// オブジェクトとして送る。
+fn object_arguments(arguments: &crate::llm::ToolArguments) -> serde_json::Value {
+    match arguments {
+        crate::llm::ToolArguments::Valid { value } if value.is_object() => value.clone(),
+        _ => serde_json::json!({}),
     }
 }
 
@@ -237,5 +278,70 @@ fn load_api_key(key_ref: Option<&str>) -> (SecretString, bool) {
             eprintln!("failed to read API key from secret store, continuing without it: {e}");
             (SecretString::from(String::new()), true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_https_base_url() {
+        assert!(parse_base_url("https://api.openai.com/v1").is_ok());
+    }
+
+    #[test]
+    fn accepts_http_loopback_base_url() {
+        assert!(parse_base_url("http://127.0.0.1:8080/v1").is_ok());
+        assert!(parse_base_url("http://localhost:8080/v1").is_ok());
+        assert!(parse_base_url("http://[::1]:8080/v1").is_ok());
+    }
+
+    #[test]
+    fn accepts_http_private_ip_literal_base_url() {
+        // 境界値はnet.rsで確かめ、ここではLLMプロバイダー側にも効いていることだけを見る。
+        assert!(parse_base_url("http://192.168.1.107:11434/v1").is_ok());
+    }
+
+    #[test]
+    fn rejects_http_hostname_base_url() {
+        // ホスト名(localhost以外)は名前解決しないため、平文では常に拒否する(IPリテラルは許す)。
+        let err = parse_base_url("http://example.com/v1").unwrap_err();
+        assert!(matches!(err, CoreError::ProviderConfig(_)));
+    }
+
+    #[test]
+    fn rejects_unsupported_scheme() {
+        let err = parse_base_url("ftp://example.com/v1").unwrap_err();
+        assert!(matches!(err, CoreError::ProviderConfig(_)));
+    }
+
+    #[test]
+    fn rejects_base_url_with_query_fragment_or_userinfo() {
+        assert!(parse_base_url("https://api.example.com/v1?key=secret").is_err());
+        assert!(parse_base_url("https://api.example.com/v1#frag").is_err());
+        assert!(parse_base_url("https://user:pass@api.example.com/v1").is_err());
+    }
+
+    #[test]
+    fn endpoint_joins_regardless_of_trailing_slash() {
+        assert_eq!(
+            endpoint(
+                &parse_base_url("https://api.openai.com/v1").unwrap(),
+                "chat/completions"
+            )
+            .unwrap()
+            .as_str(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            endpoint(
+                &parse_base_url("https://api.openai.com/v1/").unwrap(),
+                "chat/completions"
+            )
+            .unwrap()
+            .as_str(),
+            "https://api.openai.com/v1/chat/completions"
+        );
     }
 }

@@ -36,7 +36,7 @@ impl GeminiAdapter {
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
-        let base_url = parse_base_url(&base_url.into())?;
+        let base_url = super::parse_base_url(&base_url.into())?;
         let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
         Ok(Self {
             client,
@@ -47,24 +47,8 @@ impl GeminiAdapter {
     }
 }
 
-/// `base_url`の検証。平文の`http://`で鍵を送れる範囲は[`ExternalUrl::parse`]が決める。
-pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
-    parse_base_url(base_url).map(drop)
-}
-
-fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
-    ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)
-}
-
-fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreError> {
-    base_url.join(path).map_err(CoreError::ProviderConfig)
-}
-
 const INTERACTIONS: &str = "v1beta/interactions";
 const MODELS: &str = "v1beta/models";
-
-/// 一覧・能力の問い合わせは生成を待たずに返るので、応答タイムアウトの設定は使わない。
-const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
 
 async fn send(
     request: reqwest::RequestBuilder,
@@ -78,17 +62,18 @@ async fn send(
 /// `GET /v1beta/models`で、会話の生成に使えるモデルの名前(`models/`を除いたもの)を取得する。
 /// 名前順に並べ、重複と空の名前を除く。
 pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
-    let base_url = parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(METADATA_TIMEOUT))?;
+    let base_url = super::parse_base_url(base_url)?;
+    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
-        let mut url = endpoint(&base_url, MODELS)?;
+        let mut url = super::endpoint(&base_url, MODELS)?;
         url.query_pairs_mut().append_pair("pageSize", "1000");
         if let Some(token) = &page_token {
             url.query_pairs_mut().append_pair("pageToken", token);
         }
-        let page: ModelPage = get_json(&client, url, api_key).await?;
+        let page: ModelPage =
+            super::read_success_json(send(client.get(url), api_key).await?, api_key).await?;
         names.extend(
             page.models
                 .into_iter()
@@ -122,11 +107,11 @@ pub async fn detect(
     api_key: &SecretString,
     models: &[String],
 ) -> Result<HashMap<String, DetectedCapabilities>, CoreError> {
-    let base_url = parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(METADATA_TIMEOUT))?;
+    let base_url = super::parse_base_url(base_url)?;
+    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
     let mut found = HashMap::new();
     for model in models {
-        let mut url = endpoint(&base_url, MODELS)?;
+        let mut url = super::endpoint(&base_url, MODELS)?;
         url.path_segments_mut()
             .map_err(|()| CoreError::ProviderConfig("failed to build endpoint".to_string()))?
             .push(model);
@@ -134,29 +119,10 @@ pub async fn detect(
         if response.status() == StatusCode::NOT_FOUND {
             continue;
         }
-        let key = api_key.expose_secret();
-        let response = super::reject_failure(response, |status, body| {
-            LlmError::from_status(status, body, key)
-        })
-        .await?;
-        let info: ListedModel = super::read_json(response, api_key).await?;
+        let info: ListedModel = super::read_success_json(response, api_key).await?;
         found.insert(model.clone(), info.detected());
     }
     Ok(found)
-}
-
-async fn get_json<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
-    url: reqwest::Url,
-    api_key: &SecretString,
-) -> Result<T, CoreError> {
-    let response = send(client.get(url), api_key).await?;
-    let key = api_key.expose_secret();
-    let response = super::reject_failure(response, |status, body| {
-        LlmError::from_status(status, body, key)
-    })
-    .await?;
-    Ok(super::read_json(response, api_key).await?)
 }
 
 #[derive(Deserialize)]
@@ -307,7 +273,7 @@ fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
                                 "type": "function_call",
                                 "id": call.id.clone().unwrap_or_default(),
                                 "name": call.name,
-                                "arguments": tool_arguments(&call.arguments),
+                                "arguments": super::object_arguments(&call.arguments),
                             })
                         }));
                     }
@@ -340,15 +306,6 @@ fn content(text: &str, images: &[InlineImage]) -> Vec<Value> {
         json!({ "type": "image", "data": data, "mime_type": mime_type })
     }));
     parts
-}
-
-/// `arguments`はオブジェクトに限られる。この方言の応答から来た呼び出しは常にオブジェクトなので、
-/// そうでないのは別の方言で実行した記録だけで、空のオブジェクトとして送る。
-fn tool_arguments(arguments: &ToolArguments) -> Value {
-    match arguments {
-        ToolArguments::Valid { value } if value.is_object() => value.clone(),
-        _ => json!({}),
-    }
 }
 
 /// プレビューの本文で、画像の本体(`data`)だけを長さに縮める(`LlmAdapter::request_preview`)。
@@ -433,7 +390,7 @@ impl GeminiAdapter {
         thinking_level: Option<&'static str>,
     ) -> Result<InteractionResponse, LlmError> {
         let body = request_body(&self.model, messages, tools, thinking_level);
-        let endpoint = endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
+        let endpoint = super::endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
         let response = send(self.client.post(endpoint).json(&body), &self.api_key).await?;
@@ -577,64 +534,11 @@ impl LlmAdapter for GeminiAdapter {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
+    use super::super::test_server::spawn_server;
     use super::*;
     use crate::llm::{ToolCallRequest, ToolSchema};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-    /// 受けたリクエスト1件。ヘッダー部(小文字)と本文。
-    struct Received {
-        headers: String,
-        body: Value,
-    }
-
-    /// `responses`の数だけ接続を受け、順に`(状態コード, 本文)`を返す。受けたリクエストを返す。
-    fn spawn_server(
-        responses: Vec<(u16, &'static str)>,
-    ) -> (String, std::thread::JoinHandle<Vec<Received>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let handle = std::thread::spawn(move || {
-            let mut received = Vec::new();
-            for (status, body) in responses {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut raw = Vec::new();
-                let mut buf = [0u8; 8192];
-                let header_end = loop {
-                    let n = stream.read(&mut buf).unwrap();
-                    raw.extend_from_slice(&buf[..n]);
-                    if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break i + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
-                let length = headers
-                    .lines()
-                    .find_map(|l| l.strip_prefix("content-length: "))
-                    .map_or(0, |v| v.trim().parse::<usize>().unwrap());
-                while raw.len() < header_end + length {
-                    let n = stream.read(&mut buf).unwrap();
-                    raw.extend_from_slice(&buf[..n]);
-                }
-                let request_body = serde_json::from_slice(&raw[header_end..header_end + length])
-                    .unwrap_or(Value::Null);
-                let response = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                received.push(Received {
-                    headers,
-                    body: request_body,
-                });
-            }
-            received
-        });
-        (format!("http://{addr}"), handle)
-    }
 
     fn adapter(base_url: &str, key: &str) -> GeminiAdapter {
         GeminiAdapter::new(
@@ -1002,6 +906,68 @@ mod tests {
         assert_eq!(names, ["gemini-a", "gemini-b"]);
         assert!(received[0].headers.starts_with("get /v1beta/models?"));
         assert!(received[1].headers.contains("pagetoken=p2"));
+    }
+
+    #[tokio::test]
+    async fn leaves_models_the_server_does_not_know_out_of_the_detection() {
+        let (base_url, handle) = spawn_server(vec![
+            (
+                200,
+                r#"{"name":"models/gemini-a","inputTokenLimit":1000,"thinking":true}"#,
+            ),
+            (
+                404,
+                r#"{"error":{"code":"model_not_found","message":"not found"}}"#,
+            ),
+        ]);
+        let found = detect(
+            &base_url,
+            &SecretString::from("key-test".to_string()),
+            &["gemini-a".to_string(), "gemini-gone".to_string()],
+        )
+        .await
+        .unwrap();
+        let received = handle.join().unwrap();
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found["gemini-a"].context_length, Some(1000));
+        assert!(received[1]
+            .headers
+            .starts_with("get /v1beta/models/gemini-gone "));
+    }
+
+    #[tokio::test]
+    async fn passes_every_function_call_of_one_response() {
+        let (base_url, handle) = spawn_server(vec![(
+            200,
+            r#"{"status":"requires_action","steps":[
+                {"type":"function_call","id":"call_1","name":"a","arguments":{}},
+                {"type":"function_call","id":"call_2","name":"b","arguments":{"x":1}}
+            ]}"#,
+        )]);
+        let mut events = Vec::new();
+        adapter(&base_url, "")
+            .send(&[user("hi")], ToolOffer::NONE, None, &mut |e| {
+                events.push(e)
+            })
+            .await
+            .unwrap();
+        handle.join().unwrap();
+
+        let calls: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ResponseEvent::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                (Some("call_1".to_string()), "a".to_string()),
+                (Some("call_2".to_string()), "b".to_string()),
+            ]
+        );
     }
 
     #[test]
