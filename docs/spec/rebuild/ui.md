@@ -4,10 +4,9 @@
 「なぜそうするか」(整合性の担保と修正の容易さ)を扱うのに対し、ここは「この実装で
 どう守るか」を扱う。画面のコードを書く前に、この文書と `../principles.md` 6節を読むこと。
 
-**UIは調整中である。** 見た目の作り込み(フォントの選定と同梱形式・ダークテーマの詰め等)は
-まだ終えておらず、今の値は仮置きである。全体レビューでは、この文書の方針から外れているもの
-以外の見た目の細部(例: `frontend/public/fonts/` のフォントのサイズ・形式)を指摘の対象にしない。
-作り込みを終えたら、この段落を消す。
+**UIは調整中である。** 見た目の作り込み(ダークテーマの詰め等)はまだ終えておらず、今の値は
+仮置きである。全体レビューでは、この文書の方針から外れているもの以外の見た目の細部を指摘の
+対象にしない。作り込みを終えたら、この段落を消す。
 
 ## 1. スタイルシートの2層構成
 
@@ -41,7 +40,7 @@
 
 | 用途 | トークン |
 |---|---|
-| 文字 | `--font-family`, `--font-family-mono`, `--font-size-sm/md/lg/xl`, `--line-height-tight/normal` |
+| 文字 | `--font-family`, `--font-family-prose`, `--font-family-mono`, `--font-weight-normal/strong`, `--font-size-sm/md/lg/xl`, `--line-height-tight/normal` |
 | 余白 | `--space-1`〜`--space-5` |
 | 入力欄の内側の余白(欄と高さを揃えるボタンも使う) | `--field-padding` |
 | 窓の上端から各カラムの中身までの余白 | `--pane-padding` |
@@ -68,6 +67,27 @@
 
 値どうしの関係(遠い側マージンは近い側の2倍、など)は、**関係そのものを式で持つ**
 (`../principles.md` 8節)。別々のトークンに分けると、片方だけ変えたときに関係が崩れる。
+
+### 書体とウェイト
+
+画面の文字はNoto Sans JP、発言本文(ユーザーとモデルが書いたMarkdown、`.markdown`)だけを
+Noto Serif JPにする。吹き出しの中でも時刻・操作ボタン・添付・エラー発言は画面の文字として
+Sansのままにする。等幅はOSのフォントに委ねる(`--font-family-mono`)。
+
+| 書体 | 本文(`--font-weight-normal`) | 強調(`--font-weight-strong`) |
+|---|---|---|
+| Sans(画面) | 400 | 500 |
+| Serif(発言本文) | 400 | 700 |
+
+画面の強調(見出し・タブ・ボタンの名前)は、700では画面の文字として重すぎるため500にする。
+本文の強調は、細い明朝の中で見分けられる700にする。`.markdown`が`--font-weight-strong`を
+上書きするので、見出し・`strong`・表の見出しは基盤層の指定のまま書体に合った太さになる。
+
+同梱するのはこの4つのウェイトだけで、`frontend/public/fonts/` にWOFF2で置く。字形は
+日本語用のサブセット(Noto CJKの`SubsetOTF/JP`。中国語・韓国語専用の字形を除いた版)を使い、
+含まれない字はOSのフォントで出る。ウェイトを増やすときはファイルと`tokens.css`の
+`@font-face`を足し、表を直す。同梱していないウェイトを指定しても、太字は合成せず
+(基盤層の`font-synthesis: style`)近いウェイトの字形で出る。
 
 ### 塗りと奥行き
 
@@ -204,7 +224,7 @@ WebKitGTK固有の挙動は、Chromiumでの確認では分からない。次の
 `min()` 内のパーセント混在計算, `padding-inline`, `aspect-ratio`, `field-sizing`,
 CSSの入れ子(`&`), `:is()`/`:where()`, `inset` を含む `box-shadow`, `box-shadow` の中の `var()` の
 フォールバック(`--elevation: initial` で空の影になること), `display: contents`,
-`@media (hover: hover)`, チェックボックスへの `appearance: none` と `::before`。
+`@media (hover: hover)`, チェックボックスへの `appearance: none` と `::before`, `font-synthesis`。
 
 確認が済んだものは、**どのバージョンで見たかを併記して残す**(次に同じ調べ直しをしないため)。
 `field-sizing: content` は WebKitGTK 2.52.6 で対応を確認済み(Issue #96)。検索欄の消去ボタンを

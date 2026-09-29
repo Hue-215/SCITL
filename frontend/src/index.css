@@ -25,6 +25,9 @@
 :root {
   color-scheme: light dark;
   font-family: var(--font-family);
+  /* 同梱していないウェイトを太字として合成させない(字形が潰れる)。斜体の合成は残す
+     (日本語の書体は斜体を持たず、.entry-tool等の斜体はこれで作られる)。 */
+  font-synthesis: style;
 }
 
 body {
@@ -49,7 +52,7 @@ h5,
 h6 {
   margin: 0;
   font-size: var(--font-size-md);
-  font-weight: 700;
+  font-weight: var(--font-weight-strong);
   line-height: var(--line-height-tight);
 }
 
@@ -68,8 +71,11 @@ ol {
   padding: 0;
 }
 
-strong {
-  font-weight: 700;
+/* UA既定の太字(bold = 700)は、Sansが持たないウェイトを指す。 */
+b,
+strong,
+th {
+  font-weight: var(--font-weight-strong);
 }
 
 pre {
@@ -577,7 +583,7 @@ option {
   height: var(--control-size-md);
   text-align: left;
   padding: 0 var(--space-2);
-  font-weight: 700;
+  font-weight: var(--font-weight-strong);
 }
 
 /* アイコン1つだけを置くボタンの箱。サイドバーの⚙と設定画面の←が同じ形。
@@ -640,7 +646,7 @@ option {
   padding: var(--space-2);
   /* 窓の下端・左端と仕切り線に接するので、角を丸めると角に背景が覗く。直角のままにする。 */
   border-radius: 0;
-  font-weight: 700;
+  font-weight: var(--font-weight-strong);
 }
 
 .chat-log {
@@ -742,8 +748,12 @@ option {
 }
 
 /* 発言本文のMarkdown描画(Markdown.tsx)。段落・リスト・表などブロックどうしの間隔は
-   入れ物のgapで一律に決める(ui.md「余白の持たせ方」)。 */
+   入れ物のgapで一律に決める(ui.md「余白の持たせ方」)。
+   書体は本文だけSerifにし、強調のウェイトもSerifで同梱した値に替える。吹き出しの中でも
+   時刻・操作ボタン・添付は画面の文字なので、.entryではなくここで替える。 */
 .markdown {
+  font-family: var(--font-family-prose);
+  --font-weight-strong: 700;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -846,7 +856,7 @@ option {
 }
 
 .tool-call-label {
-  font-weight: 700;
+  font-weight: var(--font-weight-strong);
 }
 
 .tool-call-detail pre,
@@ -920,7 +930,7 @@ option {
 .settings-tab {
   text-align: left;
   padding: var(--space-2) var(--space-3);
-  font-weight: 700;
+  font-weight: var(--font-weight-strong);
   color: var(--color-text-secondary);
 }
 
@@ -989,7 +999,7 @@ option {
 }
 
 .settings-advanced summary {
-  font-weight: 700;
+  font-weight: var(--font-weight-strong);
 }
 
 /* .thinking-toolsと同じ理由で<details>はflexコンテナにしないため、
@@ -1108,7 +1118,7 @@ option {
 
 .model-table th {
   font-size: var(--font-size-sm);
-  font-weight: 400;
+  font-weight: var(--font-weight-normal);
   color: var(--color-text-secondary);
   white-space: nowrap;
 }

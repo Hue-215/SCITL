@@ -12,24 +12,47 @@
  *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
  */
 
+/* 同梱するのは下の4つのウェイトだけ(ui.md「書体とウェイト」)。ここに無いウェイトを
+   指定すると、近いウェイトの字形が使われる。 */
 @font-face {
-  font-family: 'Noto Serif CJK JP';
-  src: url('/fonts/NotoSerifCJKjp-Regular.otf') format('opentype');
+  font-family: 'Noto Sans JP';
+  src: url('/fonts/NotoSansJP-Regular.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'Noto Serif CJK JP';
-  src: url('/fonts/NotoSerifCJKjp-Bold.otf') format('opentype');
+  font-family: 'Noto Sans JP';
+  src: url('/fonts/NotoSansJP-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Serif JP';
+  src: url('/fonts/NotoSerifJP-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Serif JP';
+  src: url('/fonts/NotoSerifJP-Bold.woff2') format('woff2');
   font-weight: 700;
   font-display: swap;
 }
 
 :root {
-  --font-family: 'Noto Serif CJK JP', serif;
+  /* 画面の文字。発言本文(.markdown)だけが--font-family-proseを使う */
+  --font-family: 'Noto Sans JP', sans-serif;
+  --font-family-prose: 'Noto Serif JP', serif;
   /* コマンド・JSON等、桁を揃えて読ませる箇所用。OSごとの等幅フォントに委ねる */
   --font-family-mono: ui-monospace, monospace;
+
+  /* ウェイトは2段階(本文 / 強調)。強調の値は書体ごとに同梱したウェイトに合わせて決め、
+     .markdownがSerif用の値で上書きする。太字は要素に直値で書かず、必ずこれを使う。 */
+  --font-weight-normal: 400;
+  --font-weight-strong: 500;
 
   /* 文字サイズ: 3段階(補助文 / 本文 / 見出し)。sm/md/lgの差が視認できない刻みは置かない。
      xlはMarkdown本文の見出し(.markdown h1)専用で、画面の見出しには使わない。 */
