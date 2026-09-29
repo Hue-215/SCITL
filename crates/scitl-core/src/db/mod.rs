@@ -43,7 +43,7 @@ macro_rules! text_column_enum {
                 match value.as_str()? {
                     $($text => Ok(Self::$variant),)+
                     other => Err(rusqlite::types::FromSqlError::Other(
-                        format!("unknown value: {other}").into(),
+                        format!("unknown {}: {other}", stringify!($ty)).into(),
                     )),
                 }
             }
