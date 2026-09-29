@@ -218,6 +218,30 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 - 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
 
+**Gemini形式**(`llm::providers::gemini`、Issue #81): Interactions API(`POST {base_url}/v1beta/interactions`)を
+ストリーミングせずに呼ぶ。`generateContent`は旧来のAPIとされ、新しい機能はInteractions APIにだけ入るため。
+出典は公式ドキュメント(Interactions API reference・thinking・function calling・api-errors・models)。
+
+- ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る
+- **`store: false`を常に送る**。既定ではやり取りがGoogle側に保存される(有料で55日、無料で1日)。
+  会話はこのアプリが持ち、毎回すべてを入力のステップ(`user_input`・`model_output`・`function_call`・
+  `function_result`)として送る(`previous_interaction_id`は使わない)
+- 思考の強さは`generation_config.thinking_level`で渡し、`thinking_summaries: "auto"`で要約を返させる。
+  思考を切る指定は無いので「オフ」は`minimal`にし、拒まれたらイベントを渡す前に`low`で呼び直す
+- 思考は独立した`thought`ステップ(要約と署名)で返る。ツールの往復の途中では、出力のステップを
+  並びごと`llm::Replay`として次の呼び出しに返す(Anthropic形式と同じ扱い)
+- 公式ドキュメントは、会話状態をこちらで持つ場合、過去のターンの`thought`ステップも受け取ったまま
+  送り直すよう求めている。このアプリは思考を保存しないので送り直せない(Issue #128と同じ問題)。
+  送らないとどうなるかは実際のAPIで確かめる
+- 最後の呼び出し(ツールの上限)は、ツールの定義を残して`tool_choice: "none"`で禁じる
+- 出力の上限(`max_output_tokens`)は送らず、モデルの既定に任せる(必須ではないため)
+- 状態(`status`)の`completed`は通常の終了、`requires_action`はツール呼び出し、`incomplete`は長さによる
+  打ち切りにする。`failed`と、方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、
+  途中まで書いた本文を渡さずに`LlmError::Refused`(ブロック)またはHTTPのエラーにする。入力が長すぎる
+  専用のエラーコードは無いので、`invalid_request`の文面から見分ける
+- 能力の自動検出は`GET /v1beta/models/{id}`で行う。コンテキスト長は`inputTokenLimit`、思考は`thinking`で
+  決め、ツールは常にありとする。画像入力の可否は情報に無いので決めない
+
 **ユーザー発言の送信日時は本文と分けて運ぶ**(Issue #68): DBの本文と送信日時
 (ISO8601 UTC)から、発言列を作るときに `llm::PromptText::user_message` が次の形に組み立てる。
 

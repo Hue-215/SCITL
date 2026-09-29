@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod gemini;
 mod local_server;
 pub mod openai_compat;
 
@@ -16,6 +17,7 @@ use crate::llm::{DetectedCapabilities, ErrorDetail, LlmAdapter, LlmError};
 use crate::secrets;
 
 use anthropic::AnthropicAdapter;
+use gemini::GeminiAdapter;
 use openai_compat::OpenAiCompatAdapter;
 
 pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
@@ -32,6 +34,7 @@ pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), Co
     match api_format {
         ApiFormat::OpenAiCompat => openai_compat::validate_base_url(base_url),
         ApiFormat::Anthropic => anthropic::validate_base_url(base_url),
+        ApiFormat::Gemini => gemini::validate_base_url(base_url),
     }
 }
 
@@ -95,6 +98,12 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
             provider.model,
             timeout,
         )?),
+        ApiFormat::Gemini => Arc::new(GeminiAdapter::new(
+            provider.base_url.to_string(),
+            api_key,
+            provider.model,
+            timeout,
+        )?),
     };
     Ok(ActiveAdapter {
         adapter: Some(adapter),
@@ -106,7 +115,7 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
 pub fn can_detect_capabilities(provider: &ProviderConfig) -> bool {
     match provider.api_format {
         ApiFormat::OpenAiCompat => local_server::is_detectable(&provider.base_url),
-        ApiFormat::Anthropic => true,
+        ApiFormat::Anthropic | ApiFormat::Gemini => true,
     }
 }
 
@@ -126,6 +135,9 @@ pub async fn detect_capabilities(
         ApiFormat::Anthropic => anthropic::detect(&provider.base_url, &api_key, models)
             .await
             .map(Some),
+        ApiFormat::Gemini => gemini::detect(&provider.base_url, &api_key, models)
+            .await
+            .map(Some),
     }
 }
 
@@ -135,6 +147,7 @@ pub async fn list_models(provider: &ProviderConfig) -> Result<Vec<String>, CoreE
     match provider.api_format {
         ApiFormat::OpenAiCompat => openai_compat::list_models(&provider.base_url, &api_key).await,
         ApiFormat::Anthropic => anthropic::list_models(&provider.base_url, &api_key).await,
+        ApiFormat::Gemini => gemini::list_models(&provider.base_url, &api_key).await,
     }
 }
 
@@ -155,8 +168,8 @@ const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is n
 enum KeyHeader {
     /// `Authorization: Bearer`
     Bearer,
-    /// `x-api-key`
-    XApiKey,
+    /// 鍵をそのまま値にする独自のヘッダー(`x-api-key`等)。
+    Named(&'static str),
 }
 
 /// 鍵を添えて送る。届かなかったとき(接続・タイムアウト等)は、鍵を伏せた[`LlmError`]にする。
@@ -172,14 +185,14 @@ async fn send_with_key(
     let request = match header {
         _ if key.is_empty() => request,
         KeyHeader::Bearer => request.bearer_auth(key),
-        KeyHeader::XApiKey => {
+        KeyHeader::Named(name) => {
             let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
                 LlmError::InvalidRequest(ErrorDetail::internal(
                     "the API key contains characters that cannot be sent in a header",
                 ))
             })?;
             value.set_sensitive(true);
-            request.header("x-api-key", value)
+            request.header(name, value)
         }
     };
     request

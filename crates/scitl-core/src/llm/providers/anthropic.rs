@@ -80,7 +80,7 @@ async fn send(
     super::send_with_key(
         request.header("anthropic-version", API_VERSION),
         api_key,
-        KeyHeader::XApiKey,
+        KeyHeader::Named("x-api-key"),
     )
     .await
 }
