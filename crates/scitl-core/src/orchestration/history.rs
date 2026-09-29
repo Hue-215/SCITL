@@ -118,6 +118,7 @@ pub(super) fn build_history(
             Role::Assistant => history.push(ChatMessage::Assistant {
                 content: Some(m.content.clone()),
                 tool_calls: Vec::new(),
+                replay: Default::default(),
             }),
             // `role='tool'`は実行記録の行だけで、上で済んでいる(0002のトリガー)。
             Role::Error | Role::Tool => {}
@@ -209,6 +210,7 @@ fn fact_round_trip(m: &Message, replied_turns: &HashSet<String>) -> Option<[Chat
                     value: record.arguments,
                 },
             }],
+            replay: Default::default(),
         },
         ChatMessage::Tool {
             tool_call_id: id,
@@ -402,6 +404,7 @@ mod tests {
             ChatMessage::Assistant {
                 content: None,
                 tool_calls,
+                ..
             } => {
                 assert_eq!(tool_calls.len(), 1);
                 assert_eq!(tool_calls[0].id.as_deref(), Some(id.as_str()));

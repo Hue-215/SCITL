@@ -61,6 +61,10 @@ pub enum TurnFailure {
     RateLimit {
         detail: ErrorDetail,
     },
+    /// モデルが応答を断った。言い方を変えるか、別のモデルで再試行してもらう。
+    Refused {
+        detail: ErrorDetail,
+    },
     /// 設定不備(鍵ストア・プロバイダー設定・設定ファイル、ヘッダーに載せられない鍵)。
     /// 鍵名やパスを含みうるため詳細は出さない。
     ProviderConfig,
@@ -92,6 +96,7 @@ impl TurnFailure {
             TurnFailure::ToolTimeout => "tool_timeout",
             TurnFailure::Auth { .. } => "auth",
             TurnFailure::RateLimit { .. } => "rate_limit",
+            TurnFailure::Refused { .. } => "refused",
             TurnFailure::ProviderConfig => "provider_config",
             TurnFailure::Provider { .. } => "provider",
             TurnFailure::Unexpected { .. } => "unexpected",
@@ -115,6 +120,7 @@ impl TurnFailure {
             | TurnFailure::ThinkingEffortUnsupported { detail }
             | TurnFailure::Auth { detail }
             | TurnFailure::RateLimit { detail }
+            | TurnFailure::Refused { detail }
             | TurnFailure::Provider { detail }
             | TurnFailure::Unexpected { detail } => Some(detail.as_str()),
             TurnFailure::NoProvider
@@ -215,6 +221,9 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
         LlmError::RateLimit(detail) => TurnFailure::RateLimit {
             detail: detail.clone(),
         },
+        LlmError::Refused(detail) => TurnFailure::Refused {
+            detail: detail.clone(),
+        },
         LlmError::Http(detail) => TurnFailure::Provider {
             detail: detail.clone(),
         },
@@ -254,6 +263,7 @@ mod tests {
             ),
             (LlmError::Auth(detail("x")), "auth"),
             (LlmError::RateLimit(detail("x")), "rate_limit"),
+            (LlmError::Refused(detail("x")), "refused"),
             (LlmError::Http(detail("x")), "provider"),
         ];
         for (e, kind) in cases {
@@ -273,6 +283,7 @@ mod tests {
             LlmError::ReasoningEffortValueRejected(detail("upstream overloaded")),
             LlmError::Auth(detail("upstream overloaded")),
             LlmError::RateLimit(detail("upstream overloaded")),
+            LlmError::Refused(detail("upstream overloaded")),
             LlmError::Http(detail("upstream overloaded")),
         ];
         for e in with_detail {
@@ -301,6 +312,7 @@ mod tests {
             TurnFailure::ToolTimeout,
             TurnFailure::Auth { detail: detail() },
             TurnFailure::RateLimit { detail: detail() },
+            TurnFailure::Refused { detail: detail() },
             TurnFailure::ProviderConfig,
             TurnFailure::Provider { detail: detail() },
             TurnFailure::Unexpected { detail: detail() },
@@ -322,6 +334,7 @@ mod tests {
                 | TurnFailure::ToolTimeout
                 | TurnFailure::Auth { .. }
                 | TurnFailure::RateLimit { .. }
+                | TurnFailure::Refused { .. }
                 | TurnFailure::ProviderConfig
                 | TurnFailure::Provider { .. }
                 | TurnFailure::Unexpected { .. } => {}

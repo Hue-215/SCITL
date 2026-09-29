@@ -33,6 +33,7 @@ pub fn estimate_message(message: &ChatMessage) -> usize {
         ChatMessage::Assistant {
             content,
             tool_calls,
+            ..
         } => {
             content.as_deref().map_or(0, estimate_text)
                 + tool_calls
@@ -115,6 +116,7 @@ mod tests {
         let plain = ChatMessage::Assistant {
             content: None,
             tool_calls: Vec::new(),
+            replay: Default::default(),
         };
         let with_call = ChatMessage::Assistant {
             content: None,
@@ -123,6 +125,7 @@ mod tests {
                 name: "add_steps".to_string(),
                 arguments: serde_json::json!({ "descriptions": ["買い出し"] }).into(),
             }],
+            replay: Default::default(),
         };
         assert!(estimate_message(&with_call) > estimate_message(&plain));
     }

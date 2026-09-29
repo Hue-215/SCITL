@@ -28,10 +28,23 @@ import { useAsyncAction } from './useAsyncAction'
 
 const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
   open_ai_compat: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com',
 }
 
 const API_FORMAT_LABELS: Record<ApiFormat, MessageKey> = {
   open_ai_compat: 'settings.provider.formats.open_ai_compat',
+  anthropic: 'settings.provider.formats.anthropic',
+}
+
+// Anthropic形式のベースURLは`/v1`を含まない(アダプタが`v1/messages`を足す)。OpenAI互換の
+// 癖で`/v1`まで書くと、存在しないパスに送ることになる。登録は止めず、ヒントで知らせる。
+function hasExtraPath(format: ApiFormat, baseUrl: string): boolean {
+  if (format !== 'anthropic') return false
+  try {
+    return /\/v1(\/messages)?\/?$/.test(new URL(baseUrl.trim()).pathname)
+  } catch {
+    return false
+  }
 }
 
 // 検索欄のあるモデルの一覧(登録済みの表・取得したモデルの候補)で、絞り込んだ結果が空のときの一文。
@@ -548,6 +561,9 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
       <label className="settings-field">
         <span>{t('settings.provider.base_url_label')}</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
+        {hasExtraPath(apiFormat, baseUrl) && (
+          <p className="settings-hint">{t('settings.provider.base_url_extra_path')}</p>
+        )}
         <p className="settings-hint">
           {httpPlainTextHint(t('settings.provider.api_key_secret'))}
         </p>

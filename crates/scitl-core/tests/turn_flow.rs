@@ -10,7 +10,7 @@ use scitl_core::db::messages::{Chat, Kind, Role};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, RequestPreview,
+    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, Replay, RequestPreview,
     ResponseEvent, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
@@ -238,7 +238,7 @@ impl LlmAdapter for ScriptedAdapter {
         tools: ToolOffer<'_>,
         _reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
-    ) -> Result<(), CoreError> {
+    ) -> Result<Replay, CoreError> {
         assert_eq!(
             self.readiness,
             Readiness::Ready,
@@ -251,7 +251,7 @@ impl LlmAdapter for ScriptedAdapter {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if let (false, Some(events)) = (tools.callable, &self.without_tools) {
             events.iter().cloned().for_each(on_event);
-            return Ok(());
+            return Ok(Replay::default());
         }
         let index = if self.repeat_last {
             call.min(self.script.len() - 1)
@@ -261,7 +261,7 @@ impl LlmAdapter for ScriptedAdapter {
         match self.script.get(index) {
             Some(Ok(events)) => {
                 events.iter().cloned().for_each(on_event);
-                Ok(())
+                Ok(Replay::default())
             }
             Some(Err(error)) => Err(error.clone().into()),
             None => panic!("no scripted response for call {call}"),
@@ -625,6 +625,7 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
         ChatMessage::Assistant {
             content,
             tool_calls,
+            ..
         } => {
             assert_eq!(tool_calls.len(), 1);
             assert_eq!(tool_calls[0].name, "add_steps");

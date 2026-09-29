@@ -164,6 +164,7 @@ mod tests {
             ChatMessage::Assistant {
                 content: Some("reply".to_string()),
                 tool_calls: Vec::new(),
+                replay: Default::default(),
             },
             ChatMessage::user(latest.clone()),
         ];

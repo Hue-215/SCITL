@@ -1,3 +1,4 @@
+pub mod anthropic;
 mod local_server;
 pub mod openai_compat;
 
@@ -14,6 +15,7 @@ use crate::error::CoreError;
 use crate::llm::{DetectedCapabilities, LlmAdapter, LlmError};
 use crate::secrets;
 
+use anthropic::AnthropicAdapter;
 use openai_compat::OpenAiCompatAdapter;
 
 pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
@@ -29,6 +31,7 @@ pub struct ActiveAdapter {
 pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), CoreError> {
     match api_format {
         ApiFormat::OpenAiCompat => openai_compat::validate_base_url(base_url),
+        ApiFormat::Anthropic => anthropic::validate_base_url(base_url),
     }
 }
 
@@ -86,6 +89,12 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
             provider.model,
             timeout,
         )?),
+        ApiFormat::Anthropic => Arc::new(AnthropicAdapter::new(
+            provider.base_url.to_string(),
+            api_key,
+            provider.model,
+            timeout,
+        )?),
     };
     Ok(ActiveAdapter {
         adapter: Some(adapter),
@@ -97,6 +106,7 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
 pub fn can_detect_capabilities(provider: &ProviderConfig) -> bool {
     match provider.api_format {
         ApiFormat::OpenAiCompat => local_server::is_detectable(&provider.base_url),
+        ApiFormat::Anthropic => true,
     }
 }
 
@@ -113,6 +123,9 @@ pub async fn detect_capabilities(
     let api_key = load_api_key_off_thread(provider).await?;
     match provider.api_format {
         ApiFormat::OpenAiCompat => local_server::detect(&provider.base_url, &api_key, models).await,
+        ApiFormat::Anthropic => anthropic::detect(&provider.base_url, &api_key, models)
+            .await
+            .map(Some),
     }
 }
 
@@ -121,6 +134,7 @@ pub async fn list_models(provider: &ProviderConfig) -> Result<Vec<String>, CoreE
     let api_key = load_api_key_off_thread(provider).await?;
     match provider.api_format {
         ApiFormat::OpenAiCompat => openai_compat::list_models(&provider.base_url, &api_key).await,
+        ApiFormat::Anthropic => anthropic::list_models(&provider.base_url, &api_key).await,
     }
 }
 
@@ -133,19 +147,39 @@ async fn load_api_key_off_thread(provider: &ProviderConfig) -> Result<SecretStri
     Ok(api_key)
 }
 
+/// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
+const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is not available.)";
+
+/// 鍵を載せるヘッダー。方言ごとに違う。
+#[derive(Clone, Copy)]
+enum KeyHeader {
+    /// `Authorization: Bearer`
+    Bearer,
+    /// `x-api-key`
+    XApiKey,
+}
+
 /// 鍵を添えて送る。届かなかったとき(接続・タイムアウト等)は、鍵を伏せた[`LlmError`]にする。
 /// 応答の状態コードは見ない([`reject_failure`])。
 async fn send_with_key(
     request: reqwest::RequestBuilder,
     api_key: &SecretString,
+    header: KeyHeader,
 ) -> Result<reqwest::Response, LlmError> {
     let key = api_key.expose_secret();
-    // 認証不要のローカル推論サーバー向けに、鍵が空なら`Authorization`ヘッダーごと付けない
+    // 認証不要のローカル推論サーバー向けに、鍵が空なら鍵のヘッダーごと付けない
     // (`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
-    let request = if key.is_empty() {
-        request
-    } else {
-        request.bearer_auth(key)
+    let request = match header {
+        _ if key.is_empty() => request,
+        KeyHeader::Bearer => request.bearer_auth(key),
+        // 載せられない文字を含む鍵は、送るときに組み立ての失敗(`InvalidRequest`)になる。
+        KeyHeader::XApiKey => match reqwest::header::HeaderValue::from_str(key) {
+            Ok(mut value) => {
+                value.set_sensitive(true);
+                request.header("x-api-key", value)
+            }
+            Err(_) => request.header("x-api-key", key),
+        },
     };
     request
         .send()
