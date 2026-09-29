@@ -5,14 +5,14 @@ use crate::blocking;
 use crate::db::messages::Chat;
 use crate::db::{with_conn, SharedConnection};
 use crate::error::Result;
-use crate::llm::{ChatMessage, ToolSchema};
+use crate::llm::{ChatMessage, PromptText, ToolSchema};
 use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
-use crate::orchestration::state_prompt::build_system_prompt;
-use crate::orchestration::{SystemPrompts, TurnContext};
+use crate::orchestration::state_prompt::{build_state, build_system_prompt};
+use crate::orchestration::TurnContext;
 use crate::tools::{self, external::ExternalToolset};
 
-/// ツールの上限に達したあとの最後の呼び出しで、システムプロンプトの末尾に足す一節。
+/// ツールの上限に達したあとの最後の呼び出しで、最新状態の囲みに足す一節。
 /// ツールを渡さない理由を伝えないと、モデルがツールを呼ぶつもりの文を返しがちになる。
 const ROUND_LIMIT_NOTE: &str = "The tool call limit for this turn has been reached, so no tools \
      are available now. Reply to the user based on the tool results so far.";
@@ -23,9 +23,8 @@ pub(super) struct TurnRequest {
     history: Vec<ChatMessage>,
     exposed_tools: Vec<ToolSchema>,
     tools_available: bool,
-    // ラウンドごとにDBスレッドへ渡すので、所有した文字列で持つ。
-    base_prompt: Option<String>,
-    task_chat_prompt: Option<String>,
+    /// ラウンドによらず同じ。毎回変わるものは[`Self::round`]が最新状態として添える。
+    system: ChatMessage,
 }
 
 impl TurnRequest {
@@ -59,8 +58,7 @@ impl TurnRequest {
             history,
             exposed_tools,
             tools_available,
-            base_prompt: ctx.prompts.base.map(str::to_string),
-            task_chat_prompt: ctx.prompts.task_chat.map(str::to_string),
+            system: ChatMessage::System(build_system_prompt(chat, &ctx.prompts, tools_available)),
         })
     }
 
@@ -90,37 +88,47 @@ impl TurnRequest {
         final_call: bool,
     ) -> Result<(Vec<ChatMessage>, &[ToolSchema])> {
         let chat = self.chat;
-        let tools_available = self.tools_available;
-        let base = self.base_prompt.clone();
-        let task_chat = self.task_chat_prompt.clone();
-        let mut system_prompt_text = with_conn(db, move |conn| {
-            let prompts = SystemPrompts {
-                base: base.as_deref(),
-                task_chat: task_chat.as_deref(),
-            };
-            build_system_prompt(conn, chat, &prompts, tools_available)
-        })
-        .await?;
-        if final_call && tools_available {
-            system_prompt_text.push_str("\n\n");
-            system_prompt_text.push_str(ROUND_LIMIT_NOTE);
-        }
+        let notes: &'static [&'static str] = if final_call && self.tools_available {
+            &[ROUND_LIMIT_NOTE]
+        } else {
+            &[]
+        };
+        let state = with_conn(db, move |conn| build_state(conn, chat, notes)).await?;
 
         let offered: &[ToolSchema] = if final_call { &[] } else { &self.exposed_tools };
-        let system = ChatMessage::System(system_prompt_text);
-        // システムプロンプトとこのラウンドまでの往復はラウンドごとに伸びるので、間引きも
-        // ラウンドごとにやり直す。
+        // このラウンドまでの往復と最新状態はラウンドごとに伸び・変わるので、間引きも
+        // ラウンドごとにやり直す。最新状態は直近のユーザー発言に添えるが、見積もりでは
+        // 別の発言として数える。
+        let state_estimate = ChatMessage::user(state.clone());
         let kept = trim_history(
             &self.history,
             ctx.capabilities.context_length,
-            std::iter::once(&system).chain(round_trip),
+            [&self.system, &state_estimate]
+                .into_iter()
+                .chain(round_trip),
             offered,
         );
 
         let mut messages = Vec::with_capacity(1 + kept.len() + round_trip.len());
-        messages.push(system);
+        messages.push(self.system.clone());
         messages.extend(kept.iter().cloned());
+        attach_state(&mut messages, &state);
         messages.extend(round_trip.iter().cloned());
         Ok((messages, offered))
+    }
+}
+
+/// 最新状態を直近のユーザー発言の後ろに添える。システムプロンプトに置かないのは、毎回変わる
+/// ものを発言列の先頭に置くと、先頭一致のプロンプトキャッシュがそこで切れるため。会話の途中に
+/// システム発言として差し込まないのは、チャットテンプレートでそれを拒むローカルの推論サーバーが
+/// あるため。ユーザー発言が無い発言列(応答すべき発言が無い)は送らない
+/// (`history::awaits_reply`)が、あれば最新状態だけのユーザー発言として足す。
+fn attach_state(messages: &mut Vec<ChatMessage>, state: &PromptText) {
+    match messages.iter_mut().rev().find_map(|m| match m {
+        ChatMessage::User { text, .. } => Some(text),
+        _ => None,
+    }) {
+        Some(text) => *text = text.followed_by(state),
+        None => messages.push(ChatMessage::user(state.clone())),
     }
 }
