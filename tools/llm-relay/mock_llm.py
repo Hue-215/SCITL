@@ -5,7 +5,8 @@ LLM役(サブエージェント)が relay/res-NNNN.json を書くまで待って
 応答ファイルの形(OpenAIの message を簡略化したもの):
   {"content": "本文" | null,
    "reasoning_content": "思考(任意)",
-   "tool_calls": [{"name": "add_steps", "arguments": {...}}]}
+   "tool_calls": [{"name": "add_steps", "arguments": {...}}],
+   "stop_reason": "max_tokens"(任意。打ち切り等を試すとき)}
 """
 import json
 import os
@@ -21,6 +22,12 @@ import anthropic_rules as rules  # noqa: E402
 RELAY = os.environ.get("RELAY_DIR", os.path.join(os.path.dirname(__file__), "box"))
 PORT = int(os.environ.get("RELAY_PORT", "18080"))
 WAIT_SECS = 900
+# 能力の自動検出に答える値。SCITLはループバックの接続先に llama.cpp の GET /props 等を問い合わせる。
+VISION = os.environ.get("RELAY_VISION", "1") == "1"
+TOOLS = os.environ.get("RELAY_TOOLS", "1") == "1"
+N_CTX = int(os.environ.get("RELAY_N_CTX", "32768"))
+# LLM役は方言に関係なく Anthropic の stop_reason の名前で書く。OpenAI互換ではこの名前にする。
+FINISH_REASONS = {"end_turn": "stop", "tool_use": "tool_calls", "max_tokens": "length"}
 os.makedirs(RELAY, exist_ok=True)
 lock = threading.Lock()
 
@@ -74,13 +81,15 @@ def completion(res):
         message["tool_calls"] = calls
     if res.get("reasoning_content"):
         message["reasoning_content"] = res["reasoning_content"]
+    stop = res.get("stop_reason")
+    finish = FINISH_REASONS.get(stop, stop) if stop else ("tool_calls" if calls else "stop")
     return {
         "id": "chatcmpl-" + uuid.uuid4().hex[:12],
         "object": "chat.completion",
         "created": int(time.time()),
         "model": "relay",
         "choices": [{"index": 0, "message": message,
-                     "finish_reason": "tool_calls" if calls else "stop"}],
+                     "finish_reason": finish}],
     }
 
 
@@ -99,8 +108,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path.rstrip("/").endswith("/models"):
+        path = self.path.rstrip("/")
+        if path.endswith("/models"):
             return self.send_json(200, {"object": "list", "data": [{"id": "relay-model"}]})
+        if path.endswith("/props"):  # llama.cpp の形。1モデルだけを載せたサーバーとして答える
+            return self.send_json(200, {
+                "default_generation_settings": {"n_ctx": N_CTX},
+                "modalities": {"vision": VISION},
+                "chat_template_caps": {"supports_tool_calls": TOOLS},
+            })
         self.send_json(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
@@ -114,9 +130,11 @@ class Handler(BaseHTTPRequestHandler):
         res = relay(body)
         if res is None:
             return self.send_json(504, {"error": {"message": "relay timed out"}})
-        if "error" in res:  # エラー応答を試すとき: {"error": {"status": 429, "message": ...}}
-            err = res["error"]
-            return self.send_json(err.get("status", 500), {"error": err})
+        if "error" in res:
+            # エラー応答を試すとき: {"error": {"status": 400, "message": ..., "code": ..., "param": ...}}
+            # status 以外はOpenAIの error の形のまま返す
+            err = dict(res["error"])
+            return self.send_json(err.pop("status", 500), {"error": err})
         self.send_json(200, completion(res))
 
     def anthropic_messages(self, extra_headers=None):

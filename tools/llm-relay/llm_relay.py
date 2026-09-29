@@ -6,7 +6,9 @@
 
 ドライバーが終わると box/done ができ、next は DONE と表示して終わる。
 システムプロンプトとツール定義は、前回表示から変わっていなければ省略する。
+画像は box/img-NNNN-K.<形式> に書き出し、本文にはそのパスを <image: パス> として出す。
 """
+import base64
 import hashlib
 import json
 import os
@@ -15,6 +17,8 @@ import time
 
 RELAY = os.environ.get("RELAY_DIR", os.path.join(os.path.dirname(__file__), "box"))
 SEEN = os.path.join(RELAY, ".last_shown_hash")
+# 思考の強さ・出力の上限など、応答の書き方に関わる指定。あればヘッダーに出す。
+SHOWN_PARAMS = ("max_tokens", "reasoning_effort", "thinking", "output_config")
 
 
 def pending():
@@ -22,7 +26,46 @@ def pending():
     return [r for r in reqs if not os.path.exists(os.path.join(RELAY, f"res-{r}.json"))]
 
 
-def normalize_anthropic(body):
+class Images:
+    """リクエスト中の画像をファイルに書き出す。LLM役はそのパスを読んで画像を見る。"""
+
+    def __init__(self, rid):
+        self.rid = rid
+        self.count = 0
+
+    def save(self, media_type, data):
+        self.count += 1
+        ext = media_type.split("/")[-1].replace("jpeg", "jpg")
+        path = os.path.abspath(os.path.join(RELAY, f"img-{self.rid}-{self.count}.{ext}"))
+        with open(path, "wb") as f:
+            f.write(base64.b64decode(data))
+        return f"<image: {path}>"
+
+    def from_url(self, url):
+        if not url.startswith("data:") or "," not in url:
+            return f"<image: {url}>"
+        head, data = url.split(",", 1)
+        return self.save(head[5:].split(";")[0], data)
+
+    def from_source(self, src):
+        if src.get("type") == "base64":
+            return self.save(src["media_type"], src["data"])
+        return f"<image: {src.get('url', src.get('type'))}>"
+
+
+def openai_part(p, images):
+    if p.get("type") == "image_url":
+        return images.from_url(p["image_url"]["url"])
+    return p.get("text", f"<{p['type']}>")
+
+
+def anthropic_part(b, images):
+    if b.get("type") == "image":
+        return images.from_source(b["source"])
+    return b.get("text", f"<{b['type']}>")
+
+
+def normalize_anthropic(body, images):
     """Anthropic形式を、下の表示が読むOpenAI風の形に直す(表示のためだけ)。"""
     system = body.get("system")
     if isinstance(system, list):
@@ -36,7 +79,7 @@ def normalize_anthropic(body):
             if t == "text":
                 texts.append(b["text"])
             elif t == "image":
-                texts.append("<image>")
+                texts.append(images.from_source(b["source"]))
             elif t == "thinking":
                 texts.append(f"<thinking>{b.get('thinking', '')}</thinking>")
             elif t == "tool_use":
@@ -44,7 +87,7 @@ def normalize_anthropic(body):
             elif t == "tool_result":
                 c = b.get("content")
                 if isinstance(c, list):
-                    c = "\n".join(x.get("text", f"<{x['type']}>") for x in c)
+                    c = "\n".join(anthropic_part(x, images) for x in c)
                 err = " is_error" if b.get("is_error") else ""
                 texts.append(f"<tool_result id={b['tool_use_id']}{err}>{c or ''}</tool_result>")
         msgs.append({"role": m["role"], "content": "\n".join(texts), "tool_calls": calls})
@@ -56,8 +99,9 @@ def normalize_anthropic(body):
 def show(rid):
     with open(os.path.join(RELAY, f"req-{rid}.json")) as f:
         body = json.load(f)
+    images = Images(rid)
     if body.get("_format") == "anthropic":
-        msgs, tools = normalize_anthropic(body)
+        msgs, tools = normalize_anthropic(body, images)
     else:
         msgs = body["messages"]
         tools = [{"name": t["function"]["name"], "description": t["function"]["description"],
@@ -66,7 +110,8 @@ def show(rid):
     fixed = json.dumps([system, tools], ensure_ascii=False, sort_keys=True)
     h = hashlib.sha256(fixed.encode()).hexdigest()
     last = open(SEEN).read() if os.path.exists(SEEN) else ""
-    print(f"=== REQUEST {rid} ({body.get('_format', 'openai')}, model={body.get('model')}) ===")
+    params = "".join(f", {k}={json.dumps(body[k], ensure_ascii=False)}" for k in SHOWN_PARAMS if k in body)
+    print(f"=== REQUEST {rid} ({body.get('_format', 'openai')}, model={body.get('model')}{params}) ===")
     if h != last:
         print("--- system prompt ---")
         for m in system:
@@ -85,7 +130,7 @@ def show(rid):
         print(f"[{m['role']}]" + (f" tool_call_id={m['tool_call_id']}" if m.get("tool_call_id") else ""))
         c = m.get("content")
         if isinstance(c, list):
-            c = "\n".join(p.get("text", f"<{p['type']}>") for p in c)
+            c = "\n".join(openai_part(p, images) for p in c)
         if c:
             print(c)
         for tc in m.get("tool_calls", []):

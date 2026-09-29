@@ -34,6 +34,7 @@ relay_session ─HTTP─▶ mock_llm.py ─box/req-NNNN.json─▶ LLM役
 | `req-NNNN.json` | 疑似API | 受けたリクエスト本文。Anthropic形式には `_format: "anthropic"` と検査の警告 `_lint` を足す |
 | `res-NNNN.json` | LLM役 | 応答(下記)。置かれた時点で疑似APIが返す |
 | `rejected-NNNN.json` | 疑似API | 検査で断ったリクエストと理由。LLM役には渡さない |
+| `img-NNNN-K.<形式>` | `llm_relay.py next` | リクエスト `NNNN` のK枚目の画像。表示では本文の該当位置に `<image: 絶対パス>` と出る |
 | `done` | ドライバーを動かす側 | これがあると `llm_relay.py next` は `DONE` を返して終わる |
 
 LLM役の応答は、方言に関係なく同じ形で書く。方言の形への変換は疑似APIが行う。
@@ -45,23 +46,41 @@ LLM役の応答は、方言に関係なく同じ形で書く。方言の形へ�
  "stop_reason": "max_tokens"}
 ```
 
-`stop_reason` は任意で、打ち切り等を試すときだけ書く(Anthropic形式のみ)。エラー応答を試すときは
-次の形を書く。Anthropic形式では本物と同じエラーの形(`type`・`error`・`request_id`)と
-`request-id` ヘッダーで返る。
+`stop_reason` は任意で、打ち切り等を試すときだけAnthropicの名前(`end_turn`・`tool_use`・`max_tokens`)で
+書く。OpenAI互換では `finish_reason` の `stop`・`tool_calls`・`length` に直して返す。エラー応答を
+試すときは次の形を書く。`status` が状態コードになり、残りは方言のエラーの形に入れて返す。
 
 ```json
 {"error": {"status": 429, "type": "rate_limit_error", "message": "..."}}
 ```
 
+- OpenAI互換: `{"error": {...}}` に `status` 以外をそのまま入れる。SCITLが本文で見分けるエラーは
+  `code`・`param`・`message` で作る(例: 思考の強さの拒否は `"param": "reasoning_effort"`、値だけの拒否は
+  さらに `"code": "unsupported_value"`。コンテキスト超過は `"code": "context_length_exceeded"`)
+- Anthropic形式: 本物と同じエラーの形(`type`・`error`・`request_id`)と `request-id` ヘッダーで返る
+
 `llm_relay.py next` は、システムプロンプトとツール定義を前回の表示から変わっていなければ省く。
+見出しの行には、応答の書き方に関わる指定(`max_tokens`・`reasoning_effort`・`thinking`・`output_config`)が
+あれば出す。画像は `box/` に書き出し、パスを表示する(LLM役は画像を読めるツールでそのファイルを開く)。
 
 ## 3. 受け口
 
-### 3.1 OpenAI互換(`/v1/chat/completions`, `/v1/models`)
+### 3.1 OpenAI互換(`/v1/chat/completions`, `/v1/models`, `/props`)
 
 検査しない。互換を名乗るサーバーごとに挙動が違い、基準にする文書が無いため。非ストリーミングの
 `chat.completion` の形で返し、`reasoning_content` は `message.reasoning_content` に載せる。
 `/v1/models` は `relay-model` の1件を返す。
+
+`/props` は、SCITLがループバックの接続先に行う能力の自動検出に、llama.cppの形で答える
+(読み込んだ1モデルの能力として、どのモデル名にも同じ値が付く)。値は起動時の環境変数で変える。
+
+| 環境変数 | 既定 | 答える項目 |
+|---|---|---|
+| `RELAY_VISION` | `1` | `modalities.vision`(`1` 以外で `false`) |
+| `RELAY_TOOLS` | `1` | `chat_template_caps.supports_tool_calls`(同上) |
+| `RELAY_N_CTX` | `32768` | `default_generation_settings.n_ctx` |
+
+思考の有無はllama.cppが答えない項目なので、SCITLの既定値(またはモデル表での手動設定)に従う。
 
 ### 3.2 Anthropic形式(`/v1/messages`)
 
@@ -184,8 +203,9 @@ STEPは `@new`(タスクを作って聞き取りを始める)・`@general`(総�
 平文の `http` はIPリテラルのループバックに限って通るので、`localhost` ではなく `127.0.0.1` と書く。
 鍵は空か適当な値でよい(OpenAI互換の受け口は認証を見ない)。モデル一覧には `relay-model` が出る。
 
-ループバックのURLには、モデルの能力の自動検出が走る。疑似APIは能力の問い合わせに答えない(404)
-ので、必要ならモデル表で能力を手動で設定する。
+ループバックのURLには、モデルの能力の自動検出が走り、疑似APIの `/props`(3.1節)の値が入る。
+画像なし・短いコンテキスト等を試すときは、環境変数を変えて疑似APIを起動し直し、設定画面から
+問い合わせ直す(検出結果はアプリの起動中、モデルごとに覚えられる)。
 
 ### 6.3 LLM役
 
@@ -196,5 +216,6 @@ python3 llm_relay.py reply 0001 <<'JSON'
 JSON
 ```
 
-エージェントに任せるときは、この2つのコマンドだけを使い、アプリのソースを読まないよう指示する
-(本物のモデルと同じく、リクエストに含まれる情報だけで答えさせるため)。
+エージェントに任せるときは、この2つのコマンドと、表示された `<image: パス>` の画像を開くことだけを
+許し、アプリのソースを読まないよう指示する(本物のモデルと同じく、リクエストに含まれる情報だけで
+答えさせるため)。
