@@ -24,5 +24,8 @@ export function useAsyncAction(describe: (error: string) => string = (error) => 
     }
   }
 
-  return { running, error, run }
+  // 別の操作の結果に置き換わったとき、古い失敗を残さないために外す。
+  const clear = () => setError(null)
+
+  return { running, error, run, clear }
 }

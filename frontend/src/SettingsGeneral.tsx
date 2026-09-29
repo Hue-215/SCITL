@@ -135,9 +135,15 @@ function ExportSection() {
     t('settings.general.open_export_folder_failed', { error: isolated(error) }),
   )
 
+  // 結果の欄には最後に行った操作の成否だけを出す。
   const runExport = () => {
     setSummary(null)
+    opening.clear()
     void exporting.run(exportMarkdown, setSummary)
+  }
+  const openFolder = () => {
+    exporting.clear()
+    void opening.run(openExportFolder)
   }
 
   return (
@@ -150,12 +156,14 @@ function ExportSection() {
             ? t('settings.general.exporting')
             : t('settings.general.export_button')}
         </button>
-        <button type="button" onClick={() => void opening.run(openExportFolder)}>
+        <button type="button" onClick={openFolder}>
           {t('settings.general.open_export_folder')}
         </button>
       </div>
-      {summary && <p>{t('settings.general.export_done', { folder: isolated(summary.folder) })}</p>}
-      {summary && summary.missing_attachments > 0 && (
+      {summary && !opening.error && (
+        <p>{t('settings.general.export_done', { folder: isolated(summary.folder) })}</p>
+      )}
+      {summary && !opening.error && summary.missing_attachments > 0 && (
         <p className="error">
           {t('settings.general.export_missing_attachments', {
             count: summary.missing_attachments,
