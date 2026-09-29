@@ -131,8 +131,5 @@ export function appendTurnEvent(live: LiveThoughts, event: TurnEvent): LiveThoug
     case 'text_delta':
     case 'tool_call':
       return live
-    // 型はRust側と手で合わせているので、知らない種類が届いても表示を保つ。
-    default:
-      return live
   }
 }
