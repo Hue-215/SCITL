@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import { failureText } from './api'
 import { chatKey } from './chat'
 import { t } from './i18n'
+import { without } from './record'
 import { appendTurnEvent, NO_LIVE_THOUGHTS, type LiveThoughts, type ThoughtItem } from './thinking'
 import type { Chat, PendingEntry, TurnEvent } from './types'
 
@@ -9,13 +10,6 @@ import type { Chat, PendingEntry, TurnEvent } from './types'
 // 実行中の状態と失敗を、会話ごとに持つ(Issue #152・#70)。応答待ちの会話を離れて別の会話を
 // 操作でき、戻ってきたときも応答待ちの表示・途中経過・失敗がその会話に残る。同じ会話で2本目を
 // 始めないのは画面の無効化だけに頼らず、core側でも断る(orchestration::TurnContext::generating)。
-
-function without<T>(map: Record<string, T>, key: string): Record<string, T> {
-  if (!(key in map)) return map
-  const next = { ...map }
-  delete next[key]
-  return next
-}
 
 export interface ChatRequests {
   /** 実行中のコマンドの楽観表示。実行中でなければ空。 */

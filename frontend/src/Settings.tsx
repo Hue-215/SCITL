@@ -15,6 +15,7 @@ import {
 } from './api'
 import type { SettingsView } from './types'
 import { t } from './i18n'
+import { without } from './record'
 import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
 import { ProvidersTab } from './SettingsProviders'
@@ -74,11 +75,7 @@ export default function Settings({ onClose }: SettingsProps) {
 
   const fetchTools = async (serverId: string) => {
     setFetchingTools((prev) => [...prev, serverId])
-    setToolFetchErrors((prev) => {
-      const next = { ...prev }
-      delete next[serverId]
-      return next
-    })
+    setToolFetchErrors((prev) => without(prev, serverId))
     try {
       setSettings(await fetchMcpTools(serverId))
     } catch (e) {
