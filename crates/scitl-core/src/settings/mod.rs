@@ -1,4 +1,4 @@
-//! 設定・登録の操作(設定画面の各タブ、Issue #22・#28・#71)。GUIのコマンドもCLIも
+//! 設定・登録の操作(設定画面の各タブ)。GUIのコマンドもCLIも
 //! ここを1つ呼ぶだけにし、登録の規則・入力検証・秘密情報の出し入れ・保存を同じ経路に通す。
 //!
 //! 変更はすべて[`Draft`]を通る。書き込み同士は`writer`で直列化し、設定の複製を変更→
@@ -6,7 +6,7 @@
 //! メモリ上の設定とファイルが食い違わない。読み手(ターンの開始)が取る`current`のロックは
 //! 差し替えの一瞬だけで、資格情報ストアやファイルのI/Oを待たされない。
 //!
-//! 設定に問題があっても起動は止めない(Issue #155。画面から直す手段が無くなるため)。
+//! 設定に問題があっても起動は止めない(画面から直す手段が無くなるため)。
 //! 設定ファイルを読めなければ空の設定で動かし、読めなかったファイルを上書きしないよう
 //! 保存を断る。アクティブなプロバイダーを組み立てられなければ、そのプロバイダーを使えない
 //! ものとして動かし、削除・切り替えで直せるようにする。どちらも理由を設定画面に出し、
@@ -58,9 +58,8 @@ pub struct GeneralUpdate {
     pub response_timeout_secs: Option<u64>,
 }
 
-/// サーバー追加フォームからの入力。接続方式ごとに必要な値だけを受け取る
-/// (`McpEndpoint`と同じタグ付きenumにすることで、フロントエンドが送る形と
-/// Rust側の型を対応させる)。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。
+/// サーバー追加フォームからの入力。`McpEndpoint`と同じく、接続方式ごとに必要な値だけを受け取る。
+/// 組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。
 /// 値を含むため`Debug`は付けない(ログに出す経路を作らない)。
 #[derive(Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
@@ -165,15 +164,11 @@ pub struct Settings {
     config_error: Option<String>,
     current: Mutex<Current>,
     writer: Mutex<()>,
-    /// 取得済みのMCPツール一覧。アプリ起動中だけ保持するメモリキャッシュで、
-    /// config.tomlには書かない(ツール名・説明はユーザーの設定ではなくサーバー側の持ち物で、
-    /// 永続化した写しはサーバー側の更新を検知できない)。設定画面の表示と、ターン開始時の
-    /// ツール公開(`orchestration::McpAccess`)が同じここを読む。
+    /// 取得済みのMCPツール一覧([`crate::mcp::ToolCatalog`])。
     mcp_tools: Arc<ToolCatalog>,
     /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。
     fetching: InFlightSet<String>,
-    /// モデル能力の自動検出の結果(能力解決の3層の真ん中)。`mcp_tools`と同じく
-    /// アプリ起動中だけ保持する(理由は[`DetectedCatalog`])。
+    /// モデル能力の自動検出の結果([`DetectedCatalog`])。
     detected: DetectedCatalog,
     /// [`Self::detect_model_capabilities`]の同時実行を1プロバイダーにつき1本に絞る。
     detecting: InFlightSet<String>,
@@ -181,9 +176,8 @@ pub struct Settings {
 
 impl Settings {
     /// 設定ファイルを読み、アクティブなプロバイダーのアダプタを組み立てる。ファイルが
-    /// 無ければプロバイダー0件で始める。既定の通信先を補わないのは、通信先をユーザーが
-    /// 登録したものに限るため。読めない・組み立てられない場合も失敗にはしない(モジュール
-    /// 冒頭)。
+    /// 無ければプロバイダー0件で始める(通信先はユーザーが登録したものに限る)。読めない・
+    /// 組み立てられない場合も失敗にはしない。
     pub fn load(path: PathBuf) -> Self {
         let (config, config_error) = match config::load(&path) {
             Ok(config) => (config, None),
@@ -284,9 +278,8 @@ impl Settings {
         Ok(self.view())
     }
 
-    /// プロバイダーが提供するモデル名を問い合わせる。登録済みのものも含めて
-    /// 名前順に返し、設定には書かない。どれを登録するかは利用者が選び、[`Self::add_models`]で
-    /// 登録する(一括で登録しない理由はarchitecture.md 3節)。
+    /// プロバイダーが提供するモデル名を問い合わせる。登録済みのものも含めて名前順に返し、
+    /// 設定には書かない(登録は利用者が選んで[`Self::add_models`]で行う)。
     pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<AvailableModel>> {
         let provider = self.provider(provider_id)?;
         Ok(view::available_models(
@@ -373,9 +366,8 @@ impl Settings {
         }
     }
 
-    /// 空白だけのプロンプトは未設定として保存する。既定の文面を持つもの(タスクチャット用・
-    /// 開始の発言)は、既定の文面と同じ値も未設定にする(architecture.md 3節「聞き取りの開始」。
-    /// 判定は`orchestration::stored_prompt`)。
+    /// 空白だけのプロンプトと、既定の文面と同じ値は未設定として保存する
+    /// (`orchestration::stored_prompt`)。
     /// 表示言語は[`Self::update_language`]が別に持つので、ここでは変えない。
     pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
         // `0`は画面側でも弾くが、UIの入力チェックはセキュリティ境界ではない。
@@ -469,9 +461,9 @@ impl Settings {
         })
     }
 
-    /// アクティブなプロバイダーを消したら先頭をアクティブにする。保存済みAPIキーも消す
-    /// (legacy/frontend.md 3節。削除確認は画面側の責務)。鍵は設定の保存が済んでから消す。
-    /// 先に消すと、保存に失敗したときに設定だけが消えた鍵を指して残る。
+    /// アクティブなプロバイダーを消したら先頭をアクティブにする。保存済みAPIキーも消す。
+    /// 鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに設定が消えた鍵を
+    /// 指して残る)。
     pub fn delete_provider(&self, provider_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let config = &mut draft.config;
@@ -642,8 +634,7 @@ impl Settings {
     }
 
     /// 保存済みの秘密情報も消す。`delete_provider`と同じく、設定の保存が済んでから消す。
-    /// 取得済みツール一覧のキャッシュも捨てる(同じIDのサーバーを登録し直したときに、前の
-    /// サーバーの一覧が残っていてはならない。Issue #104)。
+    /// 同じ名前で登録し直したときに前の一覧が残らないよう、ツール一覧のキャッシュも捨てる。
     pub fn delete_mcp_server(&self, server_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let index = draft

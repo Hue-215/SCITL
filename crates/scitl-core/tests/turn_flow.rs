@@ -601,16 +601,13 @@ async fn run_turn_rebuilds_the_state_and_returns_tool_round_trip_within_the_turn
     assert!(!round1_system.contains("current task state"));
     assert_eq!(round1_system, system_prompt_content(&rounds[1][0]));
 
-    // 1ラウンド目の最新状態にはまだ工程が無く、2ラウンド目にはadd_stepsの結果が反映される
-    // (次ターン以降の履歴の代替。principles.md 3節)。
+    // 1ラウンド目の最新状態にはまだ工程が無く、2ラウンド目にはadd_stepsの結果が反映される。
     let states = adapter.states();
     assert!(!states[0].contains("買い出し"));
     assert!(states[1].contains("買い出し"));
 
-    // 同時に、直前のツール呼び出しと結果が実メッセージとして返る
-    // (同一ターン内のループはこちらが頼り。tools.md 4節)。これが無いと、
-    // モデルが「自分がさっき呼んだ」ことを認識できず同じツールを呼び直してしまう
-    // (Issue #38で実機確認された不具合)。
+    // 同時に、直前のツール呼び出しと結果が発言として返る。これが無いと、モデルは自分が
+    // さっき呼んだことを認識できず、同じツールを呼び直す。
     let round2_tail = &rounds[1][rounds[1].len() - 2..];
     match &round2_tail[0] {
         ChatMessage::Assistant {
@@ -827,7 +824,7 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     );
     assert!(reply_of(&messages).contains("見つかりませんでした"));
 
-    // 実行記録の`result`に`error`キーが立つ(画面の「エラーの有無」表示の前提、Issue #42)。
+    // 実行記録の`result`に`error`キーが立つ(画面の失敗の印はこれを見る)。
     let record = messages
         .iter()
         .find(|m| m.kind == Kind::ToolExecution)
@@ -1279,8 +1276,8 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
 }
 
 /// エラー発言は次ターンのAPI送信用履歴に混入しない。詳細(プロバイダーの応答本文)も、
-/// システムプロンプトを含めどこにも載らない(Issue #159。外部から来た文字列をモデルに渡すと
-/// 注入の経路になる)。
+/// システムプロンプトを含めどこにも載らない(外部から来た文字列をモデルに渡すと注入の経路に
+/// なる)。
 #[tokio::test]
 async fn error_messages_are_excluded_from_the_next_turns_history() {
     let conn = db::open_in_memory().unwrap();
@@ -1573,9 +1570,7 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         ]
     );
 
-    // モデルへ送り返す発言列(ChatMessage)には思考が現れる余地が無い
-    // (`ChatMessage`に思考を運ぶ構成要素自体が無いため型で保証される)。
-    // ここでは実際に送信された本文にも思考テキストが混入していないことを重ねて確認する。
+    // `ChatMessage`には思考を運ぶ構成要素が無いが、送信された本文にも混入していないことを確かめる。
     let rounds = adapter.sent_messages();
     for round in &rounds {
         for message in round {

@@ -74,7 +74,8 @@ enum Run {
     ReadAttachment,
 }
 
-/// 公開面。MCPは枠のみ。
+/// 公開面。
+// TODO(#73): `Mcp`はまだ枠だけで、何も公開しない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
     General,
@@ -151,7 +152,7 @@ pub fn kind(chat: Chat, name: &str) -> Option<ToolKind> {
 
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]に
 /// する。総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離を
-/// モデルの自己制御に頼らない。tools.md 5節)。タスクチャットの`task_id`は呼び出し元
+/// モデルの自己制御に頼らない)。タスクチャットの`task_id`は呼び出し元
 /// (orchestration)が文脈から渡す(モデルには公開しない)。`image_input`はモデルが画像入力に
 /// 対応するか(`attachments::delivery`)。
 pub fn execute(
@@ -178,9 +179,8 @@ pub fn execute(
     result.map(ToolOutput::from)
 }
 
-/// `step_id`はタスクIDと違いモデルの文脈に頼らず渡させる引数のため、対象タスクの取り違え
-/// (同節が修正した過去の不具合)を防ぐには呼び出し側で所属チェックが要る。工程の更新・削除
-/// ツールで共有する。
+/// 工程が会話の対象タスクに属するかを確かめる。`step_id`はモデルが渡す引数なので、別の
+/// タスクの工程を指されうる。工程の更新・削除ツールで共有する。
 fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result<()> {
     let belongs = task_steps::list_for_task(conn, task_id)?
         .iter()

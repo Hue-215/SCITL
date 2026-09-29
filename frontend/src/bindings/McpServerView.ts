@@ -4,11 +4,7 @@ import type { McpToolView } from "./McpToolView";
 
 export type McpServerView = { id: string, name: string, enabled: boolean, endpoint: McpEndpointView, enabled_tools: Array<string>, 
 /**
- * 画面に出すツール一覧。取得済みの一覧に、そこに無い有効化済みのツールを
- * 足したもの。有効化済みのツールを必ず出すのは、出さないと確認することも外すことも
- * できないため(一覧のキャッシュはアプリ起動中だけなので、再起動直後は未取得になる。
- * サーバーが消したツールは、同じ名前のツールが後から足されると選び直さずに公開される)。
- * 一覧に無いツールの説明はサーバーに聞かないと分からないので無い。画面はこれを描く
- * だけで、自前では組み立てない。
+ * 画面に出すツール一覧。取得済みの一覧に、そこに無い有効化済みのツールを足したもの
+ * (再起動直後の未取得の間も、有効化済みのツールを確かめて外せるように)。
  */
 tools: Array<McpToolView>, tools_fetched: boolean, };

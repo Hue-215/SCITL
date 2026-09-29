@@ -70,8 +70,7 @@ pub enum McpEndpointView {
     },
 }
 
-/// 設定画面へ渡すツール1件。引数スキーマは表示に使わないので渡さない
-/// (表示に不要なサーバー由来のデータをWebViewへ出さない)。
+/// 設定画面へ渡すツール1件。引数スキーマは表示に使わないので渡さない。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct McpToolView {
@@ -93,18 +92,13 @@ pub struct McpServerView {
     pub enabled: bool,
     pub endpoint: McpEndpointView,
     pub enabled_tools: Vec<String>,
-    /// 画面に出すツール一覧。取得済みの一覧に、そこに無い有効化済みのツールを
-    /// 足したもの。有効化済みのツールを必ず出すのは、出さないと確認することも外すことも
-    /// できないため(一覧のキャッシュはアプリ起動中だけなので、再起動直後は未取得になる。
-    /// サーバーが消したツールは、同じ名前のツールが後から足されると選び直さずに公開される)。
-    /// 一覧に無いツールの説明はサーバーに聞かないと分からないので無い。画面はこれを描く
-    /// だけで、自前では組み立てない。
+    /// 画面に出すツール一覧。取得済みの一覧に、そこに無い有効化済みのツールを足したもの
+    /// (再起動直後の未取得の間も、有効化済みのツールを確かめて外せるように)。
     pub tools: Vec<McpToolView>,
     pub tools_fetched: bool,
 }
 
-/// 一般設定。既定値を持つものは`ToolSettingsView`と同じく、設定値(未設定は`None`)と
-/// 未設定時に実際に使われる既定値の両方を渡す(既定値をTS側に書き写さない理由も同じ)。
+/// 一般設定。既定値を持つものは、設定値(未設定は`None`)と未設定時の既定値の両方を渡す。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct GeneralSettingsView {
@@ -120,9 +114,8 @@ pub struct GeneralSettingsView {
     pub language: Language,
 }
 
-/// ツール呼び出しの上限。設定値そのもの(未設定は`None`)に加え、未設定時に実際に使われる
-/// 既定値も渡す。画面はプレースホルダにこれを出すだけで、既定値をTS側に書き写さない(2箇所に
-/// 持つと必ずどちらかが古くなる)。
+/// ツール呼び出しの上限。設定値(未設定は`None`)と未設定時の既定値の両方を渡し、画面は
+/// 既定値をプレースホルダに出す。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ToolSettingsView {
