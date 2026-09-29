@@ -1,4 +1,4 @@
-//! 疑似API(LLM役が中継する`tools/llm-relay/mock_llm.py`)を相手に、本物のアダプタとターンの
+//! 疑似API(LLM役が応答を書く。別リポジトリ Hue-215/Sham_llm)を相手に、本物のアダプタとターンの
 //! 処理を通して会話を進める試験用のドライバー。GUIの送信と同じ入口(`create_task`・
 //! `open_task_chat`・`run_turn`)を呼ぶ。使い方は`docs/llm-relay.md`。
 //!
@@ -9,8 +9,8 @@
 //! STEPは`@new`(タスクを作って聞き取りを始める)・`@general`(総合チャットへ移る)・
 //! それ以外(今の会話へのユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
 //!
-//! 環境変数`RELAY_ANTHROPIC_MODEL`にモデルIDを指定すると、OpenAI互換の代わりにAnthropic形式の
-//! アダプタで、そのモデルを思考の強さ「中」で呼ぶ(BASE_URLは`/v1`を付けない)。
+//! 方言は環境変数`RELAY_DIALECT`(`openai`・`anthropic`・`gemini`)で選ぶ。BASE_URLとモデルは
+//! `docs/llm-relay.md`。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -22,6 +22,7 @@ use scitl_core::db::messages::Chat;
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::providers::anthropic::AnthropicAdapter;
+use scitl_core::llm::providers::gemini::GeminiAdapter;
 use scitl_core::llm::providers::openai_compat::OpenAiCompatAdapter;
 use scitl_core::llm::{LlmAdapter, ResponseEvent, DEFAULT_CAPABILITIES};
 use scitl_core::orchestration::{
@@ -43,10 +44,12 @@ async fn main() {
     let key = SecretString::from("relay-dummy-key".to_string());
     // LLM役は人間並みに遅いので長めに待つ。
     let timeout = Duration::from_secs(900);
-    let anthropic_model = std::env::var("RELAY_ANTHROPIC_MODEL").ok();
-    let adapter: Box<dyn LlmAdapter> = match &anthropic_model {
-        Some(model) => Box::new(AnthropicAdapter::new(base_url, key, model, timeout).unwrap()),
-        None => Box::new(OpenAiCompatAdapter::new(base_url, key, "relay-model", timeout).unwrap()),
+    let dialect = std::env::var("RELAY_DIALECT").unwrap_or_else(|_| "openai".to_string());
+    let adapter: Box<dyn LlmAdapter> = match dialect.as_str() {
+        "openai" => Box::new(OpenAiCompatAdapter::new(base_url, key, "dummy-o", timeout).unwrap()),
+        "anthropic" => Box::new(AnthropicAdapter::new(base_url, key, "dummy-a", timeout).unwrap()),
+        "gemini" => Box::new(GeminiAdapter::new(base_url, key, "dummy-g", timeout).unwrap()),
+        other => panic!("unknown RELAY_DIALECT: {other}"),
     };
     let general = GeneralConfig::default();
     let generating = InFlightSet::new();
@@ -72,7 +75,7 @@ async fn main() {
         prompts: SystemPrompts::from_config(&general),
         opening_message: orchestration::opening_message(&general),
         capabilities: DEFAULT_CAPABILITIES,
-        reasoning_effort: anthropic_model.as_ref().map(|_| ReasoningEffort::Medium),
+        reasoning_effort: (dialect != "openai").then_some(ReasoningEffort::Medium),
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
         generating: &generating,
