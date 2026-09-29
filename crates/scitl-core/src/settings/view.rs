@@ -139,8 +139,8 @@ pub struct SettingsView {
     pub mcp_server_name_max_chars: usize,
 }
 
-/// チャット入力欄の下のモデル選択・思考の強さ選択。設定画面の[`SettingsView`]
-/// とは別に持ち、選ぶのに要るものだけを渡す。
+/// チャット入力欄の下のモデル選択・思考の強さ選択。設定画面の[`SettingsView`]とは別に持ち、
+/// 選ぶのに要るものだけを渡す。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ChatModelsView {

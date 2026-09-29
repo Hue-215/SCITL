@@ -100,8 +100,8 @@ export const NO_LIVE_THOUGHTS: LiveThoughts = { items: [], reasoningOpen: false 
 
 /**
  * 届いたイベントを1件積む。保存済みのターンと同じく、1ラウンドの思考は1項目にまとめる。
- * 本文は描かない(完了後に読み直した返信で出す)。実行前のツール呼び出しも
- * 描かず、実行の知らせ(`tool_executed`)で結果と一緒に出す。
+ * 本文は描かない(完了後に読み直した返信で出す)。実行前のツール呼び出しも描かず、実行の
+ * 知らせ(`tool_executed`)で結果と一緒に出す。
  */
 // TODO(#204): 本文もライブ表示する。
 export function appendTurnEvent(live: LiveThoughts, event: TurnEvent): LiveThoughts {

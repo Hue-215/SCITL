@@ -67,8 +67,8 @@ impl TurnRequest {
     }
 
     /// ツールを渡すラウンドの数。上限のラウンドまでツールを実行したら、ツールを渡さずにもう
-    /// 一度だけ呼ぶ(ツールに対応しないモデルは最初の呼び出しがそれにあたる)。`u64`で数えるのは、
-    /// 上限が`u32::MAX`でも最後の1回を数えられるようにするため。
+    /// 一度だけ呼ぶ(ツールに対応しないモデルは最初の呼び出しがそれにあたる)。`u64`で
+    /// 数えるのは、上限が`u32::MAX`でも最後の1回を数えられるようにするため。
     pub(super) fn tool_rounds(&self, ctx: &TurnContext<'_>) -> u64 {
         if self.tools_available {
             u64::from(ctx.limits.max_rounds_per_turn)

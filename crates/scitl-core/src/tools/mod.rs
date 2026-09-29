@@ -150,11 +150,10 @@ pub fn kind(chat: Chat, name: &str) -> Option<ToolKind> {
     find(chat, name).map(|tool| tool.kind)
 }
 
-/// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]に
-/// する。総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離を
-/// モデルの自己制御に頼らない)。タスクチャットの`task_id`は呼び出し元
-/// (orchestration)が文脈から渡す(モデルには公開しない)。`image_input`はモデルが画像入力に
-/// 対応するか(`attachments::delivery`)。
+/// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]にする。
+/// 総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離をモデルの自己制御に
+/// 頼らない)。タスクチャットの`task_id`は呼び出し元(orchestration)が文脈から渡す(モデルには
+/// 公開しない)。`image_input`はモデルが画像入力に対応するか(`attachments::delivery`)。
 pub fn execute(
     conn: &Connection,
     chat: Chat,

@@ -6,8 +6,8 @@ import { formatBytes, isolated, t } from './i18n'
 import type { AttachmentDeliveries, AttachmentView } from './types'
 import type { StagedAttachments } from './useStagedAttachments'
 
-// 添付ファイル。種別の判定・大きさの上限・モデルへの渡し方はRust側が決め、
-// ここは結果を描くだけ。
+// 添付ファイル。種別の判定・大きさの上限・モデルへの渡し方はRust側が決め、ここは結果を
+// 描くだけ。
 
 // 拡大表示の枠の幅。確認ダイアログより広く取る(Dialogの`width`)。ここでしか使わない値
 // なのでトークン化しない。

@@ -833,8 +833,8 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     assert!(content["result"].get("error").is_some(), "got {content}");
 }
 
-/// ツール結果に載った自由入力の予約タグは、モデルへ送る側でだけ無害化し、
-/// 保存する実行記録には受け取ったまま残す。
+/// ツール結果に載った自由入力の予約タグは、モデルへ送る側でだけ無害化し、保存する
+/// 実行記録には受け取ったまま残す。
 #[tokio::test]
 async fn reserved_tags_in_tool_results_are_neutralized_only_on_the_way_to_the_model() {
     let conn = db::open_in_memory().unwrap();
@@ -1164,9 +1164,9 @@ async fn run_turn_persists_error_message_when_the_tool_time_budget_is_exhausted(
     assert_eq!(tool_execution_count(&messages), 0);
 }
 
-/// 使った時間が積み上がって上限に届いたら、次の呼び出しへ進まずに打ち切る。
-/// 上限を1ナノ秒にすると、1回目の実行は上限に届いていないので走り、その実行時間だけで
-/// 必ず上限を超えるため、2回目の手前で打ち切られる。実時間の長さには依存しない。
+/// 使った時間が積み上がって上限に届いたら、次の呼び出しへ進まずに打ち切る。上限を
+/// 1ナノ秒にすると、1回目の実行は上限に届いていないので走り、その実行時間だけで必ず上限を
+/// 超えるため、2回目の手前で打ち切られる。実時間の長さには依存しない。
 #[tokio::test]
 async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
     let conn = db::open_in_memory().unwrap();
@@ -1370,8 +1370,8 @@ async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
     assert!(matches!(rounds[1].last(), Some(ChatMessage::Tool { .. })));
 }
 
-/// 編集: 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から
-/// 会話が再生成される。旧アシスタント応答は履歴から消え、新しい応答だけが残る。
+/// 編集: 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から会話が
+/// 再生成される。旧アシスタント応答は履歴から消え、新しい応答だけが残る。
 #[tokio::test]
 async fn edit_user_message_truncates_and_regenerates() {
     let conn = db::open_in_memory().unwrap();
@@ -1570,7 +1570,8 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         ]
     );
 
-    // `ChatMessage`には思考を運ぶ構成要素が無いが、送信された本文にも混入していないことを確かめる。
+    // `ChatMessage`には思考を運ぶ構成要素が無いが、送信された本文にも混入していないことを
+    // 確かめる。
     let rounds = adapter.sent_messages();
     for round in &rounds {
         for message in round {
@@ -2033,8 +2034,8 @@ async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
     assert_eq!(messages[1].error_kind.as_deref(), Some("unexpected"));
 }
 
-/// 往復の上限を使い切ったら、ツールを渡さずにもう一度だけ呼び、返信させる。
-/// 上限のラウンドで実行したツールの結果を、モデルが受け取ったうえで返信する。
+/// 往復の上限を使い切ったら、ツールを渡さずにもう一度だけ呼び、返信させる。上限のラウンドで
+/// 実行したツールの結果を、モデルが受け取ったうえで返信する。
 #[tokio::test]
 async fn after_the_last_tool_round_the_model_replies_without_tools() {
     let conn = db::open_in_memory().unwrap();

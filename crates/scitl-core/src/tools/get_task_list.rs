@@ -44,7 +44,8 @@ pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
 /// 最新状態で同じタスクの見え方が食い違わないようにするため。
 pub fn task_list(conn: &Connection) -> Result<Value> {
     // 表示側のフォールバックはモデルには渡さず、`title: null`(未設定)をそのまま見せる。
-    // アーカイブ済みは返さない(溜まる一方で、トークンが増え続け、優先度の相談ではノイズになる)。
+    // アーカイブ済みは返さない(溜まる一方で、トークンが増え続け、優先度の相談では
+    // ノイズになる)。
     let tasks: Vec<_> = tasks::list_summaries(conn)?
         .into_iter()
         .filter(|t| t.archived_at.is_none())

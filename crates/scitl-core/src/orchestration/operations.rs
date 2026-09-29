@@ -88,8 +88,8 @@ pub async fn delete_task(
     .await
 }
 
-/// タスクチャット版の`update_task`ツールと同じ検証・実行を通し、実行した引数そのものを記録する。
-/// `unchanged`が今のタスクについて真なら、変更も記録もしない。
+/// タスクチャット版の`update_task`ツールと同じ検証・実行を通し、実行した引数そのものを
+/// 記録する。`unchanged`が今のタスクについて真なら、変更も記録もしない。
 async fn update(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,

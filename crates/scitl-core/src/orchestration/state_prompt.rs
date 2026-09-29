@@ -60,9 +60,9 @@ pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts, tools_available:
         (Chat::General, false) => {}
     }
 
-    // ユーザー発言を包む予約タグ・最新状態の囲みの読み方。囲みと`sent_at`の
-    // 意味を伝えないと、モデルはタグを本文の一部と受け取り、応答にそのまま書き写す。文面は
-    // 組み立て側(`llm::PromptText`)から生成する。
+    // ユーザー発言を包む予約タグ・最新状態の囲みの読み方。囲みと`sent_at`の意味を伝えないと、
+    // モデルはタグを本文の一部と受け取り、応答にそのまま書き写す。文面は組み立て側
+    // (`llm::PromptText`)から生成する。
     sections.push(crate::llm::user_message_format_note());
 
     sections.join("\n\n")

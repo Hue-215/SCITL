@@ -562,7 +562,8 @@ struct ResponseFunctionCall {
 #[async_trait::async_trait]
 impl LlmAdapter for OpenAiCompatAdapter {
     fn readiness(&self) -> Readiness {
-        // モデル未選択でもアダプタは作られるので、ここで断る。APIキーは判定しない(`Readiness`)。
+        // モデル未選択でもアダプタは作られるので、ここで断る。APIキーは判定しない
+        // (`Readiness`)。
         if self.model.is_empty() {
             Readiness::NoModel
         } else {

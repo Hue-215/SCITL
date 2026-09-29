@@ -7,9 +7,9 @@ use super::attachments::{self, AttachmentView};
 use super::{now_iso8601, text_column_enum};
 use crate::error::{CoreError, Result};
 
-/// 発言が属する会話。`messages.task_id`がNULLなら総合チャット。
-/// `Option<i64>`で持たないのは、渡し忘れの`None`が総合チャットへの書き込みに化けるのを
-/// 型で防ぐため。画面とは`{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
+/// 発言が属する会話。`messages.task_id`がNULLなら総合チャット。`Option<i64>`で持たないのは、
+/// 渡し忘れの`None`が総合チャットへの書き込みに化けるのを型で防ぐため。画面とは
+/// `{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", content = "task_id", rename_all = "snake_case")]

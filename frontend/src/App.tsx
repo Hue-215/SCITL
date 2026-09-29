@@ -40,8 +40,8 @@ export default function App() {
   // 表示中の会話。起動したら総合チャットを開く(タスクを離れたときの戻り先でもある)。
   const [chat, setChat] = useState<Chat>(GENERAL_CHAT)
   const [adding, setAdding] = useState(false)
-  // タスクを作らなかった理由(チャットを使えない間)。IPCの失敗(`error`)と違い、
-  // モデルの選択や設定の変更で解消しうるので、それらを変えたら外す(次の追加で改めて判定される)。
+  // タスクを作らなかった理由(チャットを使えない間)。IPCの失敗(`error`)と違い、モデルの
+  // 選択や設定の変更で解消しうるので、それらを変えたら外す(次の追加で改めて判定される)。
   const [addBlocked, setAddBlocked] = useState<string | null>(null)
   // 表示中のタスク。総合チャットと、タスクを読み込むまでの間はnull。
   const [task, setTask] = useState<TaskDetailView | null>(null)

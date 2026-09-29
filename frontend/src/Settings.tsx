@@ -162,9 +162,9 @@ export default function Settings({ onClose }: SettingsProps) {
                   )
                 }
                 onAddServer={async (name, endpoint) => {
-                  // 追加したら続けて1回ツール一覧を取得する。失敗しても登録は残し、エラーは
-                  // そのカードに出す。
-                  // 追加したサーバーは、追加前に無かったidで見分ける。
+                  // 追加したら続けて1回ツール一覧を取得する。失敗しても登録は残し、
+                  // エラーはそのカードに出す。追加したサーバーは、追加前に無かったidで
+                  // 見分ける。
                   const before = new Set(settings.mcp_servers.map((s) => s.id))
                   const next = await applyAdded(() => addMcpServer(name, endpoint))
                   const added = next.mcp_servers.find((s) => !before.has(s.id))

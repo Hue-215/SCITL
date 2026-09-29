@@ -268,8 +268,8 @@ const MAX_TITLE_CHARS: usize = 40;
 
 /// タイトル文字列を、1行のタイトルとして書き込める形に正規化する(防御としての無害化は
 /// 出力先ごとに掛ける)。制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、
-/// 連続空白を1つにまとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので
-/// 省略の印は付けない。画面からの変更は、これで空になるタイトルを書く前に断る
+/// 連続空白を1つにまとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので省略の
+/// 印は付けない。画面からの変更は、これで空になるタイトルを書く前に断る
 /// (`orchestration::operations`)。
 pub(crate) fn sanitize_title(raw: &str) -> String {
     let squeezed = collapse_whitespace(raw);
@@ -347,8 +347,9 @@ fn fallback_label(first_user_message: &str) -> Option<String> {
     (!squeezed.is_empty()).then(|| ellipsize(&squeezed, MAX_FALLBACK_LABEL_CHARS))
 }
 
-/// タスクを論理削除する。配下の工程の`deleted_at`は書き換えない。ツールには公開せず、
-/// 画面・CLIからのみ呼ぶ。削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる値はここで取る)。
+/// タスクを論理削除する。配下の工程の`deleted_at`は書き換えない。ツールには公開せず、画面・
+/// CLIからのみ呼ぶ。削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる
+/// 値はここで取る)。
 pub fn delete_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
         &format!(
