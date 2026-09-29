@@ -3,10 +3,8 @@ import type { FinishReason } from "./FinishReason";
 import type { ToolArguments } from "./ToolArguments";
 
 /**
- * アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び
- * (docs/spec/principles.md 3節「応答はイベントの並びとして受け取る」、Issue #8)。
- * ストリーミングしないプロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る
- * ([`LlmAdapter::send`])。
+ * アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び。ストリーミングしない
+ * プロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る([`LlmAdapter::send`])。
  */
 export type ResponseEvent = { "type": "text_delta", text: string, } | { "type": "reasoning_delta", text: string, } | { "type": "tool_call", 
 /**

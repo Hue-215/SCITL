@@ -63,13 +63,11 @@ impl<'a> AdapterInputs<'a> {
     }
 }
 
-/// 現在の`active_provider_id`からアダプタを組み立てる。アクティブなプロバイダーが無い場合は
-/// エラーではなく`None`を返す(全プロバイダー削除は有効な状態であり、チャット送信時に
-/// 初めてエラー発言として表面化させる)。
+/// 現在の`active_provider_id`からアダプタを組み立てる。アクティブなプロバイダーが無ければ
+/// `None`(チャット送信時にエラー発言になる)。
 ///
-/// 資格情報ストアが利用できない(OSユーザーが変わった、キーチェーンをクリアした等)
-/// 場合でもアプリ自体は起動させる。鍵無し扱いに落とし、実際のAPI呼び出し時に
-/// プロバイダー側の認証エラーとして表面化させる。
+/// 資格情報ストアを使えなくても、鍵無しで組み立てて起動を続ける(API呼び出し時に認証エラー
+/// として表に出る)。
 pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError> {
     let AdapterInputs { provider, timeout } = AdapterInputs::of(config);
     let Some(provider) = provider else {
@@ -103,7 +101,8 @@ pub fn can_detect_capabilities(provider: &ProviderConfig) -> bool {
 }
 
 /// `models`の能力を推論サーバーに問い合わせる。`Ok(None)`は能力を問い合わせられない
-/// サーバー、`Err`はサーバーに繋がらないか、今は答えられない。サーバーが知らないモデルは結果に含めない。
+/// サーバー、`Err`はサーバーに繋がらないか、今は答えられない。サーバーが知らないモデルは
+/// 結果に含めない。
 pub async fn detect_capabilities(
     provider: &ProviderConfig,
     models: &[String],
@@ -117,7 +116,7 @@ pub async fn detect_capabilities(
     }
 }
 
-/// プロバイダーが提供するモデル名の一覧(Issue #33)。名前順で、登録済みのものも含む。
+/// プロバイダーが提供するモデル名の一覧。名前順で、登録済みのものも含む。
 pub async fn list_models(provider: &ProviderConfig) -> Result<Vec<String>, CoreError> {
     let api_key = load_api_key_off_thread(provider).await?;
     match provider.api_format {

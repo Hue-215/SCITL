@@ -1,19 +1,12 @@
-//! 外部ツールサーバー(MCP)クライアント。サーバーの登録・接続・ツール一覧の取得
-//! (Issue #28)と、応答生成1ターンの中でのツール呼び出し(Issue #44)を担う。
+//! 外部ツールサーバー(MCP)クライアント。サーバーへの接続・ツール一覧の取得と、応答生成
+//! 1ターンの中でのツール呼び出しを担う。
 //!
-//! 接続は会話1ターンの間だけ張り、ターンが終われば切断する([`McpSessions`]。常駐接続や
-//! コネクションプールは持たない。legacy/backend.md 9節「方針として重要」)。設定画面からの
-//! ツール一覧取得は1回の取得で開いて閉じる。
+//! 接続は1ターンの間だけ張り、ターンが終われば切断する([`McpSessions`])。設定画面からの
+//! ツール一覧取得は1回ごとに開いて閉じる。取得したツール一覧はアプリ起動中だけ
+//! [`ToolCatalog`]に持ち、config.tomlには書かない(サーバー側の更新に追従できないため)。
 //!
-//! 取得したツール一覧はアプリ起動中だけ[`ToolCatalog`]に保持し、config.tomlには書かない
-//! (Issue #104。ツール名・説明はユーザーの設定ではなくサーバー側の持ち物で、永続化した
-//! 写しはサーバー側の更新を検知できない。legacy/backend.md 9節「ツール一覧の事前取得と
-//! キャッシュ」)。
-//!
-//! `rmcp`(公式Rust SDK)を使う。有効化するfeatureは`client`・`transport-child-process`・
-//! `transport-streamable-http-client-reqwest`のみで、OAuth/認可系(`auth`)は有効化しない
-//! (`.well-known`ディスカバリ等でユーザーが登録していない先への通信が発生し得るため。
-//! principles.md 1節)。
+//! `rmcp`のOAuth/認可系(`auth`)featureは有効にしない。`.well-known`ディスカバリ等で、
+//! ユーザーが登録していない先へ通信しうるため。
 
 mod http;
 mod stdio;
@@ -35,7 +28,7 @@ use crate::secrets;
 use crate::text;
 
 /// 接続・ツール一覧取得・ツール呼び出しそれぞれに設ける固定タイムアウト。応答しない
-/// サーバーで設定画面やターンが固まらないようにする(architecture.md 5節と同じ考え方)。
+/// サーバーで設定画面やターンが固まらないようにする。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(30);
 /// 1回のツール呼び出しの上限。ターン全体で使える時間の合計は設定から決まるが
@@ -46,13 +39,12 @@ const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 応答を保存し終えたあとのターンが切断待ちのまま返らなくなる。
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// クライアント側のMCPセッション。ハンドラを持たない(`()`)ため、サーバーからの
-/// サンプリング要求等には応答しない(公開範囲を広げないための既定。principles.md 4節)。
+/// クライアント側のMCPセッション。サーバーからの要求(サンプリング等)で通信や処理が増えない
+/// よう、意図的にハンドラを持たない(`()`)。
 type ClientService = RunningService<RoleClient, ()>;
 
-/// サーバーから受け取ったツール1件。どの値も受け取ったまま持つ(architecture.md 10節
-/// 「保存するデータは書き換えない」)。画面へ出す形は`settings::view`が作り、
-/// これ自体はWebViewへ渡さない。
+/// サーバーから受け取ったツール1件。どの値も受け取ったまま持つ。画面へ出す形は
+/// `settings::view`が作り、これ自体はWebViewへ渡さない。
 #[derive(Debug, Clone)]
 pub struct McpToolInfo {
     /// 有効化の照合とサーバー呼び出しに使う識別子。書き換えると、サーバー上の別の
@@ -60,14 +52,12 @@ pub struct McpToolInfo {
     pub name: String,
     pub description: Option<String>,
     /// サーバーが宣言した引数スキーマ(JSON Schema)。モデルへツールを公開するときに渡す。
-    /// 中身は検証しない(信頼境界は登録したこと自体に置く。principles.md 4節)。
-    /// 設定画面へは渡さない(表示に使わないものをWebViewへ出さない)。
+    /// 中身は検証しない(信頼境界はユーザーが登録したこと自体に置く)。設定画面へは渡さない。
     pub input_schema: Value,
 }
 
-/// 取得済みツール一覧のメモリキャッシュ(Issue #104)。アプリ起動中のみ有効で、
-/// config.tomlには書かない。設定画面の表示と、ターン開始時のツール公開の両方が
-/// ここを読む(同じ一覧の出どころを2つ持たない。principles.md 5節)。
+/// 取得済みツール一覧のメモリキャッシュ。設定画面の表示と、ターン開始時のツール公開の
+/// 両方がここを読む。
 #[derive(Debug, Default)]
 pub struct ToolCatalog {
     by_server: Mutex<HashMap<String, Vec<McpToolInfo>>>,
@@ -96,9 +86,9 @@ impl ToolCatalog {
     }
 }
 
-/// 応答生成1ターンの間だけ生きるセッション置き場(legacy/backend.md 9節)。
-/// サーバーごとに最初に必要になった時点で接続し、ターンの終わりに[`Self::close`]で
-/// まとめて切断する。呼び出し側は成功・失敗どちらの経路でも必ず`close`を通ること。
+/// 応答生成1ターンの間だけ生きるセッション置き場。サーバーごとに最初に必要になった時点で
+/// 接続し、ターンの終わりに[`Self::close`]でまとめて切断する。呼び出し側は成功・
+/// 失敗どちらの経路でも必ず`close`を通ること。
 #[derive(Default)]
 pub struct McpSessions {
     by_server: HashMap<String, ClientService>,
@@ -243,7 +233,8 @@ fn to_tool_info(tool: rmcp::model::Tool) -> McpToolInfo {
 
 /// ツール呼び出しの結果を、モデルへ返す・実行記録として保存するためのJSONに変換する。
 /// 構造化された結果があればそれを、無ければテキストブロックを連結して返す。
-/// 画像等の非テキストブロックはこの経路では扱わない(添付として扱う仕組みはIssue #21)。
+/// 画像等の非テキストブロックは扱わない。
+// TODO(#107): 非テキストの結果を扱う。
 fn to_result_value(result: CallToolResult) -> Value {
     let mut value = Map::new();
     if let Some(structured) = result.structured_content {
@@ -292,8 +283,7 @@ fn to_result_value(result: CallToolResult) -> Value {
     Value::Object(value)
 }
 
-/// ツール結果のテキストは、モデルの入力にも実行記録にも載る。上限を設けて
-/// 際限なく膨らまないようにする(履歴トリミングの方式はIssue #7の範囲)。
+/// ツール結果のテキストの上限。モデルの入力にも実行記録にも載るため、際限なく膨らまないように。
 const MAX_RESULT_CHARS: usize = 20_000;
 
 fn truncate_result_text(result: &str) -> String {
@@ -305,9 +295,7 @@ fn truncate_result_text(result: &str) -> String {
     }
 }
 
-/// streamable_http方式のURLを検証する(実際に接続する前、サーバー登録時のIPC層から呼ぶ)。
-/// 検証本体は[`ExternalUrl::parse`]に集約する(LLMプロバイダーのbase_url
-/// 検証と共有)。
+/// streamable_http方式のURLを検証する(サーバー登録時に呼ぶ)。検証本体は[`ExternalUrl::parse`]。
 pub fn validate_streamable_http_url(url: &str) -> Result<(), CoreError> {
     ExternalUrl::parse(url).map(drop).map_err(CoreError::Mcp)
 }
@@ -368,8 +356,7 @@ async fn resolve_secrets(refs: &[SecretRef]) -> Result<Vec<(String, SecretString
 
 /// サーバーとのやり取りの失敗を、エラー文言に載せる形にする。rmcpのエラー表示には
 /// サーバーが書いた`message`と任意のJSON(`data`)がそのまま入り、設定画面・ツール実行記録・
-/// モデルへ返す結果のすべてに載るため、画面に出す診断文字列として整える
-/// (architecture.md 10節)。
+/// モデルへ返す結果のすべてに載るため、画面に出す診断文字列として整える。
 const MAX_SERVER_ERROR_CHARS: usize = 512;
 
 fn describe_server_error(e: &impl std::fmt::Display) -> String {

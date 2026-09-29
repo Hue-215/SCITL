@@ -1,5 +1,5 @@
-//! トークン数の見積もり(architecture.md 2節)。プロバイダーのトークナイザは使わず、
-//! 文字数から多めに見積もる。多めに倒す理由は[`super::FALLBACK_CONTEXT_LENGTH`]と同じ。
+//! トークン数の見積もり。プロバイダーのトークナイザは使わず、文字数から多めに見積もる。
+//! 多めに倒す理由は[`super::FALLBACK_CONTEXT_LENGTH`]と同じ。
 
 use super::{ChatMessage, ToolSchema};
 

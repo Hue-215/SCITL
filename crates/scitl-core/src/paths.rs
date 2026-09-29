@@ -1,5 +1,5 @@
 //! アプリのデータの置き場所。GUIとCLIが同じファイルを開くため、ディレクトリの解決と
-//! その中の並びをここに閉じる(architecture.md 1節)。
+//! その中の並びをここに閉じる。
 
 use std::path::{Path, PathBuf};
 
@@ -50,18 +50,18 @@ impl DataLayout {
         self.root.join("config.toml")
     }
 
-    /// 添付の実体の置き場所(architecture.md 12節)。
+    /// 添付の実体の置き場所。
     pub fn attachments(&self) -> PathBuf {
         self.root.join("attachments")
     }
 
-    /// Markdownエクスポートの書き出し先(architecture.md 13節)。
+    /// Markdownエクスポートの書き出し先。
     pub fn export(&self) -> PathBuf {
         self.root.join("export")
     }
 }
 
-/// キャッシュディレクトリの中の、添付を開くために書き出す場所(architecture.md 12節)。
+/// キャッシュディレクトリの中の、添付を開くために書き出す場所。
 pub fn revealed_attachments(cache_dir: &Path) -> PathBuf {
     cache_dir.join("revealed-attachments")
 }

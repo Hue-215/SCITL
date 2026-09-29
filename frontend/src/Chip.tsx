@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react'
 
 interface ChipProps {
-  // 利用者が付けた名前(ファイル名等)でありうるので、要素の境界で閉じ込める
-  // (architecture.md 10節「画面(モデル・ユーザーが書いたもの)」)。
+  // 利用者が付けた名前(ファイル名等)でありうるので、要素の境界で閉じ込める。
   label: string
   // 名前の後ろに添える補足(大きさ等)。
   detail?: string
@@ -19,8 +18,7 @@ interface ChipProps {
   disabled?: boolean
 }
 
-// 添付ファイル名などを枠で表示する共通部品(legacy/frontend.md 5節「チップ」、
-// principles.md 6節「共通の操作は共通部品を経由させる」)。
+// 添付ファイル名などを枠で表示する共通部品。
 export default function Chip({
   label,
   detail,

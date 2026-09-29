@@ -312,7 +312,7 @@ fn calls_two_tools() -> ScriptedAdapter {
     .repeating_last()
 }
 
-/// APIプロバイダーが失敗を返す(Issue #40)。
+/// APIプロバイダーが失敗を返す。
 fn fails_to_authenticate() -> ScriptedAdapter {
     ScriptedAdapter::failing(LlmError::from_status(
         reqwest::StatusCode::UNAUTHORIZED,
@@ -321,22 +321,22 @@ fn fails_to_authenticate() -> ScriptedAdapter {
     ))
 }
 
-/// テキストもツール呼び出しも無い応答を返す(Issue #40)。
+/// テキストもツール呼び出しも無い応答を返す。
 fn replies_nothing() -> ScriptedAdapter {
     ScriptedAdapter::repeating(vec![done(FinishReason::Stop)])
 }
 
-/// 毎回ツールを呼び続け、上限到達を起こす(Issue #40)。
+/// 毎回ツールを呼び続け、上限到達を起こす。
 fn always_adds_a_step() -> ScriptedAdapter {
     ScriptedAdapter::repeating(calls(vec![add_a_step()]))
 }
 
-/// ツールを渡されている間はツールを呼び続け、渡されなくなったら返信する(Issue #153)。
+/// ツールを渡されている間はツールを呼び続け、渡されなくなったら返信する。
 fn adds_steps_while_tools_are_offered() -> ScriptedAdapter {
     always_adds_a_step().replying_without_tools(text("ここまでの結果でお答えします"))
 }
 
-/// 1回目はツール呼び出しの前に思考を出し、2回目は思考の後に最終応答を出す(Issue #42)。
+/// 1回目はツール呼び出しの前に思考を出し、2回目は思考の後に最終応答を出す。
 fn reasons_around_a_tool_call() -> ScriptedAdapter {
     let thought = |text: &str| ResponseEvent::ReasoningDelta {
         text: text.to_string(),
@@ -434,8 +434,8 @@ fn seed_task(conn: &Connection) -> i64 {
     conn.last_insert_rowid()
 }
 
-/// 外部(MCP)サーバーに繋がらなくても、そのターンは内部ツールだけで進む(Issue #44)。
-/// 登録した1台が落ちているだけでチャットが使えなくなってはならない。
+/// 外部(MCP)サーバーに繋がらなくても、そのターンは内部ツールだけで進む。登録した1台が
+/// 落ちているだけでチャットが使えなくなってはならない。
 #[tokio::test]
 async fn run_turn_continues_when_an_mcp_server_cannot_be_reached() {
     let conn = db::open_in_memory().unwrap();
@@ -511,7 +511,7 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
     assert!(reply_of(&messages).contains("更新しました"));
 }
 
-/// ターンの途中経過は、アダプタのイベントとツールの実行を起きた順に知らせる(Issue #70)。
+/// ターンの途中経過は、アダプタのイベントとツールの実行を起きた順に知らせる。
 /// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。
 #[tokio::test]
 async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
@@ -601,16 +601,13 @@ async fn run_turn_rebuilds_the_state_and_returns_tool_round_trip_within_the_turn
     assert!(!round1_system.contains("current task state"));
     assert_eq!(round1_system, system_prompt_content(&rounds[1][0]));
 
-    // 1ラウンド目の最新状態にはまだ工程が無く、2ラウンド目にはadd_stepsの結果が反映される
-    // (次ターン以降の履歴の代替。principles.md 3節)。
+    // 1ラウンド目の最新状態にはまだ工程が無く、2ラウンド目にはadd_stepsの結果が反映される。
     let states = adapter.states();
     assert!(!states[0].contains("買い出し"));
     assert!(states[1].contains("買い出し"));
 
-    // 同時に、直前のツール呼び出しと結果が実メッセージとして返る
-    // (同一ターン内のループはこちらが頼り。tools.md 4節)。これが無いと、
-    // モデルが「自分がさっき呼んだ」ことを認識できず同じツールを呼び直してしまう
-    // (Issue #38で実機確認された不具合)。
+    // 同時に、直前のツール呼び出しと結果が発言として返る。これが無いと、モデルは自分が
+    // さっき呼んだことを認識できず、同じツールを呼び直す。
     let round2_tail = &rounds[1][rounds[1].len() - 2..];
     match &round2_tail[0] {
         ChatMessage::Assistant {
@@ -656,8 +653,8 @@ async fn run_turn_rebuilds_the_state_and_returns_tool_round_trip_within_the_turn
 
 #[tokio::test]
 async fn state_tool_results_stay_in_their_own_turn() {
-    // 状態系の結果は最新状態JSONが代わりに伝えるので、次のターンの履歴には載せない
-    // (docs/spec/rebuild/tools.md 4節)。実行記録には分類と払い出されたIDを残す。
+    // 状態系の結果は最新状態JSONが代わりに伝えるので、次のターンの履歴には載せない。
+    // 実行記録には分類と払い出されたIDを残す。
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let adapter = adds_a_step();
@@ -694,8 +691,8 @@ async fn state_tool_results_stay_in_their_own_turn() {
     assert_eq!(record["call_id"], "call_1");
 }
 
-/// 送信日時はユーザー発言の`sent_at`として本文と分けて運ぶ(Issue #68)。
-/// 本文には混ぜず、アシスタント発言には付けない。
+/// 送信日時はユーザー発言の`sent_at`として本文と分けて運ぶ。本文には混ぜず、アシスタント
+/// 発言には付けない。
 #[tokio::test]
 async fn history_carries_send_time_beside_the_user_text() {
     let conn = db::open_in_memory().unwrap();
@@ -783,7 +780,7 @@ async fn run_turn_executes_every_tool_call_in_a_single_response() {
 }
 
 /// 内部ツール1件の失敗ではターンを止めず、`{"error": ...}`の結果として記録し、
-/// モデルにも返して会話を続ける(Issue #58、docs/spec/principles.md 3節)。
+/// モデルにも返して会話を続ける。
 #[tokio::test]
 async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     let conn = db::open_in_memory().unwrap();
@@ -827,7 +824,7 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     );
     assert!(reply_of(&messages).contains("見つかりませんでした"));
 
-    // 実行記録の`result`に`error`キーが立つ(画面の「エラーの有無」表示の前提、Issue #42)。
+    // 実行記録の`result`に`error`キーが立つ(画面の失敗の印はこれを見る)。
     let record = messages
         .iter()
         .find(|m| m.kind == Kind::ToolExecution)
@@ -836,8 +833,8 @@ async fn run_turn_reports_internal_tool_failure_to_the_model_and_continues() {
     assert!(content["result"].get("error").is_some(), "got {content}");
 }
 
-/// ツール結果に載った自由入力の予約タグは、モデルへ送る側でだけ無害化し、
-/// 保存する実行記録には受け取ったまま残す(docs/spec/principles.md 4節)。
+/// ツール結果に載った自由入力の予約タグは、モデルへ送る側でだけ無害化し、保存する
+/// 実行記録には受け取ったまま残す。
 #[tokio::test]
 async fn reserved_tags_in_tool_results_are_neutralized_only_on_the_way_to_the_model() {
     let conn = db::open_in_memory().unwrap();
@@ -891,7 +888,7 @@ async fn reserved_tags_in_tool_results_are_neutralized_only_on_the_way_to_the_mo
 }
 
 /// 引数がJSONとして読めないツール呼び出しは、実行せずに失敗としてモデルへ返し、
-/// ターンを続ける(Issue #121、docs/spec/principles.md 3節)。
+/// ターンを続ける。
 #[tokio::test]
 async fn run_turn_reports_malformed_tool_arguments_to_the_model_without_running_the_tool() {
     let conn = db::open_in_memory().unwrap();
@@ -965,7 +962,7 @@ async fn run_narrating_turn(final_text: Option<&'static str>) -> Vec<db::message
     db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap()
 }
 
-/// ツールを呼んだラウンドの本文は捨てず、ターンの返信の一部として最終行に残る(Issue #131)。
+/// ツールを呼んだラウンドの本文は捨てず、ターンの返信の一部として最終行に残る。
 #[tokio::test]
 async fn text_written_alongside_tool_calls_is_kept_in_the_reply() {
     let messages = run_narrating_turn(Some("追加しました")).await;
@@ -993,7 +990,7 @@ async fn earlier_text_counts_as_the_reply_when_the_last_round_is_empty() {
     assert_eq!(last.content, "工程を追加しますね");
 }
 
-/// LLM呼び出しの失敗はErrで落とさず、エラー発言として保存される(Issue #40)。
+/// LLM呼び出しの失敗はErrで落とさず、エラー発言として保存される。
 #[tokio::test]
 async fn run_turn_persists_error_message_instead_of_returning_err() {
     let conn = db::open_in_memory().unwrap();
@@ -1013,7 +1010,7 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("auth"));
-    // 詳細は定型文言とは別の列に持つ(Issue #159)。
+    // 詳細は定型文言とは別の列に持つ。
     assert_eq!(
         error_message.error_detail.as_deref(),
         Some("HTTP 401: invalid api key")
@@ -1021,7 +1018,7 @@ async fn run_turn_persists_error_message_instead_of_returning_err() {
     assert!(!error_message.content.contains("invalid api key"));
 }
 
-/// 空応答(テキストもツール呼び出しも無い)もエラー発言として保存される(Issue #40)。
+/// 空応答(テキストもツール呼び出しも無い)もエラー発言として保存される。
 #[tokio::test]
 async fn run_turn_persists_error_message_for_empty_response() {
     let conn = db::open_in_memory().unwrap();
@@ -1044,7 +1041,7 @@ async fn run_turn_persists_error_message_for_empty_response() {
 }
 
 /// 上限のあとの最後の呼び出し(ツールを渡さない)でもツールを呼んできたら、実行せずに
-/// 上限到達のエラー発言として保存する(Issue #40・#153)。
+/// 上限到達のエラー発言として保存する。
 #[tokio::test]
 async fn run_turn_persists_error_message_for_tool_round_limit() {
     let conn = db::open_in_memory().unwrap();
@@ -1101,8 +1098,8 @@ async fn tool_calls_from_a_model_without_tool_support_are_not_a_round_limit() {
     assert_eq!(tool_execution_count(&messages), 0);
 }
 
-/// 設定したラウンド数の上限がそのまま効く(Issue #71)。`turn.rs`が定数ではなく
-/// 渡された値を見ていることを、実際に回った回数で確かめる。
+/// 設定したラウンド数の上限がそのまま効く。`turn.rs`が定数ではなく渡された値を
+/// 見ていることを、実際に回った回数で確かめる。
 #[tokio::test]
 async fn run_turn_honors_the_configured_max_tool_rounds() {
     let conn = db::open_in_memory().unwrap();
@@ -1134,10 +1131,10 @@ async fn run_turn_honors_the_configured_max_tool_rounds() {
     );
 }
 
-/// ツール実行に使える合計時間が最初から無ければ、ラウンド数に余裕があっても1回も
-/// 呼ばずに打ち切る(Issue #71)。`ToolLimits::from_config`は0を未設定として弾くので、
-/// この値は設定からは作れない。ここで確かめたいのは「使い切ったのに呼べる」状態を
-/// 作らないことなので、上限そのものを直接渡す。
+/// ツール実行に使える合計時間が最初から無ければ、ラウンド数に余裕があっても1回も呼ばずに
+/// 打ち切る。`ToolLimits::from_config`は0を未設定として弾くので、この値は設定からは作れない。
+/// ここで確かめたいのは「使い切ったのに呼べる」状態を作らないことなので、上限そのものを
+/// 直接渡す。
 #[tokio::test]
 async fn run_turn_persists_error_message_when_the_tool_time_budget_is_exhausted() {
     let conn = db::open_in_memory().unwrap();
@@ -1167,9 +1164,9 @@ async fn run_turn_persists_error_message_when_the_tool_time_budget_is_exhausted(
     assert_eq!(tool_execution_count(&messages), 0);
 }
 
-/// 使った時間が積み上がって上限に届いたら、次の呼び出しへ進まずに打ち切る(Issue #71)。
-/// 上限を1ナノ秒にすると、1回目の実行は上限に届いていないので走り、その実行時間だけで
-/// 必ず上限を超えるため、2回目の手前で打ち切られる。実時間の長さには依存しない。
+/// 使った時間が積み上がって上限に届いたら、次の呼び出しへ進まずに打ち切る。上限を
+/// 1ナノ秒にすると、1回目の実行は上限に届いていないので走り、その実行時間だけで必ず上限を
+/// 超えるため、2回目の手前で打ち切られる。実時間の長さには依存しない。
 #[tokio::test]
 async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
     let conn = db::open_in_memory().unwrap();
@@ -1206,8 +1203,7 @@ fn tool_execution_count(messages: &[db::messages::Message]) -> usize {
         .count()
 }
 
-/// プロバイダー未選択(`None`)はエラー発言として保存され、`send`は一切呼ばれない
-/// (Issue #40)。
+/// プロバイダー未選択(`None`)はエラー発言として保存され、`send`は一切呼ばれない。
 #[tokio::test]
 async fn run_turn_persists_error_message_when_no_provider_is_configured() {
     let conn = db::open_in_memory().unwrap();
@@ -1229,8 +1225,7 @@ async fn run_turn_persists_error_message_when_no_provider_is_configured() {
     assert_eq!(error_message.error_kind.as_deref(), Some("no_provider"));
 }
 
-/// アダプタを使えない理由(設定ファイルを読めない等)は、その理由のエラー発言になる
-/// (Issue #155)。
+/// アダプタを使えない理由(設定ファイルを読めない等)は、その理由のエラー発言になる。
 #[tokio::test]
 async fn run_turn_persists_the_reason_the_adapter_cannot_be_used() {
     let conn = db::open_in_memory().unwrap();
@@ -1258,8 +1253,7 @@ async fn run_turn_persists_the_reason_the_adapter_cannot_be_used() {
     );
 }
 
-/// モデル未選択・APIキー未設定は`send`を呼ぶ前に検知され、エラー発言として保存される
-/// (Issue #40)。
+/// モデル未選択・APIキー未設定は`send`を呼ぶ前に検知され、エラー発言として保存される。
 #[tokio::test]
 async fn run_turn_persists_error_message_for_unready_adapter_without_calling_send() {
     let conn = db::open_in_memory().unwrap();
@@ -1281,9 +1275,9 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
     assert_eq!(error_message.error_kind.as_deref(), Some("no_model"));
 }
 
-/// エラー発言は次ターンのAPI送信用履歴に混入しない(`legacy/backend.md` 4節手順2)。
-/// 詳細(プロバイダーの応答本文)も、システムプロンプトを含めどこにも載らない(Issue #159。
-/// 外部から来た文字列をモデルに渡すと注入の経路になる)。
+/// エラー発言は次ターンのAPI送信用履歴に混入しない。詳細(プロバイダーの応答本文)も、
+/// システムプロンプトを含めどこにも載らない(外部から来た文字列をモデルに渡すと注入の経路に
+/// なる)。
 #[tokio::test]
 async fn error_messages_are_excluded_from_the_next_turns_history() {
     let conn = db::open_in_memory().unwrap();
@@ -1328,8 +1322,8 @@ async fn error_messages_are_excluded_from_the_next_turns_history() {
     assert!(!leaks("invalid api key"));
 }
 
-/// コンテキスト長に収まらない古い発言は、ユーザー発言の単位で落とす(Issue #66)。
-/// このターンのユーザー発言とツールの往復は、どのラウンドでも残る。
+/// コンテキスト長に収まらない古い発言は、ユーザー発言の単位で落とす。このターンのユーザー
+/// 発言とツールの往復は、どのラウンドでも残る。
 #[tokio::test]
 async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
     let conn = db::open_in_memory().unwrap();
@@ -1376,8 +1370,8 @@ async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
     assert!(matches!(rounds[1].last(), Some(ChatMessage::Tool { .. })));
 }
 
-/// 編集(Issue #41): 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から
-/// 会話が再生成される。旧アシスタント応答は履歴から消え、新しい応答だけが残る。
+/// 編集: 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から会話が
+/// 再生成される。旧アシスタント応答は履歴から消え、新しい応答だけが残る。
 #[tokio::test]
 async fn edit_user_message_truncates_and_regenerates() {
     let conn = db::open_in_memory().unwrap();
@@ -1425,7 +1419,7 @@ async fn edit_user_message_truncates_and_regenerates() {
     assert!(deleted_at.is_some());
 }
 
-/// 編集の削除と挿入は1つの単位(Issue #151)。挿入が失敗したら、削除も残らない。
+/// 編集の削除と挿入は1つの単位。挿入が失敗したら、削除も残らない。
 #[tokio::test]
 async fn failed_edit_leaves_the_conversation_untouched() {
     let conn = db::open_in_memory().unwrap();
@@ -1470,10 +1464,10 @@ async fn failed_edit_leaves_the_conversation_untouched() {
     assert_eq!(contents, vec!["元の質問", "応答A"]);
 }
 
-/// 編集(Issue #95): ツールを実行したターンを編集で破棄しても、編集後の発言は**元の位置**に
+/// 編集: ツールを実行したターンを編集で破棄しても、編集後の発言は**元の位置**に
 /// 現れる。編集後の本文は新しい行として挿入されるが、生き残る通常発言はすべて対象より前の
 /// idなので、破棄されたターンのツール実行記録さえ会話から外れれば順序は元のままになる。
-/// 記録はDBに残す(`data-model.md`「ツール実行記録は……対象に含めない」)。
+/// 記録はDBに残す。
 #[tokio::test]
 async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
     let conn = db::open_in_memory().unwrap();
@@ -1544,7 +1538,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
 }
 
 /// 思考(reasoning)は該当する行の`reasoning`列に保存され、モデルへの再送信には
-/// 一切含まれないことを検証する(Issue #42、principles.md 3節「思考は履歴に送り返さない」)。
+/// 一切含まれないことを検証する。
 #[tokio::test]
 async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
     let conn = db::open_in_memory().unwrap();
@@ -1576,9 +1570,8 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
         ]
     );
 
-    // モデルへ送り返す発言列(ChatMessage)には思考が現れる余地が無い
-    // (`ChatMessage`に思考を運ぶ構成要素自体が無いため型で保証される)。
-    // ここでは実際に送信された本文にも思考テキストが混入していないことを重ねて確認する。
+    // `ChatMessage`には思考を運ぶ構成要素が無いが、送信された本文にも混入していないことを
+    // 確かめる。
     let rounds = adapter.sent_messages();
     for round in &rounds {
         for message in round {
@@ -1635,8 +1628,8 @@ async fn edit_user_message_rejects_assistant_target() {
     assert!(result.is_err());
 }
 
-/// 再試行(Issue #41): 同じ`turn_id`のまま`attempt_no`が増え、旧アシスタント応答は
-/// 表示から外れて新しい応答に置き換わる。対応するユーザー発言はそのまま残る。
+/// 再試行: 同じ`turn_id`のまま`attempt_no`が増え、旧アシスタント応答は表示から外れて新しい
+/// 応答に置き換わる。対応するユーザー発言はそのまま残る。
 #[tokio::test]
 async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     let conn = db::open_in_memory().unwrap();
@@ -1712,8 +1705,8 @@ async fn retry_reply_rejects_user_target() {
     assert!(result.is_err());
 }
 
-/// エラーで終わったターンも再試行できる(Issue #130)。エラー発言は同じ`turn_id`の
-/// 次の試行に置き換わり、編集で打ち直したときのような新しいターンにはならない。
+/// エラーで終わったターンも再試行できる。エラー発言は同じ`turn_id`の次の試行に置き換わり、
+/// 編集で打ち直したときのような新しいターンにはならない。
 #[tokio::test]
 async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     let conn = db::open_in_memory().unwrap();
@@ -1757,8 +1750,7 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     assert_eq!(messages[1].attempt_no, Some(2));
 }
 
-/// エラー発言も削除できる(Issue #130)。返信を失ったターンは会話から外れ、
-/// ユーザー発言だけが残る。
+/// エラー発言も削除できる。返信を失ったターンは会話から外れ、ユーザー発言だけが残る。
 #[tokio::test]
 async fn delete_message_removes_an_error_reply() {
     let conn = db::open_in_memory().unwrap();
@@ -1795,7 +1787,7 @@ async fn delete_message_removes_an_error_reply() {
     assert_eq!(contents, vec!["質問"]);
 }
 
-/// 削除(Issue #41): カスケードしない単発の論理削除。対象以外の発言はそのまま残る。
+/// 削除: カスケードしない単発の論理削除。対象以外の発言はそのまま残る。
 #[tokio::test]
 async fn delete_message_removes_only_the_target_without_cascade() {
     let conn = db::open_in_memory().unwrap();
@@ -1841,8 +1833,8 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     assert_eq!(contents, vec!["応答1", "2回目", "応答2"]);
 }
 
-/// ユーザー発言だけを消したターンの返信は、再試行すると応答すべき発言が無いので断る
-/// (Issue #182)。モデルは呼ばず、返信も消えない。
+/// ユーザー発言だけを消したターンの返信は、再試行すると応答すべき発言が無いので断る。
+/// モデルは呼ばず、返信も消えない。
 #[tokio::test]
 async fn retry_reply_is_refused_when_the_turn_lost_its_user_message() {
     for turns in [1, 2] {
@@ -1897,8 +1889,8 @@ async fn retry_reply_is_refused_when_the_turn_lost_its_user_message() {
     }
 }
 
-/// 同じタスクで応答を生成中なら、次のターンは何も書かずに断る(Issue #152)。
-/// 別のタスクは妨げず、ターンが終われば同じタスクでもまた始められる。
+/// 同じタスクで応答を生成中なら、次のターンは何も書かずに断る。別のタスクは妨げず、ターンが
+/// 終われば同じタスクでもまた始められる。
 #[tokio::test]
 async fn a_turn_is_rejected_while_the_same_task_is_generating() {
     let conn = db::open_in_memory().unwrap();
@@ -1953,8 +1945,7 @@ async fn a_turn_is_rejected_while_the_same_task_is_generating() {
     );
 }
 
-/// 生成中のタスクでは発言を削除できない(Issue #152)。生成中のターンが読んだ履歴と
-/// DBの発言が食い違うため。
+/// 生成中のタスクでは発言を削除できない。生成中のターンが読んだ履歴とDBの発言が食い違うため。
 #[tokio::test]
 async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
     let conn = db::open_in_memory().unwrap();
@@ -1994,8 +1985,8 @@ async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
     );
 }
 
-/// 再試行が途中で失敗しても、1回目の失敗と同じくエラー発言が同じターンに残る
-/// (Issue #152)。何も残さずに抜けると、返信を消したターンごと会話から消える。
+/// 再試行が途中で失敗しても、1回目の失敗と同じくエラー発言が同じターンに残る。
+/// 何も残さずに抜けると、返信を消したターンごと会話から消える。
 #[tokio::test]
 async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
     let conn = db::open_in_memory().unwrap();
@@ -2043,8 +2034,8 @@ async fn a_retry_that_fails_midway_leaves_an_error_reply_in_the_same_turn() {
     assert_eq!(messages[1].error_kind.as_deref(), Some("unexpected"));
 }
 
-/// 往復の上限を使い切ったら、ツールを渡さずにもう一度だけ呼び、返信させる(Issue #153)。
-/// 上限のラウンドで実行したツールの結果を、モデルが受け取ったうえで返信する。
+/// 往復の上限を使い切ったら、ツールを渡さずにもう一度だけ呼び、返信させる。上限のラウンドで
+/// 実行したツールの結果を、モデルが受け取ったうえで返信する。
 #[tokio::test]
 async fn after_the_last_tool_round_the_model_replies_without_tools() {
     let conn = db::open_in_memory().unwrap();
@@ -2083,8 +2074,8 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     assert_eq!(reply.content, "ここまでの結果でお答えします");
 }
 
-/// ツールに対応しないモデルには、ツールを渡さずに1回だけ呼び、注意書きを添える
-/// (Issue #69、legacy/backend.md 4節手順2)。上限到達の一節は添えない。
+/// ツールに対応しないモデルには、ツールを渡さずに1回だけ呼び、注意書きを添える。
+/// 上限到達の一節は添えない。
 #[tokio::test]
 async fn models_without_tool_support_are_called_once_without_tools() {
     let conn = db::open_in_memory().unwrap();
@@ -2125,7 +2116,7 @@ fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
         .collect()
 }
 
-/// 聞き取りの開始(Issue #76)。開始の発言は保存せず、以降のターンでも履歴の先頭に補う。
+/// 聞き取りの開始。開始の発言は保存せず、以降のターンでも履歴の先頭に補う。
 #[tokio::test]
 async fn open_task_chat_answers_the_opening_message_without_saving_it() {
     let conn = db::open_in_memory().unwrap();
@@ -2216,7 +2207,7 @@ async fn open_task_chat_is_refused_once_the_conversation_has_started() {
     assert_eq!(roles(&db, task_id), vec!["user", "assistant"]);
 }
 
-/// チャットを使えない間はタスクを作らない(legacy/frontend.md 1節)。
+/// チャットを使えない間はタスクを作らない。
 #[tokio::test]
 async fn create_task_is_refused_while_the_chat_cannot_run() {
     let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
@@ -2256,9 +2247,8 @@ fn calls_tools_then_confirms(tool_calls: Vec<(&str, serde_json::Value)>) -> Scri
     ScriptedAdapter::new(vec![calls(tool_calls), text("確認しました")]).repeating_last()
 }
 
-/// 総合チャット(Issue #43)。発言はどのタスクにも属さず、モデルには読み取り専用の
-/// ツールとタスク一覧だけを渡す。更新系のツールを呼ばれても実行しない
-/// (docs/spec/rebuild/tools.md 5節)。
+/// 総合チャット。発言はどのタスクにも属さず、モデルには読み取り専用のツールとタスク
+/// 一覧だけを渡す。更新系のツールを呼ばれても実行しない。
 #[tokio::test]
 async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     let conn = db::open_in_memory().unwrap();
@@ -2325,8 +2315,8 @@ async fn the_general_chat_and_a_task_generate_independently() {
         .unwrap();
 }
 
-/// 削除済みのタスクには発言を書かない(Issue #75)。削除とターンが行き違っても、
-/// ユーザー発言だけが残ってエラー発言が付く形にならない。
+/// 削除済みのタスクには発言を書かない。削除とターンが行き違っても、ユーザー発言だけが残って
+/// エラー発言が付く形にならない。
 #[tokio::test]
 async fn a_turn_on_a_deleted_task_writes_nothing() {
     let conn = db::open_in_memory().unwrap();
@@ -2370,8 +2360,8 @@ fn png() -> Vec<u8> {
     bytes
 }
 
-/// 添付はユーザー発言と一緒に保存され、送信前の集合から外れる(Issue #21)。本文が
-/// 空でも添付があれば送れる。
+/// 添付はユーザー発言と一緒に保存され、送信前の集合から外れる。本文が空でも添付があれば
+/// 送れる。
 #[tokio::test]
 async fn run_turn_saves_attachments_with_the_user_message() {
     let conn = db::open_in_memory().unwrap();
@@ -2480,7 +2470,7 @@ async fn run_turn_refuses_an_empty_message_and_unknown_attachments() {
     assert_eq!(written, 0);
 }
 
-/// 編集した発言は添付を引き継ぐ(legacy/frontend.md 1節)。
+/// 編集した発言は添付を引き継ぐ。
 #[tokio::test]
 async fn edit_user_message_carries_attachments_over() {
     let conn = db::open_in_memory().unwrap();
@@ -2597,7 +2587,7 @@ async fn attachments_return_to_staging_when_the_message_cannot_be_saved() {
 }
 
 /// 画像に対応するモデルには、送った発言の画像が一緒に届く。テキストの本文は囲みの後ろの
-/// 添付の情報に載る(Issue #21)。
+/// 添付の情報に載る。
 #[tokio::test]
 async fn attachments_reach_the_model_with_the_message() {
     let conn = db::open_in_memory().unwrap();
@@ -2642,7 +2632,7 @@ async fn attachments_reach_the_model_with_the_message() {
     assert!(images[0].data_url().starts_with("data:image/png;base64,"));
 }
 
-/// 過去の添付は、添付の読み込みツールで読み直せる(Issue #213)。中身(本文・画像)は読んだ
+/// 過去の添付は、添付の読み込みツールで読み直せる。中身(本文・画像)は読んだ
 /// ターンでだけ送り、次のターンの履歴には名前などの情報だけが残る。
 #[tokio::test]
 async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
@@ -2756,8 +2746,7 @@ async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
     }
 }
 
-/// 読み込んだ画像の実体を読めなくても、ツールの失敗としてモデルに返し、ターンは続ける
-/// (principles.md 3節「失敗しても会話を止めない」)。
+/// 読み込んだ画像の実体を読めなくても、ツールの失敗としてモデルに返し、ターンは続ける。
 #[tokio::test]
 async fn an_image_that_cannot_be_read_is_reported_to_the_model() {
     let conn = db::open_in_memory().unwrap();
@@ -2848,7 +2837,7 @@ fn message_count(db: &db::SharedConnection) -> i64 {
         .unwrap()
 }
 
-/// プレビューは、次のターンが最初に送る発言列とツールを、何も保存せずに組み立てる(Issue #23)。
+/// プレビューは、次のターンが最初に送る発言列とツールを、何も保存せずに組み立てる。
 #[tokio::test]
 async fn preview_shows_what_the_next_turn_sends_without_saving() {
     let conn = db::open_in_memory().unwrap();

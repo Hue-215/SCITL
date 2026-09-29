@@ -20,8 +20,8 @@ pub(super) const TOOL: InternalTool = InternalTool {
     run: Run::ReadAttachment,
 };
 
-/// 総合チャット・タスクチャットで同じ形(docs/spec/rebuild/tools.md 2節)。対象の会話は
-/// 文脈から固定するので引数に取らず、添付IDだけを選ばせる。
+/// 総合チャット・タスクチャットで同じ形。対象の会話は文脈から固定するので引数に取らず、添付
+/// IDだけを選ばせる。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(

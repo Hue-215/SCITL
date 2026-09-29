@@ -1,7 +1,6 @@
-//! チャット本文中のリンクを開く前の判定と、OSへの委譲(principles.md 4節「リンクは確認を
-//! 挟み、通信方式を制限する」)。確認ダイアログに出す内容(`inspect`)と、実際に開く前の
-//! 再検証(`open_confirmed`)が同じ判定を通るよう、判定はこのファイルに閉じる。
-//! WebView側の判定結果は信用しない(architecture.md 8節)。
+//! チャット本文中のリンクを開く前の判定と、OSへの委譲。確認ダイアログに出す内容(`inspect`)と、
+//! 実際に開く前の再検証(`open_confirmed`)が同じ判定を通るよう、判定はこのファイルに閉じる。
+//! WebView側の判定結果は信用しない。
 
 use percent_encoding::{utf8_percent_encode, AsciiSet};
 use serde::Serialize;

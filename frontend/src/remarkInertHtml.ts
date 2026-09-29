@@ -2,7 +2,7 @@ import type { Html, Image, ImageReference, Nodes, Parent, PhrasingContent, Root 
 import { t } from './i18n'
 
 // Markdownの構文木から、描画時に外部へのアクセスや生のHTML解釈を起こしうる要素を
-// 取り除く remark プラグイン(principles.md 4節「画像の自動取得を防ぐ」)。
+// 取り除く remark プラグイン。
 //
 // - 画像記法(`![alt](url)`・参照形式)は、画像と分かるラベルを付けたリンクに変える。
 //   リンクは確認ダイアログを経てしか開けない(Markdown.tsx)
@@ -10,7 +10,7 @@ import { t } from './i18n'
 //   それ以外のタグは書かれた文字列のまま表示する(黙って消すと、モデルが何を書いたかが
 //   見えなくなるため)
 //
-// 描画側(react-markdown)は元々HTMLを解釈しない設定で使うが、画像はHTMLを経由せずに
+// 描画側(react-markdown)もHTMLを解釈しない設定で使うが、画像はHTMLを経由せずに
 // 描画されるため、ここで構文木の段階で潰す。CSPの img-src と合わせた多層防御。
 
 const RAW_TAG = /<img\b[^>]*>|<br\s*\/?>/gi

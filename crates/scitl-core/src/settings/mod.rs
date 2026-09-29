@@ -1,17 +1,16 @@
-//! 設定・登録の操作(設定画面の各タブ、Issue #22・#28・#71)。GUIのコマンドもCLIも
-//! ここを1つ呼ぶだけにし、登録の規則・入力検証・秘密情報の出し入れ・保存を同じ経路に通す
-//! (architecture.md 1節、principles.md 5節)。
+//! 設定・登録の操作(設定画面の各タブ)。GUIのコマンドもCLIもここを1つ呼ぶだけにし、登録の
+//! 規則・入力検証・秘密情報の出し入れ・保存を同じ経路に通す。
 //!
 //! 変更はすべて[`Draft`]を通る。書き込み同士は`writer`で直列化し、設定の複製を変更→
 //! アダプタの組み立て→保存→差し替え、の順で進める。途中で失敗すれば何も差し替えないので、
 //! メモリ上の設定とファイルが食い違わない。読み手(ターンの開始)が取る`current`のロックは
 //! 差し替えの一瞬だけで、資格情報ストアやファイルのI/Oを待たされない。
 //!
-//! 設定に問題があっても起動は止めない(Issue #155。画面から直す手段が無くなるため)。
-//! 設定ファイルを読めなければ空の設定で動かし、読めなかったファイルを上書きしないよう
-//! 保存を断る。アクティブなプロバイダーを組み立てられなければ、そのプロバイダーを使えない
-//! ものとして動かし、削除・切り替えで直せるようにする。どちらも理由を設定画面に出し、
-//! チャットでは理由に応じたエラー発言にする。
+//! 設定に問題があっても起動は止めない(画面から直す手段が無くなるため)。設定ファイルを
+//! 読めなければ空の設定で動かし、読めなかったファイルを上書きしないよう保存を断る。
+//! アクティブなプロバイダーを組み立てられなければ、そのプロバイダーを使えないものとして
+//! 動かし、削除・切り替えで直せるようにする。どちらも理由を設定画面に出し、チャットでは
+//! 理由に応じたエラー発言にする。
 
 pub mod view;
 
@@ -59,10 +58,9 @@ pub struct GeneralUpdate {
     pub response_timeout_secs: Option<u64>,
 }
 
-/// サーバー追加フォームからの入力。接続方式ごとに必要な値だけを受け取る
-/// (`McpEndpoint`と同じタグ付きenumにすることで、フロントエンドが送る形と
-/// Rust側の型を対応させる)。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。
-/// 値を含むため`Debug`は付けない(ログに出す経路を作らない)。
+/// サーバー追加フォームからの入力。`McpEndpoint`と同じく、接続方式ごとに必要な値だけを
+/// 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
+/// `Debug`は付けない(ログに出す経路を作らない)。
 #[derive(Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum NewMcpEndpoint {
@@ -166,25 +164,20 @@ pub struct Settings {
     config_error: Option<String>,
     current: Mutex<Current>,
     writer: Mutex<()>,
-    /// 取得済みのMCPツール一覧(Issue #104)。アプリ起動中だけ保持するメモリキャッシュで、
-    /// config.tomlには書かない(ツール名・説明はユーザーの設定ではなくサーバー側の持ち物で、
-    /// 永続化した写しはサーバー側の更新を検知できない)。設定画面の表示と、ターン開始時の
-    /// ツール公開(`orchestration::McpAccess`)が同じここを読む。
+    /// 取得済みのMCPツール一覧([`crate::mcp::ToolCatalog`])。
     mcp_tools: Arc<ToolCatalog>,
     /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。
     fetching: InFlightSet<String>,
-    /// モデル能力の自動検出の結果(能力解決の3層の真ん中)。`mcp_tools`と同じく
-    /// アプリ起動中だけ保持する(理由は[`DetectedCatalog`])。
+    /// モデル能力の自動検出の結果([`DetectedCatalog`])。
     detected: DetectedCatalog,
     /// [`Self::detect_model_capabilities`]の同時実行を1プロバイダーにつき1本に絞る。
     detecting: InFlightSet<String>,
 }
 
 impl Settings {
-    /// 設定ファイルを読み、アクティブなプロバイダーのアダプタを組み立てる。ファイルが無ければ
-    /// プロバイダー0件で始める。既定の通信先を補わないのは、通信先をユーザーが登録したものに
-    /// 限るため(principles.md 1節)。読めない・組み立てられない場合も失敗にはしない
-    /// (モジュール冒頭)。
+    /// 設定ファイルを読み、アクティブなプロバイダーのアダプタを組み立てる。ファイルが
+    /// 無ければプロバイダー0件で始める(通信先はユーザーが登録したものに限る)。読めない・
+    /// 組み立てられない場合も失敗にはしない。
     pub fn load(path: PathBuf) -> Self {
         let (config, config_error) = match config::load(&path) {
             Ok(config) => (config, None),
@@ -241,7 +234,7 @@ impl Settings {
         self.snapshot()
     }
 
-    /// チャット入力欄の下のモデル選択(Issue #64)。思考の強さを選べるかは能力で決まるので、
+    /// チャット入力欄の下のモデル選択。思考の強さを選べるかは能力で決まるので、
     /// ターンの開始と同じく、アクティブなモデルを先に問い合わせる。失敗したら自動検出より
     /// 下の層の値で出す。
     pub async fn chat_models(&self) -> ChatModelsView {
@@ -285,9 +278,8 @@ impl Settings {
         Ok(self.view())
     }
 
-    /// プロバイダーが提供するモデル名を問い合わせる(Issue #33)。登録済みのものも含めて
-    /// 名前順に返し、設定には書かない。どれを登録するかは利用者が選び、[`Self::add_models`]で
-    /// 登録する(一括で登録しない理由はarchitecture.md 3節)。
+    /// プロバイダーが提供するモデル名を問い合わせる。登録済みのものも含めて名前順に返し、
+    /// 設定には書かない(登録は利用者が選んで[`Self::add_models`]で行う)。
     pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<AvailableModel>> {
         let provider = self.provider(provider_id)?;
         Ok(view::available_models(
@@ -374,10 +366,9 @@ impl Settings {
         }
     }
 
-    /// 空白だけのプロンプトは未設定として保存する。既定の文面を持つもの(タスクチャット用・
-    /// 開始の発言)は、既定の文面と同じ値も未設定にする(architecture.md 3節「聞き取りの開始」。
-    /// 判定は`orchestration::stored_prompt`)。
-    /// 表示言語は[`Self::update_language`]が別に持つので、ここでは変えない。
+    /// 空白だけのプロンプトと、既定の文面と同じ値は未設定として保存する
+    /// (`orchestration::stored_prompt`)。表示言語は[`Self::update_language`]が別に持つので、
+    /// ここでは変えない。
     pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
         // `0`は画面側でも弾くが、UIの入力チェックはセキュリティ境界ではない。
         if update.response_timeout_secs == Some(0) {
@@ -399,8 +390,7 @@ impl Settings {
         draft.commit()
     }
 
-    /// 保存した表示言語。画面は起動時に1度だけ読み、切り替えは再起動で反映する
-    /// (legacy/frontend.md 2節)。
+    /// 保存した表示言語。画面は起動時に1度だけ読み、切り替えは再起動で反映する。
     pub fn display_language(&self) -> Language {
         self.current().config.general.language()
     }
@@ -432,8 +422,8 @@ impl Settings {
     }
 
     /// 最初に登録したプロバイダーをアクティブにする。鍵の保存に失敗したらプロバイダー自体の
-    /// 登録も中断し(legacy/frontend.md 3節)、登録に失敗したら保存した鍵を消す。どちらでも
-    /// `key_ref`と鍵の片方だけが残る状態を作らない。
+    /// 登録も中断し、登録に失敗したら保存した鍵を消す。どちらでも`key_ref`と鍵の片方だけが
+    /// 残る状態を作らない。
     pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
         let name = new.name.trim().to_string();
         if name.is_empty() {
@@ -471,9 +461,9 @@ impl Settings {
         })
     }
 
-    /// アクティブなプロバイダーを消したら先頭をアクティブにする。保存済みAPIキーも消す
-    /// (legacy/frontend.md 3節。削除確認は画面側の責務)。鍵は設定の保存が済んでから消す。
-    /// 先に消すと、保存に失敗したときに設定だけが消えた鍵を指して残る。
+    /// アクティブなプロバイダーを消したら先頭をアクティブにする。保存済みAPIキーも消す。
+    /// 鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに設定が消えた鍵を
+    /// 指して残る)。
     pub fn delete_provider(&self, provider_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let config = &mut draft.config;
@@ -534,7 +524,7 @@ impl Settings {
         Ok(view)
     }
 
-    /// チャット入力欄の下で選んだモデルに切り替える(Issue #64)。一覧はプロバイダーを跨ぐので、
+    /// チャット入力欄の下で選んだモデルに切り替える。一覧はプロバイダーを跨ぐので、
     /// アクティブなプロバイダーとそのモデルを1回の保存で切り替える。2回に分けると、間で
     /// 落ちたときに意図しない組が残る。
     pub fn select_chat_model(&self, provider_id: &str, model: &str) -> Result<()> {
@@ -573,7 +563,7 @@ impl Settings {
         draft.commit()
     }
 
-    /// 手動設定より下の層と同じ値にしたら、手動設定を外す(architecture.md 3節)。
+    /// 手動設定より下の層と同じ値にしたら、手動設定を外す。
     pub fn set_model_capability(
         &self,
         provider_id: &str,
@@ -643,9 +633,8 @@ impl Settings {
         draft.commit().inspect_err(|_| delete_secret_refs(&refs))
     }
 
-    /// 保存済みの秘密情報も消す(legacy/frontend.md 4節)。`delete_provider`と同じく、
-    /// 設定の保存が済んでから消す。取得済みツール一覧のキャッシュも捨てる(同じIDの
-    /// サーバーを登録し直したときに、前のサーバーの一覧が残っていてはならない。Issue #104)。
+    /// 保存済みの秘密情報も消す。`delete_provider`と同じく、設定の保存が済んでから消す。
+    /// 削除したサーバーのツール一覧がキャッシュに残らないよう、ここで捨てる。
     pub fn delete_mcp_server(&self, server_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let index = draft
@@ -690,9 +679,9 @@ impl Settings {
         draft.commit()
     }
 
-    /// サーバーに接続してツール一覧を取得し、キャッシュへ載せて設定の状態ごと返す
-    /// (Issue #104)。config.tomlには書き込まない。ロックはサーバー設定を複製するまで
-    /// だけ持ち、接続の`.await`をまたがせない。
+    /// サーバーに接続してツール一覧を取得し、キャッシュへ載せて設定の状態ごと返す。
+    /// config.tomlには書き込まない。ロックはサーバー設定を複製するまでだけ持ち、接続の
+    /// `.await`をまたがせない。
     pub async fn fetch_mcp_tools(&self, server_id: &str) -> Result<SettingsView> {
         let _in_flight = self
             .fetching
@@ -1252,7 +1241,7 @@ name = "m"
     }
 
     /// 設定ファイルを読めなくても起動し、理由を画面とターンへ渡す。読めなかったファイルは
-    /// 上書きしない(Issue #155)。
+    /// 上書きしない。
     #[test]
     fn unreadable_config_file_starts_empty_and_refuses_to_save() {
         let dir = tempfile::tempdir().unwrap();
@@ -1274,7 +1263,7 @@ name = "m"
     }
 
     /// アクティブなプロバイダーを組み立てられなくても起動し、そのプロバイダーを使えない
-    /// ものとして扱う。無関係な変更は通し、削除すれば直る(Issue #155)。
+    /// ものとして扱う。無関係な変更は通し、削除すれば直る。
     #[test]
     fn broken_active_provider_does_not_block_startup_or_unrelated_changes() {
         let dir = tempfile::tempdir().unwrap();

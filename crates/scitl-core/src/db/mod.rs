@@ -53,12 +53,12 @@ macro_rules! text_column_enum {
 pub(crate) use text_column_enum;
 
 /// 非同期層から使うDBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を
-/// 非同期関数のawaitをまたいで持たせられない(architecture.md 4節)。触るときは[`with_conn`]を通す。
+/// 非同期関数のawaitをまたいで持たせられない。触るときは[`with_conn`]を通す。
 pub type SharedConnection = Arc<Mutex<Connection>>;
 
 /// 非同期層からリポジトリ層(同期の`fn`)を呼ぶ唯一の入口。ロックの取得からドロップまでを
-/// [`crate::blocking::run`]のクロージャ内に閉じ込め、ロックガードがawaitをまたがないようにする
-/// (architecture.md 4節)。
+/// [`crate::blocking::run`]のクロージャ内に閉じ込め、ロックガードがawaitを
+/// またがないようにする。
 pub async fn with_conn<F, T>(db: SharedConnection, f: F) -> Result<T>
 where
     F: FnOnce(&Connection) -> Result<T> + Send + 'static,
@@ -71,9 +71,9 @@ where
     .await
 }
 
-/// 読んで判断してから書く操作を1つの単位にする。途中の文が失敗すれば何も残さず
-/// (工程を一部だけ追加したのにツールは失敗を返す、といった食い違いを作らない)、
-/// 別プロセスの書き込みは`f`が終わるまで待たせる(data-model.md 4節)。
+/// 読んで判断してから書く操作を1つの単位にする。途中の文が失敗すれば何も残さず(工程を
+/// 一部だけ追加したのにツールは失敗を返す、といった食い違いを作らない)、別プロセスの
+/// 書き込みは`f`が終わるまで待たせる。
 ///
 /// 既にトランザクションの中で呼ばれたら、新しく始めずにその中で実行する(SQLiteは入れ子の
 /// `BEGIN`を受け付けない)。開始方法・確定・巻き戻しは外側に従うので、トランザクションは
@@ -85,7 +85,7 @@ pub(crate) fn in_transaction<T>(
     if !conn.is_autocommit() {
         return f(conn);
     }
-    // 読むより前に書き込みの権利を取る(data-model.md 4節)。
+    // 読むより前に書き込みの権利を取る。
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let out = f(&tx)?;
     tx.commit()?;
@@ -110,8 +110,7 @@ pub(crate) fn in_rolled_back_transaction<T>(
     // `tx`は確定せずに落とすので、ここで巻き戻る。
 }
 
-/// 番号順のマイグレーション。`user_version`は、この列の先頭から何個を適用済みかを表す
-/// (data-model.md 5節)。
+/// 番号順のマイグレーション。`user_version`は、この列の先頭から何個を適用済みかを表す。
 const MIGRATIONS: &[&str] = &[
     INIT_SQL,
     TOOL_EXECUTION_ROLE_SQL,
@@ -121,7 +120,7 @@ const MIGRATIONS: &[&str] = &[
 
 /// 先頭から`target`個目までのマイグレーションを適用する。適用済みの版の読み取りから
 /// 版の書き込みまでを1つのトランザクションに収め、GUIとCLIが同時に開いても、遅れた側は
-/// 先に適用された版を読んでから判断する(data-model.md 5節)。
+/// 先に適用された版を読んでから判断する。
 fn migrate_to(conn: &Connection, target: usize) -> Result<()> {
     debug_assert!(target <= MIGRATIONS.len());
     let applied_version =
@@ -150,8 +149,7 @@ fn migrate_to(conn: &Connection, target: usize) -> Result<()> {
     })
 }
 
-/// ISO8601 UTC(`YYYY-MM-DDTHH:MM:SSZ`)。生成箇所をここに集約する
-/// (docs/spec/rebuild/data-model.md 1節)。
+/// ISO8601 UTC(`YYYY-MM-DDTHH:MM:SSZ`)。生成箇所をここに集約する。
 pub fn now_iso8601() -> String {
     iso8601(chrono::Utc::now())
 }
@@ -160,8 +158,7 @@ fn iso8601(at: chrono::DateTime<chrono::Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// 接続を開き、PRAGMAとマイグレーションを適用する
-/// (docs/spec/rebuild/data-model.md 4節・5節、architecture.md 4節)。
+/// 接続を開き、PRAGMAとマイグレーションを適用する。
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -275,7 +272,7 @@ mod tests {
         assert!(opened.is_ok(), "{opened:?}");
     }
 
-    /// 辞書順が時系列順になる固定幅の形(data-model.md 1節)。秒未満は書かず、UTCは`Z`で書く。
+    /// 辞書順が時系列順になる固定幅の形。秒未満は書かず、UTCは`Z`で書く。
     #[test]
     fn timestamps_are_fixed_width_utc_seconds() {
         let at = chrono::DateTime::from_timestamp(1_790_000_000, 999_999_999).unwrap();

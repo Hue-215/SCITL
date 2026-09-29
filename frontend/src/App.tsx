@@ -40,14 +40,14 @@ export default function App() {
   // 表示中の会話。起動したら総合チャットを開く(タスクを離れたときの戻り先でもある)。
   const [chat, setChat] = useState<Chat>(GENERAL_CHAT)
   const [adding, setAdding] = useState(false)
-  // タスクを作らなかった理由(チャットを使えない間。Issue #76)。IPCの失敗(`error`)と違い、
-  // モデルの選択や設定の変更で解消しうるので、それらを変えたら外す(次の追加で改めて判定される)。
+  // タスクを作らなかった理由(チャットを使えない間)。IPCの失敗(`error`)と違い、モデルの
+  // 選択や設定の変更で解消しうるので、それらを変えたら外す(次の追加で改めて判定される)。
   const [addBlocked, setAddBlocked] = useState<string | null>(null)
   // 表示中のタスク。総合チャットと、タスクを読み込むまでの間はnull。
   const [task, setTask] = useState<TaskDetailView | null>(null)
   const [messages, setMessages] = useState<MessageView[]>([])
   const [draft, setDraft] = useState('')
-  // 入力欄の送信前の添付(Issue #21)。本文と同じく、会話を切り替えても残す。
+  // 入力欄の送信前の添付。本文と同じく、会話を切り替えても残す。
   const staged = useStagedAttachments()
   const fileInputRef = useRef<HTMLInputElement>(null)
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
@@ -60,8 +60,7 @@ export default function App() {
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 編集モード(Issue #41)。ユーザー発言のみが対象。応答待ち中は開始できない
-  // (`disableActions`参照)。
+  // 編集モード。ユーザー発言のみが対象。応答待ち中は開始できない(`disableActions`参照)。
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   // 表示中の会話の鍵(`chatKey`)。非同期の処理が終わった時点で見比べるため、stateとは別に
@@ -140,7 +139,7 @@ export default function App() {
     void loadChat(chat)
   }, [chat, loadChat])
 
-  // 作ったらユーザーの発言を待たずに聞き取りを始める(Issue #76、legacy/frontend.md 1節)。
+  // 作ったらユーザーの発言を待たずに聞き取りを始める。
   const addTask = async () => {
     if (adding) return
     setAdding(true)
@@ -170,8 +169,8 @@ export default function App() {
     )
   }
 
-  // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする(Issue #41、
-  // legacy/frontend.md 1節)。他の会話は応答待ちの間も操作できる。
+  // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする。他の会話は応答待ちの
+  // 間も操作できる。
   const disableActions = requests.isBusy(chat)
 
   // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
@@ -185,7 +184,7 @@ export default function App() {
     setDraft('')
     stick()
     // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
-    // DBから引き直す(docs/spec/principles.md 3節「保存するのは組み立て終わった応答」)。
+    // DBから引き直す。
     await requests.run(
       target,
       [
@@ -201,15 +200,12 @@ export default function App() {
     )
   }
 
-  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す(Issue #95)。
-  // バックエンドはコマンド最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
-  // ここでやっているのは「すでに起きた削除を先に見せる」ことだけ。確定後は`loadChat`が必ず
-  // DBの内容で上書きするため、これが最終的な表示になることはない(楽観表示はユーザー発言の
-  // プレースホルダと同じ扱い)。
+  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す。バックエンドは応答の生成に
+  // 入る前に論理削除を済ませているので、起きた削除を先に見せるだけになる(確定後は`loadChat`が
+  // DBの内容で上書きする)。
   //
-  // `turnId`は再試行でのみ渡す。再試行の対象はターンの最終行なので、idだけで切ると同じターンの
-  // ツール実行記録が残り、`finalEntryOf`がそれを返信の吹き出しとして描いてしまう
-  // (`thinking.ts`参照)。作り直すのはターンごとなので、ターンごと外す。
+  // `turnId`は再試行でのみ渡す。idだけで切ると同じターンのツール実行記録が残り、
+  // `finalEntryOf`がそれを返信の吹き出しとして描いてしまうので、ターンごと外す。
   const hideSuperseded = (fromId: number, turnId: string | null) => {
     setMessages((prev) =>
       prev.filter((m) => m.id < fromId && (turnId === null || m.turn_id !== turnId)),
@@ -253,18 +249,17 @@ export default function App() {
     )
   }
 
-  // 確認ダイアログ無しの即座に取り消し可能な論理削除(legacy/frontend.md 1節)。最初の
-  // ユーザー発言を消すと一覧のフォールバック表示が変わる(Issue #61)が、引き直しは
-  // `requests`が一覧ごと行う。
+  // 確認ダイアログ無しで削除する(取り消し可能な論理削除)。最初のユーザー発言を消すと一覧の
+  // フォールバック表示が変わるので、`requests`が一覧ごと引き直す。
   const remove = async (messageId: number) => {
     if (disableActions) return
     const target = chat
     await requests.run(target, [], () => deleteChatMessage(target, messageId), settle)
   }
 
-  // ヘッダーからのタスク操作(Issue #75)。発言の操作と同じく会話ごとの応答待ちに載せ、
+  // ヘッダーからのタスク操作。発言の操作と同じく会話ごとの応答待ちに載せ、
   // 実行中は他の操作を止め、失敗はその会話に残す。アーカイブ・削除のあとは総合チャットへ
-  // 戻る(legacy/frontend.md 1節)。その間に別の会話へ移っていたら、そのままにする。
+  // 戻る。その間に別の会話へ移っていたら、そのままにする。
   const runTaskOperation = (taskId: number, operation: () => Promise<unknown>) => {
     if (disableActions) return
     const target = taskChat(taskId)

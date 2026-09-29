@@ -47,7 +47,7 @@ function EntryActions({
   )
 }
 
-// 編集中のユーザー発言(Issue #41)。編集できるのは1件ずつ。
+// 編集中のユーザー発言。編集できるのは1件ずつ。
 export interface EntryEditing {
   id: number | null
   draft: string
@@ -91,7 +91,7 @@ export default function ChatLog({
         if (item.kind === 'plain') {
           const message = item.message
           // 応答生成以外の経路(画面・MCP等)での操作の記録は「思考・ツール」の
-          // 折りたたみに含めず、独立した1行として表示する(docs/spec/legacy/frontend.md 1節)。
+          // 折りたたみに含めず、独立した1行として表示する。
           if (message.kind === 'tool_execution') {
             return (
               <li key={message.id} className="entry entry-tool">
@@ -101,10 +101,7 @@ export default function ChatLog({
             )
           }
 
-          // 編集・削除(Issue #41)。対象はツール実行記録を除く通常発言のみ
-          // (data-model.md「ツール実行記録は通常発言の編集・削除・再試行の対象に
-          // 含めない」)。`plain`項目は常にユーザー発言のため、編集はここでのみ
-          // 起こりうる(legacy/frontend.md 1節)。編集と削除は対象が同じ。
+          // 編集・削除。`plain`項目は常にユーザー発言なので、編集はここでのみ起こりうる。
           const canEditOrDelete = message.role === 'user'
 
           if (editing.id === message.id) {
@@ -161,11 +158,8 @@ export default function ChatLog({
           )
         }
 
-        // SCITL自身の応答生成1ターン分。思考・内部ツール呼び出しを発生順の折りたたみで
-        // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する(Issue #42)。
-        // 再試行・削除(Issue #41)の対象は、この最終行の通常発言のみ
-        // (data-model.md「ツール実行記録は…対象に含めない」)。再試行と削除は対象が同じ。
-        // 失敗したターンの返信(エラー発言)も含める(Issue #130)。
+        // 応答生成1ターン分。思考・ツール呼び出しを発生順の折りたたみで見せ、返信(最終行。
+        // エラー発言を含む)を吹き出しとして表示する。再試行・削除の対象はこの最終行。
         const finalMessage = finalEntryOf(item.entries)
         const canRetryOrDelete =
           finalMessage.kind === 'normal' &&
@@ -179,8 +173,8 @@ export default function ChatLog({
                 content={finalMessage.content}
                 errorKind={finalMessage.error_kind}
               />
-              {/* プロバイダーが書いた文字列のため、Markdown描画(#39)の対象にせず
-                  プレーンテキストのまま出す(Issue #159) */}
+              {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
+                  プレーンテキストのまま出す */}
               {finalMessage.error_detail && (
                 <details className="entry-error-detail">
                   <summary>{t('chat.error_detail_summary')}</summary>
@@ -202,8 +196,8 @@ export default function ChatLog({
       })}
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
-          // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す(Issue #70)。
-          // 完了したら読み直したターンに置き換わる。
+          // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す。完了したら読み直した
+          // ターンに置き換わる。
           <li key={`pending-${i}`} className="turn-group">
             <ThinkingTools items={live} />
             <div className="entry entry-pending">
@@ -217,7 +211,7 @@ export default function ChatLog({
           </li>
         ),
       )}
-      {/* コマンド自体の失敗。保存されたエラー発言と同じ見た目にする(Issue #152) */}
+      {/* コマンド自体の失敗。保存されたエラー発言と同じ見た目にする */}
       {failure && (
         <li className="entry entry-error">
           <span className="entry-content">{failure}</span>

@@ -23,7 +23,7 @@ pub struct AppState {
     pub generating: InFlightSet<Chat>,
     /// 送信前の添付と実体の置き場所(`orchestration::TurnContext::attachments`)。
     pub attachments: Arc<Attachments>,
-    /// Markdownエクスポートの書き出し先。画面からは変えられない(architecture.md 13節)。
+    /// Markdownエクスポートの書き出し先。画面からは変えられない。
     pub export_dir: PathBuf,
 }
 

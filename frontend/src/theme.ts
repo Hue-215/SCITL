@@ -1,8 +1,7 @@
-// 単色シードから明暗2種のカラースキームを生成し、CSS変数として適用する(Issue #79)。
-// 役割(background/surface/text/primary...)ごとに彩度・明度を決め打ちし、シードの色相(と
-// 危険色を除く彩度)だけを引き継ぐ。デザイントークンを1箇所に集約する方針
-// (docs/spec/principles.md 6節)の一部。奥行きの影(--shadow-*)も明暗で中身が変わるため、
-// 同じ切り替えに乗せてここで発行する。
+// 単色シードから明暗2種のカラースキームを生成し、CSS変数として適用する。役割
+// (background/surface/text/primary...)ごとに彩度・明度を決め打ちし、シードの色相(と危険色を
+// 除く彩度)だけを引き継ぐ。奥行きの影(--shadow-*)も明暗で中身が変わるため、同じ切り替えに
+// 乗せてここで発行する。
 //
 // シードの色味が乗るのは背景・面・境界線・プライマリだけで、文字(on*を含む)は
 // 無彩色で固定する。文字に色を付けると読みにくく、かつシードの選び方で
@@ -33,7 +32,7 @@ const DANGER_HUE = 4
 const ROLES = {
   bg: { light: { saturationFactor: 0.08, lightness: 98 }, dark: { saturationFactor: 0.12, lightness: 9 } },
   // surfaceは沈んだ部品(入力欄・選択中の項目)、surfaceAltは浮いた部品(ボタン)の塗り。
-  // どちらも背景(bg)との差で部品の輪郭を作り、影は奥行きの補助に留める(ui.md 2節)。
+  // どちらも背景(bg)との差で部品の輪郭を作り、影は奥行きの補助に留める(ui.md「塗りと奥行き」)。
   surface: { light: { saturationFactor: 0.1, lightness: 94 }, dark: { saturationFactor: 0.14, lightness: 14 } },
   surfaceAlt: { light: { saturationFactor: 0.12, lightness: 90 }, dark: { saturationFactor: 0.16, lightness: 21 } },
   border: { light: { saturationFactor: 0.14, lightness: 82 }, dark: { saturationFactor: 0.16, lightness: 32 } },
@@ -69,7 +68,7 @@ const DANGER_ROLES = {
 // 奥行きの表現。ライトは影、ダークは影が背景に沈んで見えないため縁の光で代える。
 // 浮き(raise)は押せる部品、沈み(sink)は値を入れる所と選択中の項目、持ち上げ(lift)は
 // 押せない面(吹き出し)に使う。liftの強さは吹き出しが背景から離れて見える量で決めており、
-// raiseより強い(押せる部品とは大きさと置き場所で見分けられる。ui.md 2節)。
+// raiseより強い(押せる部品とは大きさと置き場所で見分けられる)。
 type Elevation = { raise: string; sink: string; lift: string; focus: string }
 
 function buildElevation(h: number, s: number, mode: 'light' | 'dark'): Elevation {

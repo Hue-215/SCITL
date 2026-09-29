@@ -1,10 +1,9 @@
-//! 手元で動かす推論サーバー(llama.cpp・LM Studio・Ollama)からのモデル能力の検出
-//! (legacy/backend.md 3節、能力解決の「自動検出」の層)。
+//! 手元で動かす推論サーバー(llama.cpp・LM Studio・Ollama)からのモデル能力の検出(能力解決の
+//! 「自動検出」の層)。
 //!
 //! どのサーバーもチャットはOpenAI互換APIで受けるが、能力の問い合わせ方はサーバーごとの
 //! 独自APIにしか無い。問い合わせ先は登録済みの`base_url`と同じオリジンの別のパスだけで、
-//! 通信先は増やさない(principles.md 1節)。クライアントも`net::hardened_client`を通す
-//! (architecture.md 5節)。
+//! 通信先は増やさない。クライアントも`net::hardened_client`を通す。
 //!
 //! 問い合わせるのは接続先がループバックかプライベートIPのときだけ([`is_detectable`])。
 //! クラウドのAPIはこれらの独自APIを持たず、問い合わせても外れるだけで、

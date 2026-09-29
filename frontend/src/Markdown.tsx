@@ -8,9 +8,9 @@ import remarkSoftBreaks from './remarkSoftBreaks'
 // remarkSoftBreaksは、remarkInertHtmlが`<br>`から作った改行を見て二重の改行を避けるため後に置く
 const REMARK_PLUGINS = [remarkGfm, remarkInertHtml, remarkSoftBreaks]
 
-// 発言本文のMarkdown描画(Issue #39)。react-markdownはHTML文字列を経由せずReactの
-// 要素を直接組み立てるため、innerHTMLへの注入経路を持たない。生のHTML・画像は
-// remarkInertHtmlが構文木の段階で無害化する。
+// 発言本文のMarkdown描画。react-markdownはHTML文字列を経由せずReactの要素を直接組み
+// 立てるため、innerHTMLへの注入経路を持たない。生のHTML・画像はremarkInertHtmlが構文木の
+// 段階で無害化する。
 //
 // 本文が変わらない限り描き直さない(`memo`)。会話欄は入力欄と同じ親の下にあり、1文字打つ
 // たびに全発言を解析し直すと、会話が長いほど入力が重くなるため。
@@ -19,10 +19,10 @@ export default memo(function Markdown({ text }: { text: string }) {
   const rootRef = useRef<HTMLDivElement>(null)
 
   const components: Components = {
-    // リンクはWebView内で遷移させず、必ず確認ダイアログを経てOSのブラウザで開く
-    // (principles.md 4節)。<a>にhrefを持たせないことで、クリック処理以外の経路
-    // (中クリック・ドラッグ・右クリックメニュー・エンジンによるDNS先読み)をまとめて無くす。
-    // 確認には書かれたURLをそのまま渡し、許可されない通信方式でも理由を表示できるようにする。
+    // リンクはWebView内で遷移させず、必ず確認ダイアログを経てOSのブラウザで開く。<a>に
+    // hrefを持たせないことで、クリック処理以外の経路(中クリック・ドラッグ・右
+    // クリックメニュー・エンジンによるDNS先読み)をまとめて無くす。確認には書かれた
+    // URLをそのまま渡し、許可されない通信方式でも理由を表示できるようにする。
     a: ({ href, children }) => {
       const activate = () => {
         if (href === undefined) return

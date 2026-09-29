@@ -41,17 +41,13 @@ impl From<String> for UserInput {
     }
 }
 
-/// 1ターンの処理フロー(architecture.md 1節)。ユーザー発言の保存 → LLM呼び出し →
-/// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
-/// までを1つの関数に閉じる(docs/spec/principles.md 5節)。
+/// 発言を送り、応答を生成する。ユーザー発言(と添付)を保存してから
+/// [`generate_turn_response`]へ進む。本文が空白だけでも、添付があれば送れる。添付は預かりから
+/// 取り出してユーザー発言と一緒に書き、書けなければ預かりに戻す(画面は同じトークンで送り直す)。
 ///
-/// 添付は預かりから取り出してユーザー発言と一緒に書き、書けなければ預かりに戻す。
-/// 本文が空白だけでも、添付があれば送れる(添付だけの発言)。
-///
-/// ユーザー発言を保存したあとの失敗は、`Err`で上位に返さずエラー発言として保存し
-/// `Ok`で返す([`generate_turn_response`])。`Err`になるのは、その会話が既に応答を
-/// 生成中のとき、タスクが無い(削除済みを含む)とき、本文も添付も無いとき、預けていない
-/// 添付を指したとき、発言やエラー発言自体を書けないときだけ。
+/// ユーザー発言を保存したあとの失敗はエラー発言として保存し、`Ok`で返す。`Err`になるのは、
+/// その会話が既に応答を生成中のとき、タスクが無い(削除済みを含む)とき、本文も添付も無いとき、
+/// 預けていない添付を指したとき、発言やエラー発言自体を書けないときだけ。
 pub async fn run_turn(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -125,9 +121,8 @@ pub enum TaskCreation {
     },
 }
 
-/// 新規タスクの作成(Issue #76)。作ったタスクでは続けて[`open_task_chat`]で聞き取りを
-/// 始めるので、チャットを使えない(モデル未選択等)ならタスクを作らずに理由を返す
-/// (legacy/frontend.md 1節)。作ってしまうと、聞き取りが始まらずエラー発言だけのタスクが残る。
+/// 新規タスクの作成。チャットを使えない(モデル未選択等)ならタスクを作らずに理由を返す
+/// (続く[`open_task_chat`]が失敗し、エラー発言だけのタスクが残るため)。
 pub async fn create_task(db: SharedConnection, ctx: &TurnContext<'_>) -> Result<TaskCreation> {
     if let Err(failure) = ready_adapter(ctx) {
         return Ok(TaskCreation::Unavailable {
@@ -138,10 +133,9 @@ pub async fn create_task(db: SharedConnection, ctx: &TurnContext<'_>) -> Result<
     Ok(TaskCreation::Created { task })
 }
 
-/// 聞き取りの開始(Issue #76)。ユーザーの発言なしに、開始の発言
-/// ([`TurnContext::opening_message`])への返信として最初のターンを生成する。開始の発言は
-/// 保存せず、以降のターンも`history::build_history`が履歴の先頭に補う
-/// (architecture.md 3節「聞き取りの開始」)。
+/// 聞き取りの開始。ユーザーの発言なしに、開始の発言([`TurnContext::opening_message`])への
+/// 返信として最初のターンを生成する。開始の発言は保存せず、以降のターンも
+/// `history::build_history`が履歴の先頭に補う。
 ///
 /// まだ1行も発言の無いタスクでだけ行う。
 pub async fn open_task_chat(
@@ -165,10 +159,9 @@ pub async fn open_task_chat(
     generate_turn_response(db, ctx, Attempt::first(chat)).await
 }
 
-/// 編集(ユーザー発言のみ、Issue #41)。対象の発言以降(自身を含む)の通常発言をすべて
-/// 論理削除し、編集後の内容を新しい発言として挿入したうえで、新しいターンとして
-/// 応答を生成し直す。ツール実行記録は対象外(`db::messages::soft_delete_normal_from`
-/// 参照)。添付は新しい発言へ引き継ぐ(legacy/frontend.md 1節)。
+/// ユーザー発言の編集。対象の発言以降(自身を含む)の通常発言をすべて論理削除し、編集後の
+/// 内容を新しい発言として挿入したうえで、新しいターンとして応答を生成し直す。添付は新しい
+/// 発言へ引き継ぐ。
 pub async fn edit_user_message(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -194,18 +187,13 @@ pub async fn edit_user_message(
     generate_turn_response(db, ctx, Attempt::first(chat)).await
 }
 
-/// 再試行(ターンの返信のみ、Issue #41・#130)。対象の発言以降(自身を含む)の通常発言を
-/// 論理削除し、同じ`turn_id`のまま`attempt_no`を増やして応答を生成し直す
-/// (`docs/spec/rebuild/data-model.md`「ターン境界」)。対応するユーザー発言は
-/// `id < message_id`のためカスケードの対象外で、そのまま履歴に残る。
+/// ターンの返信(アシスタント発言またはエラー発言)の再試行。対象の発言以降(自身を含む)の
+/// 通常発言を論理削除し、同じ`turn_id`のまま`attempt_no`を増やして応答を生成し直す。対応する
+/// ユーザー発言は対象より前なので残る。
 ///
-/// 返信は成功時のアシスタント発言と失敗時のエラー発言のどちらでもよい。どちらも1試行に
-/// 1行だけの通常発言で(data-model.md「1ターン内の往復で保存するもの」)、作り直し方は
-/// 変わらない。
-///
-/// 削除はカスケードしないので、ターンのユーザー発言だけが消されていることがある。返信以降を
-/// 消した残りが応答すべき発言で終わらなければ断る(`history::awaits_reply`)。新規送信と編集は
-/// 必ずユーザー発言を用意してから生成するので、この確認は再試行にだけ要る。
+/// ターンのユーザー発言だけが削除されていることがあるので、返信以降を消した残りが応答すべき
+/// 発言で終わらなければ断る(`history::awaits_reply`)。新規送信と編集は必ずユーザー発言を
+/// 用意してから生成するので、この確認は再試行にだけ要る。
 pub async fn retry_reply(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -240,10 +228,8 @@ pub async fn retry_reply(
     generate_turn_response(db, ctx, attempt).await
 }
 
-/// 削除(共通、Issue #41)。確認ダイアログ無しの即座に取り消し可能な論理削除で、
-/// カスケードはしない(対象の1件だけを消す。編集・再試行のカスケード削除とは別の操作)。
-/// 対象はユーザー発言とターンの返信(`db::messages::soft_delete_message`が検証する)。
-/// 生成中の会話では断る。生成中のターンが読んだ履歴と、DBの発言が食い違うため。
+/// 発言を1件削除する([`messages::soft_delete_message`])。生成中の会話では断る(生成中の
+/// ターンが読んだ履歴と、DBの発言が食い違うため)。
 pub async fn delete_message(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,
@@ -288,8 +274,7 @@ pub(super) fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
     Ok(())
 }
 
-/// 編集・再試行・削除の対象を引き、その会話の発言であることを1箇所で確認する
-/// (`docs/spec/principles.md` 5節)。
+/// 編集・再試行・削除の対象を引き、その会話の発言であることを1箇所で確認する。
 fn find_in_chat(conn: &Connection, chat: Chat, message_id: i64) -> Result<Message> {
     require_chat(conn, chat)?;
     let target =
@@ -314,22 +299,14 @@ fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
     Ok(())
 }
 
-/// 応答生成の本体(architecture.md 1節)。LLM呼び出し →
-/// (ツール呼び出しがあれば実行して結果を踏まえ再度呼び出し) → 確定した応答の保存、
-/// までを1つの関数に閉じる(docs/spec/principles.md 5節)。`run_turn`(新規発言)・
-/// `edit_user_message`(編集)・`retry_reply`(再試行)はいずれも、対象となる
-/// ユーザー発言をDBに用意した上でこれを呼ぶ共通の末尾処理。
+/// 応答生成の本体。LLM呼び出し → (ツール呼び出しがあれば実行して再度呼び出し) → 応答の保存。
+/// 送信・編集・再試行はどれも、ユーザー発言をDBに用意してからこれを呼ぶ。
 ///
-/// 外部(MCP)サーバーへの接続はこのターンの間だけ生かし、結果によらずここで閉じる
-/// (legacy/backend.md 9節。ラウンドの途中で抜ける経路が複数あるため、往復の本体は
-/// [`run_tool_rounds`]に分け、切断をこの1箇所に集める)。
+/// 外部(MCP)サーバーへの接続はこのターンの間だけ生かし、結果によらずここで閉じる。途中で
+/// 抜ける経路が複数あるため、往復の本体は[`run_tool_rounds`]に分けてある。
 ///
-/// 失敗はどれも`Err`で上位に返さず、この試行のエラー発言として保存して`Ok`で返す
-/// (Issue #40)。プロバイダー未選択・空応答・上限到達のような想定内の失敗に加え、途中の
-/// `Err`も`turn_error::classify`で種別を決めて残す。再試行の失敗も1回目と同じ形で残り、
-/// もう一度再試行できるようにするため(再試行は返信を消してから作り直すので、何も
-/// 書かずに抜けるとターンごと会話から消える)。`Err`が返るのはエラー発言自体を書けない
-/// ときだけ。
+/// 失敗はどれもこの試行のエラー発言として保存して`Ok`で返す(何も書かずに抜けると、返信を
+/// 消した再試行ではターンごと会話から消える)。`Err`が返るのはエラー発言自体を書けないときだけ。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -367,8 +344,7 @@ pub(super) fn ready_adapter<'a>(
     }
 }
 
-/// 応答生成の1試行(data-model.md「ターン境界」)。この試行で書く行は、すべてこの組を
-/// そのまま持つ。
+/// 応答生成の1試行。この試行で書く行は、すべてこの組をそのまま持つ。
 #[derive(Clone)]
 struct Attempt {
     chat: Chat,
@@ -415,14 +391,13 @@ impl Attempt {
     }
 }
 
-/// このターンでモデルへ公開する外部ツールを決める。ツールを1つも有効化していない
-/// サーバーには接続しない(ユーザーが有効化していない以上、繋ぐ理由が無い)。
-/// 総合チャットにも公開する(tools.md 5節。権限の分離はSCITL自身のタスクへの書き込みの話で、
-/// 外部ツールの安全性の境界はユーザーが信頼して登録したこと)。
+/// このターンでモデルへ公開する外部ツールを決める。ツールを1つも有効化していないサーバーには
+/// 接続しない。総合チャットにも公開する(総合チャットで絞るのはSCITL自身のタスクへの書き込み
+/// だけ)。
 ///
-/// 一覧はキャッシュ(Issue #104)を優先し、無ければ取得してキャッシュに載せる。
-/// 接続・取得に失敗したサーバーはこのターンでは公開しない。ここでターン全体を失敗させると、
-/// 外部サーバーが1つ落ちているだけでチャットが使えなくなるため(principles.md 3節)。
+/// 一覧はキャッシュを優先し、無ければ取得してキャッシュに載せる。接続・取得に失敗した
+/// サーバーはこのターンでは公開しない。ここでターン全体を失敗させると、外部サーバーが1つ
+/// 落ちているだけでチャットが使えなくなるため。
 pub(super) async fn prepare_external_tools(
     mcp: &McpAccess<'_>,
     chat: Chat,
@@ -467,23 +442,16 @@ async fn run_tool_rounds(
     sessions: &mut McpSessions,
 ) -> Result<()> {
     let chat = attempt.chat;
-    // 呼び出し元(`run_turn`/`edit_user_message`/`retry_reply`)が対象の
-    // ユーザー発言の挿入・カスケード削除を済ませたあとの状態を読む。
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
     let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
     let tools_available = request.tools_available();
-    // 同一ターン内のツール呼び出し往復。分類(状態系/事実系)によらずモデルに返す
-    // (docs/spec/rebuild/tools.md 4節「同一ターン内では分類によらず結果を返す」)。
-    // このターンのリクエスト組み立てにのみ使い、DBの`messages`テーブルには書かない
-    // (書くと次ターン以降の履歴に残ってしまう)。
+    // 同一ターン内のツール呼び出しの往復。分類によらずモデルに返し、DBには書かない
+    // (書くと次ターン以降の履歴に残る)。
     let mut round_trip: Vec<ChatMessage> = Vec::new();
-    // ツール実行に使った時間の合計(Issue #71)。LLMの応答待ちは数えない。そちらは
-    // アダプタ側のタイムアウト(`GeneralConfig::response_timeout_secs`)が見るもので、
-    // ここで合算すると「モデルが遅いのでツールが打ち切られた」という筋の通らない
-    // 打ち切り方になる。
+    // ツール実行に使った時間の合計。LLMの応答待ちは数えない(アダプタのタイムアウトが見る)。
     let mut tool_time_used = Duration::ZERO;
     // ツールを呼んだラウンドにモデルが添えた本文も、このターンの返信の一部として最終行に
-    // まとめて保存する(docs/spec/rebuild/data-model.md「1ターン内の往復で保存するもの」)。
+    // まとめて保存する。
     let mut reply_parts: Vec<String> = Vec::new();
 
     let tool_rounds = request.tool_rounds(ctx);
@@ -515,7 +483,7 @@ async fn run_tool_rounds(
 
         let mut text = String::new();
         // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの
-        // 再送信用)には載せない(principles.md 3節「思考は履歴に送り返さない」)。
+        // 再送信用)には載せない。
         let mut reasoning = String::new();
         let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
         for event in &events {
@@ -576,16 +544,10 @@ async fn run_tool_rounds(
         let mut executed: Vec<(ToolCallRequest, CallOutcome)> =
             Vec::with_capacity(tool_calls.len());
         for (i, call) in tool_calls.into_iter().enumerate() {
-            // 合計時間は呼び出しの区切りで判定する。`execute_call`自身は内部・外部
-            // それぞれの失敗を結果JSONに落としてターンを続けるが(同関数のドキュメント
-            // 参照)、合計時間の超過だけはモデルに返して続けても意味が無いため、
-            // ここでターンを打ち切る。
-            //
-            // 実行中の呼び出しを外から打ち切らないのは、内部ツールのDB書き込みが
-            // `spawn_blocking`の上で走っており、待つのをやめてもタスク自体は完走する
-            // ため。打ち切ると、書き込みだけが済んで実行記録が
-            // 残らない状態を作る。1回の呼び出しは内部ツールならDB操作、外部ツールなら
-            // `mcp`のper-callタイムアウトで有界なので、超過はその1回分に収まる。
+            // 合計時間は呼び出しの区切りで判定し、超えたらターンを打ち切る(ほかの失敗と違い、
+            // モデルに返して続けても意味が無い)。実行中の呼び出しを外から打ち切らないのは、
+            // 内部ツールのDB書き込みは待つのをやめても完走し、書き込みだけが済んで
+            // 実行記録が残らない状態を作るため(1回の呼び出しは`mcp`のタイムアウトで有界)。
             if tool_time_used >= ctx.limits.total_timeout {
                 return fail_turn(db, attempt, TurnFailure::ToolTimeout).await;
             }
@@ -593,9 +555,8 @@ async fn run_tool_rounds(
             let outcome = execute_call(db.clone(), chat, ctx, external, sessions, &call).await?;
             tool_time_used = tool_time_used.saturating_add(started.elapsed());
 
-            // このラウンドの思考は、ラウンド内最初のツール実行記録の`reasoning`列に
-            // 1回だけ紐付ける(発生順に混在させて表示するため。同一ラウンドの
-            // 全呼び出しに複製すると「思考・ツール」折りたたみの件数が水増しされる)。
+            // このラウンドの思考は、ラウンド内最初のツール実行記録にだけ紐付ける(全呼び出しに
+            // 複製すると、画面の「思考・ツール」の件数が水増しされる)。
             let reasoning_for_row = if i == 0 {
                 reasoning_for_db.clone()
             } else {
@@ -616,7 +577,7 @@ async fn run_tool_rounds(
         }
 
         // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
-        // OpenAI互換プロトコルの標準的な表現に合わせる(architecture.md 3節)。
+        // OpenAI互換プロトコルの標準的な表現に合わせる。
         if !text.is_empty() {
             reply_parts.push(text.clone());
         }
@@ -625,7 +586,7 @@ async fn run_tool_rounds(
             tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
         });
         // 結果には自由入力が載る。保存する実行記録(上)は受け取ったまま残し、モデルへ
-        // 送る側でだけ無害化する(docs/spec/rebuild/architecture.md 10節)。
+        // 送る側でだけ無害化する。
         for (call, outcome) in executed {
             round_trip.push(ChatMessage::Tool {
                 tool_call_id: call.id,
@@ -641,19 +602,16 @@ async fn run_tool_rounds(
 /// ツール1件の実行。名前が外部ツールとして公開したものなら対応するサーバーへ、
 /// そうでなければ内部ツールへ振り分ける(振り分けの判断はここ1箇所)。
 ///
-/// 内部・外部のどちらも、実行の失敗は`Err`で上に返さず`{"error": ...}`の結果JSONに
-/// 落としてターンを続ける(docs/spec/principles.md 3節「失敗しても会話を止めない」)。
-/// 引数の型違いや対象の取り違えはモデルが自分で直せる失敗であり、外部サーバーの
-/// 不達に至っては日常的に起こるため、モデルに失敗を伝えて続けさせる方が会話として
-/// 自然になる。返る`Err`はDBスレッドか、添付の実体を読むブロッキング処理自体が落ちた
-/// 場合だけで、それは呼び出し元が実行記録を保存できないのと同じ状況にあたる。
+/// 実行の失敗は`Err`で上に返さず、`{"error": ...}`の結果JSONにしてモデルへ伝え、ターンを
+/// 続ける(引数の誤りや対象の取り違えはモデルが自分で直せ、外部サーバーの不達は日常的に
+/// 起こるため)。返る`Err`はDBスレッドか、添付の実体を読むブロッキング処理自体が落ちた場合だけ。
 ///
 /// 引数がJSONとして読めなかった呼び出し(`ToolArguments::Malformed`)は、どのツールも
 /// 実行せずに失敗を返し、出し直させる。
 ///
-/// 結果と一緒に、実行したツールの分類(tools.md 4節)を返す。分類は振り分け先の定義から
-/// 引き、ここでは決めない。実行しなかった呼び出し(引数が読めない・公開していない名前・
-/// 接続先が無い)は`None`で、次ターン以降の履歴に載らない。
+/// 結果と一緒に、実行したツールの分類を返す。分類は振り分け先の定義から引き、ここでは
+/// 決めない。実行しなかった呼び出し(引数が読めない・公開していない名前・接続先が無い)は
+/// `None`で、次ターン以降の履歴に載らない。
 async fn execute_call(
     db: SharedConnection,
     chat: Chat,
@@ -756,8 +714,8 @@ async fn read_tool_images(
 }
 
 /// ツール実行記録を保存する唯一の入口。保存した値をそのまま画面へ知らせる
-/// ([`TurnEvent::ToolExecuted`])。画面への出力の規則(architecture.md 10節)は保存値を
-/// 前提にしているので、保存する値と知らせる値をここ1箇所で作る。
+/// ([`TurnEvent::ToolExecuted`])。画面への出力の規則は保存値を前提にしているので、保存する
+/// 値と知らせる値をここ1箇所で作る。
 async fn save_tool_execution(
     db: SharedConnection,
     attempt: &Attempt,
@@ -787,7 +745,7 @@ async fn save_tool_execution(
 }
 
 /// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
-/// の定型文言、`error_detail`は`failure.detail()`(Issue #159)。
+/// の定型文言、`error_detail`は`failure.detail()`。
 async fn fail_turn(db: SharedConnection, attempt: &Attempt, failure: TurnFailure) -> Result<()> {
     let attempt = attempt.clone();
     let content = failure.user_message();

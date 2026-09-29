@@ -1,5 +1,5 @@
 //! 1ターンの応答生成が受け取る文脈。送信・編集・再試行のどの入口も同じ組を使うため、
-//! 1つの型にまとめて渡す(principles.md 5節)。
+//! 1つの型にまとめて渡す。
 
 use crate::attachments::Attachments;
 use crate::config::ReasoningEffort;

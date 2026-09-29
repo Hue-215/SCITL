@@ -18,14 +18,8 @@ fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '
     }
 }
 
-/// 発言送信。`chat`は文脈(表示中の会話)から決まる引数であり、モデルへのツール引数には
-/// 出てこない(update_taskのタスクチャット版と同じ区別。docs/spec/rebuild/tools.md 1節)。
-/// ターンの途中経過は`on_event`へ送る(編集・再試行も同じ。architecture.md 3節)。
-/// `attachments`は`stage_attachment`が返したトークン。
-///
-/// プロバイダー未選択・モデル未選択・APIキー未設定・空応答等は`run_turn`内でエラー発言
-/// として保存され`Ok`で返る(Issue #40)。ここで`Err`になるのはDB自体への書き込み失敗など、
-/// 発言として保存すらできない場合のみ。
+/// 発言を送り、応答を生成する([`run_turn`])。`chat`は表示中の会話で、ターンの途中経過は
+/// `on_event`へ送る。`attachments`は`stage_attachment`が返したトークン。
 #[tauri::command]
 pub async fn send_chat_message(
     state: State<'_, AppState>,
@@ -47,8 +41,7 @@ pub async fn send_chat_message(
     .map_err(|e| e.to_string())
 }
 
-/// 聞き取りの開始(Issue #76)。作ったばかりのタスクで、ユーザーの発言なしにモデルの返信から
-/// 会話を始める。
+/// 作ったばかりのタスクで、ユーザーの発言なしにモデルの返信から聞き取りを始める。
 #[tauri::command]
 pub async fn open_task_chat(
     state: State<'_, AppState>,
@@ -66,8 +59,7 @@ pub async fn open_task_chat(
     .map_err(|e| e.to_string())
 }
 
-/// 発言の編集(Issue #41)。ユーザー発言のみが対象で、対象以降の発言をすべて論理削除して
-/// 編集後の内容から会話を再生成する。
+/// ユーザー発言を編集し、そこから応答を生成し直す([`edit_user_message`])。
 #[tauri::command]
 pub async fn edit_chat_message(
     state: State<'_, AppState>,
@@ -89,8 +81,7 @@ pub async fn edit_chat_message(
     .map_err(|e| e.to_string())
 }
 
-/// 発言の再試行(Issue #41・#130)。ターンの返信(アシスタント発言・エラー発言)が対象で、
-/// 同じターンのまま`attempt_no`を増やして応答を作り直す。
+/// ターンの返信を作り直す([`retry_reply`])。
 #[tauri::command]
 pub async fn retry_chat_message(
     state: State<'_, AppState>,
@@ -110,8 +101,7 @@ pub async fn retry_chat_message(
     .map_err(|e| e.to_string())
 }
 
-/// 発言の削除(Issue #41)。ユーザー発言とターンの返信が対象で、確認ダイアログ無しの
-/// 即座に取り消し可能な論理削除。カスケードはしない(対象の1件だけを消す)。
+/// 発言を1件削除する([`delete_message`])。
 #[tauri::command]
 pub async fn delete_chat_message(
     state: State<'_, AppState>,
@@ -123,7 +113,7 @@ pub async fn delete_chat_message(
         .map_err(|e| e.to_string())
 }
 
-/// 会話の発言履歴取得(#37)。
+/// 会話の発言を表示用に取得する。
 #[tauri::command]
 pub async fn list_chat_messages(
     state: State<'_, AppState>,

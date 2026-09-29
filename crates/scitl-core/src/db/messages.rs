@@ -7,10 +7,9 @@ use super::attachments::{self, AttachmentView};
 use super::{now_iso8601, text_column_enum};
 use crate::error::{CoreError, Result};
 
-/// 発言が属する会話。`messages.task_id`がNULLなら総合チャット(data-model.md messages)。
-/// `Option<i64>`で持たないのは、渡し忘れの`None`が総合チャットへの書き込みに化けるのを
-/// 型で防ぐため(tools.md 1節が修正した「対象の取り違え」と同種の事故)。
-/// 画面とは`{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
+/// 発言が属する会話。`messages.task_id`がNULLなら総合チャット。`Option<i64>`で持たないのは、
+/// 渡し忘れの`None`が総合チャットへの書き込みに化けるのを型で防ぐため。画面とは
+/// `{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", content = "task_id", rename_all = "snake_case")]
@@ -68,10 +67,9 @@ text_column_enum!(Kind {
     ToolExecution => "tool_execution",
 });
 
-/// 行の出どころ(`docs/spec/rebuild/data-model.md`「ターン境界」の3分類)。`source`と
-/// `turn_id`/`attempt_no`の組み合わせはこれだけから決まり、取り違えた組み合わせは書けない。
-/// 操作の記録が実行記録であることまでは型で縛らず、DBのトリガー(`0004_message_origin.sql`)が
-/// 止める。
+/// 行の出どころ。`source`と`turn_id`/`attempt_no`の組み合わせはこれだけから決まり、
+/// 取り違えた組み合わせは書けない。操作の記録が実行記録であることまでは型で縛らず、
+/// DBのトリガー(`0004_message_origin.sql`)が止める。
 #[derive(Debug, Clone, Copy)]
 pub enum Origin<'a> {
     User,
@@ -85,7 +83,7 @@ pub enum Origin<'a> {
     Operation(OperationSource),
 }
 
-/// 応答生成以外の経路の印(`messages.source`)。MCP(#73)を実装したら値を足す。
+/// 応答生成以外の経路の印(`messages.source`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationSource {
     Ui,
@@ -106,10 +104,9 @@ pub struct NewMessage<'a> {
     /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
     pub error_kind: Option<&'a str>,
     /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
-    /// モデル入力・エクスポートには使わない(data-model.md messages「error_detail」)。
+    /// モデル入力・エクスポートには使わない。
     pub error_detail: Option<&'a str>,
-    /// モデルの思考(reasoning)。表示・エクスポート専用で、APIへの入力には使わない
-    /// (`docs/spec/rebuild/data-model.md` messagesテーブル、Issue #42)。
+    /// モデルの思考(reasoning)。表示・エクスポート専用で、APIへの入力には使わない。
     pub reasoning: Option<&'a str>,
 }
 
@@ -162,15 +159,11 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     Ok(conn.last_insert_rowid())
 }
 
-/// 1つの会話の発言取得(支配的クエリ)。
-/// ターンを持つ行は`turn_id`ごとの最新試行のみに絞り、さらに**通常発言が1行も生き残って
-/// いないターン(破棄されたターン)を丸ごと除く**(data-model.md「ターン境界」—
-/// 応答生成以外の経路での操作の記録はturn_idを持たないため常に残る)。
-///
-/// 後者はIssue #95。編集・再試行のカスケードは`kind='normal'`しか論理削除しないため
-/// (ツール実行記録は保全する。data-model.md)、破棄されたターンのツール実行記録だけが
-/// 残る。これを会話に並べると、直後に挿入される編集後の発言がその下に来て新規送信と
-/// 見分けが付かなくなる。記録はDBに残したまま、この支配的クエリの時点で会話から外す。
+/// 1つの会話の発言を取得する。ターンを持つ行は`turn_id`ごとの最新試行に絞り、通常発言が
+/// 1行も残っていないターン(編集・再試行・削除で破棄されたターン)は丸ごと除く。
+/// 応答生成以外の経路での操作の記録は`turn_id`を持たないので、常に残る。
+/// 破棄されたターンのツール実行記録はDBに残すが([`soft_delete_normal_from`])、会話に
+/// 並べると直後の編集後の発言が新規送信と見分けられなくなるため、ここで外す。
 pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
     let mut rows = list_rows_for_chat(conn, chat)?;
     let mut attached = attachments::views_for_chat(conn, chat)?;
@@ -212,8 +205,7 @@ pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Me
     Ok(rows)
 }
 
-/// idで1件取得する(論理削除済みは対象外)。編集・再試行・削除いずれも、操作対象の
-/// 現在の役割・種別を確認するためにまずこれを通る。
+/// idで1件取得する(論理削除済みは対象外)。
 pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     let found = conn
         .query_row(
@@ -252,12 +244,9 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
     })
 }
 
-/// 削除(共通)の唯一の入口。対象はユーザー発言とターンの返信(アシスタント発言・
-/// エラー発言)の通常発言のみ
-/// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない」)。
-/// 返信を消したターンは通常発言が残らないため、`list_for_chat`がターンごと会話から外す。
-/// 確認ダイアログを挟まない即時の論理削除で、`deleted_at`を立てるだけの取り消し可能な
-/// 操作にする(`deleted_at`をNULLに戻せば復元できる。復元UIは本Issueの範囲外)。
+/// 発言を1件だけ論理削除する。対象はユーザー発言とターンの返信(アシスタント発言・
+/// エラー発言)の通常発言のみで、ツール実行記録は消さない。`deleted_at`を立てるだけなので、
+/// NULLに戻せば復元できる。
 pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
     let msg = find_message(conn, id)?.ok_or(CoreError::MessageNotFound(id))?;
     if msg.kind != Kind::Normal || !matches!(msg.role, Role::User | Role::Assistant | Role::Error) {
@@ -275,19 +264,11 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// `from_id`以降(自身を含む)の通常発言(`kind='normal'`)を一括で論理削除する。
-/// 編集・再試行のカスケード用の共通入口(編集は対象のユーザー発言から、再試行は対象の
-/// ターンの返信から、それぞれ以降をすべて削除してから会話を再生成する)。
+/// `from_id`以降(自身を含む)の通常発言を一括で論理削除する(編集・再試行で、以降を
+/// 作り直す前に使う)。
 ///
-/// ツール実行記録(`kind='tool_execution'`)は対象に含めない
-/// (`data-model.md`「ツール実行記録は通常発言の編集・削除・再試行の対象に含めない
-/// (会話の整合性より実行記録の保全を優先する)」)。
-///
-/// この呼び出しの後、対象のターンには通常発言が1行も残らず、ツール実行記録だけが浮く。
-/// 会話としては破棄されたターンなので、`list_for_chat`が表示から外す(Issue #95。
-/// `soft_delete_normal_from_cascades_but_spares_tool_execution_rows`で、DBには残り
-/// 会話には出ないことを確認している)。**保全と表示を切り離すのがここの要点**で、
-/// 記録の側を消して辻褄を合わせてはならない。
+/// ツール実行記録は消さない。残った記録は[`list_for_chat`]が会話から外す。実行記録の保全を
+/// 優先しているので、表示を合わせるために記録の側を消してはならない。
 pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
@@ -297,7 +278,7 @@ pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> R
     Ok(())
 }
 
-/// タスクの会話を始めた側(Issue #76)。
+/// タスクの会話を始めた側。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opener {
     User,
@@ -330,9 +311,8 @@ pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
     }))
 }
 
-/// 指定`turn_id`の次の試行番号を採番する。論理削除済みの試行も`MAX`の対象に含める
-/// (物理削除しない方針と同様、番号を使い回さず単調増加させることで、削除された古い
-/// 試行の記録と新しい試行が`attempt_no`の面でも混同されないようにするため)。
+/// 指定`turn_id`の次の試行番号を採番する。削除された古い試行と番号が重ならないよう、
+/// 論理削除済みの試行も`MAX`の対象に含める。
 pub fn next_attempt_no(conn: &Connection, turn_id: &str) -> Result<i64> {
     let max: Option<i64> = conn.query_row(
         "SELECT MAX(attempt_no) FROM messages WHERE turn_id = ?1",
@@ -644,9 +624,8 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// 複数回再試行したターンを、さらに前方の発言の編集で丸ごと破棄した場合
-    /// (Issue #95)。旧試行の行は`MAX(attempt_no)`で、最新試行の行は「通常発言が
-    /// 生き残っていない」判定で、それぞれ別の条件で外れる。両方が同時に効くことを固定する。
+    /// 複数回再試行したターンを、さらに前方の発言の編集で丸ごと破棄した場合。旧試行の行は
+    /// `MAX(attempt_no)`で、最新試行の行は「通常発言が残っていない」判定で外れる。
     #[test]
     fn a_retried_turn_discarded_by_a_later_edit_disappears_from_every_attempt() {
         let conn = db::open_in_memory().unwrap();
@@ -705,7 +684,7 @@ mod tests {
             .unwrap();
         }
 
-        // 前方のユーザー発言を編集した場合のカスケード。通常発言は全試行分が消える。
+        // 前方のユーザー発言を編集した場合。通常発言は全試行分が消える。
         soft_delete_normal_from(&conn, Chat::Task(task_id), user_id).unwrap();
 
         // 旧試行・最新試行のどちらのツール実行記録も会話には出ない。
@@ -715,7 +694,7 @@ mod tests {
             "unexpected remaining rows: {remaining:?}"
         );
 
-        // 記録自体は全試行分がDBに残る(保全優先)。
+        // 記録自体は全試行分がDBに残る。
         let kept: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM messages
@@ -849,20 +828,17 @@ mod tests {
         )
         .unwrap();
 
-        // ユーザー発言以降(自身を含む)をすべて論理削除する = 編集操作のカスケードと同じ形。
+        // ユーザー発言以降(自身を含む)をすべて論理削除する(編集と同じ形)。
         soft_delete_normal_from(&conn, Chat::Task(task_id), user_id).unwrap();
 
-        // kind='normal'の行(ユーザー発言・アシスタント発言)はすべて消える。ツール実行記録は
-        // `soft_delete_normal_from`の対象外なので`deleted_at`が立たないが、通常発言が1行も
-        // 残らないターンは会話としては破棄されているため、`list_for_chat`は丸ごと外す
-        // (Issue #95)。保全(DBに残る)と表示(会話に出ない)を切り離すのがこのテストの要点。
+        // 通常発言はすべて消え、ツール実行記録は消えないが、ターンごと会話から外れる。
         let remaining = list_for_chat(&conn, Chat::Task(task_id)).unwrap();
         assert!(
             remaining.is_empty(),
             "unexpected remaining rows: {remaining:?}"
         );
 
-        // ツール実行記録の行自体は監査記録として物理的には残る(保全優先)。
+        // ツール実行記録の行自体はDBに残る。
         let tool_deleted_at: Option<String> = conn
             .query_row(
                 "SELECT deleted_at FROM messages WHERE kind = 'tool_execution'",
@@ -909,8 +885,7 @@ mod tests {
         assert_eq!(next_attempt_no(&conn, "turn-1").unwrap(), 2);
 
         soft_delete_message(&conn, id).unwrap();
-        // 削除済みでも採番は巻き戻らない(番号を使い回さないことで、削除された旧試行と
-        // 新しい試行が混同されないようにする)。
+        // 削除済みでも採番は巻き戻らない。
         assert_eq!(next_attempt_no(&conn, "turn-1").unwrap(), 2);
     }
 

@@ -2,7 +2,7 @@
 import type { ModelCapabilities } from "./ModelCapabilities";
 
 /**
- * モデル表の1行(Issue #65)。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
+ * モデル表の1行。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
  */
 export type ModelView = { 
 /**
@@ -11,7 +11,7 @@ export type ModelView = {
 name: string, 
 /**
  * 画面に出す名前。プロバイダーの一覧から選んだ名前はサーバーが書いた文字列なので、
- * 見えない文字を除いた写しを渡す(architecture.md 10節)。
+ * 見えない文字を除いた写しを渡す。
  */
 label: string, visible: boolean, capabilities: ModelCapabilities, 
 /**

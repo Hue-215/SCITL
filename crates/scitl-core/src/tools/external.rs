@@ -1,14 +1,11 @@
-//! 外部(MCP)ツールをモデルへ公開する形に整える(Issue #44)。
+//! 外部(MCP)ツールをモデルへ公開する形に整える。
 //!
-//! ここが決めるのは「どのツールを、どの名前で公開し、呼び出しをどのサーバーへ振り分けるか」
-//! だけで、接続そのものは`crate::mcp`が持つ(判断を1箇所に閉じる。principles.md 5節)。
+//! ここが決めるのは、どのツールをどの名前で公開し、呼び出しをどのサーバーへ振り分けるか
+//! だけで、接続そのものは`crate::mcp`が持つ。
 //!
-//! ツールの説明文と引数スキーマはサーバーが書いたもので、モデルのプロンプトに入る。
-//! 内容の検証はしない(信頼境界は「ユーザーが登録したこと」自体に置く。
-//! principles.md 4節「外部連携の境界を明確にする」。設定画面にも同じ趣旨の案内文がある)。
-//! 予約タグの無害化だけは掛ける(`ToolSchema::external`)。内容の検証ではなく、アプリ自身の
-//! 予約名前空間を守るもので、同じサーバーのツール結果と扱いを揃える
-//! (docs/spec/rebuild/architecture.md 10節)。
+//! ツールの説明文と引数スキーマはサーバーが書いたもので、モデルのプロンプトに入る。内容の
+//! 検証はしない(信頼境界はユーザーが登録したこと自体に置く)が、アプリ自身の予約タグの
+//! 無害化だけは掛ける(`ToolSchema::external`)。
 
 use std::collections::HashMap;
 
@@ -20,8 +17,7 @@ use crate::mcp::McpToolInfo;
 use crate::tools::ToolKind;
 
 /// サーバー識別子とツール名の区切り。名前空間化の目的は、内部ツール・他サーバーの
-/// ツールとの衝突を避けることと、呼び出し先APIの命名規則に収めること
-/// (legacy/backend.md 9節)。
+/// ツールとの衝突を避けることと、呼び出し先APIの命名規則に収めること。
 const SEPARATOR: &str = "__";
 
 /// OpenAI互換APIのツール名に使える文字と長さ。ここに収まらない名前は公開しない
@@ -52,8 +48,7 @@ impl ExternalToolset {
         let mut toolset = Self::default();
         for (server, tools) in servers {
             for tool in tools {
-                // 有効化されていないツールは公開しない(config.rsの`enabled_tools`は
-                // opt-in。サーバーが後からツールを増やしても勝手には使わない)。
+                // 有効化されていないツールは公開しない。
                 if !server.enabled_tools.contains(&tool.name) {
                     continue;
                 }
@@ -77,7 +72,7 @@ impl ExternalToolset {
                     server_id: server.id.clone(),
                     tool_name: tool.name,
                     // 外部ツールの結果はサーバー側の事情で決まり、SCITLの最新状態JSONの
-                    // どこにも現れないため、一律に事実系とする(tools.md 4節)。
+                    // どこにも現れないため、一律に事実系とする。
                     kind: ToolKind::Fact,
                 });
             }

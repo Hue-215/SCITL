@@ -1,4 +1,4 @@
-// 設定画面の「ツール」タブ(legacy/frontend.md 4節)。
+// 設定画面の「ツール」タブ。
 import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { NewMcpEndpoint } from './api'
@@ -17,9 +17,8 @@ const TRANSPORT_LABELS: Record<Transport, MessageKey> = {
   streamable_http: 'settings.tools.transport_http',
 }
 
-// 「1行1件、KEY=VALUE」形式のテキストをパースする(legacy/frontend.md 4節)。
-// エラーは行ごとに個別指摘する。行は前後の空白を除いてから見るので、`=`が先頭でなければ
-// キーは空にならない。
+// 「1行1件、KEY=VALUE」形式のテキストをパースする。エラーは行ごとに個別指摘する。行は前後の
+// 空白を除いてから見るので、`=`が先頭でなければキーは空にならない。
 function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
   const pairs: [string, string][] = []
   const errors: string[] = []
@@ -97,7 +96,7 @@ export function McpTab({
         onAdd={onAddServer}
       />
 
-      {/* ツール呼び出し全体の上限(legacy/frontend.md 4節「共通設定」)。内部ツールにも
+      {/* ツール呼び出し全体の上限。内部ツールにも
           効くので、MCPサーバーの一覧より後ろ、タブの末尾に置く。サーバーの追加とは
           別の話なので、追加フォームと同じ形の仕切り線で切る。 */}
       <section className="settings-section settings-section-break">
@@ -131,9 +130,8 @@ interface McpServerCardProps {
   onFetchTools: () => void
 }
 
-// 取得済みのツール一覧は`server.tools`(Rust側のキャッシュ)から来る。カード自身では
-// 保持しない——保持すると設定画面を閉じた時点で消え、有効にしたツールを確認することも
-// 外すこともできなくなる(Issue #104)。
+// 取得済みのツール一覧は`server.tools`(Rust側のキャッシュ)から来る。カード自身で保持すると、
+// 設定画面を閉じた時点で消える。
 function McpServerCard({
   server,
   onDelete,

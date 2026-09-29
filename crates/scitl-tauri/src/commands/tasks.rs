@@ -7,8 +7,7 @@ use super::with_db;
 use crate::AppState;
 
 /// フロントエンド向けIPCコマンド。`task_id`は表示中のタスクとしてフロントエンドが渡す
-/// (ツール`get_current_task_detail`の「ターン開始時に束縛される引数無し」とは異なる境界。
-/// architecture.md 7節)。
+/// (ターン開始時に対象を固定するツール`get_current_task_detail`とは別の境界)。
 #[tauri::command]
 pub async fn get_task_detail(
     state: State<'_, AppState>,
@@ -28,8 +27,8 @@ pub async fn list_tasks(
     with_db(&state, scitl_core::db::tasks::list_tasks).await
 }
 
-/// 新規タスク追加ボタン。作れたら、画面は続けて`open_task_chat`で聞き取りを始める
-/// (legacy/frontend.md 1節)。チャットを使えない間は作らずに理由を返す。
+/// 新規タスク追加ボタン。作れたら、画面は続けて`open_task_chat`で聞き取りを始める。
+/// チャットを使えない間は作らずに理由を返す。
 #[tauri::command]
 pub async fn create_task(state: State<'_, AppState>) -> Result<TaskCreation, String> {
     // 使えるかどうかは設定だけで決まるので、推論サーバーへ問い合わせる`snapshot_for_turn`は
@@ -43,8 +42,7 @@ pub async fn create_task(state: State<'_, AppState>) -> Result<TaskCreation, Str
     .map_err(|e| e.to_string())
 }
 
-/// ヘッダーからのタイトルの変更(Issue #75)。変更と会話ログへの記録はcoreが1つの
-/// トランザクションで書く(data-model.md「応答生成以外の経路での操作の記録」)。
+/// ヘッダーからタイトルを変更し、会話ログに記録する。
 #[tauri::command]
 pub async fn rename_task(
     state: State<'_, AppState>,
@@ -79,7 +77,7 @@ pub async fn set_task_archived(
     .map_err(|e| e.to_string())
 }
 
-/// タスクの論理削除。モデルには公開しない操作で、画面・CLIからのみ行う(tools.md 2節)。
+/// タスクの論理削除。モデルには公開しない操作で、画面・CLIからのみ行う。
 #[tauri::command]
 pub async fn delete_task(state: State<'_, AppState>, task_id: i64) -> Result<(), String> {
     operations::delete_task(

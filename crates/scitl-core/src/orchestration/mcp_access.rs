@@ -1,7 +1,7 @@
-//! ターンから見た外部ツールサーバー(Issue #44)。
+//! ターンから見た外部ツールサーバー。
 //!
 //! `orchestration::turn`が知るのはこの型までで、接続の詳細は`crate::mcp`、
-//! 公開する名前と振り分けは`crate::tools::external`が持つ(principles.md 5節)。
+//! 公開する名前と振り分けは`crate::tools::external`が持つ。
 
 use crate::config::McpServerConfig;
 use crate::mcp::ToolCatalog;
@@ -11,7 +11,7 @@ pub struct McpAccess<'a> {
     /// 登録済みのサーバー。無効なサーバー・ツールを1つも有効化していないサーバーは
     /// ターン側で除く(判断は`turn::prepare_external_tools`に1箇所)。
     pub servers: &'a [McpServerConfig],
-    /// 取得済みツール一覧のキャッシュ(Issue #104)。`None`ならターンのたびに取得する。
+    /// 取得済みツール一覧のキャッシュ。`None`ならターンのたびに取得する。
     pub catalog: Option<&'a ToolCatalog>,
 }
 

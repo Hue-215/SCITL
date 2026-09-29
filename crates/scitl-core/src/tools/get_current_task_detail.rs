@@ -18,8 +18,7 @@ pub(super) const TOOL: InternalTool = InternalTool {
     run: Run::ReadTask(execute),
 };
 
-/// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない
-/// (docs/spec/rebuild/tools.md 1節)。
+/// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(
@@ -41,8 +40,7 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
     task_detail(conn, task_id)
 }
 
-/// 工程の追加・更新・削除ツールも、変更後の全体をこの形で返す
-/// (docs/spec/principles.md 3節「書き込み系は変更後の全体を返す」)。
+/// 工程の追加・更新・削除ツールも、変更後の全体をこの形で返す。
 pub fn task_detail(conn: &Connection, task_id: i64) -> Result<Value> {
     let task = tasks::get_task(conn, task_id)?;
     let steps = task_steps::list_for_task(conn, task_id)?;

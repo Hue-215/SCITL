@@ -43,8 +43,7 @@ function TaskList({
   )
 }
 
-// サイドバー: 総合チャット行(固定)・タスク一覧・アーカイブ折りたたみ・
-// 新規タスク追加ボタン(legacy/frontend.md 1節)。
+// サイドバー: 総合チャット行(固定)・タスク一覧・アーカイブ折りたたみ・新規タスク追加ボタン。
 export default function Sidebar({
   tasks,
   selected,
@@ -84,7 +83,7 @@ export default function Sidebar({
       <div className="sidebar-scroll">
         <TaskList tasks={active} selectedTaskId={selectedTaskId} onSelect={onSelect} />
 
-        {/* 0件でも行は出す(legacy/frontend.md 1節)。アーカイブした行き先が常に見えるように */}
+        {/* 0件でも行は出す。アーカイブした行き先が常に見えるように */}
         <div className="sidebar-archived">
           <button
             type="button"

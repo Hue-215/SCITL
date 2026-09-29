@@ -8,6 +8,6 @@ export type ProviderView = { id: string, name: string, api_format: ApiFormat, ba
  */
 can_detect_capabilities: boolean, 
 /**
- * このプロバイダーをアクティブにしているが、組み立てられない理由(Issue #155)。
+ * このプロバイダーをアクティブにしているが、組み立てられない理由。
  */
 error: string | null, };

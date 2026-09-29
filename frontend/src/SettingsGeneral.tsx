@@ -1,4 +1,4 @@
-// 設定画面の「一般」タブ(legacy/frontend.md 2節)。
+// 設定画面の「一般」タブ。
 import { useEffect, useId, useState } from 'react'
 import { exportMarkdown, openExportFolder, updateGeneralSettings } from './api'
 import type { ExportSummary, Language, SettingsView } from './types'
@@ -33,8 +33,8 @@ function PromptField({ label, value, onChange, onBlur, caption }: PromptFieldPro
   )
 }
 
-// フォーカスを外すと自動保存(legacy/frontend.md 2節)。入力中は自身のstateだけを更新し、
-// blur時にのみ親へ確定した値を渡す。
+// フォーカスを外すと自動保存。入力中は自身のstateだけを更新し、blur時にのみ親へ確定した値を
+// 渡す。
 //
 // 既定の文面を持つ欄は、未設定の間は既定の文面を表示する(書き換えの起点にできるように)。
 // 空欄と既定の文面のままの値は、Rust側が未設定として保存する(`Settings::update_general`)。
@@ -124,8 +124,8 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
   )
 }
 
-// 押すと確認なしで書き出し、成否はこの欄に出す(legacy/frontend.md 2節)。タブ全体のエラー欄を
-// 使わないのは、設定の保存とは別の操作の結果だから。
+// 押すと確認なしで書き出し、成否はこの欄に出す。タブ全体のエラー欄を使わないのは、設定の
+// 保存とは別の操作の結果だから。
 function ExportSection() {
   const [summary, setSummary] = useState<ExportSummary | null>(null)
   const exporting = useAsyncAction((error) =>

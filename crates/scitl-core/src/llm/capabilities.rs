@@ -1,5 +1,4 @@
-//! モデル能力の解決(principles.md 3節「モデル能力は3層で解決する」、architecture.md 3節)。
-//! 画面の表示も、能力に応じた送信の切り替えも、ここが返す値だけを見る。
+//! モデル能力の解決。画面の表示も、能力に応じた送信の切り替えも、ここが返す値だけを見る。
 //!
 //! 3層は上から、手動設定(`config::ModelOverrides`)→ 自動検出([`DetectedCapabilities`]。
 //! 推論サーバーへの問い合わせは`providers`が行う)→ 既定値([`DEFAULT_CAPABILITIES`])。
@@ -61,7 +60,7 @@ impl CapabilityLayer {
     /// この層を`below`の上に重ねる。
     ///
     /// コンテキスト長の`0`は未設定として扱う。設定画面からは入らないが、手で編集した
-    /// `config.toml`が同じ経路を通るため(`GeneralConfig::response_timeout`と同じ扱い)。
+    /// `config.toml`も同じ経路を通るため。
     pub fn over(&self, below: ModelCapabilities) -> ModelCapabilities {
         ModelCapabilities {
             image: self.image.unwrap_or(below.image),
@@ -83,11 +82,11 @@ pub type DetectedCapabilities = CapabilityLayer;
 /// 小さく見積もっても古い発言が早めに落ちるだけで会話は続くため。
 pub const FALLBACK_CONTEXT_LENGTH: u32 = 4096;
 
-/// 一番下の層。モデル名によらず一律の値にする(architecture.md 3節)。名前から能力を
-/// 引く表は、出典を確かめられず新しいモデルにも追従できないため持たない。実物との違いは
-/// 手動設定(設定画面のモデル表)と自動検出で埋める。
+/// 一番下の層。モデル名によらず一律の値にする。名前から能力を引く表は、出典を確かめられず
+/// 新しいモデルにも追従できないため持たない。実物との違いは手動設定(設定画面のモデル表)と
+/// 自動検出で埋める。
 ///
-/// - ツールはありとする。タスクの更新はツール経由でしか行えず(tools.md)、なしにすると
+/// - ツールはありとする。タスクの更新はツール経由でしか行えず、なしにすると
 ///   登録しただけのモデルではアプリの中心の操作ができなくなるため
 /// - 思考はありとする。なしにすると、手動設定しない限り思考の強さを選べなくなるため。
 ///   思考の強さの指定を拒むAPIでは、その旨のエラー発言からモデル表での変更へ誘導する
@@ -118,9 +117,7 @@ pub fn resolve_capabilities(
 }
 
 /// 自動検出の結果。アプリ起動中だけ保持するメモリキャッシュで、config.tomlには書かない
-/// (能力はユーザーの設定ではなくサーバー側の持ち物で、永続化した写しはサーバー側の
-/// 変更(読み込み直したモデル、起動オプション)を検知できない。MCPのツール一覧
-/// (`mcp::ToolCatalog`)と同じ扱い)。
+/// (永続化すると、サーバー側でモデルや起動オプションが変わっても追従できないため)。
 #[derive(Default)]
 pub struct DetectedCatalog {
     by_model: Mutex<HashMap<(String, String), DetectedCapabilities>>,

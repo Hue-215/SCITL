@@ -1,5 +1,5 @@
-//! 出力先を知らない、文字単位の部品。どの文字列に何を掛けるかは出力先ごとに決まり
-//! (docs/spec/rebuild/architecture.md 10節)、ここはその判断に使う部品だけを持つ。
+//! 出力先を知らない、文字単位の部品。どの文字列に何を掛けるかは出力先ごとに決まり、
+//! ここはその判断に使う部品だけを持つ。
 
 /// 表示の順序を入れ替える双方向制御文字。
 fn is_bidi_control(c: char) -> bool {
@@ -39,7 +39,7 @@ pub fn collapse_whitespace(s: &str) -> String {
 }
 
 /// 先頭から`max`文字までを返す。2つ目の値は切り詰めたかどうか。省略の印は出力先ごとに
-/// 違うため(architecture.md 10節)、付けるのは呼び出し側に任せる。
+/// 違うため、付けるのは呼び出し側に任せる。
 pub fn truncate_chars(s: &str, max: usize) -> (String, bool) {
     let mut chars = s.chars();
     let head: String = chars.by_ref().take(max).collect();
