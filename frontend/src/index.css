@@ -40,7 +40,7 @@ body {
 }
 
 /* 見出し: 文字サイズは3段階しかないため、画面名(h1)だけを1段大きくし、節の見出し
-   (h2以下)は本文サイズ+太字で段を作る(--font-size-xlはMarkdown本文の見出し
+   (h2以下)は本文サイズ+強調のウェイトで段を作る(--font-size-xlはMarkdown本文の見出し
    (.markdown)専用なのでここでは使わない)。h4以下は画面では使わず、Markdown本文にだけ
    現れる。要素間の余白は入れ物側のgapで一律に決めているので、UA既定のmarginは
    二重になる分を落とす。 */
@@ -753,7 +753,7 @@ option {
    時刻・操作ボタン・添付は画面の文字なので、.entryではなくここで替える。 */
 .markdown {
   font-family: var(--font-family-prose);
-  --font-weight-strong: 700;
+  --font-weight-strong: var(--font-weight-strong-prose);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

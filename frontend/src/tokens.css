@@ -12,8 +12,7 @@
  *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
  */
 
-/* 同梱するのは下の4つのウェイトだけ(ui.md「書体とウェイト」)。ここに無いウェイトを
-   指定すると、近いウェイトの字形が使われる。 */
+/* ウェイトを足し引きしたら、下の--font-weight-*とui.md「書体とウェイト」の表も直す。 */
 @font-face {
   font-family: 'Noto Sans JP';
   src: url('/fonts/NotoSansJP-Regular.woff2') format('woff2');
@@ -50,9 +49,11 @@
   --font-family-mono: ui-monospace, monospace;
 
   /* ウェイトは2段階(本文 / 強調)。強調の値は書体ごとに同梱したウェイトに合わせて決め、
-     .markdownがSerif用の値で上書きする。太字は要素に直値で書かず、必ずこれを使う。 */
+     .markdownが--font-weight-strongを-proseの値で上書きする。太字は要素に直値で書かず、
+     必ずこれを使う。 */
   --font-weight-normal: 400;
   --font-weight-strong: 500;
+  --font-weight-strong-prose: 700;
 
   /* 文字サイズ: 3段階(補助文 / 本文 / 見出し)。sm/md/lgの差が視認できない刻みは置かない。
      xlはMarkdown本文の見出し(.markdown h1)専用で、画面の見出しには使わない。 */

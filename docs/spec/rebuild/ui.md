@@ -40,7 +40,7 @@
 
 | 用途 | トークン |
 |---|---|
-| 文字 | `--font-family`, `--font-family-prose`, `--font-family-mono`, `--font-weight-normal/strong`, `--font-size-sm/md/lg/xl`, `--line-height-tight/normal` |
+| 文字 | `--font-family`, `--font-family-prose`, `--font-family-mono`, `--font-weight-normal/strong/strong-prose`, `--font-size-sm/md/lg/xl`, `--line-height-tight/normal` |
 | 余白 | `--space-1`〜`--space-5` |
 | 入力欄の内側の余白(欄と高さを揃えるボタンも使う) | `--field-padding` |
 | 窓の上端から各カラムの中身までの余白 | `--pane-padding` |
@@ -74,14 +74,15 @@
 Noto Serif JPにする。吹き出しの中でも時刻・操作ボタン・添付・エラー発言は画面の文字として
 Sansのままにする。等幅はOSのフォントに委ねる(`--font-family-mono`)。
 
-| 書体 | 本文(`--font-weight-normal`) | 強調(`--font-weight-strong`) |
+| 書体 | 本文 | 強調 |
 |---|---|---|
-| Sans(画面) | 400 | 500 |
-| Serif(発言本文) | 400 | 700 |
+| Sans(画面) | 400(`--font-weight-normal`) | 500(`--font-weight-strong`) |
+| Serif(発言本文) | 400(`--font-weight-normal`) | 700(`--font-weight-strong-prose`) |
 
 画面の強調(見出し・タブ・ボタンの名前)は、700では画面の文字として重すぎるため500にする。
 本文の強調は、細い明朝の中で見分けられる700にする。`.markdown`が`--font-weight-strong`を
-上書きするので、見出し・`strong`・表の見出しは基盤層の指定のまま書体に合った太さになる。
+`--font-weight-strong-prose`で上書きするので、見出し・`strong`・表の見出しは基盤層の指定の
+まま書体に合った太さになる。
 
 同梱するのはこの4つのウェイトだけで、`frontend/public/fonts/` にWOFF2で置く。字形は
 日本語用のサブセット(Noto CJKの`SubsetOTF/JP`。中国語・韓国語専用の字形を除いた版)を使い、
