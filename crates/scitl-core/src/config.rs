@@ -1,6 +1,5 @@
-//! 秘密情報を含まないプロバイダー設定の永続化(TOML)。architecture.md 6節が定める通り、
-//! ここが持つのは`key_ref`という不透明な参照文字列だけで、平文の鍵を持つフィールドは
-//! 型として存在させない。実際の鍵の出し入れは[`crate::secrets`]の責務。
+//! 設定ファイル(TOML)の読み書き。秘密情報は`key_ref`という不透明な参照だけを持ち、
+//! 平文の鍵を持つフィールドは型として存在させない。鍵の出し入れは[`crate::secrets`]。
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -11,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::CoreError;
 use crate::i18n::Language;
 
-/// 対応するプロバイダーAPIの方言。現状はOpenAI互換チャットコンプリーションAPIのみ。
-/// 将来プロバイダーを追加する際はここにバリアントを足す。
+/// 対応するプロバイダーAPIの方言。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
@@ -29,8 +27,7 @@ pub struct ProviderConfig {
     pub name: String,
     pub api_format: ApiFormat,
     pub base_url: String,
-    /// 登録したモデルの一覧(設定画面「APIプロバイダー」タブ)。名前を打って1件ずつ、または
-    /// プロバイダーから取得した一覧から選んで登録する(一括で登録しない理由はarchitecture.md 3節)。
+    /// 登録したモデルの一覧。
     #[serde(default)]
     pub models: Vec<ModelConfig>,
     /// `models`のうちチャットで実際に使うモデル。`models`に無い値は無効。
@@ -63,13 +60,10 @@ pub struct ModelConfig {
     /// チャットのモデル一覧に出すか。
     #[serde(default = "visible_by_default")]
     pub visible: bool,
-    /// 能力の手動設定。能力を3層で解決するうちの一番上の層で、値の無い項目は下の層で決まる
-    /// (principles.md 3節、[`crate::llm::resolve_capabilities`])。
+    /// 能力の手動設定。値の無い項目は[`crate::llm::resolve_capabilities`]が下の層で決める。
     #[serde(default, skip_serializing_if = "ModelOverrides::is_empty")]
     pub overrides: ModelOverrides,
-    /// 思考の強さ(チャット入力欄の下で選ぶ。Issue #64)。思考に対応するモデルには常に
-    /// 明示して送り、サーバーの既定には任せない。モデルごとに持つのは、受け付ける値が
-    /// モデルごとに違うため(あるモデルに合わせた値を、切り替えた先のモデルへ持ち込まない)。
+    /// 思考の強さ。受け付ける値がモデルごとに違うため、モデルごとに持つ。
     #[serde(default)]
     pub reasoning_effort: ReasoningEffort,
 }
@@ -117,22 +111,16 @@ pub enum ReasoningEffort {
 /// 能力の手動設定。`None`は「手動では決めていない」。
 pub type ModelOverrides = crate::llm::CapabilityLayer;
 
-/// 応答タイムアウトの既定値(秒)。未設定のときに使う実体はここ1箇所だけ。
-/// タイムアウト自体は常に掛ける(HTTPクライアントの既定は無制限で、応答しない
-/// エンドポイント1つでターンが永久に固まるため)。生成の長い非ストリーミング応答も
-/// 待てるよう、余裕を持たせる。
+/// 応答タイムアウトの既定値(秒)。生成の長い非ストリーミング応答も待てるよう、余裕を持たせる。
+/// タイムアウト自体は常に掛ける(応答しないエンドポイント1つでターンが固まらないように)。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 
 /// システムプロンプト等、モデル・プロバイダーに依存しない全般設定。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeneralConfig {
     pub system_prompt: Option<String>,
-    /// タスクチャットでのみ追加するシステムプロンプト。総合チャットと
-    /// タスクチャットでは公開ツールが異なるため、
-    /// 工程ツールの使い分けのようなタスクチャット固有の指示は`system_prompt`とは
-    /// 別に持つ。
-    /// 未設定は表示言語の既定の文面で、解釈は`orchestration::SystemPrompts::from_config`に
-    /// 閉じる。
+    /// タスクチャットでのみ追加するシステムプロンプト(工程ツールの使い方など)。未設定は
+    /// 表示言語の既定の文面で、解釈は`orchestration::SystemPrompts::from_config`に閉じる。
     pub task_chat_system_prompt: Option<String>,
     /// 新規タスクで聞き取りを始めるとき、ユーザーの代わりに送る発言。未設定は
     /// 表示言語の既定の文面で、解釈は`orchestration::opening_message`に閉じる。
@@ -146,10 +134,8 @@ pub struct GeneralConfig {
 }
 
 impl GeneralConfig {
-    /// 未設定(`None`)と、保存済みの設定に紛れ込んだ`0`はどちらも既定値。`0`は
-    /// 「即タイムアウト」ではなく設定の不備として扱う。更新時にも弾くが、手で編集した
-    /// `config.toml`が同じ経路を通るため、ここでも受け止める
-    /// (`orchestration::ToolLimits::from_config`と同じ扱い)。
+    /// 未設定(`None`)と`0`はどちらも既定値。更新時にも`0`は弾くが、手で編集した
+    /// `config.toml`もここを通るため、ここでも受け止める。
     pub fn response_timeout(&self) -> Duration {
         Duration::from_secs(
             self.response_timeout_secs
@@ -163,38 +149,28 @@ impl GeneralConfig {
     }
 }
 
-/// ツール呼び出しの上限。設定画面「ツール/MCP」
-/// タブの末尾で編集する。プロバイダーではなくツールの使い方に関する設定なので、
-/// `GeneralConfig`ではなく独立した節として持つ。
-///
-/// どちらも`None`は「未設定」で、既定値の実体は[`crate::orchestration::ToolLimits`]が
-/// 1箇所だけ持つ(設定ファイル側に既定値を書き写すと、2箇所を揃える必要が生まれる)。
+/// ツール呼び出しの上限(設定画面「ツール/MCP」タブ)。`None`は未設定で、既定値は
+/// [`crate::orchestration::ToolLimits`]が持つ。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
     /// 1ターンでツールを実行するラウンドの上限。使い切ったら、ツールを渡さずにもう一度だけ
     /// モデルを呼んで返信させる(`orchestration::turn`)。
     pub max_rounds_per_turn: Option<u32>,
-    /// 1ターン内のツール実行に使える時間の合計(秒)。LLMの応答待ちは含まない
-    /// (そちらは`GeneralConfig::response_timeout_secs`が見る)。
+    /// 1ターン内のツール実行に使える時間の合計(秒)。LLMの応答待ちは含まない。
     pub total_timeout_secs: Option<u64>,
 }
 
 /// [`crate::secrets`]に保存した1つの値(環境変数またはHTTPヘッダーの値)を指す参照。
-/// `name`(環境変数名/ヘッダー名)と`key_ref`(秘密情報ストア上の不透明な参照)は別物であり、
-/// `key_ref`は`name`から機械的に導出しない(`name`はユーザー入力で
-/// `:`等を含みうるため、そこから`key_ref`を組み立てると衝突・曖昧さの元になる。
-/// `provider:{ULID}`と同様、`key_ref`はULIDで払い出す)。
+/// `key_ref`はULIDで払い出し、`name`からは組み立てない(`name`はユーザー入力で、`:`等を
+/// 含んで衝突しうるため)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretRef {
     pub name: String,
     pub key_ref: String,
 }
 
-/// MCPサーバーへの接続方式。フィールドの組み合わせを型で保証するため、
-/// (transport種別, command, url)のような別々のフィールドに分けず、
-/// タグ付きenumとして接続方式ごとに必要な値だけを持たせる
-/// (`ProviderConfig`のような平坦な構造だと、`Stdio`なのに`url`が入っている
-/// といった不正な状態を型で防げない)。
+/// MCPサーバーへの接続方式。接続方式ごとに必要な値だけを持たせ、`Stdio`なのに`url`が
+/// あるような状態を型で防ぐ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum McpEndpoint {
@@ -212,10 +188,8 @@ pub enum McpEndpoint {
     },
 }
 
-/// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない。
-/// ツール一覧そのもの(名前・説明)はここに永続化せず、アプリ起動中だけ
-/// [`crate::mcp::ToolCatalog`]に持つ。永続化すると、起動のたびに古い一覧と実サーバーの
-/// 食い違いを気にする必要が生まれるため
+/// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない。ツール一覧(名前・説明)は
+/// 永続化せず、アプリ起動中だけ[`crate::mcp::ToolCatalog`]に持つ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub id: String,
@@ -223,10 +197,8 @@ pub struct McpServerConfig {
     pub name: String,
     pub enabled: bool,
     pub endpoint: McpEndpoint,
-    /// 有効なツール名の集合(opt-in)。ここに無い名前は無効として扱う。取得したツール
-    /// 一覧に無い名前が残っていても実害はない(実行時に積集合を取るだけ)。逆に、
-    /// サーバー側が後からツールを追加しても、ユーザーが明示的に有効化するまで
-    /// 使われない(`HashMap<String, bool>`による「既定で有効」の読み方を型で排除する)。
+    /// 有効にしたツール名の集合。ここに無い名前は無効で、サーバーが後から足したツールも
+    /// 有効にするまで使われない。一覧に無い名前が残っていても、実行時に積集合を取るだけ。
     #[serde(default)]
     pub enabled_tools: BTreeSet<String>,
 }
@@ -235,9 +207,8 @@ pub struct McpServerConfig {
 /// 使う(`settings::SettingsView`)。
 pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
 
-/// サーバー識別子の制約(legacy/frontend.md 4節: [`MCP_SERVER_NAME_MAX_CHARS`]字以内、
-/// 英数字とアンダースコアのみ)。UIでの入力チェックはセキュリティ境界ではないため、
-/// Rust側でも検証する。英数字だけなので、バイト数と文字数は同じ。
+/// サーバー識別子を検証する([`MCP_SERVER_NAME_MAX_CHARS`]字以内、英数字とアンダースコア
+/// のみ)。英数字だけなので、バイト数と文字数は同じ。
 pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.len() > MCP_SERVER_NAME_MAX_CHARS {
         return Err(CoreError::InvalidSettings(format!(
@@ -291,9 +262,8 @@ pub fn load(path: &Path) -> Result<Config, CoreError> {
 /// 設定ファイルを保存する。呼び出し元が親ディレクトリの存在を保証する。
 ///
 /// 書き込み途中で落ちても`config.toml`が壊れないように書く([`crate::files::write_durably`])。
-/// 起動時の読み込みエラーは設定画面から直せない。置き換えまで同期するのは、呼び出し元が
-/// 保存の直後に古い設定だけが参照していた秘密情報を消すため(置き換えが電源断で巻き戻ると、
-/// 設定が消えた鍵を指して残る)。
+/// 置き換えまで同期するのは、呼び出し元が保存の直後に古い鍵を消すため(置き換えが電源断で
+/// 巻き戻ると、設定が消えた鍵を指して残る)。
 pub fn save(path: &Path, config: &Config) -> Result<(), CoreError> {
     let text = toml::to_string_pretty(config).map_err(|e| CoreError::Config(e.to_string()))?;
     crate::files::write_durably(path, text.as_bytes()).map_err(|e| CoreError::Config(e.to_string()))
@@ -482,8 +452,7 @@ context_length = 8192
         assert_eq!(reloaded.providers[0].models, *models);
     }
 
-    /// モデル名だけを並べた形(Issue #65より前)は読まない。起動時の読み込みエラー
-    /// (`settings`モジュール冒頭)として扱われる。
+    /// モデル名だけを並べた古い形は読まない(起動時の読み込みエラーになる)。
     #[test]
     fn model_names_without_table_are_rejected() {
         let text = r#"
@@ -497,9 +466,8 @@ models = ["a"]
         assert!(toml::from_str::<Config>(text).is_err());
     }
 
-    /// `task_chat_system_prompt`追加前のTOML(このキーを含まない)が引き続き読めることを
-    /// 保証する。`Option<T>`フィールドは`#[serde(default)]`が無くても欠損時`None`になる
-    /// serde_deriveの挙動に頼っているため、将来型を変える際の回帰検知として残す。
+    /// `task_chat_system_prompt`を含まないTOMLも読める。`#[serde(default)]`の無い`Option`が
+    /// 欠損時に`None`になるserde_deriveの挙動に頼っているため、その確認。
     #[test]
     fn load_reads_config_without_task_chat_system_prompt_key() {
         let dir = tempfile::tempdir().unwrap();

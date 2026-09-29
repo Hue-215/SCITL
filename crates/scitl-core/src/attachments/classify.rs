@@ -5,7 +5,8 @@ use serde::Serialize;
 
 use crate::db::attachments::AttachmentKind;
 
-/// 受け付ける大きさの上限。設定からは変えられない仮の値(Issue #5で設定へ移す)。
+/// 受け付ける大きさの上限。
+// TODO(#5): 設定から変えられるようにする。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// テキストは本文をDBに置き、毎ターン全文をモデルへ送るので、他より小さく絞る。

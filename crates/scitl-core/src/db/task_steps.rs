@@ -43,8 +43,7 @@ fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-/// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は
-/// 除外する(docs/spec/legacy/backend.md 5節の棚卸しを踏まえた確定方針)。
+/// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は除外する。
 /// 空の説明が1つでもあれば、1件も追加せずにエラーを返す。
 /// `order_index`は連番で既存の最大値の続きから振る。戻り値は新規に追加された工程のみ。
 pub fn add_steps(

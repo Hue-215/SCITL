@@ -20,8 +20,7 @@ pub struct Task {
     pub updated_at: String,
 }
 
-/// `update_task`ツールが受け付ける引数。`status`は列挙のみを許す
-/// (docs/spec/rebuild/tools.md「変更点の詳細」— 削除操作をここから漏らさない)。
+/// `update_task`ツールが受け付ける引数。`status`は列挙のみを許す(削除をここから漏らさない)。
 /// タイトルは消せない(未設定に戻す操作を持たない)ので`Option`のまま。
 #[derive(Debug, Default)]
 pub struct TaskUpdate {
@@ -95,9 +94,9 @@ pub struct TaskListItem {
     pub fallback_label: Option<String>,
 }
 
-/// 画面のヘッダー向けのタスク詳細。`TaskListItem`と同じ工程の数とフォールバックを添え、
-/// 一覧とヘッダーで進捗と未設定時の呼び方を揃える。`Task`そのものには足さない:`Task`はモデルへ渡す
-/// `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する。
+/// 画面のヘッダー向けのタスク詳細。`TaskListItem`と同じ工程の数とフォールバックを添える。
+/// `Task`そのものに足さないのは、`Task`がモデルへ渡す`task_detail`にも乗り、混ぜると
+/// モデルがタイトル設定済みと誤解するため。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskDetailView {
@@ -210,7 +209,7 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
             validate_deadline(deadline)?;
         }
         // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので、
-        // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない(同3節)。
+        // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない。
         if let FieldChange::Set(description) = &update.description {
             if description.trim().is_empty() {
                 return Err(CoreError::InvalidArgument {
@@ -267,12 +266,11 @@ pub(super) fn touch(conn: &Connection, task_id: i64) -> Result<()> {
 
 const MAX_TITLE_CHARS: usize = 40;
 
-/// タイトル文字列を、1行のタイトルとして書き込める形に正規化する。値の形を決めるもので、
-/// 防御としての無害化は出力先ごとに掛ける。
-/// 書き込みの唯一の経路である`update_task`に集約する。
-/// 制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、連続空白を1つに
-/// まとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので省略の印は付けない。
-/// 画面からの変更は、これで空になるタイトルを書く前に断る(`orchestration::operations`)。
+/// タイトル文字列を、1行のタイトルとして書き込める形に正規化する(防御としての無害化は
+/// 出力先ごとに掛ける)。制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、
+/// 連続空白を1つにまとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので
+/// 省略の印は付けない。画面からの変更は、これで空になるタイトルを書く前に断る
+/// (`orchestration::operations`)。
 pub(crate) fn sanitize_title(raw: &str) -> String {
     let squeezed = collapse_whitespace(raw);
     let trimmed =
@@ -282,9 +280,8 @@ pub(crate) fn sanitize_title(raw: &str) -> String {
 }
 
 /// `deadline`として書き込める形(`YYYY-MM-DD`)かを検証する。タイトルと違い、外れた値を
-/// 丸めずエラーとして返す。
-/// 日時形式や自然文を受け付けると、辞書順=時系列順という前提と、タイムゾーンで締切が
-/// 前後しない性質が壊れる。
+/// 丸めずエラーとして返す。日時形式や自然文を受け付けると、辞書順=時系列順という前提と、
+/// タイムゾーンで締切が前後しない性質が壊れる。
 fn validate_deadline(raw: &str) -> Result<()> {
     let invalid = || CoreError::InvalidArgument {
         name: "deadline".to_string(),
@@ -343,17 +340,15 @@ fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, 
     Ok(labels)
 }
 
-/// ユーザー発言から、タイトルの代わりに出せる1行を作る。DBには書き戻さない
-/// 表示専用の処理。空白しか無い発言では`None`を返す。
+/// ユーザー発言から、タイトルの代わりに出せる1行を作る(DBには書き戻さない)。空白しか
+/// 無い発言では`None`を返す。
 fn fallback_label(first_user_message: &str) -> Option<String> {
     let squeezed = collapse_whitespace(first_user_message);
     (!squeezed.is_empty()).then(|| ellipsize(&squeezed, MAX_FALLBACK_LABEL_CHARS))
 }
 
-/// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない。
-/// ツールには非公開、
-/// 画面・CLIからのみ呼ぶ。
-/// 削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる値はここで取る)。
+/// タスクを論理削除する。配下の工程の`deleted_at`は書き換えない。ツールには公開せず、
+/// 画面・CLIからのみ呼ぶ。削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる値はここで取る)。
 pub fn delete_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
         &format!(
