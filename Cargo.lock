@@ -3455,7 +3455,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tokio",
 ]
 
@@ -3481,9 +3481,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tokio",
- "toml 0.8.2",
+ "toml 1.1.6+spec-1.1.0",
  "ts-rs",
  "ulid",
  "url",
