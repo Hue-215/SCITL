@@ -239,10 +239,10 @@ impl ToolSchema {
     }
 }
 
-/// 1回の呼び出しでモデルに渡すツール。
+/// 1回の呼び出しでモデルに渡すツールと、この呼び出しでツールを呼べるか。
 ///
-/// `callable`が`false`のときも定義はそのまま渡し、呼び出しだけを禁じる(OpenAI互換なら
-/// `tool_choice: "none"`)。定義を外すと、前のラウンドまでと先頭が変わる。
+/// `callable`が`false`のとき、呼び出しをどう禁じるか(定義を外すか、定義を渡したまま禁止の
+/// 指定を送るか)は方言ごとに各アダプタが決める。
 #[derive(Debug, Clone, Copy)]
 pub struct ToolOffer<'a> {
     pub schemas: &'a [ToolSchema],

@@ -206,10 +206,6 @@ struct RequestBody<'a> {
     messages: Vec<RequestMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<RequestTool>,
-    /// 定義を渡したうえで呼び出しを禁じるときだけ`"none"`を送る。既定の`"auto"`は送らない
-    /// (`tool_choice`自体を受け付けないサーバーに、普段のリクエストまで断られないように)。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<&'static str>,
     /// OpenAIの`reasoning_effort`。互換を名乗るサーバーにも同じ名前で受けるものが多い。
     /// 拒まれたときの見分け方は[`http_error`]。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -509,11 +505,13 @@ fn request_body<'a>(
     tools: ToolOffer<'_>,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> RequestBody<'a> {
+    // 呼べない呼び出しでは定義ごと外す。定義を渡して`tool_choice: "none"`で禁じると、
+    // 定義を見たモデルが呼び出しの書式を本文に書き、サーバーがそれを解釈しないまま返信に残る。
+    let schemas = if tools.callable { tools.schemas } else { &[] };
     RequestBody {
         model,
         messages: to_request_messages(messages),
-        tools: tools
-            .schemas
+        tools: schemas
             .iter()
             .map(|t| RequestTool {
                 kind: "function",
@@ -524,7 +522,6 @@ fn request_body<'a>(
                 },
             })
             .collect(),
-        tool_choice: (!tools.callable && !tools.schemas.is_empty()).then_some("none"),
         reasoning_effort: reasoning_effort.map(reasoning_effort_value),
         // ストリーミングしなくても、応答はイベントに分けて渡す(`LlmAdapter::send`参照)。
         stream: false,
@@ -1047,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn forbids_tool_calls_only_when_tools_are_offered_but_not_callable() {
+    fn sends_no_tools_when_they_cannot_be_called() {
         let schemas = [ToolSchema::internal(
             "search",
             "search",
@@ -1063,11 +1060,13 @@ mod tests {
             .unwrap()
         };
 
+        assert_eq!(
+            body(&schemas, true)["tools"][0]["function"]["name"],
+            "search"
+        );
         let forbidden = body(&schemas, false);
-        assert_eq!(forbidden["tool_choice"], "none");
-        assert_eq!(forbidden["tools"][0]["function"]["name"], "search");
-        assert!(body(&schemas, true).get("tool_choice").is_none());
-        assert!(body(&[], false).get("tool_choice").is_none());
+        assert!(forbidden.get("tools").is_none());
+        assert!(forbidden.get("tool_choice").is_none());
     }
 
     fn user(text: &str, sent_at: &str) -> ChatMessage {
