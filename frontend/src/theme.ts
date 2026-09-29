@@ -81,7 +81,7 @@ function buildElevation(h: number, s: number, mode: 'light' | 'dark'): Elevation
       raise: `0 2px 4px -1px ${shade(0.19)}`,
       sink: `inset 0 2px 4px -2px ${shade(0.34)}, inset 0 1px 1px ${shade(0.1)}`,
       lift: `0 2px 5px -1px ${shade(0.24)}`,
-      focus: `0 0 8px hsl(${hue} ${s.toFixed(1)}% 50% / 0.45)`,
+      focus: `0 0 var(--focus-glow-spread) hsl(${hue} ${s.toFixed(1)}% 50% / 0.45)`,
     }
   }
   const light = (alpha: number) => `hsl(0 0% 100% / ${alpha})`
@@ -89,7 +89,7 @@ function buildElevation(h: number, s: number, mode: 'light' | 'dark'): Elevation
     raise: `inset 0 1px 0 ${light(0.16)}`,
     sink: `inset 0 -1px 0 ${light(0.12)}`,
     lift: `inset 0 1px 0 ${light(0.1)}`,
-    focus: `0 0 8px hsl(${hue} ${s.toFixed(1)}% 65% / 0.5)`,
+    focus: `0 0 var(--focus-glow-spread) hsl(${hue} ${s.toFixed(1)}% 65% / 0.5)`,
   }
 }
 

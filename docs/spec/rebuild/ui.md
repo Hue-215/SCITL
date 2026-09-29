@@ -43,6 +43,9 @@
 |---|---|
 | 文字 | `--font-family`, `--font-family-mono`, `--font-size-sm/md/lg/xl`, `--line-height-tight/normal` |
 | 余白 | `--space-1`〜`--space-5` |
+| 入力欄の内側の余白(欄と高さを揃えるボタンも使う) | `--field-padding` |
+| 窓の上端から各カラムの中身までの余白 | `--pane-padding` |
+| フォーカスの光の広がり(スクロール領域の余白を求める) | `--focus-glow-spread` |
 | アイコン・操作部品の寸法 | `--icon-size-sm/md/lg`(グリフ), `--control-size-md`(当たり判定の箱) |
 | 線 | `--border-width` |
 | 角丸 | `--radius`(1段階だけ。吹き出しの近い側マージンの半分を式で持つ) |
