@@ -19,7 +19,7 @@ pub struct ToolExecutionRecord {
     pub(crate) arguments: Value,
     pub(crate) result: Value,
     /// 実行したときにツール定義が決めた分類。実行しなかった呼び出し(引数が読めない・
-    /// 公開していない名前・接続先が無い)と、Issue #11より前の記録には無い。
+    /// 公開していない名前・接続先が無い)と、古い記録には無い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) tool_kind: Option<ToolKind>,
     /// プロバイダーが払い出した呼び出しID。記録のためだけに持ち、次ターン以降の履歴には

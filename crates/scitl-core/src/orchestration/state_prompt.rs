@@ -6,18 +6,16 @@ use crate::error::Result;
 use crate::llm::PromptText;
 use crate::tools::{get_current_task_detail::task_detail, get_task_list::task_list};
 
-/// ユーザーが設定するシステムプロンプト。総合チャットとタスクチャットでは公開ツールが
-/// 異なるため、`base`と`task_chat`を分けて持つ。総合チャットは`base`だけを使う。
-/// `Option<&str>`を2つ並べて渡すと取り違えの余地が生まれるため(tools.md 1節が修正した「対象
-/// タスクの取り違え」と同種の事故)、名前で縛る。
+/// ユーザーが設定するシステムプロンプト。総合チャットは`base`だけを、タスクチャットは両方を
+/// 使う。`Option<&str>`を2つ並べて渡すと取り違えうるため、名前で縛る。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemPrompts<'a> {
     pub base: Option<&'a str>,
     pub task_chat: Option<&'a str>,
 }
 
-/// ツールに対応しないモデルに添える一節(legacy/backend.md 4節手順2「(ツール無効時のみ)
-/// 注意書き」)。伝えないと、モデルはタスクを更新したつもりの返事をする。
+/// ツールに対応しないモデルに添える注意書き。伝えないと、モデルはタスクを更新したつもりの
+/// 返事をする。
 const TOOLS_UNAVAILABLE_NOTE: &str = "Tools are not available with the current model, so you \
      cannot create, update, or delete tasks or steps. If the user asks for such a change, do \
      not say that you made it; tell them that the current model cannot apply it.";
@@ -70,13 +68,10 @@ pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts, tools_available:
     sections.join("\n\n")
 }
 
-/// 現在日時と最新状態の囲み。直近のユーザー発言に添えて毎回渡す(docs/spec/principles.md
-/// 3節「最新状態は毎ターン渡す」)。最新状態は、タスクチャットならそのタスクと工程、総合
-/// チャットなら未アーカイブのタスク一覧で、それぞれの会話の状態系ツールが返すものと同じ形にする。
-/// この最新状態は**次ターン以降**の入力履歴を代替するもので、同一ターン内のツール呼び出し
-/// ループでの往復は`turn.rs`が別途モデルに返す(docs/spec/rebuild/tools.md 4節「同一ターン内
-/// では分類によらず結果を返す」)。このため、旧実装にあった「同一ターン内で実行済みの操作の
-/// 再掲」はここでは持たない(往復そのものが同じ事実を伝えるため二重になる)。
+/// 現在日時と最新状態の囲み。直近のユーザー発言に添えて毎回渡す。最新状態は、タスクチャット
+/// ならそのタスクと工程、総合チャットなら未アーカイブのタスク一覧で、それぞれの会話の状態系
+/// ツールが返すものと同じ形にする。同一ターン内の操作は往復そのものが伝えるので、ここでは
+/// 繰り返さない。
 ///
 /// `notes`はこのリクエストにだけ添える一節。タイトル・説明・工程は自由入力なので
 /// `PromptText`で無害化する。

@@ -54,9 +54,7 @@ pub enum TurnFailure {
     ToolsDisabled,
     /// 1ターン内のツール実行に使える合計時間を使い切った。
     ToolTimeout,
-    /// APIキー未設定・不正のどちらも実際の呼び出しがHTTP 401/403を返してここに落ちる
-    /// (`Readiness`のドキュメント参照。事前チェックでは「未設定」と「認証不要」を
-    /// 区別できないため、実際に呼んで判定する設計)。
+    /// APIキーの未設定・不正。どちらも実際の呼び出しがHTTP 401/403を返してここに落ちる。
     Auth {
         detail: ErrorDetail,
     },
@@ -394,7 +392,7 @@ mod tests {
         }
     }
 
-    /// 保存する文言は英語(エクスポートの固定文言は英語で統一する。principles.md 7節)。
+    /// 保存する文言は英語(エクスポートの固定文言と揃える)。
     #[test]
     fn stored_message_is_english() {
         assert_eq!(
@@ -475,9 +473,7 @@ mod tests {
 
     #[test]
     fn classify_maps_missing_or_invalid_api_key_to_auth() {
-        // APIキー未設定・不正のどちらも、実際の呼び出しが401/403を返すことで初めて
-        // 判明する(事前チェックでは「未設定」と「ローカルプロバイダーの認証不要」を
-        // 区別できないため)。
+        // APIキー未設定・不正のどちらも、実際の呼び出しが401/403を返して初めて分かる。
         let failure = llm(LlmError::from_status(
             StatusCode::UNAUTHORIZED,
             "missing bearer token",
