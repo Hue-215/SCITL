@@ -132,3 +132,60 @@ fn attach_state(messages: &mut Vec<ChatMessage>, state: &PromptText) {
         None => messages.push(ChatMessage::user(state.clone())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn state() -> PromptText {
+        PromptText::state(
+            "2026-01-01T00:00:00Z",
+            "current task state",
+            &json!({}),
+            &[],
+        )
+    }
+
+    fn user_text(message: &ChatMessage) -> &str {
+        match message {
+            ChatMessage::User { text, .. } => text.as_str(),
+            other => panic!("expected User, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attaches_the_state_to_the_latest_user_message_only() {
+        let first = PromptText::user_message("first", None);
+        let latest = PromptText::user_message("latest", None);
+        let mut messages = vec![
+            ChatMessage::System("system".to_string()),
+            ChatMessage::user(first.clone()),
+            ChatMessage::Assistant {
+                content: Some("reply".to_string()),
+                tool_calls: Vec::new(),
+            },
+            ChatMessage::user(latest.clone()),
+        ];
+
+        attach_state(&mut messages, &state());
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(user_text(&messages[1]), first.as_str());
+        assert_eq!(
+            user_text(&messages[3]),
+            latest.followed_by(&state()).as_str()
+        );
+    }
+
+    #[test]
+    fn sends_the_state_alone_when_there_is_no_user_message() {
+        let mut messages = vec![ChatMessage::System("system".to_string())];
+
+        attach_state(&mut messages, &state());
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(user_text(&messages[1]), state().as_str());
+    }
+}
