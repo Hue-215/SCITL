@@ -29,7 +29,7 @@ where
 
 /// コマンドから設定操作を1回呼ぶ定型。設定操作は資格情報ストアとファイルのI/Oを伴うため、
 /// メインスレッド(同期コマンドの実行先)でもランタイムのワーカーでもなく
-/// `blocking::run`で呼ぶ(architecture.md 4節)。
+/// `blocking::run`で呼ぶ。
 async fn with_settings<F, T>(state: &State<'_, AppState>, f: F) -> std::result::Result<T, String>
 where
     F: FnOnce(&Settings) -> Result<T> + Send + 'static,

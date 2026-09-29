@@ -1,5 +1,5 @@
-//! Markdownエクスポート(Issue #72)。どちらのコマンドもパスを受け取らない。書き出し先は
-//! 起動時に決めた`AppState::export_dir`だけ(architecture.md 13節)。
+//! Markdownエクスポートのコマンド。どちらもパスを受け取らず、書き出し先は起動時に決めた
+//! `AppState::export_dir`だけ。
 
 use std::sync::Arc;
 

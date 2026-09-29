@@ -184,7 +184,7 @@ pub async fn list_provider_models(
         .map_err(|e| e.to_string())
 }
 
-/// チャット入力欄の下のモデル選択(Issue #64)。アクティブなモデルを推論サーバーに
+/// チャット入力欄の下のモデル選択。アクティブなモデルを推論サーバーに
 /// 問い合わせることがあるため非同期で、`with_settings`を通さない。
 #[tauri::command]
 pub async fn get_chat_models(state: State<'_, AppState>) -> Result<ChatModelsView, String> {

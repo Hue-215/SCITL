@@ -1,7 +1,7 @@
 //! WebViewがアプリ自身の画面以外へ遷移するのを止める。本文中のリンクは
 //! `commands::link`の確認を経てOSのブラウザで開くのが唯一の経路であり、WebView自体が
 //! 外部のページを読み込む必要は無い。リンクのクリック処理が漏れた場合にも止まるよう、
-//! 描画側の対策と併用する(principles.md 4節「防御は多層にする」)。
+//! 描画側の対策と併用する。
 
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime, Url};
