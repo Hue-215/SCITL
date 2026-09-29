@@ -232,7 +232,10 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   並びごと`llm::Replay`として次の呼び出しに返す(Anthropic形式と同じ扱い)
 - 公式ドキュメントは、会話状態をこちらで持つ場合、過去のターンの`thought`ステップも受け取ったまま
   送り直すよう求めている。このアプリは思考を保存しないので送り直せない(Issue #128と同じ問題)。
-  送らないとどうなるかは実際のAPIで確かめる
+  実際のAPI(2026-09-30、`gemini-3.5-flash-lite`)では、送らなくてもエラーにはならなかった。
+  前のターンの推論を引き継げない分の質の差は測っていない
+- `function_result`には、対応する`function_call`の名前を添える。定義の上では任意だが、添えないと
+  ツールの往復の2回目が`invalid_request`(`Invalid input received.`)で断られた
 - 最後の呼び出し(ツールの上限)は、ツールの定義を残して`tool_choice: "none"`で禁じる
 - 出力の上限(`max_output_tokens`)は送らず、モデルの既定に任せる(必須ではないため)
 - 状態(`status`)の`completed`は通常の終了、`requires_action`はツール呼び出し、`incomplete`は長さによる
