@@ -8,16 +8,20 @@
 //!
 //! STEPは`@new`(タスクを作って聞き取りを始める)・`@general`(総合チャットへ移る)・
 //! それ以外(今の会話へのユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
+//!
+//! 環境変数`RELAY_ANTHROPIC_MODEL`にモデルIDを指定すると、OpenAI互換の代わりにAnthropic形式の
+//! アダプタで、そのモデルを思考の強さ「中」で呼ぶ(BASE_URLは`/v1`を付けない)。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use scitl_core::attachments::{AttachmentStore, Attachments};
-use scitl_core::config::GeneralConfig;
+use scitl_core::config::{GeneralConfig, ReasoningEffort};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::in_flight::InFlightSet;
+use scitl_core::llm::providers::anthropic::AnthropicAdapter;
 use scitl_core::llm::providers::openai_compat::OpenAiCompatAdapter;
 use scitl_core::llm::{LlmAdapter, ResponseEvent, DEFAULT_CAPABILITIES};
 use scitl_core::orchestration::{
@@ -36,14 +40,14 @@ async fn main() {
 
     std::fs::create_dir_all(data.root()).unwrap();
     let db: SharedConnection = Arc::new(Mutex::new(db::open(data.database()).unwrap()));
-    let adapter = OpenAiCompatAdapter::new(
-        base_url,
-        SecretString::from("relay-dummy-key".to_string()),
-        "relay-model",
-        // LLM役は人間並みに遅いので長めに待つ。
-        Duration::from_secs(900),
-    )
-    .unwrap();
+    let key = SecretString::from("relay-dummy-key".to_string());
+    // LLM役は人間並みに遅いので長めに待つ。
+    let timeout = Duration::from_secs(900);
+    let anthropic_model = std::env::var("RELAY_ANTHROPIC_MODEL").ok();
+    let adapter: Box<dyn LlmAdapter> = match &anthropic_model {
+        Some(model) => Box::new(AnthropicAdapter::new(base_url, key, model, timeout).unwrap()),
+        None => Box::new(OpenAiCompatAdapter::new(base_url, key, "relay-model", timeout).unwrap()),
+    };
     let general = GeneralConfig::default();
     let generating = InFlightSet::new();
     let attachments = Attachments::new(AttachmentStore::new(
@@ -62,13 +66,13 @@ async fn main() {
         }
         TurnEvent::Response { .. } => {}
     };
-    let adapter: &dyn LlmAdapter = &adapter;
+    let adapter: &dyn LlmAdapter = adapter.as_ref();
     let ctx = TurnContext {
         adapter: Ok(adapter),
         prompts: SystemPrompts::from_config(&general),
         opening_message: orchestration::opening_message(&general),
         capabilities: DEFAULT_CAPABILITIES,
-        reasoning_effort: None,
+        reasoning_effort: anthropic_model.as_ref().map(|_| ReasoningEffort::Medium),
         mcp: McpAccess::none(),
         limits: ToolLimits::default(),
         generating: &generating,
