@@ -48,9 +48,8 @@ pub fn task_list(conn: &Connection) -> Result<Value> {
     // 意味する状態をそのまま見せる(docs/spec/rebuild/tools.md「変更点の詳細」)。
     // アーカイブ済みは返さない(旧実装と同じ。docs/spec/rebuild/tools.md 2節)。アーカイブは
     // 溜まる一方で、返し続けるとトークンが増え続け、優先度の相談ではノイズになる。
-    let tasks: Vec<_> = tasks::list_tasks(conn)?
+    let tasks: Vec<_> = tasks::list_summaries(conn)?
         .into_iter()
-        .map(|t| t.summary)
         .filter(|t| t.archived_at.is_none())
         .collect();
     Ok(serde_json::to_value(tasks).expect("TaskSummary serialization cannot fail"))

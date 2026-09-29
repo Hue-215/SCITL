@@ -8,6 +8,6 @@
 export type TaskListItem = { 
 /**
  * `title`が未設定のときに代わりに表示する、最初のユーザー発言の切り詰め。
- * ユーザー発言がまだ無ければ`None`(その場合の表示は画面側が決める)。
+ * `title`があるか、ユーザー発言がまだ無ければ`None`(その場合の表示は画面側が決める)。
  */
 fallback_label: string | null, id: number, title: string | null, deadline: string | null, archived_at: string | null, steps_done: number, steps_total: number, };

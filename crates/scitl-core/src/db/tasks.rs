@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -91,7 +93,7 @@ pub struct TaskListItem {
     #[serde(flatten)]
     pub summary: TaskSummary,
     /// `title`が未設定のときに代わりに表示する、最初のユーザー発言の切り詰め。
-    /// ユーザー発言がまだ無ければ`None`(その場合の表示は画面側が決める)。
+    /// `title`があるか、ユーザー発言がまだ無ければ`None`(その場合の表示は画面側が決める)。
     pub fallback_label: Option<String>,
 }
 
@@ -120,6 +122,19 @@ const STEPS_TOTAL: &str = "(SELECT COUNT(*) FROM task_steps s
 /// 削除済み(deleted_at)を除く全タスクを作成日時昇順で返す。アーカイブ済みと未アーカイブの
 /// 振り分けはフロントエンド側(archived_atの有無)で行う。
 pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
+    let mut labels = fallback_labels(conn, None)?;
+    Ok(list_summaries(conn)?
+        .into_iter()
+        .map(|summary| TaskListItem {
+            fallback_label: labels.remove(&summary.id),
+            summary,
+        })
+        .collect())
+}
+
+/// [`list_tasks`]と同じ範囲・順の、代わりの呼び名を添えない形。呼び名を使わない呼び出し側
+/// (モデルへ渡すタスク一覧)が、組み立てて捨てる分の問い合わせをしないために使う。
+pub fn list_summaries(conn: &Connection) -> Result<Vec<TaskSummary>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT t.id, t.title, t.deadline, t.archived_at, {STEPS_DONE}, {STEPS_TOTAL}
          FROM tasks t
@@ -138,14 +153,7 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(|summary| {
-            Ok(TaskListItem {
-                fallback_label: fallback_label_of(conn, summary.id)?,
-                summary,
-            })
-        })
-        .collect()
+    Ok(rows)
 }
 
 /// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う
@@ -193,7 +201,7 @@ pub fn get_task_detail_view(conn: &Connection, task_id: i64) -> Result<TaskDetai
         task,
         steps_done,
         steps_total,
-        fallback_label: fallback_label_of(conn, task_id)?,
+        fallback_label: fallback_labels(conn, Some(task_id))?.remove(&task_id),
     })
 }
 
@@ -313,23 +321,30 @@ fn validate_deadline(raw: &str) -> Result<()> {
 /// 付け、続きがあることを示す。
 const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 
-/// タイトルの代わりに出す1行を、ユーザー発言を古い順に見て最初に作れたもので決める。
-/// 一覧とヘッダーで選び方を食い違わせないため、どちらもここを通す。空白だけの発言
-/// (添付だけを送った発言等)は名前にならないので飛ばす。その判定は[`fallback_label`]だけが
+/// タイトル未設定のタスク(`only`を渡せばそのタスクだけ)の、タイトルの代わりに出す1行。
+/// タイトルがあれば呼び名は使わないので求めない。ユーザー発言を古い順に見て、最初に作れた
+/// もので決める。一覧とヘッダーで選び方を食い違わせないため、どちらもここを通す。空白だけの
+/// 発言(添付だけを送った発言等)は名前にならないので飛ばす。その判定は[`fallback_label`]だけが
 /// 持つ(SQLの`TRIM`はUnicodeの空白を落とせず、写すと食い違う)。
-fn fallback_label_of(conn: &Connection, task_id: i64) -> Result<Option<String>> {
+fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, String>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT content FROM messages
-         WHERE task_id = ?1 AND role = 'user' AND kind = 'normal' AND deleted_at IS NULL
-         ORDER BY created_at ASC, id ASC",
+        "SELECT m.task_id, m.content FROM messages m JOIN tasks t ON t.id = m.task_id
+         WHERE t.title IS NULL AND t.deleted_at IS NULL AND (?1 IS NULL OR t.id = ?1)
+           AND m.role = 'user' AND m.kind = 'normal' AND m.deleted_at IS NULL
+         ORDER BY m.task_id, m.created_at ASC, m.id ASC",
     )?;
-    let mut rows = stmt.query([task_id])?;
+    let mut rows = stmt.query([only])?;
+    let mut labels = HashMap::new();
     while let Some(row) = rows.next()? {
-        if let Some(label) = fallback_label(&row.get::<_, String>(0)?) {
-            return Ok(Some(label));
+        let task_id: i64 = row.get(0)?;
+        if labels.contains_key(&task_id) {
+            continue;
+        }
+        if let Some(label) = fallback_label(&row.get::<_, String>(1)?) {
+            labels.insert(task_id, label);
         }
     }
-    Ok(None)
+    Ok(labels)
 }
 
 /// ユーザー発言から、タイトルの代わりに出せる1行を作る。DBには書き戻さない
@@ -850,6 +865,40 @@ mod tests {
                 .fallback_label
                 .as_deref(),
             Some("写真の件")
+        );
+    }
+
+    #[test]
+    fn fallback_labels_are_per_task_and_only_for_untitled_tasks() {
+        let conn = db::open_in_memory().unwrap();
+        let first = seed_task(&conn);
+        let titled = seed_task(&conn);
+        let second = seed_task(&conn);
+        seed_user_message(&conn, first, "1つ目");
+        seed_user_message(&conn, titled, "付いたタイトルがある");
+        seed_user_message(&conn, second, "2つ目");
+        update_task(
+            &conn,
+            titled,
+            TaskUpdate {
+                title: Some("発表".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let labels: Vec<_> = list_tasks(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.fallback_label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![Some("1つ目".to_string()), None, Some("2つ目".to_string())]
+        );
+        assert_eq!(
+            get_task_detail_view(&conn, titled).unwrap().fallback_label,
+            None
         );
     }
 
