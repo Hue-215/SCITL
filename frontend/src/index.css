@@ -153,7 +153,7 @@ input:not([type='radio']) {
     var(--focus-glow, 0 0 transparent);
 }
 
-/* 奥行き。押せる部品は浮かせ、値を入れる所は沈ませる。輪郭は背景との
+/* 奥行き(ui.md「塗りと奥行き」)。押せる部品は浮かせ、値を入れる所は沈ませる。輪郭は背景との
    塗りの差で作り、影は奥行きの補助に留める。 */
 button,
 select {
@@ -518,7 +518,7 @@ option {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 端の行の浮きを切らさないための余白。 */
+  /* 端の行の浮きを切らさないための余白(ui.md「スクロール領域」)。 */
   padding-block: var(--space-1);
 }
 
@@ -566,7 +566,7 @@ option {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  /* 端の行の浮き・フォーカスの光を切らさないための余白。外との間隔は
+  /* 端の行の浮き・フォーカスの光を切らさないための余白(ui.md「スクロール領域」)。外との間隔は
      .sidebarのgapと合わせて作る。 */
   padding-block: var(--space-2);
 }
@@ -697,7 +697,7 @@ option {
   margin-right: var(--bubble-margin-near);
 }
 
-/* 塗りのある吹き出しは、押せない面として持ち上げる。 */
+/* 塗りのある吹き出しは、押せない面として持ち上げる(ui.md「塗りと奥行き」)。 */
 .entry-user,
 .entry-assistant,
 .entry-error {
@@ -1219,7 +1219,7 @@ option {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 端の行のチェックボックスのフォーカスの光を切らさないための余白。 */
+  /* 端の行のチェックボックスのフォーカスの光を切らさないための余白(ui.md「スクロール領域」)。 */
   padding-block: var(--space-1);
 }
 
@@ -1255,7 +1255,7 @@ option {
 }
 
 /* 主ボタン(タスクを追加・送信)。濃いアクセント色では影が塗りに溶けるため、ユーザーの
-   吹き出しと同じ薄い塗りにする(ui.md「デザイントークン」)。 */
+   吹き出しと同じ薄い塗りにする(ui.md「塗りと奥行き」)。 */
 button.primary {
   background: var(--color-primary-container);
   color: var(--color-on-primary-container);

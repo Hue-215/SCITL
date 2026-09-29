@@ -103,6 +103,7 @@ export const NO_LIVE_THOUGHTS: LiveThoughts = { items: [], reasoningOpen: false 
  * 本文は描かない(完了後に読み直した返信で出す)。実行前のツール呼び出しも
  * 描かず、実行の知らせ(`tool_executed`)で結果と一緒に出す。
  */
+// TODO(#204): 本文もライブ表示する。
 export function appendTurnEvent(live: LiveThoughts, event: TurnEvent): LiveThoughts {
   if (event.type === 'tool_executed') {
     const item: ThoughtItem = { kind: 'tool', id: event.id, execution: event.execution }

@@ -25,6 +25,7 @@ import type {
  * コマンドの失敗を画面に出す文字列にする唯一の入口。今はcoreのエラー文(英語の診断文)
  * をそのまま返し、表示言語には訳していない。
  */
+// TODO(#199): 表示言語に訳す。
 export function failureText(e: unknown): string {
   return String(e)
 }
