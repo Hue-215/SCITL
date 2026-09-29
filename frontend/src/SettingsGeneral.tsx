@@ -3,7 +3,7 @@ import { useEffect, useId, useState } from 'react'
 import { exportMarkdown, openExportFolder, updateGeneralSettings } from './api'
 import type { ExportSummary, Language, SettingsView } from './types'
 import Dropdown from './Dropdown'
-import { currentLanguage, languageName, LANGUAGES, t } from './i18n'
+import { currentLanguage, isolated, languageName, LANGUAGES, t } from './i18n'
 import { NumberField } from './settingsFields'
 import { useAsyncAction } from './useAsyncAction'
 
@@ -128,9 +128,11 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
 // 使わないのは、設定の保存とは別の操作の結果だから。
 function ExportSection() {
   const [summary, setSummary] = useState<ExportSummary | null>(null)
-  const exporting = useAsyncAction((error) => t('settings.general.export_failed', { error }))
+  const exporting = useAsyncAction((error) =>
+    t('settings.general.export_failed', { error: isolated(error) }),
+  )
   const opening = useAsyncAction((error) =>
-    t('settings.general.open_export_folder_failed', { error }),
+    t('settings.general.open_export_folder_failed', { error: isolated(error) }),
   )
 
   const runExport = () => {
@@ -152,7 +154,7 @@ function ExportSection() {
           {t('settings.general.open_export_folder')}
         </button>
       </div>
-      {summary && <p>{t('settings.general.export_done', { folder: summary.folder })}</p>}
+      {summary && <p>{t('settings.general.export_done', { folder: isolated(summary.folder) })}</p>}
       {summary && summary.missing_attachments > 0 && (
         <p className="error">
           {t('settings.general.export_missing_attachments', {

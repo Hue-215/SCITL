@@ -14,7 +14,7 @@ import {
   updateToolSettings,
 } from './api'
 import type { SettingsView } from './types'
-import { t } from './i18n'
+import { isolated, t } from './i18n'
 import { without } from './record'
 import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
@@ -81,7 +81,7 @@ export default function Settings({ onClose }: SettingsProps) {
     } catch (e) {
       setToolFetchErrors((prev) => ({
         ...prev,
-        [serverId]: t('common.fetch_failed', { error: failureText(e) }),
+        [serverId]: t('common.fetch_failed', { error: isolated(failureText(e)) }),
       }))
     } finally {
       setFetchingTools((prev) => prev.filter((id) => id !== serverId))
@@ -132,7 +132,7 @@ export default function Settings({ onClose }: SettingsProps) {
           <div className="settings-column">
             {settings?.config_error && (
               <p className="error">
-                {t('settings.config_unreadable', { error: settings.config_error })}
+                {t('settings.config_unreadable', { error: isolated(settings.config_error) })}
               </p>
             )}
             {error && <p className="error">{error}</p>}

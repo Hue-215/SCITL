@@ -21,7 +21,7 @@ import type {
 import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
-import { t, type MessageKey } from './i18n'
+import { isolated, type MessageKey, t } from './i18n'
 import { CollapseToggle, LIST_COLLAPSE_THRESHOLD } from './settingsFields'
 import { httpPlainTextHint, usePositiveIntegerInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
@@ -36,7 +36,7 @@ const API_FORMAT_LABELS: Record<ApiFormat, MessageKey> = {
 
 // 検索欄のあるモデルの一覧(登録済みの表・取得したモデルの候補)で、絞り込んだ結果が空のときの一文。
 function noModelMatchText(query: string): string {
-  return t('settings.model.no_match', { query: query.trim() })
+  return t('settings.model.no_match', { query: isolated(query.trim()) })
 }
 
 interface ProvidersTabProps {
@@ -108,7 +108,7 @@ function ProviderCard({
   const [available, setAvailable] = useState<AvailableModel[] | null>(null)
   // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように。MCPの
   // ツール一覧の取得と同じ扱い)。
-  const listing = useAsyncAction((error) => t('common.fetch_failed', { error }))
+  const listing = useAsyncAction((error) => t('common.fetch_failed', { error: isolated(error) }))
 
   // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
   // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
@@ -127,7 +127,7 @@ function ProviderCard({
           label={t('common.delete')}
           confirmTitle={t('settings.provider.delete_provider_dialog_title')}
           confirmMessage={t('settings.provider.delete_provider_dialog_message', {
-            name: provider.name,
+            name: isolated(provider.name),
           })}
           confirmLabel={t('common.delete')}
           onConfirm={onDeleteProvider}
@@ -135,14 +135,16 @@ function ProviderCard({
       </div>
       <p className="provider-card-meta">
         {t('settings.provider.meta', {
-          url: provider.base_url,
+          url: isolated(provider.base_url),
           api_key: provider.has_api_key
             ? t('settings.provider.api_key_set')
             : t('settings.provider.api_key_unset'),
         })}
       </p>
       {provider.error && (
-        <p className="error">{t('settings.provider.unusable', { error: provider.error })}</p>
+        <p className="error">
+          {t('settings.provider.unusable', { error: isolated(provider.error) })}
+        </p>
       )}
 
       {hasModel ? (
@@ -419,7 +421,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
             const visible = e.target.checked
             onUpdate(() => setModelVisible(providerId, name, visible))
           }}
-          aria-label={t('settings.model.visible_checkbox_label', { model: shown })}
+          aria-label={t('settings.model.visible_checkbox_label', { model: isolated(shown) })}
         />
       </td>
       <td className="model-name">{shown}</td>
@@ -433,7 +435,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
                 const supported = e.target.checked
                 onUpdate(() => setModelCapability(providerId, name, capability, supported))
               }}
-              aria-label={t(checkboxLabel, { model: shown })}
+              aria-label={t(checkboxLabel, { model: isolated(shown) })}
             />
             {capability === 'tools' && !model.capabilities.tools && (
               <span
@@ -455,7 +457,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
           placeholder={t('settings.model.context_length_default_hint', {
             value: model.default_context_length,
           })}
-          aria-label={t('settings.model.context_length_label', { model: shown })}
+          aria-label={t('settings.model.context_length_label', { model: isolated(shown) })}
         />
         {contextLength.invalid && (
           <p className="error model-context-length-error">{t('errors.positive_integer')}</p>
@@ -468,7 +470,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
               type="button"
               className="icon-button"
               onClick={() => onUpdate(() => resetModelCapabilities(providerId, name))}
-              aria-label={t('settings.model.reset_caps_label', { model: shown })}
+              aria-label={t('settings.model.reset_caps_label', { model: isolated(shown) })}
               title={t('settings.model.reset_caps_tooltip')}
             >
               ↺
@@ -478,7 +480,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
             type="button"
             className="icon-button"
             onClick={() => onUpdate(() => removeModel(providerId, name))}
-            aria-label={t('settings.model.delete_model_label', { model: shown })}
+            aria-label={t('settings.model.delete_model_label', { model: isolated(shown) })}
             title={t('common.delete')}
           >
             ×

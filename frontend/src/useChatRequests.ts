@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { failureText } from './api'
 import { chatKey } from './chat'
-import { t } from './i18n'
+import { isolated, t } from './i18n'
 import { without } from './record'
 import { appendTurnEvent, NO_LIVE_THOUGHTS, type LiveThoughts, type ThoughtItem } from './thinking'
 import type { Chat, PendingEntry, TurnEvent } from './types'
@@ -80,7 +80,7 @@ export function useChatRequests(): ChatRequests {
     } catch (e) {
       setFailures((prev) => ({
         ...prev,
-        [key]: t('chat.command_failed', { error: failureText(e) }),
+        [key]: t('chat.command_failed', { error: isolated(failureText(e)) }),
       }))
     }
     // 引き直しの最中に届いた分を積まないよう、引き直す前に外す。

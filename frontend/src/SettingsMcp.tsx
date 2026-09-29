@@ -5,7 +5,7 @@ import type { NewMcpEndpoint } from './api'
 import type { McpServerView, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
-import { t, type MessageKey } from './i18n'
+import { isolated, type MessageKey, t } from './i18n'
 import { CollapseToggle, LIST_COLLAPSE_THRESHOLD, NumberField } from './settingsFields'
 import { httpPlainTextHint } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
@@ -31,7 +31,7 @@ function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: 
       errors.push(
         t('settings.tools.kv_line_invalid', {
           line_no: i + 1,
-          line: trimmed,
+          line: isolated(trimmed),
           sample: t('settings.tools.kv_sample'),
         }),
       )
@@ -149,9 +149,9 @@ function McpServerCard({
   const endpointSummary =
     server.endpoint.transport === 'stdio'
       ? t('settings.tools.endpoint_stdio', {
-          command: [server.endpoint.command, ...server.endpoint.args].join(' '),
+          command: isolated([server.endpoint.command, ...server.endpoint.args].join(' ')),
         })
-      : t('settings.tools.endpoint_http', { url: server.endpoint.url })
+      : t('settings.tools.endpoint_http', { url: isolated(server.endpoint.url) })
   const secretNames =
     server.endpoint.transport === 'stdio' ? server.endpoint.env_names : server.endpoint.header_names
   const secretLabel =
@@ -177,7 +177,9 @@ function McpServerCard({
         <ConfirmButton
           label={t('settings.tools.unregister_button')}
           confirmTitle={t('settings.tools.delete_server_dialog_title')}
-          confirmMessage={t('settings.tools.delete_server_dialog_message', { id: server.name })}
+          confirmMessage={t('settings.tools.delete_server_dialog_message', {
+            id: isolated(server.name),
+          })}
           confirmLabel={t('settings.tools.unregister_button')}
           onConfirm={onDelete}
         />
@@ -188,7 +190,7 @@ function McpServerCard({
         <p className="provider-card-meta">
           {t('settings.tools.secret_names_display', {
             label: secretLabel,
-            names: secretNames.join(', '),
+            names: secretNames.map(isolated).join(', '),
           })}
         </p>
       )}
@@ -281,7 +283,7 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
     } else if (trimmedName.length > nameMaxChars || !MCP_NAME_CHARS.test(trimmedName)) {
       validationErrors.push(t('settings.tools.id_invalid', { max: nameMaxChars }))
     } else if (existingNames.includes(trimmedName)) {
-      validationErrors.push(t('settings.tools.id_duplicate', { id: trimmedName }))
+      validationErrors.push(t('settings.tools.id_duplicate', { id: isolated(trimmedName) }))
     }
 
     if (transport === 'stdio') {

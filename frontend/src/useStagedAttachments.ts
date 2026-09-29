@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { discardStagedAttachment, failureText, getAttachmentLimits, stageAttachment } from './api'
-import { formatBytes, t } from './i18n'
+import { formatBytes, isolated, t } from './i18n'
 import type { AttachmentKind, PickingLimits } from './types'
 
 /** 送信前の添付1件。 */
@@ -105,7 +105,7 @@ export function useStagedAttachments(): StagedAttachments {
             key,
             name,
             state: 'rejected',
-            message: t('attachment.load_failed', { error: failureText(e) }),
+            message: t('attachment.load_failed', { error: isolated(failureText(e)) }),
           })
         },
       )
