@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { discardStagedAttachment, failureText, getAttachmentLimits, stageAttachment } from './api'
 import { formatBytes, isolated, t } from './i18n'
-import type { AttachmentKind, PickingLimits, StageOutcome } from './types'
+import type { AttachmentKind, PickingLimits } from './types'
 
 /** 送信前の添付1件。 */
 export type StagedItem = { key: string; name: string } & (
@@ -34,16 +34,6 @@ export interface StagedAttachments {
   busy: boolean
   /** 送れるものがある。 */
   ready: boolean
-}
-
-/** 預けられなかった理由の文言。 */
-function rejectionText(rejected: Extract<StageOutcome, { status: 'rejected' }>): string {
-  switch (rejected.reason) {
-    case 'too_large':
-      return t('attachment.too_large', { limit: formatBytes(rejected.limit_bytes) })
-    case 'too_many':
-      return t('attachment.too_many', { count: rejected.limit })
-  }
 }
 
 /** 入力欄の送信前の添付。選んだファイルはRust側で判定させて預け、トークンで持つ。 */
@@ -101,7 +91,12 @@ export function useStagedAttachments(): StagedAttachments {
                   kind: outcome.kind,
                   size: outcome.size_bytes,
                 }
-              : { key, name, state: 'rejected', message: rejectionText(outcome) },
+              : {
+                  key,
+                  name,
+                  state: 'rejected',
+                  message: t('attachment.too_large', { limit: formatBytes(outcome.limit_bytes) }),
+                },
           )
         },
         (e) => {
