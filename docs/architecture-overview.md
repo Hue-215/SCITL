@@ -61,8 +61,10 @@ flowchart LR
   ORCH -- spawn_blocking --> DB
   ORCH --> ATT
   TOOLS --> DB
-  TOOLS -- 外部ツール --> MCP
-  SET --> SEC
+  ORCH -- 外部ツール --> MCP
+  SET -- 保存・削除 --> SEC
+  LLM -- APIキーの読み出し --> SEC
+  MCP -- 環境変数・ヘッダーの読み出し --> SEC
   SET --> TOML
   LLM --> NET
   MCP -- http --> NET
@@ -89,9 +91,9 @@ sequenceDiagram
   participant A as LlmAdapter
   participant X as tools / MCP
 
-  U->>C: send_chat_message(タスク, 本文, 添付, Channel)
+  U->>C: send_chat_message(会話, 本文, 添付, Channel)
   C->>T: run_turn
-  T->>T: in_flightでタスクごとに1本に絞る
+  T->>T: in_flightで会話(タスク / 総合チャット)ごとに1本に絞る
   T->>D: ユーザー発言と添付を1トランザクションで保存
   T->>X: 外部ツールの一覧(有効なサーバーのみ、取得済みなら再利用)
   T->>D: 履歴を読む
