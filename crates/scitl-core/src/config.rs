@@ -63,7 +63,8 @@ pub struct ModelConfig {
     /// 能力の手動設定。値の無い項目は[`crate::llm::resolve_capabilities`]が下の層で決める。
     #[serde(default, skip_serializing_if = "ModelOverrides::is_empty")]
     pub overrides: ModelOverrides,
-    /// 思考の強さ。受け付ける値がモデルごとに違うため、モデルごとに持つ。
+    /// 思考の強さ。思考に対応するモデルには常に明示して送り、サーバーの既定には任せない。
+    /// 受け付ける値がモデルごとに違うため、モデルごとに持つ。
     #[serde(default)]
     pub reasoning_effort: ReasoningEffort,
 }
@@ -111,9 +112,9 @@ pub enum ReasoningEffort {
 /// 能力の手動設定。`None`は「手動では決めていない」。
 pub type ModelOverrides = crate::llm::CapabilityLayer;
 
-/// 応答タイムアウトの既定値(秒)。未設定のときに使う値はここにだけ置く。生成の長い
-/// 非ストリーミング応答も待てるよう、余裕を持たせる。
-/// タイムアウト自体は常に掛ける(応答しないエンドポイント1つでターンが固まらないように)。
+/// 応答タイムアウトの既定値(秒)。未設定のときに使う値はここにだけ置く。生成の
+/// 長い非ストリーミング応答も待てるよう、余裕を持たせる。タイムアウト自体は常に掛ける
+/// (応答しないエンドポイント1つでターンが固まらないように)。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 
 /// システムプロンプト等、モデル・プロバイダーに依存しない全般設定。
@@ -209,7 +210,8 @@ pub struct McpServerConfig {
 pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
 
 /// サーバー識別子を検証する([`MCP_SERVER_NAME_MAX_CHARS`]字以内、英数字とアンダースコア
-/// のみ)。英数字だけなので、バイト数と文字数は同じ。
+/// のみ)。画面の入力チェックはセキュリティ境界ではないので、ここでも検証する。英数字だけ
+/// なので、バイト数と文字数は同じ。
 pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
     if name.is_empty() || name.len() > MCP_SERVER_NAME_MAX_CHARS {
         return Err(CoreError::InvalidSettings(format!(

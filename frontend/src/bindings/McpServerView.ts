@@ -5,6 +5,7 @@ import type { McpToolView } from "./McpToolView";
 export type McpServerView = { id: string, name: string, enabled: boolean, endpoint: McpEndpointView, enabled_tools: Array<string>, 
 /**
  * 画面に出すツール一覧。取得済みの一覧に、そこに無い有効化済みのツールを足したもの
- * (再起動直後の未取得の間も、有効化済みのツールを確かめて外せるように)。
+ * (再起動直後の未取得の間も、有効化済みのツールを確かめて外せるように)。画面はこれを
+ * 描くだけで、自前では組み立てない。
  */
 tools: Array<McpToolView>, tools_fetched: boolean, };

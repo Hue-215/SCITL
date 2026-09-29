@@ -161,6 +161,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 
 /// 1つの会話の発言を取得する。ターンを持つ行は`turn_id`ごとの最新試行に絞り、通常発言が
 /// 1行も残っていないターン(編集・再試行・削除で破棄されたターン)は丸ごと除く。
+/// 応答生成以外の経路での操作の記録は`turn_id`を持たないので、常に残る。
 /// 破棄されたターンのツール実行記録はDBに残すが([`soft_delete_normal_from`])、会話に
 /// 並べると直後の編集後の発言が新規送信と見分けられなくなるため、ここで外す。
 pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {

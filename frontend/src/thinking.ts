@@ -74,7 +74,8 @@ export type ThoughtItem =
 
 /**
  * 1ターン分のentriesから、発生順の思考・ツール項目列を組み立てる。各行の`reasoning`は
- * そのラウンド(または最終応答)より前に生じた思考なので、同じ行のツール実行より先に並べる。
+ * そのラウンド(または最終応答)より前に生じた思考なので、同じ行のツール実行より先に並べる
+ * (`orchestration::turn`がラウンドの思考を最初のツール実行記録に紐付けるのと対応する)。
  */
 export function buildThoughtItems(entries: MessageView[]): ThoughtItem[] {
   const items: ThoughtItem[] = []

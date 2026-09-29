@@ -93,12 +93,14 @@ pub struct McpServerView {
     pub endpoint: McpEndpointView,
     pub enabled_tools: Vec<String>,
     /// 画面に出すツール一覧。取得済みの一覧に、そこに無い有効化済みのツールを足したもの
-    /// (再起動直後の未取得の間も、有効化済みのツールを確かめて外せるように)。
+    /// (再起動直後の未取得の間も、有効化済みのツールを確かめて外せるように)。画面はこれを
+    /// 描くだけで、自前では組み立てない。
     pub tools: Vec<McpToolView>,
     pub tools_fetched: bool,
 }
 
-/// 一般設定。既定値を持つものは、設定値(未設定は`None`)と未設定時の既定値の両方を渡す。
+/// 一般設定。既定値を持つものは、`ToolSettingsView`と同じく設定値(未設定は`None`)と
+/// 未設定時の既定値の両方を渡す。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct GeneralSettingsView {
@@ -115,7 +117,7 @@ pub struct GeneralSettingsView {
 }
 
 /// ツール呼び出しの上限。設定値(未設定は`None`)と未設定時の既定値の両方を渡し、画面は
-/// 既定値をプレースホルダに出す。
+/// 既定値をプレースホルダに出す(既定値をTS側に書き写さないため)。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ToolSettingsView {
