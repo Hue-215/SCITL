@@ -1,0 +1,186 @@
+// 設定画面の「一般」タブ(legacy/frontend.md 2節)。
+import { useEffect, useId, useState } from 'react'
+import { exportMarkdown, failureText, openExportFolder, updateGeneralSettings } from './api'
+import type { ExportSummary, Language, SettingsView } from './types'
+import Dropdown from './Dropdown'
+import { currentLanguage, languageName, LANGUAGES, t } from './i18n'
+import { NumberField } from './settingsFields'
+
+type GeneralUpdate = Parameters<typeof updateGeneralSettings>[0]
+
+interface GeneralTabProps {
+  settings: SettingsView
+  onSave: (update: GeneralUpdate) => void
+  onSaveLanguage: (language: Language) => void
+}
+
+interface PromptFieldProps {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  onBlur: () => void
+  caption?: string
+}
+
+function PromptField({ label, value, onChange, onBlur, caption }: PromptFieldProps) {
+  return (
+    <label className="settings-field">
+      <span>{label}</span>
+      <textarea value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} />
+      {caption && <p className="settings-hint">{caption}</p>}
+    </label>
+  )
+}
+
+// フォーカスを外すと自動保存(legacy/frontend.md 2節)。入力中は自身のstateだけを更新し、
+// blur時にのみ親へ確定した値を渡す。
+//
+// 既定の文面を持つ欄は、未設定の間は既定の文面を表示する(書き換えの起点にできるように)。
+// 空欄と既定の文面のままの値は、Rust側が未設定として保存する(`Settings::update_general`)。
+export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
+  const { general } = settings
+  const languageLabelId = useId()
+  const [systemPrompt, setSystemPrompt] = useState(general.system_prompt ?? '')
+  const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
+    general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
+  )
+  const [taskOpeningMessage, setTaskOpeningMessage] = useState(
+    general.task_opening_message ?? general.default_task_opening_message,
+  )
+
+  useEffect(() => {
+    setSystemPrompt(general.system_prompt ?? '')
+    setTaskChatSystemPrompt(
+      general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
+    )
+    setTaskOpeningMessage(general.task_opening_message ?? general.default_task_opening_message)
+  }, [general])
+
+  const current = (): GeneralUpdate => ({
+    systemPrompt: systemPrompt || null,
+    taskChatSystemPrompt: taskChatSystemPrompt || null,
+    taskOpeningMessage: taskOpeningMessage || null,
+    responseTimeoutSecs: general.response_timeout_secs,
+  })
+
+  return (
+    <div className="settings-panel">
+      <div className="settings-field">
+        <span id={languageLabelId}>{t('settings.general.language_label')}</span>
+        <Dropdown
+          labelledBy={languageLabelId}
+          label={languageName(general.language)}
+          options={LANGUAGES.map((language) => ({ key: language, label: languageName(language) }))}
+          selectedKey={general.language}
+          onSelect={(key) => onSaveLanguage(key as Language)}
+          direction="down"
+          align="start"
+        />
+        {/* 画面は起動時の言語で描かれているので、保存した言語と違う間だけ出す */}
+        {general.language !== currentLanguage() && (
+          <p className="settings-hint">{t('settings.general.language_restart_note')}</p>
+        )}
+      </div>
+
+      <PromptField
+        label={t('settings.general.system_prompt_label')}
+        value={systemPrompt}
+        onChange={setSystemPrompt}
+        onBlur={() => onSave(current())}
+      />
+
+      <NumberField
+        label={t('settings.general.timeout_label')}
+        value={general.response_timeout_secs}
+        defaultValue={general.default_response_timeout_secs}
+        onSave={(secs) => onSave({ ...current(), responseTimeoutSecs: secs })}
+      />
+
+      <details className="settings-advanced">
+        <summary>{t('settings.general.advanced_settings')}</summary>
+        {/* <details>自体はflexにしないので(index.cssの.settings-advanced)、欄の間隔は
+            中の入れ物のgapで持つ */}
+        <div className="settings-section">
+          <PromptField
+            label={t('settings.general.task_chat_prompt_label')}
+            value={taskChatSystemPrompt}
+            onChange={setTaskChatSystemPrompt}
+            onBlur={() => onSave(current())}
+            caption={t('settings.general.task_chat_prompt_caption')}
+          />
+          <PromptField
+            label={t('settings.general.task_opening_label')}
+            value={taskOpeningMessage}
+            onChange={setTaskOpeningMessage}
+            onBlur={() => onSave(current())}
+            caption={t('settings.general.task_opening_caption')}
+          />
+        </div>
+      </details>
+
+      <ExportSection />
+    </div>
+  )
+}
+
+type ExportResult = { ok: true; summary: ExportSummary } | { ok: false; message: string }
+
+// 押すと確認なしで書き出し、成否はこの欄に出す(legacy/frontend.md 2節)。タブ全体のエラー欄を
+// 使わないのは、設定の保存とは別の操作の結果だから。
+function ExportSection() {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<ExportResult | null>(null)
+
+  const runExport = async () => {
+    setRunning(true)
+    setResult(null)
+    try {
+      setResult({ ok: true, summary: await exportMarkdown() })
+    } catch (e) {
+      setResult({
+        ok: false,
+        message: t('settings.general.export_failed', { error: failureText(e) }),
+      })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const openFolder = async () => {
+    try {
+      await openExportFolder()
+    } catch (e) {
+      setResult({
+        ok: false,
+        message: t('settings.general.open_export_folder_failed', { error: failureText(e) }),
+      })
+    }
+  }
+
+  return (
+    <div className="settings-field settings-section-break">
+      <span>{t('settings.general.export_label')}</span>
+      <p className="settings-hint">{t('settings.general.export_caption')}</p>
+      <div className="button-row">
+        <button type="button" onClick={runExport} disabled={running}>
+          {running ? t('settings.general.exporting') : t('settings.general.export_button')}
+        </button>
+        <button type="button" onClick={openFolder}>
+          {t('settings.general.open_export_folder')}
+        </button>
+      </div>
+      {result?.ok === true && (
+        <p>{t('settings.general.export_done', { folder: result.summary.folder })}</p>
+      )}
+      {result?.ok === true && result.summary.missing_attachments > 0 && (
+        <p className="error">
+          {t('settings.general.export_missing_attachments', {
+            count: result.summary.missing_attachments,
+          })}
+        </p>
+      )}
+      {result?.ok === false && <p className="error">{result.message}</p>}
+    </div>
+  )
+}
+
