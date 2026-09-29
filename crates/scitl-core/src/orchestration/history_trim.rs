@@ -7,7 +7,7 @@ use crate::llm::{estimate_message, estimate_tools, ChatMessage, ToolSchema};
 const RESPONSE_SHARE_DIVISOR: usize = 4;
 
 /// `history`のうち、コンテキスト長に収まる末尾を返す。`others`(システムプロンプトと
-/// このターンのツールの往復)と`tools`は間引かずに必ず送るので、先に予算から引く。
+/// 最新状態)と`tools`は間引かずに必ず送るので、先に予算から引く。
 ///
 /// 間引く単位は、ユーザー発言から次のユーザー発言の手前まで。ツールの往復
 /// (`tool_calls`を持つassistantと続くtool)を途中で切らず、間引いた履歴はユーザー発言から

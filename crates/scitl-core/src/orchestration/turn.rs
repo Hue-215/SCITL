@@ -443,7 +443,7 @@ async fn run_tool_rounds(
 ) -> Result<()> {
     let chat = attempt.chat;
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
-    let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
+    let request = TurnRequest::prepare(db.clone(), ctx, chat, stored, external).await?;
     let tools_available = request.tools_available();
     // 同一ターン内のツール呼び出しの往復。分類によらずモデルに返し、DBには書かない
     // (書くと次ターン以降の履歴に残る)。
@@ -457,9 +457,7 @@ async fn run_tool_rounds(
     let tool_rounds = request.tool_rounds(ctx);
     for round in 1..=tool_rounds + 1 {
         let final_call = round > tool_rounds;
-        let (messages_to_send, offered) = request
-            .round(db.clone(), ctx, &round_trip, final_call)
-            .await?;
+        let (messages_to_send, offered) = request.round(&round_trip, final_call);
 
         // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
         let mut events = Vec::new();
@@ -529,7 +527,7 @@ async fn run_tool_rounds(
             .await?;
             return Ok(());
         }
-        // ツールを渡していないのに呼んできた。実行はせず、ツールを渡さなかった理由
+        // 呼べないようにしたのに呼んできた。実行はせず、呼べなかった理由
         // (上限に達した・ツールに対応しないモデル)のエラーで終える。
         if final_call {
             let failure = if tools_available {

@@ -7,7 +7,7 @@ use crate::config::ReasoningEffort;
 use crate::error::CoreError;
 use crate::llm::{
     ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
+    RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolOffer,
 };
 use crate::net::ExternalUrl;
 
@@ -502,13 +502,16 @@ fn abbreviate_images(body: &mut serde_json::Value) {
 fn request_body<'a>(
     model: &'a str,
     messages: &[ChatMessage],
-    tools: &[ToolSchema],
+    tools: ToolOffer<'_>,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> RequestBody<'a> {
+    // 呼べない呼び出しでは定義ごと外す。定義を渡して`tool_choice: "none"`で禁じると、
+    // 定義を見たモデルが呼び出しの書式を本文に書き、サーバーがそれを解釈しないまま返信に残る。
+    let schemas = if tools.callable { tools.schemas } else { &[] };
     RequestBody {
         model,
         messages: to_request_messages(messages),
-        tools: tools
+        tools: schemas
             .iter()
             .map(|t| RequestTool {
                 kind: "function",
@@ -574,7 +577,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
     fn request_preview(
         &self,
         messages: &[ChatMessage],
-        tools: &[ToolSchema],
+        tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Option<RequestPreview> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
@@ -586,7 +589,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
     async fn send(
         &self,
         messages: &[ChatMessage],
-        tools: &[ToolSchema],
+        tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<(), CoreError> {
@@ -646,7 +649,7 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
-    use crate::llm::InlineImage;
+    use crate::llm::{InlineImage, ToolSchema};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -688,7 +691,10 @@ mod tests {
         let adapter =
             OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", TEST_TIMEOUT)
                 .unwrap();
-        adapter.send(&[], &[], None, &mut |_| {}).await.unwrap();
+        adapter
+            .send(&[], ToolOffer::NONE, None, &mut |_| {})
+            .await
+            .unwrap();
         handle.join().unwrap()
     }
 
@@ -704,10 +710,15 @@ mod tests {
         let messages = [ChatMessage::user(PromptText::user_message("hi", None))];
 
         let preview = adapter
-            .request_preview(&messages, &[], Some(ReasoningEffort::Low))
+            .request_preview(&messages, ToolOffer::NONE, Some(ReasoningEffort::Low))
             .unwrap();
 
-        let expected = request_body("local-model", &messages, &[], Some(ReasoningEffort::Low));
+        let expected = request_body(
+            "local-model",
+            &messages,
+            ToolOffer::NONE,
+            Some(ReasoningEffort::Low),
+        );
         assert_eq!(preview.body, serde_json::to_value(expected).unwrap());
         assert!(!serde_json::to_string(&preview)
             .unwrap()
@@ -737,7 +748,10 @@ mod tests {
             },
         ];
 
-        let body = adapter.request_preview(&messages, &[], None).unwrap().body;
+        let body = adapter
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap()
+            .body;
 
         let parts = &body["messages"][0]["content"];
         assert!(parts[0]["text"].as_str().unwrap().contains(&text));
@@ -768,7 +782,7 @@ mod tests {
                 .unwrap();
         let mut events = Vec::new();
         adapter
-            .send(&[], &[], None, &mut |e| events.push(e))
+            .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
             .await
             .unwrap();
         handle.join().unwrap();
@@ -1019,13 +1033,40 @@ mod tests {
 
     #[test]
     fn sends_reasoning_effort_only_when_given() {
-        let body = |effort| serde_json::to_value(request_body("m", &[], &[], effort)).unwrap();
+        let body =
+            |effort| serde_json::to_value(request_body("m", &[], ToolOffer::NONE, effort)).unwrap();
         assert!(body(None).get("reasoning_effort").is_none());
         assert_eq!(body(Some(ReasoningEffort::Off))["reasoning_effort"], "none");
         assert_eq!(
             body(Some(ReasoningEffort::High))["reasoning_effort"],
             "high"
         );
+    }
+
+    #[test]
+    fn sends_no_tools_when_they_cannot_be_called() {
+        let schemas = [ToolSchema::internal(
+            "search",
+            "search",
+            serde_json::json!({"type": "object"}),
+        )];
+        let body = |schemas: &[ToolSchema], callable| {
+            serde_json::to_value(request_body(
+                "m",
+                &[],
+                ToolOffer { schemas, callable },
+                None,
+            ))
+            .unwrap()
+        };
+
+        assert_eq!(
+            body(&schemas, true)["tools"][0]["function"]["name"],
+            "search"
+        );
+        let forbidden = body(&schemas, false);
+        assert!(forbidden.get("tools").is_none());
+        assert!(forbidden.get("tool_choice").is_none());
     }
 
     fn user(text: &str, sent_at: &str) -> ChatMessage {
