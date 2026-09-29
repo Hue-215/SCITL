@@ -100,3 +100,22 @@ miniz_oxide = { opt-level = 3 }
 gif = { opt-level = 3 }
 weezl = { opt-level = 3 }
 image-webp = { opt-level = 3 }
+
+# 配布物の大きさを優先する。`panic = "abort"`は入れない(コマンドやタスク内のpanicで
+# アプリ全体が落ちる挙動に変わるため)
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
+
+# 添付画像の正規化は速度が要るので、[profile.dev.package]と同じクレートは速度優先に戻す
+[profile.release.package]
+image = { opt-level = 3 }
+zune-jpeg = { opt-level = 3 }
+png = { opt-level = 3 }
+fdeflate = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
+gif = { opt-level = 3 }
+weezl = { opt-level = 3 }
+image-webp = { opt-level = 3 }
