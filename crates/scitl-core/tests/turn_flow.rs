@@ -11,7 +11,7 @@ use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
     ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, RequestPreview,
-    ResponseEvent, ToolArguments, ToolSchema, DEFAULT_CAPABILITIES,
+    ResponseEvent, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -72,27 +72,30 @@ fn user_text(message: &ChatMessage) -> &str {
 
 /// 直近のユーザー発言に添えた最新状態の囲み。
 fn state_of(messages: &[ChatMessage]) -> String {
-    let latest_user = messages
+    messages
         .iter()
         .rev()
-        .find(|m| matches!(m, ChatMessage::User { .. }))
-        .expect("a request carries a user message");
-    let ChatMessage::User { text, .. } = latest_user else {
-        unreachable!()
-    };
-    let (_, state) = text
-        .as_str()
-        .split_once("\n<scitl:state>")
-        .expect("the latest user message carries the state");
-    format!("<scitl:state>{state}")
+        .find_map(|m| match m {
+            ChatMessage::User { text, .. } => text
+                .as_str()
+                .split_once("\n<scitl:state>")
+                .map(|(_, state)| format!("<scitl:state>{state}")),
+            _ => None,
+        })
+        .expect("a user message carries the state")
 }
 
-fn tool_names(tools: &[ToolSchema]) -> Vec<String> {
-    tools.iter().map(|t| t.name().to_string()).collect()
+/// ツールの上限に達したことを伝える一節か。
+fn mentions_round_limit(message: &ChatMessage) -> bool {
+    matches!(message, ChatMessage::User { text, .. } if text.as_str().contains("tool call limit"))
 }
 
-/// 1回の呼び出しで送られたもの。発言列と、渡されたツールの名前。
-type Sent = (Vec<ChatMessage>, Vec<String>);
+fn tool_names(tools: ToolOffer<'_>) -> Vec<String> {
+    tools.schemas.iter().map(|t| t.name().to_string()).collect()
+}
+
+/// 1回の呼び出しで送られたもの。発言列、渡されたツールの名前、ツールを呼べたか。
+type Sent = (Vec<ChatMessage>, Vec<String>, bool);
 
 /// 決めておいた応答を呼び出しごとに順に返し、送られた発言列とツールを記録するアダプタ。
 /// 応答は1回分ずつ、イベント列(ストリーミングしないアダプタと同じく1件ずつ渡す)か失敗。
@@ -102,7 +105,7 @@ struct ScriptedAdapter {
     /// 台本を使い切ったら最後の応答を繰り返す。偽なら、使い切った後の呼び出しで止まる
     /// (想定より多く呼ばれたことに気付けるように)。
     repeat_last: bool,
-    /// ツールを渡されなかった呼び出しでは、台本の代わりにこれを返す。
+    /// ツールを呼べない呼び出しでは、台本の代わりにこれを返す。
     without_tools: Option<Vec<ResponseEvent>>,
     calls: AtomicUsize,
     sent: Mutex<Vec<Sent>>,
@@ -171,12 +174,19 @@ impl ScriptedAdapter {
     fn sent_messages(&self) -> Vec<Vec<ChatMessage>> {
         self.sent()
             .into_iter()
-            .map(|(messages, _)| messages)
+            .map(|(messages, _, _)| messages)
             .collect()
     }
 
     fn offered(&self) -> Vec<Vec<String>> {
-        self.sent().into_iter().map(|(_, tools)| tools).collect()
+        self.sent().into_iter().map(|(_, tools, _)| tools).collect()
+    }
+
+    fn callable(&self) -> Vec<bool> {
+        self.sent()
+            .into_iter()
+            .map(|(_, _, callable)| callable)
+            .collect()
     }
 
     /// 各呼び出しで直近のユーザー発言に添えた最新状態。
@@ -225,7 +235,7 @@ impl LlmAdapter for ScriptedAdapter {
     async fn send(
         &self,
         messages: &[ChatMessage],
-        tools: &[ToolSchema],
+        tools: ToolOffer<'_>,
         _reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<(), CoreError> {
@@ -237,9 +247,9 @@ impl LlmAdapter for ScriptedAdapter {
         self.sent
             .lock()
             .unwrap()
-            .push((messages.to_vec(), tool_names(tools)));
+            .push((messages.to_vec(), tool_names(tools), tools.callable));
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
-        if let (true, Some(events)) = (tools.is_empty(), &self.without_tools) {
+        if let (false, Some(events)) = (tools.callable, &self.without_tools) {
             events.iter().cloned().for_each(on_event);
             return Ok(());
         }
@@ -261,13 +271,13 @@ impl LlmAdapter for ScriptedAdapter {
     fn request_preview(
         &self,
         messages: &[ChatMessage],
-        tools: &[ToolSchema],
+        tools: ToolOffer<'_>,
         _reasoning_effort: Option<ReasoningEffort>,
     ) -> Option<RequestPreview> {
         self.previewed
             .lock()
             .unwrap()
-            .push((messages.to_vec(), tool_names(tools)));
+            .push((messages.to_vec(), tool_names(tools), tools.callable));
         Some(RequestPreview {
             body: serde_json::Value::Null,
         })
@@ -568,7 +578,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
 }
 
 #[tokio::test]
-async fn run_turn_rebuilds_the_state_and_returns_tool_round_trip_within_the_turn() {
+async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_request() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let adapter = adds_a_step();
@@ -601,10 +611,12 @@ async fn run_turn_rebuilds_the_state_and_returns_tool_round_trip_within_the_turn
     assert!(!round1_system.contains("current task state"));
     assert_eq!(round1_system, system_prompt_content(&rounds[1][0]));
 
-    // 1ラウンド目の最新状態にはまだ工程が無く、2ラウンド目にはadd_stepsの結果が反映される。
-    let states = adapter.states();
-    assert!(!states[0].contains("買い出し"));
-    assert!(states[1].contains("買い出し"));
+    // 2ラウンド目は1ラウンド目に送ったものを書き換えずに、後ろへ往復を足しただけ
+    // (ツールの往復中に思考ブロックを返すAPIは、それより前が変わると受け付けない)。
+    // 最新状態はターンの最初のまま、add_stepsの結果は往復の結果として伝わる。
+    assert_eq!(rounds[1][..rounds[0].len()], rounds[0][..]);
+    assert_eq!(rounds[1].len(), rounds[0].len() + 2);
+    assert!(!adapter.states()[1].contains("買い出し"));
 
     // 同時に、直前のツール呼び出しと結果が発言として返る。これが無いと、モデルは自分が
     // さっき呼んだことを認識できず、同じツールを呼び直す。
@@ -2058,13 +2070,17 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     .await
     .unwrap();
 
+    // 最後の呼び出しもツールの定義は同じものを渡し、呼び出しだけを禁じる。上限に達したことは
+    // 発言列の末尾に足し、前に送った部分は変えない。
     let offered = adapter.offered();
     assert_eq!(offered.len(), 3, "2ラウンド + 最後の1回");
-    assert!(offered[..2].iter().all(|tools| !tools.is_empty()));
-    assert!(offered[2].is_empty(), "最後の呼び出しにはツールを渡さない");
-    let states = adapter.states();
-    assert!(!states[1].contains("tool call limit"));
-    assert!(states[2].contains("tool call limit"));
+    assert!(!offered[0].is_empty());
+    assert!(offered.iter().all(|tools| *tools == offered[0]));
+    assert_eq!(adapter.callable(), vec![true, true, false]);
+    let rounds = adapter.sent_messages();
+    assert_eq!(rounds[2][..rounds[1].len()], rounds[1][..]);
+    assert!(!rounds[1].iter().any(mentions_round_limit));
+    assert!(mentions_round_limit(rounds[2].last().unwrap()));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
@@ -2098,8 +2114,9 @@ async fn models_without_tool_support_are_called_once_without_tools() {
     .unwrap();
 
     assert_eq!(adapter.offered(), vec![Vec::<String>::new()]);
+    assert_eq!(adapter.callable(), vec![false]);
     assert!(adapter.system_prompts()[0].contains("Tools are not available"));
-    assert!(!adapter.states()[0].contains("tool call limit"));
+    assert!(!adapter.sent_messages()[0].iter().any(mentions_round_limit));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
@@ -2876,6 +2893,7 @@ async fn preview_shows_what_the_next_turn_sends_without_saving() {
     assert!(comparable(&previewed.0).contains("sent_at=\\\"\\\""));
     assert_eq!(comparable(&previewed.0), comparable(&sent.0));
     assert_eq!(previewed.1, sent.1);
+    assert_eq!(previewed.2, sent.2);
 }
 
 #[tokio::test]

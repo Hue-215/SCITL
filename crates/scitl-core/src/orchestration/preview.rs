@@ -78,9 +78,9 @@ pub async fn preview_request(
         ExternalToolset::default()
     };
 
-    let request = TurnRequest::prepare(ctx, chat, stored, &external).await?;
+    let request = TurnRequest::prepare(db, ctx, chat, stored, &external).await?;
     let final_call = request.tool_rounds(ctx) == 0;
-    let (messages, offered) = request.round(db, ctx, &[], final_call).await?;
+    let (messages, offered) = request.round(&[], final_call);
     let request = adapter
         .request_preview(&messages, offered, ctx.reasoning_effort)
         .ok_or_else(|| {

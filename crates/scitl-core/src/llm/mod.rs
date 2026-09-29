@@ -239,6 +239,24 @@ impl ToolSchema {
     }
 }
 
+/// 1回の呼び出しでモデルに渡すツール。
+///
+/// `callable`が`false`のときも定義はそのまま渡し、呼び出しだけを禁じる(OpenAI互換なら
+/// `tool_choice: "none"`)。定義を外すと、前のラウンドまでと先頭が変わる。
+#[derive(Debug, Clone, Copy)]
+pub struct ToolOffer<'a> {
+    pub schemas: &'a [ToolSchema],
+    pub callable: bool,
+}
+
+impl ToolOffer<'_> {
+    /// ツールを渡さない呼び出し。
+    pub const NONE: ToolOffer<'static> = ToolOffer {
+        schemas: &[],
+        callable: false,
+    };
+}
+
 /// アダプタが構成不足で呼び出しに進めない状態。アダプタ自体が無い場合(プロバイダー未選択等)は
 /// `orchestration::TurnContext::adapter`の`Err`で表す。
 ///
@@ -276,7 +294,7 @@ pub trait LlmAdapter: Send + Sync {
     async fn send(
         &self,
         messages: &[ChatMessage],
-        tools: &[ToolSchema],
+        tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<(), CoreError>;
@@ -292,7 +310,7 @@ pub trait LlmAdapter: Send + Sync {
     fn request_preview(
         &self,
         _messages: &[ChatMessage],
-        _tools: &[ToolSchema],
+        _tools: ToolOffer<'_>,
         _reasoning_effort: Option<ReasoningEffort>,
     ) -> Option<RequestPreview> {
         None
