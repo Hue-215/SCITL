@@ -22,7 +22,7 @@ flowchart LR
 
   subgraph TA["scitl-tauri: 薄いIPCシェル"]
     CMD["commands/*.rs<br/>デシリアライズ → coreを1つ呼ぶ → シリアライズ"]
-    CONF["tauri.conf.json<br/>CSP: connect-src 'none'"]
+    CONF["tauri.conf.json<br/>CSP: connect-srcはIPCの窓口のみ"]
   end
 
   CLI["scitl-cli<br/>JSON出力 / 応答生成はしない / preview"]
