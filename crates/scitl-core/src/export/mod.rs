@@ -23,6 +23,7 @@ use crate::db::task_steps::{self, TaskStep};
 use crate::db::tasks::{self, Task};
 use crate::db::{now_iso8601, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
+use crate::text;
 use markdown::{AttachmentLink, Entry};
 
 const ATTACHMENTS_DIR: &str = "attachments";
@@ -32,6 +33,7 @@ const TITLE_CHARS_IN_FILE_NAME: usize = 40;
 
 /// 書き出しの結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ExportSummary {
     /// 書き出したフォルダの名前(`root`の直下)。
     pub folder: String,
@@ -210,7 +212,7 @@ fn write_attachment(
 fn task_file_name(task: &Task) -> String {
     let stem = match &task.title {
         Some(title) => {
-            let title: String = title.chars().take(TITLE_CHARS_IN_FILE_NAME).collect();
+            let (title, _) = text::truncate_chars(title, TITLE_CHARS_IN_FILE_NAME);
             safe_file_name(&format!("task-{}-{title}", task.id))
         }
         None => format!("task-{}", task.id),
@@ -304,7 +306,7 @@ mod tests {
             messages::insert_message(
                 &self.conn,
                 NewMessage {
-                    task_id: chat.task_id(),
+                    chat,
                     role,
                     content,
                     kind,

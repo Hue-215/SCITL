@@ -3,10 +3,10 @@ import { ConfirmButton } from './Dialog'
 import { isolated, t } from './i18n'
 import { isCommitEnter } from './keyboard'
 import { taskName, taskProgress } from './taskName'
-import type { TaskDetail } from './types'
+import type { TaskDetailView } from './types'
 
 interface TaskHeaderProps {
-  task: TaskDetail
+  task: TaskDetailView
   // 応答待ちの間は操作させない(Rust側でも断る。orchestration::operations)。
   disabled: boolean
   onRename: (title: string) => void

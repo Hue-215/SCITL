@@ -14,6 +14,7 @@ use crate::i18n::Language;
 /// 対応するプロバイダーAPIの方言。現状はOpenAI互換チャットコンプリーションAPIのみ
 /// (architecture.md 2節)。将来プロバイダーを追加する際はここにバリアントを足す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ApiFormat {
     OpenAiCompat,
@@ -91,6 +92,7 @@ fn visible_by_default() -> bool {
 
 /// モデルの能力のうち、対応の有無で表すもの。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Image,
@@ -100,6 +102,7 @@ pub enum Capability {
 
 /// 思考の強さ。リクエストでの書き方は方言ごとにアダプタが決める。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
     /// 思考させない。
@@ -112,27 +115,7 @@ pub enum ReasoningEffort {
 }
 
 /// 能力の手動設定。`None`は「手動では決めていない」。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelOverrides {
-    pub image: Option<bool>,
-    pub tools: Option<bool>,
-    pub thinking: Option<bool>,
-    pub context_length: Option<u32>,
-}
-
-impl ModelOverrides {
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
-    pub fn flag_mut(&mut self, capability: Capability) -> &mut Option<bool> {
-        match capability {
-            Capability::Image => &mut self.image,
-            Capability::Tools => &mut self.tools,
-            Capability::Thinking => &mut self.thinking,
-        }
-    }
-}
+pub type ModelOverrides = crate::llm::CapabilityLayer;
 
 /// 応答タイムアウトの既定値(秒)。未設定のときに使う実体はここ1箇所だけ。
 /// タイムアウト自体は常に掛ける(HTTPクライアントの既定は無制限で、応答しない

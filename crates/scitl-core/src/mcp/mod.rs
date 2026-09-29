@@ -30,7 +30,9 @@ use serde_json::{json, Map, Value};
 
 use crate::config::{McpEndpoint, McpServerConfig, SecretRef};
 use crate::error::CoreError;
+use crate::net::ExternalUrl;
 use crate::secrets;
+use crate::text;
 
 /// 接続・ツール一覧取得・ツール呼び出しそれぞれに設ける固定タイムアウト。応答しない
 /// サーバーで設定画面やターンが固まらないようにする(architecture.md 5節と同じ考え方)。
@@ -294,25 +296,20 @@ fn to_result_value(result: CallToolResult) -> Value {
 /// 際限なく膨らまないようにする(履歴トリミングの方式はIssue #7の範囲)。
 const MAX_RESULT_CHARS: usize = 20_000;
 
-fn truncate_result_text(text: &str) -> String {
-    if text.chars().count() <= MAX_RESULT_CHARS {
-        return text.to_string();
+fn truncate_result_text(result: &str) -> String {
+    match text::truncate_chars(result, MAX_RESULT_CHARS) {
+        (head, true) => {
+            format!("{head}\n…(the rest of the result was omitted because it is too long)")
+        }
+        (head, false) => head,
     }
-    let mut out: String = text.chars().take(MAX_RESULT_CHARS).collect();
-    out.push_str(
-        "
-…(the rest of the result was omitted because it is too long)",
-    );
-    out
 }
 
 /// streamable_http方式のURLを検証する(実際に接続する前、サーバー登録時のIPC層から呼ぶ)。
-/// 検証本体は[`crate::net::validate_external_url`]に集約する(LLMプロバイダーのbase_url
+/// 検証本体は[`ExternalUrl::parse`]に集約する(LLMプロバイダーのbase_url
 /// 検証と共有)。
 pub fn validate_streamable_http_url(url: &str) -> Result<(), CoreError> {
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|e| CoreError::Mcp(format!("url is not a valid URL: {e}")))?;
-    crate::net::validate_external_url(&parsed).map_err(CoreError::Mcp)
+    ExternalUrl::parse(url).map(drop).map_err(CoreError::Mcp)
 }
 
 /// リクエストの構造やMCPプロトコル自体が管理するヘッダー名。ユーザーが登録した
@@ -376,7 +373,7 @@ async fn resolve_secrets(refs: &[SecretRef]) -> Result<Vec<(String, SecretString
 const MAX_SERVER_ERROR_CHARS: usize = 512;
 
 fn describe_server_error(e: &impl std::fmt::Display) -> String {
-    crate::text::display_label(&e.to_string(), MAX_SERVER_ERROR_CHARS)
+    text::display_label(&e.to_string(), MAX_SERVER_ERROR_CHARS)
 }
 
 #[cfg(test)]

@@ -17,6 +17,41 @@ const TOOL_EXECUTION_ROLE_SQL: &str =
 const ERROR_DETAIL_SQL: &str = include_str!("../../../../migrations/0003_error_detail.sql");
 const MESSAGE_ORIGIN_SQL: &str = include_str!("../../../../migrations/0004_message_origin.sql");
 
+/// DBの列に文字列で持つ列挙。列の値との対応をここに1度だけ書き、書き込み(`ToSql`)と
+/// 読み出し(`FromSql`)を同じ対応から作る。値は列のCHECK制約と揃える。
+macro_rules! text_column_enum {
+    ($ty:ty { $($variant:ident => $text:literal),+ $(,)? }) => {
+        impl $ty {
+            /// DBの列の値。
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $text,)+
+                }
+            }
+        }
+
+        impl rusqlite::types::ToSql for $ty {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                Ok(self.as_str().into())
+            }
+        }
+
+        impl rusqlite::types::FromSql for $ty {
+            fn column_result(
+                value: rusqlite::types::ValueRef<'_>,
+            ) -> rusqlite::types::FromSqlResult<Self> {
+                match value.as_str()? {
+                    $($text => Ok(Self::$variant),)+
+                    other => Err(rusqlite::types::FromSqlError::Other(
+                        format!("unknown {}: {other}", stringify!($ty)).into(),
+                    )),
+                }
+            }
+        }
+    };
+}
+pub(crate) use text_column_enum;
+
 /// 非同期層から使うDBハンドル。`rusqlite::Connection`は`Sync`ではないため`&Connection`を
 /// 非同期関数のawaitをまたいで持たせられない(architecture.md 4節)。触るときは[`with_conn`]を通す。
 pub type SharedConnection = Arc<Mutex<Connection>>;

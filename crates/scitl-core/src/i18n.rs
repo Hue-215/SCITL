@@ -1,8 +1,8 @@
 //! 画面文言の言語ファイル(`lang/*.json`)を引く(architecture.md 11節)。
 //!
 //! 言語ファイルはフロントエンドと共有し、画面はフロントエンドが引く。core側で引くのは、
-//! 画面を通らずに残る文言(エラー発言の`content`)だけ。ファイルはビルド時に埋め込むので、
-//! 実行時にファイルを探さない。
+//! 画面を通らずに残る・使われる文言(エラー発言の`content`と、プロンプトの既定の文面
+//! `task_chat.*`)だけ。ファイルはビルド時に埋め込むので、実行時にファイルを探さない。
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// 表示言語。値は言語ファイルの名前(`lang/{code}.json`)と、画面の`lang`属性に使う。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     Ja,

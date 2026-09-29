@@ -3,17 +3,19 @@
 //!
 //! 3層は上から、手動設定(`config::ModelOverrides`)→ 自動検出([`DetectedCapabilities`]。
 //! 推論サーバーへの問い合わせは`providers`が行う)→ 既定値([`DEFAULT_CAPABILITIES`])。
-//! 項目ごとに、値を持つ一番上の層が決める。
+//! 項目ごとに、値を持つ一番上の層が決める。上の2層は同じ形([`CapabilityLayer`])で、
+//! 重ね方も[`CapabilityLayer::over`]の1つだけにする。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{Capability, ModelConfig};
 
 /// 解決済みのモデル能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ModelCapabilities {
     pub image: bool,
     pub tools: bool,
@@ -33,14 +35,48 @@ impl ModelCapabilities {
     }
 }
 
-/// 推論サーバーから分かった能力。サーバーが教えない項目は`None`で、下の層(既定値)に任せる。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DetectedCapabilities {
+/// 能力の層のうち、項目ごとに値を持たないことがあるもの(手動設定・自動検出)。値を持たない
+/// 項目(`None`)は下の層に任せる。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityLayer {
     pub image: Option<bool>,
     pub tools: Option<bool>,
     pub thinking: Option<bool>,
     pub context_length: Option<u32>,
 }
+
+impl CapabilityLayer {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn flag_mut(&mut self, capability: Capability) -> &mut Option<bool> {
+        match capability {
+            Capability::Image => &mut self.image,
+            Capability::Tools => &mut self.tools,
+            Capability::Thinking => &mut self.thinking,
+        }
+    }
+
+    /// この層を`below`の上に重ねる。
+    ///
+    /// コンテキスト長の`0`は未設定として扱う。設定画面からは入らないが、手で編集した
+    /// `config.toml`が同じ経路を通るため(`GeneralConfig::response_timeout`と同じ扱い)。
+    pub fn over(&self, below: ModelCapabilities) -> ModelCapabilities {
+        ModelCapabilities {
+            image: self.image.unwrap_or(below.image),
+            tools: self.tools.unwrap_or(below.tools),
+            thinking: self.thinking.unwrap_or(below.thinking),
+            context_length: self
+                .context_length
+                .filter(|n| *n > 0)
+                .unwrap_or(below.context_length),
+        }
+    }
+}
+
+/// 推論サーバーから分かった能力。サーバーが教えない項目は`None`で、下の層(既定値)に任せる。
+pub type DetectedCapabilities = CapabilityLayer;
 
 /// どの層でもコンテキスト長が分からないときの値。ローカル推論サーバーが既定で確保する
 /// 長さの小さい側に合わせる。大きく見積もると履歴の間引きが足りずに超過で止まるが、
@@ -67,40 +103,18 @@ pub const DEFAULT_CAPABILITIES: ModelCapabilities = ModelCapabilities {
 /// 手動設定より下の層(自動検出 → 既定値)で決まる値。手動設定を「下の層と同じなら外す」
 /// 判定(`settings`)と、設定画面のプレースホルダはこれを見る。
 pub fn fallback_capabilities(detected: Option<&DetectedCapabilities>) -> ModelCapabilities {
-    let default = DEFAULT_CAPABILITIES;
-    let Some(detected) = detected else {
-        return default;
-    };
-    ModelCapabilities {
-        image: detected.image.unwrap_or(default.image),
-        tools: detected.tools.unwrap_or(default.tools),
-        thinking: detected.thinking.unwrap_or(default.thinking),
-        context_length: detected
-            .context_length
-            .filter(|n| *n > 0)
-            .unwrap_or(default.context_length),
+    match detected {
+        Some(detected) => detected.over(DEFAULT_CAPABILITIES),
+        None => DEFAULT_CAPABILITIES,
     }
 }
 
 /// 手動設定 → 自動検出 → 既定値の順に解決する。
-///
-/// コンテキスト長の`0`は未設定として扱う。設定画面からは入らないが、手で編集した
-/// `config.toml`が同じ経路を通るため(`GeneralConfig::response_timeout`と同じ扱い)。
 pub fn resolve_capabilities(
     model: &ModelConfig,
     detected: Option<&DetectedCapabilities>,
 ) -> ModelCapabilities {
-    let fallback = fallback_capabilities(detected);
-    let manual = &model.overrides;
-    ModelCapabilities {
-        image: manual.image.unwrap_or(fallback.image),
-        tools: manual.tools.unwrap_or(fallback.tools),
-        thinking: manual.thinking.unwrap_or(fallback.thinking),
-        context_length: manual
-            .context_length
-            .filter(|n| *n > 0)
-            .unwrap_or(fallback.context_length),
-    }
+    model.overrides.over(fallback_capabilities(detected))
 }
 
 /// 自動検出の結果。アプリ起動中だけ保持するメモリキャッシュで、config.tomlには書かない

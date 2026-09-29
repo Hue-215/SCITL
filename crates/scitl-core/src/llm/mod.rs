@@ -9,8 +9,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 pub use capabilities::{
-    fallback_capabilities, resolve_capabilities, DetectedCapabilities, DetectedCatalog,
-    ModelCapabilities, DEFAULT_CAPABILITIES, FALLBACK_CONTEXT_LENGTH,
+    fallback_capabilities, resolve_capabilities, CapabilityLayer, DetectedCapabilities,
+    DetectedCatalog, ModelCapabilities, DEFAULT_CAPABILITIES, FALLBACK_CONTEXT_LENGTH,
 };
 pub use error::{ErrorDetail, LlmError};
 pub use prompt::{user_message_format_note, AttachmentNote, PromptText};
@@ -24,6 +24,7 @@ use crate::error::CoreError;
 /// ストリーミングしないプロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る
 /// ([`LlmAdapter::send`])。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseEvent {
     TextDelta {
@@ -49,13 +50,13 @@ pub enum ResponseEvent {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
     ToolCall,
     /// 出力が長さ制限で打ち切られた。Stopに潰すと打ち切りを上位層が検知できない。
     Length,
-    Error,
 }
 
 /// アダプタに渡す発言列の1要素。`{role, content}`の平坦な構造ではなく列挙型にするのは、
@@ -146,10 +147,17 @@ pub struct ToolCallRequest {
 /// 置き換えると同節「暗黙の型変換をしない」を割る(引数を伴うツールを引数無しで発火させる)。
 /// 実行せずに失敗をモデルへ返す判断は`orchestration::turn`が持つ。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ToolArguments {
-    Valid { value: serde_json::Value },
-    Malformed { raw: String, error: String },
+    Valid {
+        #[cfg_attr(test, ts(type = "unknown"))]
+        value: serde_json::Value,
+    },
+    Malformed {
+        raw: String,
+        error: String,
+    },
 }
 
 impl ToolArguments {

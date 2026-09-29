@@ -10,6 +10,7 @@ use crate::orchestration::ToolExecutionView;
 /// どのタスクのイベントかは持たない。受け口はターンの呼び出しごとに渡されるので、
 /// 呼び出し側が知っている。
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnEvent {
     /// アダプタが渡したイベントをそのまま転送する(`llm::LlmAdapter::send`の約束事に従う)。

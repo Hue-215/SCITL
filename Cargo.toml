@@ -16,7 +16,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "ti
 # (信頼ルートはOSの証明書ストア)を選ぶ。ハードニング設定は`scitl-core/src/net.rs`の
 # `hardened_client`1箇所に集約する(architecture.md 5節)
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-thiserror = "1"
+thiserror = "2"
 secrecy = "0.10"
 url = "2"
 # URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、添付のファイル名の
@@ -35,7 +35,7 @@ async-trait = "0.1"
 keyring-core = "1"
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 windows-native-keyring-store = "1"
-toml = "0.8"
+toml = "1"
 # scitl-cliの引数の解析。出力に色の制御文字を混ぜないよう、既定のfeatureから色付け(と、
 # 打ち間違いの候補の提示)を外す
 clap = { version = "4", default-features = false, features = [
@@ -85,6 +85,9 @@ process-wrap = { version = "10.0", default-features = false, features = [
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"
+# 画面へ渡す型のTypeScript定義を生成する(開発時のみ。`frontend/src/bindings/`)。Rust側の型を
+# 正本にし、TS側に写しを手で持たない。生成は`cargo test`が行い、CIが生成物との差分を検査する
+ts-rs = "12"
 
 # 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
 # デコード・縮小・エンコードに関わるクレートだけは最適化する

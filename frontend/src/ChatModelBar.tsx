@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { failureText, getChatModels, selectChatModel, setReasoningEffort } from './api'
 import Dropdown, { type DropdownOption } from './Dropdown'
-import { t, type MessageKey } from './i18n'
+import { isolated, type MessageKey, t } from './i18n'
 import type { ChatModelsView, ModelChoice, ReasoningEffort, SelectedModel } from './types'
 
 const EFFORT_LABELS: Record<ReasoningEffort, MessageKey> = {
@@ -76,8 +76,8 @@ export default function ChatModelBar({
           title={
             selected
               ? t('select.model_tooltip', {
-                  model: selected.label,
-                  provider: selected.provider_name,
+                  model: isolated(selected.label),
+                  provider: isolated(selected.provider_name),
                 })
               : undefined
           }

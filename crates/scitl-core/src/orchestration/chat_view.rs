@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::orchestration::tool_record::ToolExecutionView;
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct MessageView {
     #[serde(flatten)]
     pub message: Message,

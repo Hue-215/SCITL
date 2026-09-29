@@ -1,6 +1,6 @@
 import { t } from './i18n'
 import { operationSourceLabel, type ThoughtItem } from './thinking'
-import type { Message, ToolExecutionView } from './types'
+import type { MessageView, ToolExecutionView } from './types'
 
 // 「思考・ツール」の折りたたみ表示(Issue #42、docs/spec/legacy/frontend.md 1節)。
 // モデルの思考(reasoning)と内部ツール呼び出しを発生順に混在させて表示する。
@@ -18,7 +18,7 @@ import type { Message, ToolExecutionView } from './types'
 // 通さない。整形しない分、ここからリンクや画像が作られることも無い。引数・結果は
 // Rust側が整形し、見えない文字を見える形にしてある(`ToolExecutionView`)。
 
-// ツール呼び出し1件の引数と結果。ターンの中の呼び出しと操作の記録のどちらでも同じ形で見せる。
+/** ツール呼び出し1件の引数と結果。ターンの中の呼び出しと操作の記録のどちらでも同じ形で見せる。 */
 function ToolCallDetail({ execution }: { execution: ToolExecutionView }) {
   return (
     <div className="tool-call-detail">
@@ -74,10 +74,12 @@ export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
   )
 }
 
-/// 応答生成以外の経路(画面・MCP等)での操作の記録1件を、「思考・ツール」折りたたみとは
-/// 独立した1行として表示する。行末に経路のラベルを出し、ターンの中の呼び出しと見分けられる
-/// ようにする(docs/spec/legacy/frontend.md 1節)。
-export function OperationLine({ message }: { message: Message }) {
+/**
+ * 応答生成以外の経路(画面・MCP等)での操作の記録1件を、「思考・ツール」折りたたみとは
+ * 独立した1行として表示する。行末に経路のラベルを出し、ターンの中の呼び出しと見分けられる
+ * ようにする(docs/spec/legacy/frontend.md 1節)。
+ */
+export function OperationLine({ message }: { message: MessageView }) {
   const execution = message.tool_execution
   if (!execution) return null
   return (

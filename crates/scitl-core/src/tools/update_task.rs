@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -6,52 +8,60 @@ use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
 use super::args::Args;
+use super::{InternalTool, Run, ToolKind};
 
 pub const NAME: &str = "update_task";
 
-const KNOWN_ARGS: &[&str] = &["title", "description", "deadline", "status", "clear"];
+pub(super) const TOOL: InternalTool = InternalTool {
+    schema,
+    kind: ToolKind::State,
+    run: Run::UpdateTask(execute),
+};
 
 /// `clear`で消せる項目。タイトルは未設定に戻す操作を持たないので含めない。
 const CLEARABLE: &[&str] = &["deadline", "description"];
 
 /// タスクチャット版のスキーマ。`task_id`を引数に含めない
 /// (docs/spec/rebuild/tools.md 1節「確定方針」)。
-pub fn schema() -> ToolSchema {
-    ToolSchema::internal(
-        NAME,
-        "Update the currently open task.",
-        json!({
-            "type": "object",
-            "properties": {
-                "title": { "type": "string" },
-                "description": {
-                    "type": "string",
-                    "description": "Task description. Cannot be empty; use clear to remove it."
+pub fn schema() -> &'static ToolSchema {
+    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
+        ToolSchema::internal(
+            NAME,
+            "Update the currently open task.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string" },
+                    "description": {
+                        "type": "string",
+                        "description": "Task description. Cannot be empty; use clear to remove it."
+                    },
+                    "deadline": {
+                        "type": "string",
+                        "format": "date",
+                        // 形式を満たさない値は`db::tasks::update_task`が弾く。スキーマ側にも
+                        // 明示しておき、モデルが日時形式を渡して往復を1回無駄にするのを減らす。
+                        "description": "Deadline date (YYYY-MM-DD)."
+                    },
+                    "status": { "type": "string", "enum": ["archived", "unarchived"] },
+                    "clear": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": CLEARABLE },
+                        "uniqueItems": true,
+                        // 省略・nullは「変えない」。値を消すのはこの引数だけにする(nullを消去の
+                        // 意味にすると、型に緩いモデルが変えないつもりの項目を消してしまう)。
+                        "description": "Fields to remove. A field cannot be set and removed in the same call."
+                    }
                 },
-                "deadline": {
-                    "type": "string",
-                    "format": "date",
-                    // 形式を満たさない値は`db::tasks::update_task`が弾く。スキーマ側にも
-                    // 明示しておき、モデルが日時形式を渡して往復を1回無駄にするのを減らす。
-                    "description": "Deadline date (YYYY-MM-DD)."
-                },
-                "status": { "type": "string", "enum": ["archived", "unarchived"] },
-                "clear": {
-                    "type": "array",
-                    "items": { "type": "string", "enum": CLEARABLE },
-                    "uniqueItems": true,
-                    // 省略・nullは「変えない」。値を消すのはこの引数だけにする(nullを消去の
-                    // 意味にすると、型に緩いモデルが変えないつもりの項目を消してしまう)。
-                    "description": "Fields to remove. A field cannot be set and removed in the same call."
-                }
-            },
-            "additionalProperties": false
-        }),
-    )
+                "additionalProperties": false
+            }),
+        )
+    });
+    &SCHEMA
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
-    let args = Args::parse(arguments, KNOWN_ARGS)?;
+    let args = Args::parse(arguments, schema())?;
 
     let clear = args.optional_string_array("clear")?.unwrap_or_default();
     for (i, field) in clear.iter().enumerate() {

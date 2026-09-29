@@ -35,4 +35,5 @@ windows-native-keyring-store = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+ts-rs = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "test-util"] }

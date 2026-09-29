@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { failureText, readImageAttachment, readTextAttachment, revealAttachment } from './api'
 import Chip from './Chip'
 import Dialog from './Dialog'
-import { formatBytes, t } from './i18n'
-import type { AttachmentDelivery, AttachmentKind, AttachmentView } from './types'
+import { formatBytes, isolated, t } from './i18n'
+import type { AttachmentDeliveries, AttachmentView } from './types'
 import type { StagedAttachments } from './useStagedAttachments'
 
 // 添付ファイル(Issue #21)。種別の判定・大きさの上限・モデルへの渡し方はRust側が決め、
@@ -103,7 +103,7 @@ function ImageChip({ attachment, size }: { attachment: AttachmentView; size: str
         label={attachment.original_name}
         detail={size}
         tone={error ? 'error' : 'normal'}
-        title={error ? t('attachment.load_failed', { error }) : undefined}
+        title={error ? t('attachment.load_failed', { error: isolated(error) }) : undefined}
         leading={url && <img className="chip-thumbnail" src={url} alt="" />}
         onOpen={url ? () => setOpen(true) : undefined}
       />
@@ -148,7 +148,7 @@ function TextDialog({ attachment, onClose }: { attachment: AttachmentView; onClo
   return (
     <Dialog title={attachment.original_name} onClose={onClose} width={PREVIEW_DIALOG_WIDTH}>
       {error ? (
-        <p className="error">{t('attachment.load_failed', { error })}</p>
+        <p className="error">{t('attachment.load_failed', { error: isolated(error) })}</p>
       ) : (
         // 利用者やファイルの書き手が書いたものなので、Markdownとして解釈せずそのまま出す。
         <pre className="attachment-preview-text">{text ?? t('attachment.loading')}</pre>
@@ -164,7 +164,11 @@ function OtherChip({ attachment, size }: { attachment: AttachmentView; size: str
       label={attachment.original_name}
       detail={size}
       tone={error ? 'error' : 'normal'}
-      title={error ? t('attachment.load_failed', { error }) : t('attachment.reveal_tooltip')}
+      title={
+        error
+          ? t('attachment.load_failed', { error: isolated(error) })
+          : t('attachment.reveal_tooltip')
+      }
       onOpen={() => {
         setError(null)
         revealAttachment(attachment.id).catch((e) => setError(failureText(e)))
@@ -181,7 +185,7 @@ export function StagedAttachmentChips({
 }: {
   staged: StagedAttachments
   // 選んでいるモデルの、種別ごとの渡し方。モデルが未選択なら警告は出さない。
-  deliveries: Record<AttachmentKind, AttachmentDelivery> | null
+  deliveries: AttachmentDeliveries | null
   disabled: boolean
 }) {
   if (staged.items.length === 0) return null
@@ -191,7 +195,7 @@ export function StagedAttachmentChips({
         const common = {
           label: item.name,
           onRemove: () => staged.remove(item.key),
-          removeLabel: t('attachment.remove', { name: item.name }),
+          removeLabel: t('attachment.remove', { name: isolated(item.name) }),
           disabled,
         }
         switch (item.state) {

@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -6,25 +8,35 @@ use crate::error::Result;
 use crate::llm::ToolSchema;
 
 use super::args::Args;
+use super::{InternalTool, Run, ToolKind};
 
 pub const NAME: &str = "get_task_list";
 
+pub(super) const TOOL: InternalTool = InternalTool {
+    schema,
+    kind: ToolKind::State,
+    run: Run::Read(execute),
+};
+
 /// 引数なし。文脈から決まる情報を持たないため面によらず同一のスキーマ
 /// (docs/spec/rebuild/tools.md 2節)。
-pub fn schema() -> ToolSchema {
-    ToolSchema::internal(
-        NAME,
-        "List the tasks that are not archived.",
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        }),
-    )
+pub fn schema() -> &'static ToolSchema {
+    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
+        ToolSchema::internal(
+            NAME,
+            "List the tasks that are not archived.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        )
+    });
+    &SCHEMA
 }
 
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
-    Args::parse(arguments, &[])?;
+    Args::parse(arguments, schema())?;
 
     task_list(conn)
 }
@@ -36,9 +48,8 @@ pub fn task_list(conn: &Connection) -> Result<Value> {
     // 意味する状態をそのまま見せる(docs/spec/rebuild/tools.md「変更点の詳細」)。
     // アーカイブ済みは返さない(旧実装と同じ。docs/spec/rebuild/tools.md 2節)。アーカイブは
     // 溜まる一方で、返し続けるとトークンが増え続け、優先度の相談ではノイズになる。
-    let tasks: Vec<_> = tasks::list_tasks(conn)?
+    let tasks: Vec<_> = tasks::list_summaries(conn)?
         .into_iter()
-        .map(|t| t.summary)
         .filter(|t| t.archived_at.is_none())
         .collect();
     Ok(serde_json::to_value(tasks).expect("TaskSummary serialization cannot fail"))

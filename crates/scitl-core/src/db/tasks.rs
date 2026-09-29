@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -6,6 +8,7 @@ use crate::error::{CoreError, Result};
 use crate::text::{collapse_whitespace, ellipsize, truncate_chars};
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Task {
     pub id: i64,
     pub title: Option<String>,
@@ -71,6 +74,7 @@ impl TaskStatus {
 /// サイドバーのタスク一覧表示に必要な最小限の情報。
 /// 本文(description)は一覧に出さないため含めない。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskSummary {
     pub id: i64,
     pub title: Option<String>,
@@ -84,11 +88,12 @@ pub struct TaskSummary {
 /// `title`は未設定(null)のまま返し、書き換えない
 /// (docs/spec/rebuild/data-model.md「title は TEXT NULL」)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskListItem {
     #[serde(flatten)]
     pub summary: TaskSummary,
     /// `title`が未設定のときに代わりに表示する、最初のユーザー発言の切り詰め。
-    /// ユーザー発言がまだ無ければ`None`(その場合の表示は画面側が決める)。
+    /// `title`があるか、ユーザー発言がまだ無ければ`None`(その場合の表示は画面側が決める)。
     pub fallback_label: Option<String>,
 }
 
@@ -97,6 +102,7 @@ pub struct TaskListItem {
 /// `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する
 /// (docs/spec/rebuild/tools.md「モデルには `title: null` をそのまま見せる」)。
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskDetailView {
     #[serde(flatten)]
     pub task: Task,
@@ -116,6 +122,19 @@ const STEPS_TOTAL: &str = "(SELECT COUNT(*) FROM task_steps s
 /// 削除済み(deleted_at)を除く全タスクを作成日時昇順で返す。アーカイブ済みと未アーカイブの
 /// 振り分けはフロントエンド側(archived_atの有無)で行う。
 pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
+    let mut labels = fallback_labels(conn, None)?;
+    Ok(list_summaries(conn)?
+        .into_iter()
+        .map(|summary| TaskListItem {
+            fallback_label: labels.remove(&summary.id),
+            summary,
+        })
+        .collect())
+}
+
+/// [`list_tasks`]と同じ範囲・順の、代わりの呼び名を添えない形。呼び名を使わない呼び出し側
+/// (モデルへ渡すタスク一覧)が、組み立てて捨てる分の問い合わせをしないために使う。
+pub fn list_summaries(conn: &Connection) -> Result<Vec<TaskSummary>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT t.id, t.title, t.deadline, t.archived_at, {STEPS_DONE}, {STEPS_TOTAL}
          FROM tasks t
@@ -134,14 +153,7 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskListItem>> {
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(|summary| {
-            Ok(TaskListItem {
-                fallback_label: fallback_label_of(conn, summary.id)?,
-                summary,
-            })
-        })
-        .collect()
+    Ok(rows)
 }
 
 /// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う
@@ -157,8 +169,7 @@ pub fn create_task(conn: &Connection) -> Result<Task> {
 
 pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
-        "SELECT id, title, description, deadline, archived_at, deleted_at, created_at, updated_at
-         FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+        &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND deleted_at IS NULL"),
         [task_id],
         row_to_task,
     )
@@ -169,11 +180,9 @@ pub fn get_task(conn: &Connection, task_id: i64) -> Result<Task> {
 /// 削除済みを除く全タスクの行を作成日時昇順で返す。[`list_tasks`]と同じ範囲・順で、
 /// 一覧に出さない列(説明・作成/更新日時)まで要る呼び出し側(エクスポート)が使う。
 pub fn list_all(conn: &Connection) -> Result<Vec<Task>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, title, description, deadline, archived_at, deleted_at, created_at, updated_at
-         FROM tasks WHERE deleted_at IS NULL
-         ORDER BY created_at ASC",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {TASK_COLUMNS} FROM tasks WHERE deleted_at IS NULL ORDER BY created_at ASC"
+    ))?;
     let rows = stmt
         .query_map([], row_to_task)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -192,7 +201,7 @@ pub fn get_task_detail_view(conn: &Connection, task_id: i64) -> Result<TaskDetai
         task,
         steps_done,
         steps_total,
-        fallback_label: fallback_label_of(conn, task_id)?,
+        fallback_label: fallback_labels(conn, Some(task_id))?.remove(&task_id),
     })
 }
 
@@ -312,23 +321,30 @@ fn validate_deadline(raw: &str) -> Result<()> {
 /// 付け、続きがあることを示す。
 const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 
-/// タイトルの代わりに出す1行を、ユーザー発言を古い順に見て最初に作れたもので決める。
-/// 一覧とヘッダーで選び方を食い違わせないため、どちらもここを通す。空白だけの発言
-/// (添付だけを送った発言等)は名前にならないので飛ばす。その判定は[`fallback_label`]だけが
+/// タイトル未設定のタスク(`only`を渡せばそのタスクだけ)の、タイトルの代わりに出す1行。
+/// タイトルがあれば呼び名は使わないので求めない。ユーザー発言を古い順に見て、最初に作れた
+/// もので決める。一覧とヘッダーで選び方を食い違わせないため、どちらもここを通す。空白だけの
+/// 発言(添付だけを送った発言等)は名前にならないので飛ばす。その判定は[`fallback_label`]だけが
 /// 持つ(SQLの`TRIM`はUnicodeの空白を落とせず、写すと食い違う)。
-fn fallback_label_of(conn: &Connection, task_id: i64) -> Result<Option<String>> {
+fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, String>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT content FROM messages
-         WHERE task_id = ?1 AND role = 'user' AND kind = 'normal' AND deleted_at IS NULL
-         ORDER BY created_at ASC, id ASC",
+        "SELECT m.task_id, m.content FROM messages m JOIN tasks t ON t.id = m.task_id
+         WHERE t.title IS NULL AND t.deleted_at IS NULL AND (?1 IS NULL OR t.id = ?1)
+           AND m.role = 'user' AND m.kind = 'normal' AND m.deleted_at IS NULL
+         ORDER BY m.task_id, m.created_at ASC, m.id ASC",
     )?;
-    let mut rows = stmt.query([task_id])?;
+    let mut rows = stmt.query([only])?;
+    let mut labels = HashMap::new();
     while let Some(row) = rows.next()? {
-        if let Some(label) = fallback_label(&row.get::<_, String>(0)?) {
-            return Ok(Some(label));
+        let task_id: i64 = row.get(0)?;
+        if labels.contains_key(&task_id) {
+            continue;
+        }
+        if let Some(label) = fallback_label(&row.get::<_, String>(1)?) {
+            labels.insert(task_id, label);
         }
     }
-    Ok(None)
+    Ok(labels)
 }
 
 /// ユーザー発言から、タイトルの代わりに出せる1行を作る。DBには書き戻さない
@@ -344,15 +360,21 @@ fn fallback_label(first_user_message: &str) -> Option<String> {
 /// 削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる値はここで取る)。
 pub fn delete_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
-        "UPDATE tasks SET deleted_at = ?1, updated_at = ?1
-         WHERE id = ?2 AND deleted_at IS NULL
-         RETURNING id, title, description, deadline, archived_at, deleted_at, created_at, updated_at",
+        &format!(
+            "UPDATE tasks SET deleted_at = ?1, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL
+             RETURNING {TASK_COLUMNS}"
+        ),
         rusqlite::params![now_iso8601(), task_id],
         row_to_task,
     )
     .optional()?
     .ok_or(CoreError::TaskNotFound(task_id))
 }
+
+/// [`row_to_task`]が読む列の並び。
+const TASK_COLUMNS: &str =
+    "id, title, description, deadline, archived_at, deleted_at, created_at, updated_at";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -843,6 +865,40 @@ mod tests {
                 .fallback_label
                 .as_deref(),
             Some("写真の件")
+        );
+    }
+
+    #[test]
+    fn fallback_labels_are_per_task_and_only_for_untitled_tasks() {
+        let conn = db::open_in_memory().unwrap();
+        let first = seed_task(&conn);
+        let titled = seed_task(&conn);
+        let second = seed_task(&conn);
+        seed_user_message(&conn, first, "1つ目");
+        seed_user_message(&conn, titled, "付いたタイトルがある");
+        seed_user_message(&conn, second, "2つ目");
+        update_task(
+            &conn,
+            titled,
+            TaskUpdate {
+                title: Some("発表".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let labels: Vec<_> = list_tasks(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.fallback_label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![Some("1つ目".to_string()), None, Some("2つ目".to_string())]
+        );
+        assert_eq!(
+            get_task_detail_view(&conn, titled).unwrap().fallback_label,
+            None
         );
     }
 

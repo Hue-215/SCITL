@@ -144,6 +144,12 @@ impl ErrorDetail {
         Self(sanitize(&text, api_key))
     }
 
+    /// アプリ自身が書いた短い識別子(内部エラーの種類)。`&'static str`に限るのは、実行時の
+    /// 文字列(秘密情報やパスを含みうる)がこの経路でサニタイズを通らずに入るのを防ぐため。
+    pub fn internal(id: &'static str) -> Self {
+        Self(id.to_string())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -203,7 +209,8 @@ mod tests {
     }
 
     fn client(url: &str, timeout: Duration) -> reqwest::Client {
-        crate::net::hardened_client(url, Some(timeout)).unwrap()
+        crate::net::hardened_client(&crate::net::ExternalUrl::parse(url).unwrap(), Some(timeout))
+            .unwrap()
     }
 
     #[tokio::test]

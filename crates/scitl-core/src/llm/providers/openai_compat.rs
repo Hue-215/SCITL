@@ -9,13 +9,14 @@ use crate::llm::{
     ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
     RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolSchema,
 };
+use crate::net::ExternalUrl;
 
 /// LLMプロバイダ第一弾: OpenAI互換チャットコンプリーションAPI
 /// (docs/spec/rebuild/architecture.md 2節)。方言吸収はこのファイル内に閉じ込め、
 /// `orchestration::turn`は本アダプタの存在を知らない。
 pub struct OpenAiCompatAdapter {
     client: reqwest::Client,
-    base_url: String,
+    base_url: ExternalUrl,
     api_key: SecretString,
     model: String,
 }
@@ -33,9 +34,7 @@ impl OpenAiCompatAdapter {
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
-        let base_url = base_url.into();
-        validate_base_url(&base_url)?;
-
+        let base_url = parse_base_url(&base_url.into())?;
         // ハードニング済みクライアントの組み立ては`net::hardened_client`に集約する
         // (MCP streamable_httpと共有)。
         let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
@@ -52,25 +51,18 @@ impl OpenAiCompatAdapter {
 /// `net::classify_host`が決める(ループバック、またはプライベートIPリテラルのLAN上の
 /// 推論サーバー。architecture.md 5節)。LAN宛の場合はAPIキーが平文で流れることを
 /// 設定画面のヒントで明示している(principles.md 4節)。検証本体は
-/// [`crate::net::validate_external_url`]に集約する(MCP streamable_httpのURL検証と
-/// 共有)。
+/// [`ExternalUrl::parse`]に集約する(MCP streamable_httpのURL検証と共有)。
 pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
-    let url = reqwest::Url::parse(base_url)
-        .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
-    crate::net::validate_external_url(&url).map_err(CoreError::ProviderConfig)
+    parse_base_url(base_url).map(drop)
 }
 
-/// `base_url`と`chat/completions`等のパスを安全に連結する。文字列の`format!`連結は末尾
-/// スラッシュの有無で壊れやすく(`//chat/completions`等)、`validate_base_url`が防ぐ意図
-/// (パスがクエリの置き場所にならないこと)とも噛み合わないため`Url::join`を使う。
-fn endpoint(base_url: &str, path: &str) -> Result<reqwest::Url, CoreError> {
-    let mut url = reqwest::Url::parse(base_url)
-        .map_err(|e| CoreError::ProviderConfig(format!("base_url is not a valid URL: {e}")))?;
-    if !url.path().ends_with('/') {
-        url.set_path(&format!("{}/", url.path()));
-    }
-    url.join(path)
-        .map_err(|e| CoreError::ProviderConfig(format!("failed to build endpoint: {e}")))
+fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
+    ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)
+}
+
+/// `base_url`の下の`chat/completions`等のパス。
+fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreError> {
+    base_url.join(path).map_err(CoreError::ProviderConfig)
 }
 
 /// 一覧は生成を待たずに返るので、生成を待つための応答タイムアウト
@@ -81,19 +73,16 @@ const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 /// 名前順に並べ、重複と空の名前を除く。問い合わせ先は`base_url`の下だけで、通信先は
 /// 増やさない(principles.md 1節)。
 pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
-    let client = crate::net::hardened_client(base_url, Some(LIST_MODELS_TIMEOUT))?;
-    let request = super::with_api_key(client.get(endpoint(base_url, "models")?), api_key);
+    let base_url = parse_base_url(base_url)?;
+    let client = crate::net::hardened_client(&base_url, Some(LIST_MODELS_TIMEOUT))?;
+    let response =
+        super::send_with_key(client.get(endpoint(&base_url, "models")?), api_key).await?;
     let key = api_key.expose_secret();
-    let transport_error = |e| LlmError::from_transport(e, key);
-    let response = request.send().await.map_err(transport_error)?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(LlmError::from_status(status, &text, key).into());
-    }
-
-    let parsed: ModelList = response.json().await.map_err(transport_error)?;
+    let response = super::reject_failure(response, |status, body| {
+        LlmError::from_status(status, body, key)
+    })
+    .await?;
+    let parsed: ModelList = super::read_json(response, api_key).await?;
     let mut names: Vec<String> = parsed
         .data
         .into_iter()
@@ -622,18 +611,14 @@ impl LlmAdapter for OpenAiCompatAdapter {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
         let endpoint = endpoint(&self.base_url, CHAT_COMPLETIONS)?;
-        let request = super::with_api_key(self.client.post(endpoint), &self.api_key);
-        let transport_error = |e| LlmError::from_transport(e, self.api_key.expose_secret());
-        let response = request.json(&body).send().await.map_err(transport_error)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            let key = self.api_key.expose_secret();
-            return Err(http_error(status, &text, key, reasoning_effort.is_some()).into());
-        }
-
-        let parsed: CompletionResponse = response.json().await.map_err(transport_error)?;
+        let request = self.client.post(endpoint).json(&body);
+        let response = super::send_with_key(request, &self.api_key).await?;
+        let key = self.api_key.expose_secret();
+        let response = super::reject_failure(response, |status, body| {
+            http_error(status, body, key, reasoning_effort.is_some())
+        })
+        .await?;
+        let parsed: CompletionResponse = super::read_json(response, &self.api_key).await?;
 
         let choice = parsed
             .choices
@@ -890,15 +875,21 @@ mod tests {
     #[test]
     fn endpoint_joins_regardless_of_trailing_slash() {
         assert_eq!(
-            endpoint("https://api.openai.com/v1", "chat/completions")
-                .unwrap()
-                .as_str(),
+            endpoint(
+                &parse_base_url("https://api.openai.com/v1").unwrap(),
+                "chat/completions"
+            )
+            .unwrap()
+            .as_str(),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            endpoint("https://api.openai.com/v1/", "chat/completions")
-                .unwrap()
-                .as_str(),
+            endpoint(
+                &parse_base_url("https://api.openai.com/v1/").unwrap(),
+                "chat/completions"
+            )
+            .unwrap()
+            .as_str(),
             "https://api.openai.com/v1/chat/completions"
         );
     }

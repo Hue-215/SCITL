@@ -1,4 +1,4 @@
-//! 応答生成以外の経路(画面。将来はCLI・MCP)からのタスク操作(Issue #75)。変更と会話ログへの
+//! 応答生成以外の経路(画面・CLI。将来はMCP)からのタスク操作(Issue #75)。変更と会話ログへの
 //! 記録を同じトランザクションで書く(data-model.md「応答生成以外の経路での操作の記録」)。
 //! 状態の列は現在の状態だけを持ち、いつ何をしたかはこの記録が持つ。
 //!
@@ -136,7 +136,7 @@ fn record(
     messages::insert_message(
         conn,
         NewMessage {
-            task_id: Some(task_id),
+            chat: Chat::Task(task_id),
             role: Role::Tool,
             content: &content,
             kind: Kind::ToolExecution,

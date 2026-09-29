@@ -35,7 +35,6 @@ export function initI18n(language: Language): void {
   current = {
     language,
     messages: new Map(Object.entries({ ...CATALOGS[DEFAULT_LANGUAGE], ...CATALOGS[language] })),
-    // 書式は以前の`toLocaleString()`と同じ(年月日と時分秒を数字で)。
     dateTime: new Intl.DateTimeFormat(language, {
       year: 'numeric',
       month: 'numeric',

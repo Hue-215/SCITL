@@ -4,7 +4,7 @@
 
 use crate::error::CoreError;
 use crate::i18n::{self, Language};
-use crate::llm::{LlmError, Readiness};
+use crate::llm::{ErrorDetail, LlmError, Readiness};
 
 /// エラー発言としてDBに保存する1件分。`kind()`が`messages.error_kind`、
 /// `user_message()`が`messages.content`、`detail()`が`messages.error_detail`に入る。
@@ -13,7 +13,8 @@ use crate::llm::{LlmError, Readiness};
 /// 同じ文言を引き直せるのは、このためである。
 ///
 /// 詳細を持つかどうかはバリアントの形で決まる(Issue #159)。持てるのは、アダプタが
-/// サニタイズした詳細(`llm::ErrorDetail`)と、秘密情報を含まない識別子だけ。鍵ストア・
+/// サニタイズした詳細と、秘密情報を含まない識別子だけで、どちらも`llm::ErrorDetail`の
+/// コンストラクタでしか作れない。鍵ストア・
 /// 設定ファイル・MCPサーバー由来の失敗は、鍵名・パス・URLを含みうるため詳細を持たない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnFailure {
@@ -23,29 +24,29 @@ pub enum TurnFailure {
     NoModel,
     /// 応答タイムアウト(設定画面「一般」)までに応答を読み切れなかった。
     ResponseTimeout {
-        detail: String,
+        detail: ErrorDetail,
     },
     /// 接続先に届かなかったか、応答の途中で接続が切れた。
     ConnectionFailed {
-        detail: String,
+        detail: ErrorDetail,
     },
     /// 応答は届いたが、期待した形として読めなかった。
     InvalidResponse {
-        detail: String,
+        detail: ErrorDetail,
     },
     EmptyResponse,
     /// 文言はコンテキスト長の設定を促す(`legacy/backend.md` 4節手順6)。設定すると
     /// 履歴の間引き(`orchestration::history_trim`)がその長さに収めるため。
     ContextExceeded {
-        detail: String,
+        detail: ErrorDetail,
     },
     /// 思考に対応しないモデルに思考の強さを送り、APIが拒んだ。
     ThinkingUnsupported {
-        detail: String,
+        detail: ErrorDetail,
     },
     /// 選んだ思考の強さを、モデルが受け付けなかった。
     ThinkingEffortUnsupported {
-        detail: String,
+        detail: ErrorDetail,
     },
     ToolRoundLimit,
     /// ツールに対応しないモデルとして扱っている(ツールを渡していない)のに、モデルが
@@ -57,21 +58,21 @@ pub enum TurnFailure {
     /// (`Readiness`のドキュメント参照。事前チェックでは「未設定」と「認証不要」を
     /// 区別できないため、実際に呼んで判定する設計)。
     Auth {
-        detail: String,
+        detail: ErrorDetail,
     },
     RateLimit {
-        detail: String,
+        detail: ErrorDetail,
     },
     /// 設定不備(鍵ストア・プロバイダー設定・設定ファイル、ヘッダーに載せられない鍵)。
     /// 鍵名やパスを含みうるため詳細は出さない。
     ProviderConfig,
     /// 上記のいずれにも当たらない、プロバイダーがエラーとして返した応答。
     Provider {
-        detail: String,
+        detail: ErrorDetail,
     },
     /// 内部エラー。detailにはバリアント相当の短い識別子だけを載せる。
     Unexpected {
-        detail: String,
+        detail: ErrorDetail,
     },
 }
 
@@ -117,7 +118,7 @@ impl TurnFailure {
             | TurnFailure::Auth { detail }
             | TurnFailure::RateLimit { detail }
             | TurnFailure::Provider { detail }
-            | TurnFailure::Unexpected { detail } => Some(detail),
+            | TurnFailure::Unexpected { detail } => Some(detail.as_str()),
             TurnFailure::NoProvider
             | TurnFailure::SettingsUnreadable
             | TurnFailure::NoModel
@@ -181,9 +182,9 @@ pub fn classify(err: &CoreError) -> TurnFailure {
     }
 }
 
-fn unexpected(detail: &str) -> TurnFailure {
+fn unexpected(detail: &'static str) -> TurnFailure {
     TurnFailure::Unexpected {
-        detail: detail.to_string(),
+        detail: ErrorDetail::internal(detail),
     }
 }
 
@@ -193,32 +194,32 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
     match e {
         LlmError::InvalidRequest(_) => TurnFailure::ProviderConfig,
         LlmError::Timeout(detail) => TurnFailure::ResponseTimeout {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::Connection(detail) => TurnFailure::ConnectionFailed {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::InvalidResponse(detail) => TurnFailure::InvalidResponse {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::EmptyResponse => TurnFailure::EmptyResponse,
         LlmError::ContextExceeded(detail) => TurnFailure::ContextExceeded {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::ReasoningEffortRejected(detail) => TurnFailure::ThinkingUnsupported {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::ReasoningEffortValueRejected(detail) => TurnFailure::ThinkingEffortUnsupported {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::Auth(detail) => TurnFailure::Auth {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::RateLimit(detail) => TurnFailure::RateLimit {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
         LlmError::Http(detail) => TurnFailure::Provider {
-            detail: detail.to_string(),
+            detail: detail.clone(),
         },
     }
 }
@@ -228,7 +229,6 @@ mod tests {
     use reqwest::StatusCode;
 
     use super::*;
-    use crate::llm::ErrorDetail;
 
     fn detail(text: &str) -> ErrorDetail {
         ErrorDetail::http(StatusCode::INTERNAL_SERVER_ERROR, text, "")
@@ -287,7 +287,7 @@ mod tests {
 
     /// 全種別。網羅的な`match`を置き、種別を足したらここがコンパイルエラーになるようにする。
     fn every_failure() -> Vec<TurnFailure> {
-        let detail = || "x".to_string();
+        let detail = || ErrorDetail::internal("x");
         let all = vec![
             TurnFailure::NoProvider,
             TurnFailure::SettingsUnreadable,
@@ -352,15 +352,21 @@ mod tests {
     fn messages_name_the_settings_they_point_to() {
         let cases = [
             (
-                TurnFailure::ResponseTimeout { detail: "x".into() },
+                TurnFailure::ResponseTimeout {
+                    detail: ErrorDetail::internal("x"),
+                },
                 &["settings.nav.general"][..],
             ),
             (
-                TurnFailure::ContextExceeded { detail: "x".into() },
+                TurnFailure::ContextExceeded {
+                    detail: ErrorDetail::internal("x"),
+                },
                 &["settings.nav.provider"],
             ),
             (
-                TurnFailure::ThinkingUnsupported { detail: "x".into() },
+                TurnFailure::ThinkingUnsupported {
+                    detail: ErrorDetail::internal("x"),
+                },
                 &[
                     "settings.nav.provider",
                     "settings.model.cap_reasoning_label",
@@ -417,7 +423,7 @@ mod tests {
         assert_eq!(
             failure,
             TurnFailure::Unexpected {
-                detail: "mcp".to_string()
+                detail: ErrorDetail::internal("mcp")
             }
         );
     }
@@ -444,7 +450,7 @@ mod tests {
         assert_eq!(
             failure,
             TurnFailure::Unexpected {
-                detail: "task_not_found".to_string()
+                detail: ErrorDetail::internal("task_not_found")
             }
         );
         assert!(!failure.user_message().contains("42"));

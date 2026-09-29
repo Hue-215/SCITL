@@ -62,6 +62,31 @@ fn system_prompt_content(message: &ChatMessage) -> &str {
     }
 }
 
+/// ユーザー発言の本文。直近のユーザー発言に添えた最新状態の囲みは除く。
+fn user_text(message: &ChatMessage) -> &str {
+    match message {
+        ChatMessage::User { text, .. } => text.as_str().split("\n<scitl:state>").next().unwrap(),
+        other => panic!("expected User, got {other:?}"),
+    }
+}
+
+/// 直近のユーザー発言に添えた最新状態の囲み。
+fn state_of(messages: &[ChatMessage]) -> String {
+    let latest_user = messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m, ChatMessage::User { .. }))
+        .expect("a request carries a user message");
+    let ChatMessage::User { text, .. } = latest_user else {
+        unreachable!()
+    };
+    let (_, state) = text
+        .as_str()
+        .split_once("\n<scitl:state>")
+        .expect("the latest user message carries the state");
+    format!("<scitl:state>{state}")
+}
+
 fn tool_names(tools: &[ToolSchema]) -> Vec<String> {
     tools.iter().map(|t| t.name().to_string()).collect()
 }
@@ -152,6 +177,11 @@ impl ScriptedAdapter {
 
     fn offered(&self) -> Vec<Vec<String>> {
         self.sent().into_iter().map(|(_, tools)| tools).collect()
+    }
+
+    /// 各呼び出しで直近のユーザー発言に添えた最新状態。
+    fn states(&self) -> Vec<String> {
+        self.sent_messages().iter().map(|m| state_of(m)).collect()
     }
 
     fn system_prompts(&self) -> Vec<String> {
@@ -538,7 +568,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
 }
 
 #[tokio::test]
-async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_turn() {
+async fn run_turn_rebuilds_the_state_and_returns_tool_round_trip_within_the_turn() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let adapter = adds_a_step();
@@ -563,16 +593,19 @@ async fn run_turn_rebuilds_system_prompt_and_returns_tool_round_trip_within_the_
     let rounds = adapter.sent_messages();
     assert_eq!(rounds.len(), 2);
 
-    // 1ラウンド目: システムプロンプトに基本/タスクチャット用の両方が入り、まだ工程は無い。
+    // システムプロンプトには基本/タスクチャット用の両方が入り、ラウンドをまたいで変わらない
+    // (先頭一致のプロンプトキャッシュを切らない)。最新状態はシステムプロンプトに載せない。
     let round1_system = system_prompt_content(&rounds[0][0]);
     assert!(round1_system.contains("base prompt"));
     assert!(round1_system.contains("task chat prompt"));
-    assert!(!round1_system.contains("買い出し"));
+    assert!(!round1_system.contains("current task state"));
+    assert_eq!(round1_system, system_prompt_content(&rounds[1][0]));
 
-    // 2ラウンド目: システムプロンプトの最新状態JSONにadd_stepsの結果が反映される
+    // 1ラウンド目の最新状態にはまだ工程が無く、2ラウンド目にはadd_stepsの結果が反映される
     // (次ターン以降の履歴の代替。principles.md 3節)。
-    let round2_system = system_prompt_content(&rounds[1][0]);
-    assert!(round2_system.contains("買い出し"));
+    let states = adapter.states();
+    assert!(!states[0].contains("買い出し"));
+    assert!(states[1].contains("買い出し"));
 
     // 同時に、直前のツール呼び出しと結果が実メッセージとして返る
     // (同一ターン内のループはこちらが頼り。tools.md 4節)。これが無いと、
@@ -712,15 +745,10 @@ async fn history_carries_send_time_beside_the_user_text() {
         }
         other => panic!("expected Assistant, got {other:?}"),
     }
-    match &history[2] {
-        ChatMessage::User { text: content, .. } => {
-            assert_eq!(
-                content,
-                &PromptText::user_message("ありがとう", Some(&stored_user_times[1]))
-            );
-        }
-        other => panic!("expected User, got {other:?}"),
-    }
+    assert_eq!(
+        user_text(&history[2]),
+        PromptText::user_message("ありがとう", Some(&stored_user_times[1])).as_str()
+    );
 }
 
 #[tokio::test]
@@ -2043,9 +2071,9 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     assert_eq!(offered.len(), 3, "2ラウンド + 最後の1回");
     assert!(offered[..2].iter().all(|tools| !tools.is_empty()));
     assert!(offered[2].is_empty(), "最後の呼び出しにはツールを渡さない");
-    let prompts = adapter.system_prompts();
-    assert!(!prompts[1].contains("tool call limit"));
-    assert!(prompts[2].contains("tool call limit"));
+    let states = adapter.states();
+    assert!(!states[1].contains("tool call limit"));
+    assert!(states[2].contains("tool call limit"));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
@@ -2079,9 +2107,8 @@ async fn models_without_tool_support_are_called_once_without_tools() {
     .unwrap();
 
     assert_eq!(adapter.offered(), vec![Vec::<String>::new()]);
-    let prompts = adapter.system_prompts();
-    assert!(prompts[0].contains("Tools are not available"));
-    assert!(!prompts[0].contains("tool call limit"));
+    assert!(adapter.system_prompts()[0].contains("Tools are not available"));
+    assert!(!adapter.states()[0].contains("tool call limit"));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
@@ -2122,7 +2149,8 @@ async fn open_task_chat_answers_the_opening_message_without_saving_it() {
     assert_eq!(roles(&db, task_id), vec!["assistant", "user", "assistant"]);
 
     let histories = adapter.sent_histories();
-    assert_eq!(histories[0], vec![opening_message()]);
+    assert_eq!(histories[0].len(), 1);
+    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
     assert_eq!(histories[1].len(), 3);
     assert_eq!(histories[1][0], opening_message());
     assert!(matches!(
@@ -2157,7 +2185,10 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     .unwrap();
 
     assert_eq!(roles(&db, task_id), vec!["assistant"]);
-    assert_eq!(adapter.sent_histories(), vec![vec![opening_message()]]);
+    let histories = adapter.sent_histories();
+    assert_eq!(histories.len(), 1);
+    assert_eq!(histories[0].len(), 1);
+    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
 }
 
 #[tokio::test]
@@ -2252,9 +2283,9 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
         offered[0],
         vec!["get_task_list", "get_task_detail", "read_attachment"]
     );
-    let system = system_prompt_content(&adapter.sent_messages()[0][0]).to_string();
-    assert!(system.contains("current tasks (not archived)"));
-    assert!(!system.contains("current task state"));
+    let state = &adapter.states()[0];
+    assert!(state.contains("current tasks (not archived)"));
+    assert!(!state.contains("current task state"));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::General).unwrap();

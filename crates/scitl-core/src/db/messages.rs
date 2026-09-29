@@ -1,11 +1,10 @@
 use std::fmt;
 
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::attachments::{self, AttachmentView};
-use super::now_iso8601;
+use super::{now_iso8601, text_column_enum};
 use crate::error::{CoreError, Result};
 
 /// 発言が属する会話。`messages.task_id`がNULLなら総合チャット(data-model.md messages)。
@@ -13,6 +12,7 @@ use crate::error::{CoreError, Result};
 /// 型で防ぐため(tools.md 1節が修正した「対象の取り違え」と同種の事故)。
 /// 画面とは`{"kind":"general"}`・`{"kind":"task","task_id":1}`の形でやり取りする。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", content = "task_id", rename_all = "snake_case")]
 pub enum Chat {
     General,
@@ -39,6 +39,7 @@ impl fmt::Display for Chat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
@@ -47,58 +48,25 @@ pub enum Role {
     Error,
 }
 
-impl Role {
-    /// DBの`role`列の値。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::User => "user",
-            Role::Assistant => "assistant",
-            Role::Tool => "tool",
-            Role::Error => "error",
-        }
-    }
-}
-
-impl FromSql for Role {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // CHECK制約で4つのどれかに限られている。
-        match value.as_str()? {
-            "user" => Ok(Role::User),
-            "assistant" => Ok(Role::Assistant),
-            "tool" => Ok(Role::Tool),
-            "error" => Ok(Role::Error),
-            other => Err(FromSqlError::Other(format!("unknown role: {other}").into())),
-        }
-    }
-}
+text_column_enum!(Role {
+    User => "user",
+    Assistant => "assistant",
+    Tool => "tool",
+    Error => "error",
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Normal,
     ToolExecution,
 }
 
-impl Kind {
-    /// DBの`kind`列の値。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::Normal => "normal",
-            Kind::ToolExecution => "tool_execution",
-        }
-    }
-}
-
-impl FromSql for Kind {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // CHECK制約で2つのどれかに限られている。
-        match value.as_str()? {
-            "normal" => Ok(Kind::Normal),
-            "tool_execution" => Ok(Kind::ToolExecution),
-            other => Err(FromSqlError::Other(format!("unknown kind: {other}").into())),
-        }
-    }
-}
+text_column_enum!(Kind {
+    Normal => "normal",
+    ToolExecution => "tool_execution",
+});
 
 /// 行の出どころ(`docs/spec/rebuild/data-model.md`「ターン境界」の3分類)。`source`と
 /// `turn_id`/`attempt_no`の組み合わせはこれだけから決まり、取り違えた組み合わせは書けない。
@@ -124,17 +92,13 @@ pub enum OperationSource {
     Cli,
 }
 
-impl OperationSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ui => "ui",
-            Self::Cli => "cli",
-        }
-    }
-}
+text_column_enum!(OperationSource {
+    Ui => "ui",
+    Cli => "cli",
+});
 
 pub struct NewMessage<'a> {
-    pub task_id: Option<i64>,
+    pub chat: Chat,
     pub role: Role,
     pub content: &'a str,
     pub kind: Kind,
@@ -150,6 +114,7 @@ pub struct NewMessage<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Message {
     pub id: i64,
     pub task_id: Option<i64>,
@@ -174,17 +139,17 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
             turn_id,
             attempt_no,
         } => (None, Some(turn_id), Some(attempt_no)),
-        Origin::Operation(source) => (Some(source.as_str()), None, None),
+        Origin::Operation(source) => (Some(source), None, None),
     };
     conn.execute(
         "INSERT INTO messages
             (task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
-            msg.task_id,
-            msg.role.as_str(),
+            msg.chat.task_id(),
+            msg.role,
             msg.content,
-            msg.kind.as_str(),
+            msg.kind,
             source,
             msg.reasoning,
             msg.error_kind,
@@ -218,8 +183,8 @@ pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
 /// [`list_for_chat`]の、添付を埋めない形。添付を中身ごと別に引く呼び出し側
 /// (`orchestration::history`)が、同じ添付を2回引かないために使う。
 pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {MESSAGE_COLUMNS}
          FROM messages
          WHERE task_id IS ?1
            AND deleted_at IS NULL
@@ -239,8 +204,8 @@ pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Me
                )
              )
            )
-         ORDER BY created_at ASC, id ASC",
-    )?;
+         ORDER BY created_at ASC, id ASC"
+    ))?;
     let rows = stmt
         .query_map([chat.task_id()], message_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -250,14 +215,13 @@ pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Me
 /// idで1件取得する(論理削除済みは対象外)。編集・再試行・削除いずれも、操作対象の
 /// 現在の役割・種別を確認するためにまずこれを通る。
 pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
-    let found = conn.query_row(
-        "SELECT id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at
-         FROM messages
-         WHERE id = ?1 AND deleted_at IS NULL",
-        [id],
-        message_from_row,
-    )
-    .optional()?;
+    let found = conn
+        .query_row(
+            &format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE id = ?1 AND deleted_at IS NULL"),
+            [id],
+            message_from_row,
+        )
+        .optional()?;
     found
         .map(|mut m| {
             m.attachments = attachments::views_for_message(conn, m.id)?;
@@ -266,7 +230,10 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
         .transpose()
 }
 
-/// `SELECT`の列の並びは`list_for_chat`・`find_message`で共通。添付は呼び出し側が埋める。
+/// [`message_from_row`]が読む列の並び。
+const MESSAGE_COLUMNS: &str = "id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at";
+
+/// 添付は呼び出し側が埋める。
 fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
     Ok(Message {
         id: row.get(0)?,
@@ -398,7 +365,7 @@ mod tests {
         insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
@@ -413,7 +380,7 @@ mod tests {
         insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Error,
                 content: "モデルからの応答が空でした",
                 kind: Kind::Normal,
@@ -431,7 +398,7 @@ mod tests {
         insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Assistant,
                 content: "再試行後の応答",
                 kind: Kind::Normal,
@@ -459,7 +426,7 @@ mod tests {
         insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Tool,
                 content: "{}",
                 kind: Kind::ToolExecution,
@@ -484,7 +451,7 @@ mod tests {
             insert_message(
                 &conn,
                 NewMessage {
-                    task_id: Some(task_id),
+                    chat: Chat::Task(task_id),
                     role,
                     content: "{}",
                     kind,
@@ -541,7 +508,7 @@ mod tests {
             insert_message(
                 &conn,
                 NewMessage {
-                    task_id: Some(task_id),
+                    chat: Chat::Task(task_id),
                     role,
                     content,
                     kind,
@@ -572,7 +539,7 @@ mod tests {
         insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Error,
                 content: "APIキーが設定されていません",
                 kind: Kind::Normal,
@@ -607,7 +574,7 @@ mod tests {
         let on_user = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
@@ -622,7 +589,7 @@ mod tests {
         let empty = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Error,
                 content: "LLMプロバイダーとの通信に失敗しました。",
                 kind: Kind::Normal,
@@ -637,7 +604,7 @@ mod tests {
         let id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Error,
                 content: "LLMプロバイダーとの通信に失敗しました。",
                 kind: Kind::Normal,
@@ -664,7 +631,7 @@ mod tests {
         let result = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Error,
                 content: "壊れた呼び出し",
                 kind: Kind::Normal,
@@ -688,7 +655,7 @@ mod tests {
         let user_id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::User,
                 content: "工程を作って",
                 kind: Kind::Normal,
@@ -705,7 +672,7 @@ mod tests {
             insert_message(
                 &conn,
                 NewMessage {
-                    task_id: Some(task_id),
+                    chat: Chat::Task(task_id),
                     role: Role::Tool,
                     content: r#"{"tool":"add_steps"}"#,
                     kind: Kind::ToolExecution,
@@ -722,7 +689,7 @@ mod tests {
             insert_message(
                 &conn,
                 NewMessage {
-                    task_id: Some(task_id),
+                    chat: Chat::Task(task_id),
                     role: Role::Assistant,
                     content: "追加しました",
                     kind: Kind::Normal,
@@ -767,7 +734,7 @@ mod tests {
         let id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
@@ -800,7 +767,7 @@ mod tests {
         let id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
@@ -834,7 +801,7 @@ mod tests {
         let user_id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::User,
                 content: "工程を追加して",
                 kind: Kind::Normal,
@@ -849,7 +816,7 @@ mod tests {
         insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Tool,
                 content: r#"{"tool":"add_steps"}"#,
                 kind: Kind::ToolExecution,
@@ -867,7 +834,7 @@ mod tests {
         let assistant_id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Assistant,
                 content: "追加しました",
                 kind: Kind::Normal,
@@ -925,7 +892,7 @@ mod tests {
         let id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::Assistant,
                 content: "1回目の応答",
                 kind: Kind::Normal,
@@ -954,7 +921,7 @@ mod tests {
         let id = insert_message(
             &conn,
             NewMessage {
-                task_id: Some(task_id),
+                chat: Chat::Task(task_id),
                 role: Role::User,
                 content: "こんにちは",
                 kind: Kind::Normal,
@@ -978,7 +945,7 @@ mod tests {
             insert_message(
                 &conn,
                 NewMessage {
-                    task_id: Some(task_id),
+                    chat: Chat::Task(task_id),
                     role,
                     content: if role == Role::Tool { "{}" } else { "本文" },
                     kind: if role == Role::Tool {
@@ -1018,11 +985,11 @@ mod tests {
     fn general_and_task_chats_do_not_see_each_others_messages() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
-        let insert = |task_id: Option<i64>, content| {
+        let insert = |chat: Chat, content| {
             insert_message(
                 &conn,
                 NewMessage {
-                    task_id,
+                    chat,
                     role: Role::User,
                     content,
                     kind: Kind::Normal,
@@ -1034,9 +1001,9 @@ mod tests {
             )
             .unwrap()
         };
-        let general_first = insert(None, "総合1");
-        insert(Some(task_id), "タスク");
-        insert(None, "総合2");
+        let general_first = insert(Chat::General, "総合1");
+        insert(Chat::Task(task_id), "タスク");
+        insert(Chat::General, "総合2");
 
         let contents = |chat| -> Vec<String> {
             list_for_chat(&conn, chat)
