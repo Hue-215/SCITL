@@ -423,7 +423,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   `script-src 'self'`(CDN・inline eval不可)
 - `connect-src ipc: http://ipc.localhost`。全通信はRust側で行う設計なので、WebViewからの
   外部接続は本来ゼロのはず。許可しているのはRust側へのIPCの窓口(Linux・macOSは`ipc:`、
-  Windowsは`http://ipc.localhost`)だけで、これ以外に広げる必要が出たら「Rustが全通信を担う」
+  Windowsは`http://ipc.localhost`。`useHttpsScheme`を有効にしたら`https://`に替える)だけで、これ以外に広げる必要が出たら「Rustが全通信を担う」
   境界が破れた合図。IPCの窓口を塞ぐと、Tauriは`postMessage`へ黙って切り替えて動き続けるが、
   そちらは本文を必ずJSONにするため、生のバイト列を受け取るコマンド(添付の`stage_attachment`)
   だけが本番ビルドで失敗する。開発時(devUrl)はこの差が表に出ないので、本番ビルドで確かめる
