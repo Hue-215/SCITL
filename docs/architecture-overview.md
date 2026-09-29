@@ -79,8 +79,8 @@ flowchart LR
 
 ## 2. 1ターンの流れ(チャット送信)
 
-`orchestration::turn`の`run_turn`から`run_tool_rounds`まで。履歴は最初に1度だけ読み、
-最新状態と間引きはラウンドごとにやり直す(`architecture.md` 3節、`tools.md` 4節)。
+`orchestration::turn`の`run_turn`から`run_tool_rounds`まで。履歴・最新状態・間引きは最初に
+1度だけ決め、各ラウンドはその後ろにツールの往復を足すだけにする(`architecture.md` 3節、`tools.md` 4節)。
 
 ```mermaid
 sequenceDiagram
@@ -96,10 +96,9 @@ sequenceDiagram
   T->>T: in_flightで会話(タスク / 総合チャット)ごとに1本に絞る
   T->>D: ユーザー発言と添付を1トランザクションで保存
   T->>X: 外部ツールの一覧(有効なサーバーのみ、取得済みなら再利用)
-  T->>D: 履歴を読む
+  T->>D: 履歴と最新状態を読み、履歴を間引く
   loop ラウンド(ツールの往復の上限 + 最後の1回)
-    T->>D: 最新状態を読み、履歴を間引く
-    T->>A: 発言列 + ツール(最後の1回はツール無し)
+    T->>A: 発言列 + ツール(最後の1回は呼び出しを禁じる)
     A-->>T: イベント列(本文/思考デルタ・ツール呼び出し・終了理由)
     T-->>U: TurnEvent(途中経過)
     alt ツール呼び出しあり
