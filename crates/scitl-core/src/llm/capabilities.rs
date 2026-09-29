@@ -60,7 +60,7 @@ impl CapabilityLayer {
     /// この層を`below`の上に重ねる。
     ///
     /// コンテキスト長の`0`は未設定として扱う。設定画面からは入らないが、手で編集した
-    /// `config.toml`が同じ経路を通るため(`GeneralConfig::response_timeout`と同じ扱い)。
+    /// `config.toml`も同じ経路を通るため。
     pub fn over(&self, below: ModelCapabilities) -> ModelCapabilities {
         ModelCapabilities {
             image: self.image.unwrap_or(below.image),
@@ -117,9 +117,7 @@ pub fn resolve_capabilities(
 }
 
 /// 自動検出の結果。アプリ起動中だけ保持するメモリキャッシュで、config.tomlには書かない
-/// (能力はユーザーの設定ではなくサーバー側の持ち物で、永続化した写しはサーバー側の
-/// 変更(読み込み直したモデル、起動オプション)を検知できない。MCPのツール一覧
-/// (`mcp::ToolCatalog`)と同じ扱い)。
+/// (永続化すると、サーバー側でモデルや起動オプションが変わっても追従できないため)。
 #[derive(Default)]
 pub struct DetectedCatalog {
     by_model: Mutex<HashMap<(String, String), DetectedCapabilities>>,

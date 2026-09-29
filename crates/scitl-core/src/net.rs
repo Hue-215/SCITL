@@ -1,7 +1,5 @@
-//! 複数の外部通信経路(LLMプロバイダー、MCP streamable_http)に共通するURL検証と
-//! HTTPクライアントのハードニング。architecture.md 5節を単一の正とし、全経路が
-//! ここを1箇所として通る(LLMアダプタとMCPクライアントは同じreqwestバージョンを
-//! 使っており、`reqwest::Client`という型そのものを共有できる)。
+//! 外部通信の経路(LLMプロバイダー、MCP streamable_http)に共通するURL検証と、HTTP
+//! クライアントのハードニング。どの経路もここを通る。
 
 use std::time::Duration;
 
@@ -11,11 +9,7 @@ use crate::error::CoreError;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// ホストの分類。平文http可否の判定(このファイル)と、将来のオフラインスイッチ
-/// (Issue #3、宛先の段階: 外部通信許可/プライベートIPのみ/localhostのみ)の両方が
-/// この分類を読む(1つの機能に関わる判断を1箇所に閉じる。principles.md 5節)。
-/// 2つの軸は独立: 宛先の段階を緩めても、平文httpが許されるかどうかは
-/// `classify_host`だけが決める(ANDで合成する。architecture.md 5節)。
+/// ホストの分類。平文httpを許すかどうかは、この分類だけで決める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostClass {
     /// ループバック(127.0.0.0/8, ::1)またはホスト名`localhost`。
@@ -27,17 +21,11 @@ pub enum HostClass {
     Other,
 }
 
-/// ホストを分類する。ホスト名は`localhost`以外すべて`Other`として扱う
-/// (DNSリバインディング対策): プライベートIPかどうかをホスト名の名前解決結果で
-/// 判定すると、検証時と接続時で解決結果が変わりうる(検証だけ通してから接続先を
-/// すり替える攻撃が成立する)。IPアドレスとして直接書かれたリテラルだけを見れば、
-/// 検証した対象と実際に接続する対象が一致することが構造的に保証される。
+/// ホストを分類する。ホスト名は`localhost`以外すべて`Other`にする。名前解決の結果で
+/// 判定すると、検証時と接続時で解決先を変えられるため(DNSリバインディング)。
 ///
-/// IPv4のリンクローカル(169.254.0.0/16)は`PrivateLiteral`に含めない。
-/// 169.254.169.254はAWS/GCP/Azureのメタデータエンドポイント(IMDS)であり、
-/// 平文httpしか話さない代表的なSSRF標的のため、緩和の対象から明示的に外す
-/// (IPv6側もfe80::/10は`url`crateがパースできず対象外であり、IPv4だけ
-/// リンクローカルを許すと軸が揃わない)。
+/// IPv4のリンクローカル(169.254.0.0/16)は`PrivateLiteral`に含めない。169.254.169.254は
+/// クラウドのメタデータエンドポイントで、平文httpしか話さない代表的なSSRFの標的のため。
 pub fn classify_host(url: &Url) -> HostClass {
     match url.host() {
         Some(url::Host::Ipv4(ip)) if ip.is_loopback() => HostClass::Loopback,
@@ -54,9 +42,8 @@ pub fn classify_host(url: &Url) -> HostClass {
 /// スキーム・ホスト・query/fragment/userinfoの検証。LLMプロバイダーのbase_url、
 /// MCP streamable_httpのURLの両方に適用する。
 ///
-/// query/fragment/userinfoを拒否する理由: エンドポイントは`Url::join`で組み立てるため、
-/// これらが混ざっているとリクエストパスや認証情報の置き場所として悪用されかねない
-/// (「クエリに鍵を置く構成」を入口で消す)。
+/// query/fragment/userinfoは、リクエストパスや認証情報の置き場所として悪用されうるため拒否する
+/// (クエリに鍵を置く構成を入口で消す)。
 pub fn validate_external_url(url: &Url) -> Result<(), String> {
     if url.query().is_some()
         || url.fragment().is_some()
@@ -111,10 +98,8 @@ impl ExternalUrl {
     }
 }
 
-/// ハードニング済み`reqwest::Client`を組み立てる。LLMプロバイダー
-/// (`llm/providers/openai_compat.rs`)とMCP streamable_http(`mcp/http.rs`)の両方が
-/// これを呼ぶ(同じ設定を2箇所に書くと片方だけ直される未来が来る)。通信先の検証を
-/// 済ませたことを、`url`の型で求める。
+/// ハードニング済み`reqwest::Client`を組み立てる。通信先の検証を済ませたことを、`url`の型で
+/// 求める。
 ///
 /// `request_timeout`はリクエスト全体(応答本文の読み切りまで)の上限。MCPは接続・一覧取得・
 /// 呼び出し・切断をそれぞれ`tokio::time::timeout`で囲んでおり、長寿命のSSEストリームも
@@ -125,10 +110,7 @@ pub fn hardened_client(
 ) -> Result<reqwest::Client, CoreError> {
     let mut builder = reqwest::Client::builder()
         .no_proxy()
-        // architecture.md 5節: クロスホストのリダイレクトは拒否する。チャット
-        // コンプリーションAPI・MCPサーバーいずれも正当な理由でリダイレクトを返すことは
-        // 想定していないため、同一ホスト内も含めて一律拒否する方が単純で安全。
-        // 平文httpをプライベートIPまで許すため、ここを緩めると登録先のLANサーバーが
+        // リダイレクトは同一ホストも含めて一律に追わない。緩めると、登録先のLANサーバーが
         // 公開ホストへ302を返すだけで通信先が広がる。
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT);
@@ -231,11 +213,8 @@ mod tests {
         );
     }
 
-    // 以下は、`hardened_client`が実際に組み立てる`reqwest::Client`が全経路
-    // (LLMアダプタ・MCPクライアント双方)で共有される前提で、トランスポートの外側からは
-    // 検証できない「実際にリダイレクトを追わないか」「プロキシ環境変数を無視するか」を
-    // クライアント単体に対して確認する(ドキュメントではなくテストで
-    // 担保する)。
+    // 以下は`hardened_client`が組み立てたクライアントが、実際にリダイレクトを追わないか・
+    // プロキシ環境変数を無視するかを確かめる。
 
     /// 1回だけ接続を受け、`response`をそのまま書いて閉じる最小限のHTTPサーバー。
     fn spawn_once(response: &'static str) -> String {
@@ -300,11 +279,8 @@ mod tests {
     #[tokio::test]
     async fn proxy_env_var_is_ignored() {
         let url = spawn_once(NO_CONTENT);
-        // このプロセス内の他のテストはenv varを触らないため、並行実行下でも安全
-        // (今後env varを操作するテストを足す場合は要注意)。
-        // SAFETY: `set_var`/`remove_var`はプロセス全体のグローバル状態を変更するため
-        // unsafeとされているが、このテストバイナリ内で環境変数を操作する他のテストは
-        // 無く、競合は起きない。
+        // SAFETY: `set_var`/`remove_var`はプロセス全体の状態を変えるが、このテストバイナリで
+        // 環境変数を操作するテストは他に無く、競合しない。
         unsafe { std::env::set_var("http_proxy", "http://127.0.0.1:1") };
         let client = hardened_client(
             &ExternalUrl::parse(&url).unwrap(),

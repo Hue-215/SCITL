@@ -56,21 +56,16 @@ pub enum FinishReason {
     Length,
 }
 
-/// アダプタに渡す発言列の1要素。`{role, content}`の平坦な構造ではなく列挙型にするのは、
-/// 「userなのに`tool_call_id`を持つ」といった不正な組み合わせを型で防ぐため
-/// (docs/spec/rebuild/architecture.md 3節。`config.rs`の`McpEndpoint`と同じ理由)。
+/// アダプタに渡す発言列の1要素。「userなのに`tool_call_id`を持つ」といった不正な組み合わせを
+/// 型で防ぐため、平坦な構造ではなく列挙型にする。
 ///
-/// ツール呼び出しと結果は、同一ターン内のループでは分類(状態系/事実系)によらずモデルに返す。
-/// この往復を表現するために`Assistant`の`tool_calls`と`Tool`を持つ。DBの`messages`
-/// テーブルには保存しない(次ターン以降の入力履歴に残さないのはdocs/spec/principles.md 3節、
-/// テーブルへの不保存はdocs/spec/rebuild/data-model.md 2節)。
+/// `Assistant`の`tool_calls`と`Tool`は、同一ターン内のツールの往復を表す。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatMessage {
     System(String),
     /// ユーザー発言。送信日時と添付の情報を本文の外に置いた囲みとして、組み立て済みの形で運ぶ
-    /// ([`PromptText::user_message`]。Issue #68。`docs/spec/legacy/backend.md` 4節手順2
-    /// 「本文とは別の構造化情報として付与する。地の文に混ぜない」)。`images`は一緒に送る
-    /// 添付画像で、どの画像を送るかは`attachments::delivery`が決める。
+    /// ([`PromptText::user_message`])。`images`は一緒に送る添付画像で、どの画像を送るかは
+    /// `attachments::delivery`が決める。
     User {
         text: PromptText,
         images: Vec<InlineImage>,
@@ -80,12 +75,12 @@ pub enum ChatMessage {
         tool_calls: Vec<ToolCallRequest>,
     },
     Tool {
-        /// プロバイダが払い出した呼び出しIDをそのまま返す。捏造しない
-        /// (払い出さないプロバイダにはこのフィールド自体を送らない。architecture.md 3節)。
+        /// プロバイダが払い出した呼び出しIDをそのまま返す。捏造せず、払い出さないプロバイダには
+        /// このフィールド自体を送らない。
         tool_call_id: Option<String>,
         content: PromptText,
-        /// 結果として返す画像(添付の読み込み。Issue #213)。ツール結果に画像を載せられない
-        /// APIがあるため、リクエストでどう表すかはアダプタが決める。
+        /// 結果として返す画像(添付の読み込み)。ツール結果に画像を載せられないAPIがあるため、
+        /// リクエストでどう表すかはアダプタが決める。
         images: Vec<InlineImage>,
     },
 }
@@ -138,10 +133,9 @@ pub struct ToolCallRequest {
 }
 
 /// ツール呼び出しの引数。JSONとして読めなかった場合もアダプタで`Err`にせず、生の文字列の
-/// まま上位へ運ぶ。読めない引数は性能の低いモデルでは日常的に起こり、ターンごと止めると
-/// principles.md 3節「失敗しても会話を止めない」を割るため。かといって空オブジェクト等へ
-/// 置き換えると同節「暗黙の型変換をしない」を割る(引数を伴うツールを引数無しで発火させる)。
-/// 実行せずに失敗をモデルへ返す判断は`orchestration::turn`が持つ。
+/// まま上位へ運ぶ(`orchestration::turn`が実行せずに失敗をモデルへ返す)。ターンごと止めると
+/// 性能の低いモデルでは会話が続かず、空オブジェクト等に置き換えると引数を伴うツールを
+/// 引数無しで発火させるため。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -243,24 +237,19 @@ impl ToolSchema {
     }
 }
 
-/// アダプタが構成不足で呼び出しに進めない状態。プロバイダの選択有無など、アダプタ自体が無い
-/// 場合は`orchestration::TurnContext::adapter`の`Err`で表すためここには含めない
-/// (`orchestration::turn_error::from_readiness`参照)。
+/// アダプタが構成不足で呼び出しに進めない状態。アダプタ自体が無い場合(プロバイダー未選択等)は
+/// `orchestration::TurnContext::adapter`の`Err`で表す。
 ///
-/// APIキーの空・未設定はここに含めない。ローカルプロバイダーは認証不要で意図的に
-/// 空のままにする場合があり、空文字列だけでは「未設定で使えない」のか「設定不要」なのかを
-/// 区別できない(`providers::build_active_adapter`のドキュメント参照: 資格情報ストアが
-/// 使えない場合も鍵無し扱いで起動を続け、実際のAPI呼び出し時にプロバイダー側の認証エラー
-/// として表面化させる設計)。実際に鍵が必要なら呼び出しが401/403を返し、
-/// `turn_error::classify`が`Auth`として分類する。
+/// APIキーの空・未設定はここに含めない。認証不要のローカルプロバイダーと区別できないため、
+/// 鍵が要るなら呼び出しが401/403を返し、`turn_error::classify`が`Auth`として分類する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Readiness {
     Ready,
     NoModel,
 }
 
-/// 具象プロバイダの境界。`orchestration::turn`はこのtraitのみを知り、
-/// プロバイダ固有の癖は各実装内に閉じ込める。
+/// 具象プロバイダの境界。`orchestration::turn`はこのtraitのみを知り、プロバイダ固有の癖は
+/// 各実装内に閉じ込める。
 #[async_trait::async_trait]
 pub trait LlmAdapter: Send + Sync {
     /// 実際にAPIを呼ぶ前に分かる構成不足(モデル未選択)を判定する。APIキーは判定しない
@@ -290,9 +279,9 @@ pub trait LlmAdapter: Send + Sync {
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<(), CoreError>;
 
-    /// [`Self::send`]が同じ引数で送るリクエストの本文を、送らずに返す(送信内容のプレビュー。
-    /// Issue #23)。実際のプロバイダーは必ず実装し、`send`と同じ組み立てを通す。既定の`None`は
-    /// テスト用のアダプタのためのもの。
+    /// [`Self::send`]が同じ引数で送るリクエストの本文を、送らずに返す(送信内容のプレビュー)。
+    /// 実際のプロバイダーは必ず実装し、`send`と同じ組み立てを通す。既定の`None`はテスト用の
+    /// アダプタのためのもの。
     ///
     /// 変えてよいのは画像の実体だけで、形式と長さに縮める(1枚で数MBになり、端末では読めない)。
     /// 縮めるのは方言の上で画像を置く位置に限る。他の文字列まで縮めると、モデルに渡る文を
