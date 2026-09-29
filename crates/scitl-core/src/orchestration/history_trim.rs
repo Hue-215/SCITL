@@ -57,6 +57,7 @@ mod tests {
         ChatMessage::Assistant {
             content: Some(text.to_string()),
             tool_calls: Vec::new(),
+            replay: Default::default(),
         }
     }
 
@@ -69,6 +70,7 @@ mod tests {
                     name: "search".to_string(),
                     arguments: serde_json::json!({}).into(),
                 }],
+                replay: Default::default(),
             },
             ChatMessage::Tool {
                 tool_call_id: Some("call_1".to_string()),

@@ -10,7 +10,7 @@ use scitl_core::db::messages::{Chat, Kind, Role};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, RequestPreview,
+    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, Replay, RequestPreview,
     ResponseEvent, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
@@ -238,7 +238,7 @@ impl LlmAdapter for ScriptedAdapter {
         tools: ToolOffer<'_>,
         _reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
-    ) -> Result<(), CoreError> {
+    ) -> Result<Replay, CoreError> {
         assert_eq!(
             self.readiness,
             Readiness::Ready,
@@ -251,7 +251,7 @@ impl LlmAdapter for ScriptedAdapter {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if let (false, Some(events)) = (tools.callable, &self.without_tools) {
             events.iter().cloned().for_each(on_event);
-            return Ok(());
+            return Ok(Replay::default());
         }
         let index = if self.repeat_last {
             call.min(self.script.len() - 1)
@@ -261,7 +261,7 @@ impl LlmAdapter for ScriptedAdapter {
         match self.script.get(index) {
             Some(Ok(events)) => {
                 events.iter().cloned().for_each(on_event);
-                Ok(())
+                Ok(Replay::default())
             }
             Some(Err(error)) => Err(error.clone().into()),
             None => panic!("no scripted response for call {call}"),
@@ -625,6 +625,7 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
         ChatMessage::Assistant {
             content,
             tool_calls,
+            ..
         } => {
             assert_eq!(tool_calls.len(), 1);
             assert_eq!(tool_calls[0].name, "add_steps");
@@ -2914,4 +2915,99 @@ async fn preview_reports_why_the_chat_cannot_be_used() {
         matches!(outcome, Err(TurnFailure::NoProvider)),
         "{outcome:?}"
     );
+}
+
+/// `responses`の数だけ接続を受け、順に本文を200で返す。受けたリクエストの本文を返す。
+fn spawn_messages_server(
+    responses: Vec<&'static str>,
+) -> (String, std::thread::JoinHandle<Vec<serde_json::Value>>) {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        let mut bodies = Vec::new();
+        for body in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 8192];
+            let header_end = loop {
+                let n = stream.read(&mut buf).unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break i + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
+            let length: usize = headers
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length: "))
+                .map_or(0, |v| v.trim().parse().unwrap());
+            while raw.len() < header_end + length {
+                let n = stream.read(&mut buf).unwrap();
+                raw.extend_from_slice(&buf[..n]);
+            }
+            bodies.push(serde_json::from_slice(&raw[header_end..header_end + length]).unwrap());
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+        bodies
+    });
+    (format!("http://{addr}"), handle)
+}
+
+/// Anthropic形式のツールの往復では、1回目の応答のブロック(思考ブロックを含む)が、次の
+/// 呼び出しのアシスタント発言として並びごとそのまま返る。
+#[tokio::test]
+async fn anthropic_thinking_blocks_are_sent_back_unchanged_within_the_turn() {
+    use scitl_core::llm::providers::anthropic::AnthropicAdapter;
+
+    const FIRST: &str = r#"{"content":[
+        {"type":"thinking","thinking":"plan","signature":"sig-1"},
+        {"type":"text","text":"adding"},
+        {"type":"tool_use","id":"toolu_1","name":"add_steps","input":{"descriptions":["draft"]}}
+    ],"stop_reason":"tool_use"}"#;
+    let (base_url, server) = spawn_messages_server(vec![
+        FIRST,
+        r#"{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}"#,
+    ]);
+    let adapter = AnthropicAdapter::new(
+        base_url,
+        secrecy::SecretString::from("sk-test".to_string()),
+        "claude-test",
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..context(&adapter)
+        },
+        Chat::Task(task_id),
+        "add a step".to_string(),
+    )
+    .await
+    .unwrap();
+    let bodies = server.join().unwrap();
+
+    let first: serde_json::Value = serde_json::from_str(FIRST).unwrap();
+    let second = bodies[1]["messages"].as_array().unwrap();
+    let assistant = &second[second.len() - 2];
+    assert_eq!(assistant["role"], "assistant");
+    assert_eq!(assistant["content"], first["content"]);
+    // 1回目に送った発言列は、2回目の先頭にそのまま残る。
+    let sent_first = bodies[0]["messages"].as_array().unwrap();
+    assert_eq!(second[..sent_first.len()], sent_first[..]);
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    assert_eq!(reply_of(&messages), "adding\n\ndone");
 }

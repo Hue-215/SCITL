@@ -188,6 +188,36 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 - 「会話は必ずユーザー発言から始まる」等と同様、ツール往復の表現方法の方言も
   各 `providers/*.rs` の内部で吸収する
 
+**Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
+ストリーミングせずに呼ぶ。出典は公式ドキュメント(errors・thinking・prompt caching・models)。
+
+- ベースURLは`/v1`を含まない(`https://api.anthropic.com`)。鍵は`x-api-key`、版は
+  `anthropic-version: 2023-06-01`で送る。設定画面は、`/v1`まで書いたURLにヒントを出す(登録は止めない)
+- `max_tokens`は必須なので、アダプタが固定の値を送る。設定で変えられるようにするのはIssue #271
+- 思考の強さは`thinking: {type: "adaptive", display: "summarized"}`と`output_config.effort`で渡す。
+  `display`を指定しないと思考の中身が空で返り、画面に出せない。「オフ」は`thinking: {type: "disabled"}`
+  で送り、思考を切れないモデルに拒まれたら、イベントを渡す前に`effort: "low"`で呼び直す。
+  予算で指定する古い世代(`budget_tokens`)には対応しない(Issue #272)。adaptiveを拒むモデルには、
+  思考のチェックを外すよう促すエラー発言になる
+- **ツールの往復の途中の思考ブロック**: ツール呼び出しの次のリクエストでは、直前のアシスタント
+  発言の思考ブロックを受け取ったまま返さないと400になる(`../principles.md` 3節「思考は履歴に
+  送り返さない」の例外)。アダプタは思考ブロックを含む応答のブロックを、並びごと`llm::Replay`として
+  返し、`orchestration::turn`はそれを往復のアシスタント発言に載せるだけにする。`Replay`は中身を
+  アダプタしか読めず、表示も保存もされない。返すブロックより前が変わると受け付けないモデルが
+  あるため、ターン内の組み立ては追記だけにしてある(3節「最新状態の渡し方」)。ターンをまたいで
+  返すのはIssue #128
+- 最後の呼び出し(ツールの上限)は、ツールの定義を残して`tool_choice: {type: "none"}`で禁じる。
+  定義を外すと、上の思考ブロックが受け付けられない
+- プロンプトキャッシュは、システムプロンプトの末尾に目印を置き(ツールの定義とシステム
+  プロンプトが常に読まれる)、リクエスト全体にも`cache_control`を付けて、伸びていく会話の末尾に
+  目印を自動で置かせる
+- 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は、途中まで書いた本文を渡さずに
+  `LlmError::Refused`にし、断られたことが分かるエラー発言にする(OpenAI互換の
+  `finish_reason: "content_filter"`も同じ扱い)。`max_tokens`と
+  `model_context_window_exceeded`は長さによる打ち切り(`FinishReason::Length`)にする
+- 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
+  `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
+
 **ユーザー発言の送信日時は本文と分けて運ぶ**(Issue #68): DBの本文と送信日時
 (ISO8601 UTC)から、発言列を作るときに `llm::PromptText::user_message` が次の形に組み立てる。
 

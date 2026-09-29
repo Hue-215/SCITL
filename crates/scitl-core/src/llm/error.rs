@@ -51,6 +51,9 @@ pub enum LlmError {
     Auth(ErrorDetail),
     #[error("rate limited: {0}")]
     RateLimit(ErrorDetail),
+    /// モデル(またはプロバイダーの安全上の判定)が応答を断った。途中まで書いた本文は渡さない。
+    #[error("the model declined to respond: {0}")]
+    Refused(ErrorDetail),
     /// 上記のいずれにも当たらない非成功の状態コード。
     #[error("the provider returned an error: {0}")]
     Http(ErrorDetail),

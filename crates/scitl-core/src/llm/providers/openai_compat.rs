@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::ReasoningEffort;
 use crate::error::CoreError;
 use crate::llm::{
-    ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
+    ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, Replay,
     RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolOffer,
 };
 use crate::net::ExternalUrl;
@@ -63,8 +63,12 @@ const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
     let base_url = parse_base_url(base_url)?;
     let client = crate::net::hardened_client(&base_url, Some(LIST_MODELS_TIMEOUT))?;
-    let response =
-        super::send_with_key(client.get(endpoint(&base_url, "models")?), api_key).await?;
+    let response = super::send_with_key(
+        client.get(endpoint(&base_url, "models")?),
+        api_key,
+        super::KeyHeader::Bearer,
+    )
+    .await?;
     let key = api_key.expose_secret();
     let response = super::reject_failure(response, |status, body| {
         LlmError::from_status(status, body, key)
@@ -324,9 +328,6 @@ struct RequestToolCallFunction {
     arguments: String,
 }
 
-/// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
-const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is not available.)";
-
 /// ツール結果の画像を載せるために補うユーザー発言の本文。利用者が書いたものではないので、
 /// ユーザー発言の囲み(`PromptText::user_message`)には入れない。
 const TOOL_IMAGES_TEXT: &str = "(Images returned by the tool results above, in the same order \
@@ -405,7 +406,7 @@ fn push_merged(out: &mut Vec<RequestMessage>, message: RequestMessage) {
                 && matches!(last, None | Some(RequestMessage::System { .. }))
             {
                 out.push(to_request_message(&ChatMessage::user(
-                    PromptText::user_message(PLACEHOLDER_USER_TEXT, None),
+                    PromptText::user_message(super::PLACEHOLDER_USER_TEXT, None),
                 )));
             }
             out.push(message);
@@ -435,6 +436,7 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
         ChatMessage::Assistant {
             content,
             tool_calls,
+            ..
         } => RequestMessage::Assistant {
             content: content.clone(),
             tool_calls: tool_calls.iter().map(to_request_tool_call).collect(),
@@ -592,12 +594,13 @@ impl LlmAdapter for OpenAiCompatAdapter {
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
-    ) -> Result<(), CoreError> {
+    ) -> Result<Replay, CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
         let endpoint = endpoint(&self.base_url, CHAT_COMPLETIONS)?;
         let request = self.client.post(endpoint).json(&body);
-        let response = super::send_with_key(request, &self.api_key).await?;
+        let response =
+            super::send_with_key(request, &self.api_key, super::KeyHeader::Bearer).await?;
         let key = self.api_key.expose_secret();
         let response = super::reject_failure(response, |status, body| {
             http_error(status, body, key, reasoning_effort.is_some())
@@ -610,6 +613,17 @@ impl LlmAdapter for OpenAiCompatAdapter {
             .into_iter()
             .next()
             .ok_or(LlmError::EmptyResponse)?;
+
+        // 安全上の判定で打ち切られた応答は、途中まで書いた本文も渡さない(イベントを渡す前に
+        // 判定する)。
+        if choice.finish_reason.as_deref() == Some("content_filter") {
+            return Err(LlmError::Refused(ErrorDetail::http(
+                reqwest::StatusCode::OK,
+                "finish_reason: content_filter",
+                key,
+            ))
+            .into());
+        }
 
         // 思考を本文・ツール呼び出しより先に置く(非ストリーミングで生成順は分からないが、
         // 一般的な順序に合わせる)。
@@ -634,12 +648,11 @@ impl LlmAdapter for OpenAiCompatAdapter {
         let finish_reason = match choice.finish_reason.as_deref() {
             Some("tool_calls") => FinishReason::ToolCall,
             Some("length") => FinishReason::Length,
-            Some("stop") | None => FinishReason::Stop,
-            Some(_) => FinishReason::Stop,
+            Some(_) | None => FinishReason::Stop,
         };
         on_event(ResponseEvent::Done { finish_reason });
 
-        Ok(())
+        Ok(Replay::default())
     }
 }
 
@@ -745,6 +758,7 @@ mod tests {
             ChatMessage::Assistant {
                 content: Some(text.clone()),
                 tool_calls: Vec::new(),
+                replay: Default::default(),
             },
         ];
 
@@ -792,6 +806,27 @@ mod tests {
             ResponseEvent::ToolCall { name, arguments: ToolArguments::Malformed { raw, .. }, .. }
                 if name == "update_task" && raw == "{\"title\": "
         )));
+    }
+
+    #[tokio::test]
+    async fn a_content_filter_stop_is_a_refusal_without_passing_the_partial_reply() {
+        let (base_url, handle) = spawn_capturing(
+            r#"{"choices":[{"message":{"content":"partial"},"finish_reason":"content_filter"}]}"#,
+        );
+        let adapter =
+            OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT)
+                .unwrap();
+        let mut events = Vec::new();
+        let result = adapter
+            .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
+            .await;
+        handle.join().unwrap();
+
+        assert!(
+            matches!(result, Err(CoreError::Llm(LlmError::Refused(_)))),
+            "{result:?}"
+        );
+        assert!(events.is_empty());
     }
 
     #[tokio::test]
@@ -1023,6 +1058,7 @@ mod tests {
         let assistant = serde_json::to_value(to_request_message(&ChatMessage::Assistant {
             content: Some("done".to_string()),
             tool_calls: Vec::new(),
+            replay: Default::default(),
         }))
         .unwrap();
         assert_eq!(
@@ -1077,6 +1113,7 @@ mod tests {
         ChatMessage::Assistant {
             content: Some(text.to_string()),
             tool_calls: Vec::new(),
+            replay: Default::default(),
         }
     }
 
@@ -1111,7 +1148,7 @@ mod tests {
         // 補った発言も同じ囲みで送り、日時の属性だけを省く。
         assert_eq!(
             sent[1]["content"],
-            PromptText::user_message(PLACEHOLDER_USER_TEXT, None).as_str()
+            PromptText::user_message(super::super::PLACEHOLDER_USER_TEXT, None).as_str()
         );
     }
 
@@ -1204,6 +1241,7 @@ mod tests {
                     tool_call("call_2"),
                     tool_call("call_3"),
                 ],
+                replay: Default::default(),
             },
             tool_result("call_1", vec![png()]),
             tool_result("call_2", Vec::new()),
@@ -1240,11 +1278,13 @@ mod tests {
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: vec![tool_call("call_1")],
+                replay: Default::default(),
             },
             tool_result("call_1", vec![png()]),
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: vec![tool_call("call_2")],
+                replay: Default::default(),
             },
             tool_result("call_2", Vec::new()),
         ]);
@@ -1272,6 +1312,7 @@ mod tests {
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: vec![tool_call("call_1")],
+                replay: Default::default(),
             },
             ChatMessage::Tool {
                 tool_call_id: Some("call_1".to_string()),
@@ -1292,6 +1333,7 @@ mod tests {
                 ChatMessage::Assistant {
                     content: None,
                     tool_calls: vec![tool_call(id)],
+                    replay: Default::default(),
                 },
                 ChatMessage::Tool {
                     tool_call_id: Some(id.to_string()),
@@ -1322,6 +1364,7 @@ mod tests {
                 name: "add_steps".to_string(),
                 arguments: serde_json::json!({ "descriptions": ["買い出し"] }).into(),
             }],
+            replay: Default::default(),
         }))
         .unwrap();
 
@@ -1351,6 +1394,7 @@ mod tests {
                 name: "update_task".to_string(),
                 arguments: ToolArguments::parse("{\"title\": ".to_string()),
             }],
+            replay: Default::default(),
         }))
         .unwrap();
 
