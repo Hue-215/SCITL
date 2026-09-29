@@ -16,6 +16,8 @@ use crate::i18n::Language;
 #[serde(rename_all = "snake_case")]
 pub enum ApiFormat {
     OpenAiCompat,
+    Anthropic,
+    Gemini,
 }
 
 /// 1つのLLMプロバイダー設定。秘密情報を含まないため、そのままログに出しても

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::ReasoningEffort;
 use crate::error::CoreError;
 use crate::llm::{
-    ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
+    ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, Replay,
     RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolOffer,
 };
 use crate::net::ExternalUrl;
@@ -28,7 +28,7 @@ impl OpenAiCompatAdapter {
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
-        let base_url = parse_base_url(&base_url.into())?;
+        let base_url = super::parse_base_url(&base_url.into())?;
         let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
         Ok(Self {
             client,
@@ -39,38 +39,18 @@ impl OpenAiCompatAdapter {
     }
 }
 
-/// `base_url`の検証。平文の`http://`で鍵を送れる範囲(ループバックとプライベートIPリテラル)は
-/// [`ExternalUrl::parse`]が決める。
-pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
-    parse_base_url(base_url).map(drop)
-}
-
-fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
-    ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)
-}
-
-/// `base_url`の下の`chat/completions`等のパス。
-fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreError> {
-    base_url.join(path).map_err(CoreError::ProviderConfig)
-}
-
-/// 一覧は生成を待たずに返るので、生成を待つための応答タイムアウト
-/// (`config::GeneralConfig::response_timeout`)は使わない。
-const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// `GET {base_url}/models`で、プロバイダーが提供するモデル名を取得する。名前順に並べ、
 /// 重複と空の名前を除く。問い合わせ先は`base_url`の下だけで、通信先は増やさない。
 pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
-    let base_url = parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(LIST_MODELS_TIMEOUT))?;
-    let response =
-        super::send_with_key(client.get(endpoint(&base_url, "models")?), api_key).await?;
-    let key = api_key.expose_secret();
-    let response = super::reject_failure(response, |status, body| {
-        LlmError::from_status(status, body, key)
-    })
+    let base_url = super::parse_base_url(base_url)?;
+    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let response = super::send_with_key(
+        client.get(super::endpoint(&base_url, "models")?),
+        api_key,
+        super::KeyHeader::Bearer,
+    )
     .await?;
-    let parsed: ModelList = super::read_json(response, api_key).await?;
+    let parsed: ModelList = super::read_success_json(response, api_key).await?;
     let mut names: Vec<String> = parsed
         .data
         .into_iter()
@@ -324,9 +304,6 @@ struct RequestToolCallFunction {
     arguments: String,
 }
 
-/// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
-const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is not available.)";
-
 /// ツール結果の画像を載せるために補うユーザー発言の本文。利用者が書いたものではないので、
 /// ユーザー発言の囲み(`PromptText::user_message`)には入れない。
 const TOOL_IMAGES_TEXT: &str = "(Images returned by the tool results above, in the same order \
@@ -405,7 +382,7 @@ fn push_merged(out: &mut Vec<RequestMessage>, message: RequestMessage) {
                 && matches!(last, None | Some(RequestMessage::System { .. }))
             {
                 out.push(to_request_message(&ChatMessage::user(
-                    PromptText::user_message(PLACEHOLDER_USER_TEXT, None),
+                    PromptText::user_message(super::PLACEHOLDER_USER_TEXT, None),
                 )));
             }
             out.push(message);
@@ -435,6 +412,7 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
         ChatMessage::Assistant {
             content,
             tool_calls,
+            ..
         } => RequestMessage::Assistant {
             content: content.clone(),
             tool_calls: tool_calls.iter().map(to_request_tool_call).collect(),
@@ -592,12 +570,13 @@ impl LlmAdapter for OpenAiCompatAdapter {
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
-    ) -> Result<(), CoreError> {
+    ) -> Result<Replay, CoreError> {
         let body = request_body(&self.model, messages, tools, reasoning_effort);
 
-        let endpoint = endpoint(&self.base_url, CHAT_COMPLETIONS)?;
+        let endpoint = super::endpoint(&self.base_url, CHAT_COMPLETIONS)?;
         let request = self.client.post(endpoint).json(&body);
-        let response = super::send_with_key(request, &self.api_key).await?;
+        let response =
+            super::send_with_key(request, &self.api_key, super::KeyHeader::Bearer).await?;
         let key = self.api_key.expose_secret();
         let response = super::reject_failure(response, |status, body| {
             http_error(status, body, key, reasoning_effort.is_some())
@@ -610,6 +589,17 @@ impl LlmAdapter for OpenAiCompatAdapter {
             .into_iter()
             .next()
             .ok_or(LlmError::EmptyResponse)?;
+
+        // 安全上の判定で打ち切られた応答は、途中まで書いた本文も渡さない(イベントを渡す前に
+        // 判定する)。
+        if choice.finish_reason.as_deref() == Some("content_filter") {
+            return Err(LlmError::Refused(ErrorDetail::http(
+                reqwest::StatusCode::OK,
+                "finish_reason: content_filter",
+                key,
+            ))
+            .into());
+        }
 
         // 思考を本文・ツール呼び出しより先に置く(非ストリーミングで生成順は分からないが、
         // 一般的な順序に合わせる)。
@@ -634,12 +624,11 @@ impl LlmAdapter for OpenAiCompatAdapter {
         let finish_reason = match choice.finish_reason.as_deref() {
             Some("tool_calls") => FinishReason::ToolCall,
             Some("length") => FinishReason::Length,
-            Some("stop") | None => FinishReason::Stop,
-            Some(_) => FinishReason::Stop,
+            Some(_) | None => FinishReason::Stop,
         };
         on_event(ResponseEvent::Done { finish_reason });
 
-        Ok(())
+        Ok(Replay::default())
     }
 }
 
@@ -745,6 +734,7 @@ mod tests {
             ChatMessage::Assistant {
                 content: Some(text.clone()),
                 tool_calls: Vec::new(),
+                replay: Default::default(),
             },
         ];
 
@@ -795,6 +785,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_content_filter_stop_is_a_refusal_without_passing_the_partial_reply() {
+        let (base_url, handle) = spawn_capturing(
+            r#"{"choices":[{"message":{"content":"partial"},"finish_reason":"content_filter"}]}"#,
+        );
+        let adapter =
+            OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT)
+                .unwrap();
+        let mut events = Vec::new();
+        let result = adapter
+            .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
+            .await;
+        handle.join().unwrap();
+
+        assert!(
+            matches!(result, Err(CoreError::Llm(LlmError::Refused(_)))),
+            "{result:?}"
+        );
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
     async fn lists_models_under_the_base_url_sorted_without_duplicates() {
         let (base_url, handle) = spawn_capturing(
             r#"{"object":"list","data":[{"id":"gpt-b","object":"model"},{"id":"gpt-a"},{"id":"gpt-b"},{"id":" "}]}"#,
@@ -824,66 +835,6 @@ mod tests {
         server.join().unwrap();
 
         assert!(matches!(result, Err(CoreError::Llm(LlmError::Auth(_)))));
-    }
-
-    #[test]
-    fn accepts_https_base_url() {
-        assert!(validate_base_url("https://api.openai.com/v1").is_ok());
-    }
-
-    #[test]
-    fn accepts_http_loopback_base_url() {
-        assert!(validate_base_url("http://127.0.0.1:8080/v1").is_ok());
-        assert!(validate_base_url("http://localhost:8080/v1").is_ok());
-        assert!(validate_base_url("http://[::1]:8080/v1").is_ok());
-    }
-
-    #[test]
-    fn accepts_http_private_ip_literal_base_url() {
-        // 境界値はnet.rsで確かめ、ここではLLMプロバイダー側にも効いていることだけを見る。
-        assert!(validate_base_url("http://192.168.1.107:11434/v1").is_ok());
-    }
-
-    #[test]
-    fn rejects_http_hostname_base_url() {
-        // ホスト名(localhost以外)は名前解決しないため、平文では常に拒否する(IPリテラルは許す)。
-        let err = validate_base_url("http://example.com/v1").unwrap_err();
-        assert!(matches!(err, CoreError::ProviderConfig(_)));
-    }
-
-    #[test]
-    fn rejects_unsupported_scheme() {
-        let err = validate_base_url("ftp://example.com/v1").unwrap_err();
-        assert!(matches!(err, CoreError::ProviderConfig(_)));
-    }
-
-    #[test]
-    fn rejects_base_url_with_query_fragment_or_userinfo() {
-        assert!(validate_base_url("https://api.example.com/v1?key=secret").is_err());
-        assert!(validate_base_url("https://api.example.com/v1#frag").is_err());
-        assert!(validate_base_url("https://user:pass@api.example.com/v1").is_err());
-    }
-
-    #[test]
-    fn endpoint_joins_regardless_of_trailing_slash() {
-        assert_eq!(
-            endpoint(
-                &parse_base_url("https://api.openai.com/v1").unwrap(),
-                "chat/completions"
-            )
-            .unwrap()
-            .as_str(),
-            "https://api.openai.com/v1/chat/completions"
-        );
-        assert_eq!(
-            endpoint(
-                &parse_base_url("https://api.openai.com/v1/").unwrap(),
-                "chat/completions"
-            )
-            .unwrap()
-            .as_str(),
-            "https://api.openai.com/v1/chat/completions"
-        );
     }
 
     /// 思考の強さを指定したリクエストが400で返った。
@@ -1023,6 +974,7 @@ mod tests {
         let assistant = serde_json::to_value(to_request_message(&ChatMessage::Assistant {
             content: Some("done".to_string()),
             tool_calls: Vec::new(),
+            replay: Default::default(),
         }))
         .unwrap();
         assert_eq!(
@@ -1077,6 +1029,7 @@ mod tests {
         ChatMessage::Assistant {
             content: Some(text.to_string()),
             tool_calls: Vec::new(),
+            replay: Default::default(),
         }
     }
 
@@ -1111,7 +1064,7 @@ mod tests {
         // 補った発言も同じ囲みで送り、日時の属性だけを省く。
         assert_eq!(
             sent[1]["content"],
-            PromptText::user_message(PLACEHOLDER_USER_TEXT, None).as_str()
+            PromptText::user_message(super::super::PLACEHOLDER_USER_TEXT, None).as_str()
         );
     }
 
@@ -1204,6 +1157,7 @@ mod tests {
                     tool_call("call_2"),
                     tool_call("call_3"),
                 ],
+                replay: Default::default(),
             },
             tool_result("call_1", vec![png()]),
             tool_result("call_2", Vec::new()),
@@ -1240,11 +1194,13 @@ mod tests {
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: vec![tool_call("call_1")],
+                replay: Default::default(),
             },
             tool_result("call_1", vec![png()]),
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: vec![tool_call("call_2")],
+                replay: Default::default(),
             },
             tool_result("call_2", Vec::new()),
         ]);
@@ -1272,6 +1228,7 @@ mod tests {
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: vec![tool_call("call_1")],
+                replay: Default::default(),
             },
             ChatMessage::Tool {
                 tool_call_id: Some("call_1".to_string()),
@@ -1292,6 +1249,7 @@ mod tests {
                 ChatMessage::Assistant {
                     content: None,
                     tool_calls: vec![tool_call(id)],
+                    replay: Default::default(),
                 },
                 ChatMessage::Tool {
                     tool_call_id: Some(id.to_string()),
@@ -1322,6 +1280,7 @@ mod tests {
                 name: "add_steps".to_string(),
                 arguments: serde_json::json!({ "descriptions": ["買い出し"] }).into(),
             }],
+            replay: Default::default(),
         }))
         .unwrap();
 
@@ -1351,6 +1310,7 @@ mod tests {
                 name: "update_task".to_string(),
                 arguments: ToolArguments::parse("{\"title\": ".to_string()),
             }],
+            replay: Default::default(),
         }))
         .unwrap();
 

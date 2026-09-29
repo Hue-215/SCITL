@@ -3,4 +3,4 @@
 /**
  * 対応するプロバイダーAPIの方言。
  */
-export type ApiFormat = "open_ai_compat";
+export type ApiFormat = "open_ai_compat" | "anthropic" | "gemini";

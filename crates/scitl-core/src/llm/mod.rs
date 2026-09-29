@@ -75,6 +75,9 @@ pub enum ChatMessage {
     Assistant {
         content: Option<String>,
         tool_calls: Vec<ToolCallRequest>,
+        /// この発言を返したアダプタが、次の呼び出しで送り返すよう求めたもの。同一ターン内の
+        /// 往復でだけ持ち、履歴から組み立てた発言では空。
+        replay: Replay,
     },
     Tool {
         /// プロバイダが払い出した呼び出しIDをそのまま返す。捏造せず、払い出さないプロバイダには
@@ -94,6 +97,23 @@ impl ChatMessage {
             text,
             images: Vec::new(),
         }
+    }
+}
+
+/// プロバイダーが、同じターンの次の呼び出しで受け取ったまま送り返すよう求める応答の一部
+/// (Anthropic形式の署名付きの思考ブロック等)。中身を読み書きするのは、それを返したアダプタ
+/// だけで、中核は同じターンの往復のアシスタント発言に載せて運ぶだけにする。表示も保存もしない
+/// (`docs/spec/principles.md`「思考は履歴に送り返さない」)。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Replay(Option<serde_json::Value>);
+
+impl Replay {
+    pub(in crate::llm) fn new(value: serde_json::Value) -> Self {
+        Self(Some(value))
+    }
+
+    pub(in crate::llm) fn get(&self) -> Option<&serde_json::Value> {
+        self.0.as_ref()
     }
 }
 
@@ -123,6 +143,14 @@ impl InlineImage {
 
     pub fn data_url(&self) -> &str {
         &self.data_url
+    }
+
+    /// MIMEと、base64にした本体(data URLを使わずに、別々の欄で渡す方言向け)。
+    pub fn media_type_and_data(&self) -> (&str, &str) {
+        self.data_url
+            .strip_prefix("data:")
+            .and_then(|rest| rest.split_once(";base64,"))
+            .expect("InlineImage::from_bytes builds a base64 data URL")
     }
 }
 
@@ -291,13 +319,16 @@ pub trait LlmAdapter: Send + Sync {
     /// - 一度イベントを渡したら、この呼び出しの中でリクエストをやり直さない。画面に二重に
     ///   出るため。やり直すなら最初のイベントを渡す前に限る
     /// - `Done`は成功したときに最後に1回だけ渡す(画面はこれをラウンドの区切りに使う)
+    ///
+    /// 次の呼び出しで送り返してほしいものがあれば[`Replay`]で返す。呼び出し側は、この応答から
+    /// 組み立てたアシスタント発言に載せて、同じターンの次の呼び出しに渡す。
     async fn send(
         &self,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
-    ) -> Result<(), CoreError>;
+    ) -> Result<Replay, CoreError>;
 
     /// [`Self::send`]が同じ引数で送るリクエストの本文を、送らずに返す(送信内容のプレビュー)。
     /// 実際のプロバイダーは必ず実装し、`send`と同じ組み立てを通す。既定の`None`はテスト用の

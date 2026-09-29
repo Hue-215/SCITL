@@ -475,9 +475,10 @@ async fn run_tool_rounds(
                 },
             )
             .await;
-        if let Err(e) = sent {
-            return fail_turn(db, attempt, turn_error::classify(&e)).await;
-        }
+        let replay = match sent {
+            Ok(replay) => replay,
+            Err(e) => return fail_turn(db, attempt, turn_error::classify(&e)).await,
+        };
 
         let mut text = String::new();
         // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの
@@ -582,6 +583,7 @@ async fn run_tool_rounds(
         round_trip.push(ChatMessage::Assistant {
             content: if text.is_empty() { None } else { Some(text) },
             tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
+            replay,
         });
         // 結果には自由入力が載る。保存する実行記録(上)は受け取ったまま残し、モデルへ
         // 送る側でだけ無害化する。

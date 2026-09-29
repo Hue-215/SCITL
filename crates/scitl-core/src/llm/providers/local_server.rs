@@ -133,7 +133,8 @@ impl Probe<'_> {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<Option<T>, CoreError> {
-        let response = super::send_with_key(request, self.api_key).await?;
+        let response =
+            super::send_with_key(request, self.api_key, super::KeyHeader::Bearer).await?;
         if matches!(
             response.status(),
             StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
