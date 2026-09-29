@@ -3,7 +3,6 @@ import { useId, useState } from 'react'
 import {
   addModels,
   detectModelCapabilities,
-  failureText,
   listProviderModels,
   removeModel,
   resetModelCapabilities,
@@ -24,7 +23,8 @@ import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { t, type MessageKey } from './i18n'
 import { CollapseToggle, LIST_COLLAPSE_THRESHOLD } from './settingsFields'
-import { httpPlainTextHint, useAddSubmission, usePositiveIntegerInput } from './settingsInput'
+import { httpPlainTextHint, usePositiveIntegerInput } from './settingsInput'
+import { useAsyncAction } from './useAsyncAction'
 
 const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
   open_ai_compat: 'https://api.openai.com/v1',
@@ -102,19 +102,13 @@ function ProviderCard({
   onUpdateModels,
 }: ProviderCardProps) {
   const hasModel = provider.models.length > 0
-  const [detecting, setDetecting] = useState(false)
+  // 検出の失敗は、モデルの操作と同じく親のエラー欄に出る(`onUpdateModels`)。
+  const detection = useAsyncAction()
   // 取得したモデル名。設定には書かないので、カードを閉じれば(設定画面を離れれば)捨てる。
   const [available, setAvailable] = useState<AvailableModel[] | null>(null)
-  const [listing, setListing] = useState(false)
   // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように。MCPの
   // ツール一覧の取得と同じ扱い)。
-  const [listError, setListError] = useState<string | null>(null)
-
-  const detect = async () => {
-    setDetecting(true)
-    await onUpdateModels(() => detectModelCapabilities(provider.id))
-    setDetecting(false)
-  }
+  const listing = useAsyncAction((error) => t('common.fetch_failed', { error }))
 
   // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
   // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
@@ -124,18 +118,6 @@ function ProviderCard({
       if (!provider.can_detect_capabilities) return added
       return detectModelCapabilities(provider.id).catch(() => added)
     })
-
-  const listModels = async () => {
-    setListing(true)
-    setListError(null)
-    try {
-      setAvailable(await listProviderModels(provider.id))
-    } catch (e) {
-      setListError(t('common.fetch_failed', { error: failureText(e) }))
-    } finally {
-      setListing(false)
-    }
-  }
 
   return (
     <li className="provider-card">
@@ -169,8 +151,14 @@ function ProviderCard({
         <p className="list-empty">{t('settings.model.none_registered')}</p>
       )}
       {hasModel && provider.can_detect_capabilities && (
-        <button type="button" onClick={() => void detect()} disabled={detecting}>
-          {detecting ? t('settings.model.detecting') : t('settings.model.detect_button')}
+        <button
+          type="button"
+          onClick={() =>
+            void detection.run(() => onUpdateModels(() => detectModelCapabilities(provider.id)))
+          }
+          disabled={detection.running}
+        >
+          {detection.running ? t('settings.model.detecting') : t('settings.model.detect_button')}
         </button>
       )}
 
@@ -190,11 +178,15 @@ function ProviderCard({
           placeholder={t('settings.model.add_model_hint')}
         />
         <button type="submit">{t('common.add')}</button>
-        <button type="button" onClick={() => void listModels()} disabled={listing}>
-          {listing ? t('common.fetching') : t('settings.model.fetch_models_button')}
+        <button
+          type="button"
+          onClick={() => void listing.run(() => listProviderModels(provider.id), setAvailable)}
+          disabled={listing.running}
+        >
+          {listing.running ? t('common.fetching') : t('settings.model.fetch_models_button')}
         </button>
       </form>
-      {listError && <p className="error">{listError}</p>}
+      {listing.error && <p className="error">{listing.error}</p>}
       {available && (
         <ModelPicker
           available={available}
@@ -221,7 +213,8 @@ interface ModelPickerProps {
 function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps) {
   const [selected, setSelected] = useState<string[]>([])
   const [query, setQuery] = useState('')
-  const [adding, setAdding] = useState(false)
+  // 追加の失敗は、モデルの操作と同じく親のエラー欄に出る(`onAdd`)。
+  const adding = useAsyncAction()
 
   const candidates = available.filter((m) => !registered.includes(m.name))
   const { matched, searching } = matchQuery(candidates, query, (m) => m.label)
@@ -231,13 +224,12 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
   const toggle = (name: string, checked: boolean) =>
     setSelected((prev) => (checked ? [...prev, name] : prev.filter((n) => n !== name)))
 
-  const submit = async () => {
-    setAdding(true)
-    // 候補の並び(名前順)で登録する。選んだ順にすると、表の並びが操作の順に左右される。
-    await onAdd(candidates.filter((m) => chosen.includes(m.name)).map((m) => m.name))
-    setSelected([])
-    setAdding(false)
-  }
+  const submit = () =>
+    adding.run(
+      // 候補の並び(名前順)で登録する。選んだ順にすると、表の並びが操作の順に左右される。
+      () => onAdd(candidates.filter((m) => chosen.includes(m.name)).map((m) => m.name)),
+      () => setSelected([]),
+    )
 
   return (
     <div className="model-picker">
@@ -289,9 +281,9 @@ function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps
           <button
             type="button"
             onClick={() => void submit()}
-            disabled={chosen.length === 0 || adding}
+            disabled={chosen.length === 0 || adding.running}
           >
-            {adding
+            {adding.running
               ? t('common.adding')
               : t('settings.model.picker_add_selected', { count: chosen.length })}
           </button>
@@ -512,14 +504,16 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
   const [apiFormat, setApiFormat] = useState<ApiFormat>('open_ai_compat')
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL_BY_FORMAT.open_ai_compat)
   const [apiKey, setApiKey] = useState('')
-  const submission = useAddSubmission()
+  // 失敗はフォームの直下に出し、入力は残す(Rust側の検証で弾かれても打ち直さずに済むように)。
+  // 入力を空にするのは成功したときだけ。
+  const submission = useAsyncAction()
 
   return (
     <form
       className="provider-add-form settings-section-break"
       onSubmit={(e) => {
         e.preventDefault()
-        if (submission.adding || !name.trim() || !baseUrl.trim()) return
+        if (submission.running || !name.trim() || !baseUrl.trim()) return
         void submission.run(
           () => onAdd(name.trim(), apiFormat, baseUrl.trim(), apiKey || null),
           () => {
@@ -567,8 +561,8 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
         />
       </label>
       {submission.error && <p className="error">{submission.error}</p>}
-      <button type="submit" disabled={submission.adding}>
-        {submission.adding ? t('common.adding') : t('common.add')}
+      <button type="submit" disabled={submission.running}>
+        {submission.running ? t('common.adding') : t('common.add')}
       </button>
     </form>
   )

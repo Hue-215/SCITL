@@ -1,10 +1,11 @@
 // 設定画面の「一般」タブ(legacy/frontend.md 2節)。
 import { useEffect, useId, useState } from 'react'
-import { exportMarkdown, failureText, openExportFolder, updateGeneralSettings } from './api'
+import { exportMarkdown, openExportFolder, updateGeneralSettings } from './api'
 import type { ExportSummary, Language, SettingsView } from './types'
 import Dropdown from './Dropdown'
 import { currentLanguage, languageName, LANGUAGES, t } from './i18n'
 import { NumberField } from './settingsFields'
+import { useAsyncAction } from './useAsyncAction'
 
 type GeneralUpdate = Parameters<typeof updateGeneralSettings>[0]
 
@@ -123,38 +124,18 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
   )
 }
 
-type ExportResult = { ok: true; summary: ExportSummary } | { ok: false; message: string }
-
 // 押すと確認なしで書き出し、成否はこの欄に出す(legacy/frontend.md 2節)。タブ全体のエラー欄を
 // 使わないのは、設定の保存とは別の操作の結果だから。
 function ExportSection() {
-  const [running, setRunning] = useState(false)
-  const [result, setResult] = useState<ExportResult | null>(null)
+  const [summary, setSummary] = useState<ExportSummary | null>(null)
+  const exporting = useAsyncAction((error) => t('settings.general.export_failed', { error }))
+  const opening = useAsyncAction((error) =>
+    t('settings.general.open_export_folder_failed', { error }),
+  )
 
-  const runExport = async () => {
-    setRunning(true)
-    setResult(null)
-    try {
-      setResult({ ok: true, summary: await exportMarkdown() })
-    } catch (e) {
-      setResult({
-        ok: false,
-        message: t('settings.general.export_failed', { error: failureText(e) }),
-      })
-    } finally {
-      setRunning(false)
-    }
-  }
-
-  const openFolder = async () => {
-    try {
-      await openExportFolder()
-    } catch (e) {
-      setResult({
-        ok: false,
-        message: t('settings.general.open_export_folder_failed', { error: failureText(e) }),
-      })
-    }
+  const runExport = () => {
+    setSummary(null)
+    void exporting.run(exportMarkdown, setSummary)
   }
 
   return (
@@ -162,24 +143,25 @@ function ExportSection() {
       <span>{t('settings.general.export_label')}</span>
       <p className="settings-hint">{t('settings.general.export_caption')}</p>
       <div className="button-row">
-        <button type="button" onClick={runExport} disabled={running}>
-          {running ? t('settings.general.exporting') : t('settings.general.export_button')}
+        <button type="button" onClick={runExport} disabled={exporting.running}>
+          {exporting.running
+            ? t('settings.general.exporting')
+            : t('settings.general.export_button')}
         </button>
-        <button type="button" onClick={openFolder}>
+        <button type="button" onClick={() => void opening.run(openExportFolder)}>
           {t('settings.general.open_export_folder')}
         </button>
       </div>
-      {result?.ok === true && (
-        <p>{t('settings.general.export_done', { folder: result.summary.folder })}</p>
-      )}
-      {result?.ok === true && result.summary.missing_attachments > 0 && (
+      {summary && <p>{t('settings.general.export_done', { folder: summary.folder })}</p>}
+      {summary && summary.missing_attachments > 0 && (
         <p className="error">
           {t('settings.general.export_missing_attachments', {
-            count: result.summary.missing_attachments,
+            count: summary.missing_attachments,
           })}
         </p>
       )}
-      {result?.ok === false && <p className="error">{result.message}</p>}
+      {exporting.error && <p className="error">{exporting.error}</p>}
+      {opening.error && <p className="error">{opening.error}</p>}
     </div>
   )
 }

@@ -1,7 +1,6 @@
 // 設定画面の複数のタブが共有する入力の扱い。
 import { useEffect, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { failureText } from './api'
 import { t } from './i18n'
 
 // httpの許可範囲(crates/scitl-core/src/net.rsのclassify_host)が変わったときに
@@ -50,26 +49,4 @@ export function usePositiveIntegerInput(
       'aria-invalid': invalid,
     },
   }
-}
-
-// 追加フォームの送信。結果を待ち、成功したときだけ`onDone`で入力を空にする。失敗は
-// フォームの直下に出し、入力は残す(Rust側の検証で弾かれても打ち直さずに済むように)。
-export function useAddSubmission() {
-  const [adding, setAdding] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const run = async (add: () => Promise<unknown>, onDone: () => void) => {
-    setAdding(true)
-    setError(null)
-    try {
-      await add()
-      onDone()
-    } catch (e) {
-      setError(failureText(e))
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  return { adding, error, run }
 }

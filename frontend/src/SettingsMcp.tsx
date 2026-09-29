@@ -7,7 +7,8 @@ import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { t, type MessageKey } from './i18n'
 import { CollapseToggle, LIST_COLLAPSE_THRESHOLD, NumberField } from './settingsFields'
-import { httpPlainTextHint, useAddSubmission } from './settingsInput'
+import { httpPlainTextHint } from './settingsInput'
+import { useAsyncAction } from './useAsyncAction'
 
 type Transport = McpServerView['endpoint']['transport']
 
@@ -257,7 +258,9 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
   const [url, setUrl] = useState('')
   const [headersText, setHeadersText] = useState('')
   const [errors, setErrors] = useState<string[]>([])
-  const submission = useAddSubmission()
+  // 失敗はフォームの直下に出し、入力は残す(Rust側の検証で弾かれても打ち直さずに済むように)。
+  // 入力を空にするのは成功したときだけ。
+  const submission = useAsyncAction()
 
   const reset = () => {
     setName('')
@@ -270,7 +273,7 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    if (submission.adding) return
+    if (submission.running) return
     const trimmedName = name.trim()
     const validationErrors: string[] = []
     if (trimmedName === '') {
@@ -388,8 +391,8 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
         </p>
       ))}
       {submission.error && <p className="error">{submission.error}</p>}
-      <button type="submit" disabled={submission.adding}>
-        {submission.adding ? t('common.adding') : t('common.add')}
+      <button type="submit" disabled={submission.running}>
+        {submission.running ? t('common.adding') : t('common.add')}
       </button>
     </form>
   )
