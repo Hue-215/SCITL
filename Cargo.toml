@@ -14,7 +14,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "ti
 # LLMアダプタとMCPクライアントの双方が使う唯一のHTTPクライアント。バージョンはrmcpの
 # 要求(0.13.2以上)に合わせてある。`rustls` featureはaws-lc-rs + rustls-platform-verifier
 # (信頼ルートはOSの証明書ストア)を選ぶ。ハードニング設定は`scitl-core/src/net.rs`の
-# `hardened_client`1箇所に集約する(architecture.md 5節)
+# `hardened_client`1箇所に集約する
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 thiserror = "2"
 secrecy = "0.10"
@@ -24,14 +24,14 @@ url = "2"
 # (`cargo tree -d -i percent-encoding`で確認)
 percent-encoding = "2.3.2"
 # UTC日時の文字列化と、締切の日付が実在するかの確認(`scitl-core/src/db/`)。同じ版がrmcpの依存として
-# 既にビルドされている。ローカルのタイムゾーンは読まない(タイムスタンプはUTC、締切は日付だけ。
-# data-model.md 1節)ので、OSのタイムゾーンを調べる`clock`(`iana-time-zone`等を引き込む)ではなく
+# 既にビルドされている。ローカルのタイムゾーンは読まない(タイムスタンプはUTC、締切は日付だけ)
+# ので、OSのタイムゾーンを調べる`clock`(`iana-time-zone`等を引き込む)ではなく
 # `now`だけを有効にする
 chrono = { version = "0.4.45", default-features = false, features = ["now"] }
 ulid = "1"
 async-trait = "0.1"
 # 秘密情報の保存先(OSの資格情報ストア)。本体と、secrets.rsが設定するOSごとの保存先。
-# 選んだ保存先と理由はarchitecture.md 6節。
+# 選んだ保存先と理由はarchitecture.md「秘密情報」。
 keyring-core = "1"
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 windows-native-keyring-store = "1"
@@ -63,9 +63,9 @@ base64 = "0.22"
 # 受け付ける画像形式(PNG・JPEG・GIF・WebP)のデコーダーだけを有効にする。既定のfeatureは
 # 使わない形式のデコーダーと並列化(rayon)を引き込むため切る
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-# MCPクライアント(Issue #28)。`default-features = false`にした上で必要なfeatureだけを
-# 明示する: OAuth/認可系(`auth`)や`.well-known`ディスカバリを有効化しない
-# (principles.md 1節「アプリが独自の判断で通信先を増やさない」に抵触するため)。
+# MCPクライアント。`default-features = false`にした上で必要なfeatureだけを明示する。
+# OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない先へ通信しうるので
+# 有効にしない。
 # `client`(素朴なクライアント)・`transport-child-process`(stdio)・
 # `transport-streamable-http-client-reqwest`(streamable_http、内部でreqwestを使う)のみ。
 rmcp = { version = "=3.4.0", default-features = false, features = [
