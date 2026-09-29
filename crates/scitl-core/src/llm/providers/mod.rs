@@ -100,7 +100,9 @@ pub fn can_detect_capabilities(provider: &ProviderConfig) -> bool {
     }
 }
 
-/// `models`の能力を推論サーバーに問い合わせる(`local_server::detect`へ振り分ける)。
+/// `models`の能力を推論サーバーに問い合わせる。`Ok(None)`は能力を問い合わせられない
+/// サーバー、`Err`はサーバーに繋がらないか、今は答えられない。サーバーが知らないモデルは
+/// 結果に含めない。
 pub async fn detect_capabilities(
     provider: &ProviderConfig,
     models: &[String],

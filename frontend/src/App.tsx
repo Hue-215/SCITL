@@ -200,7 +200,8 @@ export default function App() {
     )
   }
 
-  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す(確定後は`loadChat`が
+  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す。バックエンドは応答の生成に
+  // 入る前に論理削除を済ませているので、起きた削除を先に見せるだけになる(確定後は`loadChat`が
   // DBの内容で上書きする)。
   //
   // `turnId`は再試行でのみ渡す。idだけで切ると同じターンのツール実行記録が残り、
@@ -248,7 +249,8 @@ export default function App() {
     )
   }
 
-  // 確認ダイアログ無しで削除する(取り消し可能な論理削除)。
+  // 確認ダイアログ無しで削除する(取り消し可能な論理削除)。最初のユーザー発言を消すと一覧の
+  // フォールバック表示が変わるので、`requests`が一覧ごと引き直す。
   const remove = async (messageId: number) => {
     if (disableActions) return
     const target = chat

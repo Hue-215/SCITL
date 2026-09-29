@@ -59,7 +59,9 @@ pub enum FinishReason {
 /// アダプタに渡す発言列の1要素。「userなのに`tool_call_id`を持つ」といった不正な組み合わせを
 /// 型で防ぐため、平坦な構造ではなく列挙型にする。
 ///
-/// `Assistant`の`tool_calls`と`Tool`は、同一ターン内のツールの往復を表す。
+/// `Assistant`の`tool_calls`と`Tool`は、同一ターン内のツールの往復だけに使う。DBには保存せず、
+/// 次ターン以降の履歴にも載せない(過去のツール実行は`orchestration::history`が実行記録から
+/// 組み立てる)。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatMessage {
     System(String),

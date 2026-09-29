@@ -111,7 +111,8 @@ pub enum ReasoningEffort {
 /// 能力の手動設定。`None`は「手動では決めていない」。
 pub type ModelOverrides = crate::llm::CapabilityLayer;
 
-/// 応答タイムアウトの既定値(秒)。生成の長い非ストリーミング応答も待てるよう、余裕を持たせる。
+/// 応答タイムアウトの既定値(秒)。未設定のときに使う値はここにだけ置く。生成の長い
+/// 非ストリーミング応答も待てるよう、余裕を持たせる。
 /// タイムアウト自体は常に掛ける(応答しないエンドポイント1つでターンが固まらないように)。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 

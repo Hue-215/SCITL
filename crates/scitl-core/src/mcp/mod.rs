@@ -39,8 +39,8 @@ const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 応答を保存し終えたあとのターンが切断待ちのまま返らなくなる。
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// クライアント側のMCPセッション。ハンドラを持たない(`()`)ため、サーバーからの
-/// サンプリング要求等には応答しない。
+/// クライアント側のMCPセッション。サーバーからの要求(サンプリング等)で通信や処理が増えない
+/// よう、意図的にハンドラを持たない(`()`)。
 type ClientService = RunningService<RoleClient, ()>;
 
 /// サーバーから受け取ったツール1件。どの値も受け取ったまま持つ。画面へ出す形は

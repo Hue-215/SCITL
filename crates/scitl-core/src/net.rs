@@ -9,7 +9,8 @@ use crate::error::CoreError;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// ホストの分類。平文httpを許すかどうかは、この分類だけで決める。
+/// ホストの分類。平文httpを許すかどうかは、この分類だけで決める。宛先を絞る仕組みを足しても、
+/// 平文httpの可否はそちらと別にこの分類で判定する(両方を満たしたときだけ通す)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostClass {
     /// ループバック(127.0.0.0/8, ::1)またはホスト名`localhost`。

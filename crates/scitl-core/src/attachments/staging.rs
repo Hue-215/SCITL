@@ -189,7 +189,8 @@ impl Staged {
 /// 画面から際限なく預けさせない(合計量も、この数と種別ごとの上限の積で抑えられる)。
 ///
 /// 超える分は断らずに一番古いものを捨てる。画面の再読み込み等で取り残された預かりが溜まっても、
-/// 再起動まで添付できなくなることがないように。
+/// 再起動まで添付できなくなることがないように。画面も同じ`per_message`で入力欄の添付を
+/// 頭打ちにしているので、捨てられるのは取り残された預かりだけになる。
 fn make_room(entries: &mut HashMap<String, Entry>) {
     while entries.len() >= LIMITS.per_message {
         let oldest = entries

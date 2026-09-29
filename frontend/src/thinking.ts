@@ -1,8 +1,8 @@
 import type { MessageKey } from './i18n'
 import type { MessageView, ToolExecutionView, TurnEvent } from './types'
 
-// 「思考・ツール」の折りたたみ表示のためのデータ整形。コンポーネント本体は./ThinkingTools.tsx
-// (react/only-export-componentsに合わせてファイルを分ける)。
+// 「思考・ツール」の折りたたみ表示のためのデータ整形。コンポーネント本体は./ThinkingTools.tsxに
+// 置く(react/only-export-componentsに合わせてファイルを分ける)。
 
 export interface TurnGroup {
   kind: 'turn'

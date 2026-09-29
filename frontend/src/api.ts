@@ -41,8 +41,7 @@ export function createTask(): Promise<TaskCreation> {
   return invoke('create_task')
 }
 
-// ヘッダーからのタスク操作。変更と会話ログへの記録はRust側が一緒に書く。どれも応答を
-// 生成中のタスクでは断られる。
+// ヘッダーからのタスク操作。どれも応答を生成中のタスクでは断られる。
 export function renameTask(taskId: number, title: string): Promise<void> {
   return invoke('rename_task', { taskId, title })
 }
@@ -196,8 +195,7 @@ export function addModels(providerId: string, models: string[]): Promise<Setting
   return invoke('add_models', { providerId, models })
 }
 
-// プロバイダーが提供するモデル名。名前順で、登録済みのものも含む。設定には書かないので、
-// 登録はaddModelsで行う。
+// プロバイダーが提供するモデル名(登録済みのものも含む)。登録はaddModelsで行う。
 export function listProviderModels(providerId: string): Promise<AvailableModel[]> {
   return invoke('list_provider_models', { providerId })
 }
@@ -239,8 +237,7 @@ export function detectModelCapabilities(providerId: string): Promise<SettingsVie
   return invoke('detect_model_capabilities', { providerId })
 }
 
-// チャット入力欄の下のモデル選択。選び直した後は一覧を引き直す(能力の問い合わせを伴うため、
-// Rust側で保存とは別のコマンドにしてある)。
+// チャット入力欄の下のモデル選択。selectChatModelで選び直した後は、これで一覧を引き直す。
 export function getChatModels(): Promise<ChatModelsView> {
   return invoke('get_chat_models')
 }
@@ -281,8 +278,7 @@ export function setMcpToolEnabled(
   return invoke('set_mcp_tool_enabled', { serverId, toolName, enabled })
 }
 
-// 取得した一覧はRust側のキャッシュに載り、設定画面の状態ごと返ってくる。フロントエンド側で
-// 一覧を保持しない(画面移動で消えるのを防ぐ)。
+// 取得した一覧はRust側のキャッシュに載り、設定画面の状態ごと返ってくる。
 export function fetchMcpTools(serverId: string): Promise<SettingsView> {
   return invoke('fetch_mcp_tools', { serverId })
 }

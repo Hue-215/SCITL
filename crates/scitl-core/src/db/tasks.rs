@@ -269,8 +269,8 @@ const MAX_TITLE_CHARS: usize = 40;
 /// タイトル文字列を、1行のタイトルとして書き込める形に正規化する(防御としての無害化は
 /// 出力先ごとに掛ける)。制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、
 /// 連続空白を1つにまとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので省略の
-/// 印は付けない。画面からの変更は、これで空になるタイトルを書く前に断る
-/// (`orchestration::operations`)。
+/// 印は付けない。タイトルの書き込みはすべて`update_task`を通し、この正規化を通す。画面からの
+/// 変更は、これで空になるタイトルを書く前に断る(`orchestration::operations`)。
 pub(crate) fn sanitize_title(raw: &str) -> String {
     let squeezed = collapse_whitespace(raw);
     let trimmed =

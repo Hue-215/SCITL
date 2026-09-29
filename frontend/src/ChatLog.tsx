@@ -174,7 +174,7 @@ export default function ChatLog({
                 errorKind={finalMessage.error_kind}
               />
               {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
-                  プレーンテキストのまま出す(Issue #159) */}
+                  プレーンテキストのまま出す */}
               {finalMessage.error_detail && (
                 <details className="entry-error-detail">
                   <summary>{t('chat.error_detail_summary')}</summary>

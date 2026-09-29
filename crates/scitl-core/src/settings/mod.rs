@@ -634,7 +634,7 @@ impl Settings {
     }
 
     /// 保存済みの秘密情報も消す。`delete_provider`と同じく、設定の保存が済んでから消す。
-    /// 同じ名前で登録し直したときに前の一覧が残らないよう、ツール一覧のキャッシュも捨てる。
+    /// 削除したサーバーのツール一覧がキャッシュに残らないよう、ここで捨てる。
     pub fn delete_mcp_server(&self, server_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let index = draft
