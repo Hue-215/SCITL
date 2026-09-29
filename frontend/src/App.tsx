@@ -40,7 +40,7 @@ export default function App() {
   // 表示中の会話。起動したら総合チャットを開く(タスクを離れたときの戻り先でもある)。
   const [chat, setChat] = useState<Chat>(GENERAL_CHAT)
   const [adding, setAdding] = useState(false)
-  // タスクを作らなかった理由(チャットを使えない間。Issue #76)。IPCの失敗(`error`)と違い、
+  // タスクを作らなかった理由(チャットを使えない間)。IPCの失敗(`error`)と違い、
   // モデルの選択や設定の変更で解消しうるので、それらを変えたら外す(次の追加で改めて判定される)。
   const [addBlocked, setAddBlocked] = useState<string | null>(null)
   // 表示中のタスク。総合チャットと、タスクを読み込むまでの間はnull。
@@ -169,8 +169,8 @@ export default function App() {
     )
   }
 
-  // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする(Issue #41、
-  // legacy/frontend.md 1節)。他の会話は応答待ちの間も操作できる。
+  // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする。他の会話は応答待ちの
+  // 間も操作できる。
   const disableActions = requests.isBusy(chat)
 
   // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
@@ -200,15 +200,11 @@ export default function App() {
     )
   }
 
-  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す。バックエンドはコマンド
-  // 最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
-  // ここでやっているのは「すでに起きた削除を先に見せる」ことだけ。確定後は`loadChat`が必ず
-  // DBの内容で上書きするため、これが最終的な表示になることはない(楽観表示はユーザー発言の
-  // プレースホルダと同じ扱い)。
+  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す(確定後は`loadChat`が
+  // DBの内容で上書きする)。
   //
-  // `turnId`は再試行でのみ渡す。再試行の対象はターンの最終行なので、idだけで切ると同じターンの
-  // ツール実行記録が残り、`finalEntryOf`がそれを返信の吹き出しとして描いてしまう
-  // (`thinking.ts`参照)。作り直すのはターンごとなので、ターンごと外す。
+  // `turnId`は再試行でのみ渡す。idだけで切ると同じターンのツール実行記録が残り、
+  // `finalEntryOf`がそれを返信の吹き出しとして描いてしまうので、ターンごと外す。
   const hideSuperseded = (fromId: number, turnId: string | null) => {
     setMessages((prev) =>
       prev.filter((m) => m.id < fromId && (turnId === null || m.turn_id !== turnId)),
@@ -252,8 +248,7 @@ export default function App() {
     )
   }
 
-  // 確認ダイアログ無しの即座に取り消し可能な論理削除。最初のユーザー発言を消すと一覧の
-  // フォールバック表示が変わるが、引き直しは`requests`が一覧ごと行う。
+  // 確認ダイアログ無しで削除する(取り消し可能な論理削除)。
   const remove = async (messageId: number) => {
     if (disableActions) return
     const target = chat

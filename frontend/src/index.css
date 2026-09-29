@@ -1,6 +1,5 @@
 /*
- * スタイルは2層で構成する(principles.md 6節「採用するUIフレームワークの既定値に
- * 頼らない。見た目の細部まで明示的に決める」)。
+ * スタイルは2層で構成する。
  *
  *   1. 基盤層(要素セレクタ): アプリで使う要素の既定の見た目をここで決める。
  *      ブラウザとOS(WebKitGTK/GTKテーマ)の既定値は、クラスを付け忘れた要素にも
@@ -252,7 +251,7 @@ textarea:disabled {
 
 /* 内容に応じて一定の高さまで自動で伸び、それ以降は内側でスクロールする。
    field-sizingの対応は実機(WebKitGTK)で確認済み(2.52.6)。自動で高さが決まる以上、
-   手動リサイズと二重に高さの決定権を持たせない(principles.md 5節)ため resize は切る。 */
+   手動リサイズと二重に高さの決定権を持たせないため resize は切る。 */
 textarea {
   field-sizing: content;
   min-height: var(--textarea-min-height);
@@ -655,7 +654,7 @@ option {
   gap: var(--space-4);
   /* 端の吹き出しの影(--shadow-lift)を切らさないための余白。影はスクロールで見せる範囲に
      含まれないため、余白が無いと一番下まで送っても最後の発言の影が欠けて見える。
-     左右は吹き出しのマージンが同じ役を担う(左右にpaddingを置かない理由はui.md 4節)。 */
+     左右は吹き出しのマージンが同じ役を担う(左右にpaddingを置かない理由はui.md「スクロール領域」)。 */
   padding-block: var(--space-2);
 }
 
@@ -742,7 +741,7 @@ option {
 }
 
 /* 発言本文のMarkdown描画(Markdown.tsx)。段落・リスト・表などブロックどうしの間隔は
-   入れ物のgapで一律に決める(ui.md 3節)。 */
+   入れ物のgapで一律に決める(ui.md「余白の持たせ方」)。 */
 .markdown {
   display: flex;
   flex-direction: column;
@@ -938,7 +937,7 @@ option {
 
 /* 本文はメニューを除いた残りの領域の中で中央に置き、広い窓では--content-max-widthで
    頭打ちにする(行が長くなりすぎると読みにくいため)。左右余白と中央寄せは入れ物の
-   直接の子に持たせる(ui.md 3節)。役割クラス(.settings-panel)に持たせると、
+   直接の子に持たせる(ui.md「余白の持たせ方」)。役割クラス(.settings-panel)に持たせると、
    タブ本文以外の要素(エラー行)が直接の子になったときに余白が抜ける。 */
 .settings-content > * {
   max-width: var(--content-max-width);
@@ -1083,7 +1082,7 @@ option {
   overflow-x: auto;
   /* 横スクロールの領域でも上下のはみ出しは切られる。最後の行のボタンの浮き・フォーカスの
      光を切らさないよう、セルの上下余白(基盤層のth・td)に足して光の広がりまで空ける
-     (ui.md 4節)。上端は見出しの行で、影を持つ部品が無い。 */
+     (ui.md「スクロール領域」)。上端は見出しの行で、影を持つ部品が無い。 */
   padding-bottom: calc(var(--focus-glow-spread) - var(--space-1));
 }
 
@@ -1202,7 +1201,7 @@ option {
 }
 
 /* 取得したモデルの候補欄。検索欄と操作ボタンは留まり、候補だけが
-   スクロールする(ui.md 4節)。左右の余白はスクロールしない子と、候補の各行が持つ。 */
+   スクロールする(ui.md「スクロール領域」)。左右の余白はスクロールしない子と、候補の各行が持つ。 */
 .model-picker {
   display: flex;
   flex-direction: column;
@@ -1234,7 +1233,7 @@ option {
 
 /* 節の始まりを示す仕切り線。線とその下の余白は、区切られる側のブロックが上端に持つ
    (独立した<hr>にすると、線の持ち主と余白の持ち主が分かれ、入れ物のgapと二重になる)。
-   中の間隔は節ごとに違うため、ここでは持たない(ui.md 1節、3節)。 */
+   中の間隔は節ごとに違うため、ここでは持たない(ui.md「スタイルシートの2層構成」「余白の持たせ方」)。 */
 .settings-section-break {
   border-top: var(--border-width) solid var(--color-border);
   padding-top: var(--space-4);
@@ -1256,7 +1255,7 @@ option {
 }
 
 /* 主ボタン(タスクを追加・送信)。濃いアクセント色では影が塗りに溶けるため、ユーザーの
-   吹き出しと同じ薄い塗りにする(ui.md 2節)。 */
+   吹き出しと同じ薄い塗りにする(ui.md「デザイントークン」)。 */
 button.primary {
   background: var(--color-primary-container);
   color: var(--color-on-primary-container);
@@ -1267,7 +1266,7 @@ button.danger {
   color: var(--color-on-danger-container);
 }
 
-/* チップの共通部品(Chip.tsx、legacy/frontend.md 5節)。添付ファイルの名前を、発言の中と
+/* チップの共通部品(Chip.tsx)。添付ファイルの名前を、発言の中と
    入力欄の上で同じ形に出す。押せる部分(.chip-main)と×(.chip-remove)は、どちらも
    チップの枠の中に収め、ボタンとしての枠と背景は持たせない。 */
 .chip-list {
@@ -1360,7 +1359,7 @@ button.danger {
 
 /* ダイアログの共通枠。タスク削除・プロバイダー削除・
    外部ツールサーバー削除の確認のほか、リンク確認・画像プレビュー・テキスト添付の
-   全文表示でも共通で使う。ウィンドウ全体を覆う都合、内容領域の幅基準(5節)ではなく
+   全文表示でも共通で使う。ウィンドウ全体を覆う都合、内容領域の幅基準ではなく
    overlay自身の幅(100%)を基準にする。 */
 .dialog-overlay {
   position: fixed;

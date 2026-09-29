@@ -106,8 +106,7 @@ function ProviderCard({
   const detection = useAsyncAction()
   // 取得したモデル名。設定には書かないので、カードを閉じれば(設定画面を離れれば)捨てる。
   const [available, setAvailable] = useState<AvailableModel[] | null>(null)
-  // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように。MCPの
-  // ツール一覧の取得と同じ扱い)。
+  // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように)。
   const listing = useAsyncAction((error) => t('common.fetch_failed', { error: isolated(error) }))
 
   // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
@@ -210,8 +209,8 @@ interface ModelPickerProps {
   onClose: () => void
 }
 
-// 取得したモデルから、登録するものを選ぶ欄(Issue #33。一括で登録しない理由は
-// architecture.md 3節)。登録済みのモデルは候補から外す(追加すると表の側へ移る)。
+// 取得したモデルから、登録するものを選ぶ欄。登録済みのモデルは候補から外す(追加すると表の側へ
+// 移る)。
 function ModelPicker({ available, registered, onAdd, onClose }: ModelPickerProps) {
   const [selected, setSelected] = useState<string[]>([])
   const [query, setQuery] = useState('')

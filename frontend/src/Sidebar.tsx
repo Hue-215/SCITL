@@ -84,7 +84,7 @@ export default function Sidebar({
       <div className="sidebar-scroll">
         <TaskList tasks={active} selectedTaskId={selectedTaskId} onSelect={onSelect} />
 
-        {/* 0件でも行は出す(legacy/frontend.md 1節)。アーカイブした行き先が常に見えるように */}
+        {/* 0件でも行は出す。アーカイブした行き先が常に見えるように */}
         <div className="sidebar-archived">
           <button
             type="button"

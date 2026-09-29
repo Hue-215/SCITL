@@ -24,7 +24,7 @@ interface SettingsProps {
   onClose: () => void
 }
 
-// 設定画面(legacy/frontend.md 2〜4節)。
+// 設定画面。
 export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<'general' | 'providers' | 'mcp'>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
@@ -67,9 +67,8 @@ export default function Settings({ onClose }: SettingsProps) {
     return next
   }
 
-  // MCPサーバーのツール一覧の取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す。
-  // どのサーバーで失敗したかが分かるように。legacy/frontend.md 4節)。追加した直後の自動取得も
-  // 同じ表示にし、取得中にタブを切り替えても結果が失われないよう、タブではなくここで持つ。
+  // MCPサーバーのツール一覧を取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す)。
+  // 取得中にタブを切り替えても結果が失われないよう、タブではなくここで持つ。
   const [fetchingTools, setFetchingTools] = useState<string[]>([])
   const [toolFetchErrors, setToolFetchErrors] = useState<Record<string, string>>({})
 
@@ -163,8 +162,8 @@ export default function Settings({ onClose }: SettingsProps) {
                   )
                 }
                 onAddServer={async (name, endpoint) => {
-                  // 追加したら続けて1回ツール一覧を取得する(legacy/frontend.md 4節「追加時に
-                  // 自動で1回接続テスト」)。失敗しても登録は残し、エラーはそのカードに出す。
+                  // 追加したら続けて1回ツール一覧を取得する。失敗しても登録は残し、エラーは
+                  // そのカードに出す。
                   // 追加したサーバーは、追加前に無かったidで見分ける。
                   const before = new Set(settings.mcp_servers.map((s) => s.id))
                   const next = await applyAdded(() => addMcpServer(name, endpoint))

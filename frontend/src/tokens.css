@@ -32,8 +32,7 @@
   --font-family-mono: ui-monospace, monospace;
 
   /* 文字サイズ: 3段階(補助文 / 本文 / 見出し)。sm/md/lgの差が視認できない刻みは
-     置かない(Issue #79)。xlはMarkdown本文の見出し(.markdown h1)
-     専用で、画面の見出しには使わない。 */
+     置かない。xlはMarkdown本文の見出し(.markdown h1)専用で、画面の見出しには使わない。 */
   --font-size-sm: 0.85rem;
   --font-size-md: 1rem;
   --font-size-lg: 1.25rem;
@@ -60,7 +59,7 @@
   --field-padding: var(--space-2);
 
   /* フォーカスの光(--shadow-focus。色はtheme.tsが付ける)が部品の外へ広がる幅。端の部品の
-     光を切らさないよう、スクロール領域の余白をこれから求める(ui.md 4節)。 */
+     光を切らさないよう、スクロール領域の余白をこれから求める(ui.md「スクロール領域」)。 */
   --focus-glow-spread: 0.5rem;
 
   /* 窓の上端から各カラム(左カラム・会話欄・設定のメニューと本文)の中身までの余白。
@@ -71,7 +70,7 @@
      倍の2rem(--space-5)へ飛ばす。--space-4までが「部品の中・部品どうし」の間隔、
      --space-5が「塊と塊を切り分ける」間隔という役割の違いを、値の飛びで表す。
      使う予定のない段階は置かない(未使用だった--space-6は削除)。
-     配置する側ではなく中身が持つ(principles.md 6節)。 */
+     配置する側ではなく中身が持つ。 */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -95,7 +94,7 @@
      (上下の余白が揃っていないと、どちらかに寄って見えるため)。 */
   --compose-bottom-gap: var(--space-1);
 
-  /* レスポンシブ計算の基準値。frontend.md 5節「レスポンシブ」の入力値をここに集約する。
+  /* レスポンシブ計算の基準値。
      吹き出し・設定本文の幅は入れ物に追従させるため、CSSで直接使うのは上限値
      (--content-max-width)だけで、--content-min-widthは下の最小幅の導出式の入力として持つ。 */
   --sidebar-width: 16rem;

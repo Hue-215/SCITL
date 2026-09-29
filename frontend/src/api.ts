@@ -20,7 +20,6 @@ import type {
 } from './types'
 
 // フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
-// docs/spec/rebuild/architecture.md 7節。
 
 /**
  * コマンドの失敗を画面に出す文字列にする唯一の入口。今はcoreのエラー文(英語の診断文)
@@ -124,7 +123,7 @@ export function listChatMessages(chat: Chat): Promise<MessageView[]> {
 }
 
 // 編集・再試行・削除。いずれも対象は`messageId`で指定し、会話の取り違え防止のため`chat`も
-// 渡す(tools.md 1節と同じ理由)。
+// 渡す。
 export function editChatMessage(
   chat: Chat,
   messageId: number,
@@ -159,9 +158,7 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
   return invoke('update_language', { language })
 }
 
-// プロンプトはどれも`string | null`で並ぶため、位置引数だと
-// 呼び出し側での取り違えに気付きにくい(docs/spec/rebuild/tools.md 1節が修正した
-// 「対象タスクの取り違え」と同種の事故)。名前で縛るためオブジェクト引数にする。
+// プロンプトはどれも`string | null`で並ぶため、取り違えないようオブジェクト引数にする。
 export function updateGeneralSettings(args: {
   systemPrompt: string | null
   taskChatSystemPrompt: string | null

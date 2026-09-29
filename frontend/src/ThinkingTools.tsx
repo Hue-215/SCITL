@@ -6,15 +6,10 @@ import type { MessageView, ToolExecutionView } from './types'
 // 混在させて表示する。応答生成以外の経路(画面・MCP等)での操作の記録はここに含めず、独立した
 // 1行として扱う(`OperationLine`)。保存済みのターンも、応答待ちの間の途中経過もこれで描く。
 //
-// 表示専用のコンポーネントであり、モデルへの再送信経路には一切関与しない
-// (docs/spec/principles.md 3節「思考は履歴に送り返さない」。思考はAPIへ送る
-// ChatMessageの構成要素として存在しないため、バックエンド側で型として遮断されている)。
-//
-// 思考・ツール引数・結果はすべてプレーンテキストとして描画する(JSXのテキスト補間と
-// <pre>のみを使い、dangerouslySetInnerHTMLは使わない)。いずれもモデルや外部ツールが
-// 出したものをそのまま確かめるための表示なので、本文用のMarkdown描画(Markdown.tsx)は
-// 通さない。整形しない分、ここからリンクや画像が作られることも無い。引数・結果は
-// Rust側が整形し、見えない文字を見える形にしてある(`ToolExecutionView`)。
+// 思考・ツール引数・結果はすべてプレーンテキストとして描画する(dangerouslySetInnerHTMLも
+// Markdown描画も使わない)。モデルや外部ツールが出したものをそのまま確かめるための表示で、
+// ここからリンクや画像を作らせないため。引数・結果はRust側が整形し、見えない文字を見える形に
+// してある(`ToolExecutionView`)。
 
 /** ツール呼び出し1件の引数と結果。ターンの中の呼び出しと操作の記録のどちらでも同じ形で見せる。 */
 function ToolCallDetail({ execution }: { execution: ToolExecutionView }) {

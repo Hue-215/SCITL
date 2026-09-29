@@ -101,9 +101,7 @@ export default function ChatLog({
             )
           }
 
-          // 編集・削除。対象はツール実行記録を除く通常発言のみ(data-model.md「ツール
-          // 実行記録は通常発言の編集・削除・再試行の対象に含めない」)。`plain`項目は常に
-          // ユーザー発言のため、編集はここでのみ起こりうる。編集と削除は対象が同じ。
+          // 編集・削除。`plain`項目は常にユーザー発言なので、編集はここでのみ起こりうる。
           const canEditOrDelete = message.role === 'user'
 
           if (editing.id === message.id) {
@@ -160,10 +158,8 @@ export default function ChatLog({
           )
         }
 
-        // SCITL自身の応答生成1ターン分。思考・内部ツール呼び出しを発生順の折りたたみで
-        // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する。再試行・削除の
-        // 対象は、この最終行の通常発言のみ。再試行と削除は対象が同じ。失敗したターンの返信
-        // (エラー発言)も含める。
+        // 応答生成1ターン分。思考・ツール呼び出しを発生順の折りたたみで見せ、返信(最終行。
+        // エラー発言を含む)を吹き出しとして表示する。再試行・削除の対象はこの最終行。
         const finalMessage = finalEntryOf(item.entries)
         const canRetryOrDelete =
           finalMessage.kind === 'normal' &&
@@ -177,7 +173,7 @@ export default function ChatLog({
                 content={finalMessage.content}
                 errorKind={finalMessage.error_kind}
               />
-              {/* プロバイダーが書いた文字列のため、Markdown描画(#39)の対象にせず
+              {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
                   プレーンテキストのまま出す(Issue #159) */}
               {finalMessage.error_detail && (
                 <details className="entry-error-detail">
@@ -215,7 +211,7 @@ export default function ChatLog({
           </li>
         ),
       )}
-      {/* コマンド自体の失敗。保存されたエラー発言と同じ見た目にする(Issue #152) */}
+      {/* コマンド自体の失敗。保存されたエラー発言と同じ見た目にする */}
       {failure && (
         <li className="entry entry-error">
           <span className="entry-content">{failure}</span>
