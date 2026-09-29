@@ -57,7 +57,6 @@ pub enum FinishReason {
     ToolCall,
     /// 出力が長さ制限で打ち切られた。Stopに潰すと打ち切りを上位層が検知できない。
     Length,
-    Error,
 }
 
 /// アダプタに渡す発言列の1要素。`{role, content}`の平坦な構造ではなく列挙型にするのは、
