@@ -23,8 +23,8 @@ function choiceKey(choice: ModelChoice): string {
   return JSON.stringify([choice.provider_id, choice.model])
 }
 
-// チャット入力欄の下に置くモデル選択と思考の強さ選択。
-// 選べるものと選択中のものはRust側が組み立てて渡し、ここは描いて選ばせるだけ。
+// チャット入力欄の下に置くモデル選択と思考の強さ選択。選べるものと選択中のものはRust側が
+// 組み立てて渡し、ここは描いて選ばせるだけ。
 export default function ChatModelBar({
   onError,
   onChanged,

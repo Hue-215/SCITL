@@ -1,8 +1,8 @@
 import type { MessageKey } from './i18n'
 import type { MessageView, ToolExecutionView, TurnEvent } from './types'
 
-// 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック。
-// コンポーネント本体は./ThinkingTools.tsxに置き、こちらは純粋な変換関数のみを持つ
+// 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック。コンポーネント本体は
+// ./ThinkingTools.tsxに置き、こちらは純粋な変換関数のみを持つ
 // (react/only-export-componentsに合わせてコンポーネントと非コンポーネントのエクスポートを
 // ファイルごとに分ける)。
 
@@ -54,8 +54,8 @@ export function groupMessages(messages: MessageView[]): DisplayItem[] {
  *
  * 最終行が`kind='normal'`であることは`list_for_chat`が保証する。通常発言が1行も残らない
  * ターン(編集で破棄されたターン)はクエリの時点で会話から外れるため、ここへ届かない。
- * 破棄されたかどうかの判定を表示側にも持たせると同じ判断が2箇所に分かれる
- * ので、ここでは判定しない(../../docs/spec/principles.md 5節)。
+ * 破棄されたかどうかの判定を表示側にも持たせると同じ判断が2箇所に分かれるので、ここでは
+ * 判定しない(../../docs/spec/principles.md 5節)。
  */
 export function finalEntryOf(entries: MessageView[]): MessageView {
   return entries[entries.length - 1]

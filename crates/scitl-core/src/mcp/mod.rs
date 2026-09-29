@@ -65,9 +65,9 @@ pub struct McpToolInfo {
     pub input_schema: Value,
 }
 
-/// 取得済みツール一覧のメモリキャッシュ。アプリ起動中のみ有効で、
-/// config.tomlには書かない。設定画面の表示と、ターン開始時のツール公開の両方が
-/// ここを読む(同じ一覧の出どころを2つ持たない。principles.md 5節)。
+/// 取得済みツール一覧のメモリキャッシュ。アプリ起動中のみ有効で、config.tomlには書かない。
+/// 設定画面の表示と、ターン開始時のツール公開の両方がここを読む(同じ一覧の出どころを2つ
+/// 持たない。principles.md 5節)。
 #[derive(Debug, Default)]
 pub struct ToolCatalog {
     by_server: Mutex<HashMap<String, Vec<McpToolInfo>>>,
@@ -96,9 +96,9 @@ impl ToolCatalog {
     }
 }
 
-/// 応答生成1ターンの間だけ生きるセッション置き場。
-/// サーバーごとに最初に必要になった時点で接続し、ターンの終わりに[`Self::close`]で
-/// まとめて切断する。呼び出し側は成功・失敗どちらの経路でも必ず`close`を通ること。
+/// 応答生成1ターンの間だけ生きるセッション置き場。サーバーごとに最初に必要になった時点で
+/// 接続し、ターンの終わりに[`Self::close`]でまとめて切断する。呼び出し側は成功・
+/// 失敗どちらの経路でも必ず`close`を通ること。
 #[derive(Default)]
 pub struct McpSessions {
     by_server: HashMap<String, ClientService>,

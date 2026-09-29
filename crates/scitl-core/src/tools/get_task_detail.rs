@@ -18,9 +18,8 @@ pub(super) const TOOL: InternalTool = InternalTool {
     run: Run::Read(execute),
 };
 
-/// 総合チャット版。総合チャットは特定のタスクに紐づかず、
-/// 対象を文脈から決められないので、`task_id`をモデルに選ばせる。読み取り専用なので、
-/// 取り違えても書き込みは起きない。
+/// 総合チャット版。総合チャットは特定のタスクに紐づかず、対象を文脈から決められないので、
+/// `task_id`をモデルに選ばせる。読み取り専用なので、取り違えても書き込みは起きない。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(

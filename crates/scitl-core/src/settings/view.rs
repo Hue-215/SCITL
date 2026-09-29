@@ -120,9 +120,9 @@ pub struct GeneralSettingsView {
     pub language: Language,
 }
 
-/// ツール呼び出しの上限。設定値そのもの(未設定は`None`)に加え、未設定時に
-/// 実際に使われる既定値も渡す。画面はプレースホルダにこれを出すだけで、既定値を
-/// TS側に書き写さない(2箇所に持つと必ずどちらかが古くなる)。
+/// ツール呼び出しの上限。設定値そのもの(未設定は`None`)に加え、未設定時に実際に使われる
+/// 既定値も渡す。画面はプレースホルダにこれを出すだけで、既定値をTS側に書き写さない(2箇所に
+/// 持つと必ずどちらかが古くなる)。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ToolSettingsView {

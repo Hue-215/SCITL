@@ -3,8 +3,8 @@ use serde_json::{Map, Value};
 use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
-/// ツール引数の検証。各ツールは受ける引数の名前と型だけを
-/// 書き、検証の規則はここに閉じる。型が期待と違う場合は変換を試みずエラーにする。
+/// ツール引数の検証。各ツールは受ける引数の名前と型だけを書き、検証の規則はここに閉じる。
+/// 型が期待と違う場合は変換を試みずエラーにする。
 pub(super) struct Args<'a> {
     object: &'a Map<String, Value>,
 }

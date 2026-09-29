@@ -329,8 +329,8 @@ interface ModelTableProps {
   onUpdate: (action: () => Promise<SettingsView>) => void
 }
 
-// モデル表。能力は解決済みの値を描くだけで、
-// 手動設定の正規化(初期値と同じ値なら手動設定を外す)はRust側が持つ。
+// モデル表。能力は解決済みの値を描くだけで、手動設定の正規化(初期値と同じ値なら手動設定を
+// 外す)はRust側が持つ。
 function ModelTable({ provider, onUpdate }: ModelTableProps) {
   const models = provider.models
   const [expanded, setExpanded] = useState(false)

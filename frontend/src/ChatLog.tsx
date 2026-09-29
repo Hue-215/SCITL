@@ -101,10 +101,9 @@ export default function ChatLog({
             )
           }
 
-          // 編集・削除。対象はツール実行記録を除く通常発言のみ
-          // (data-model.md「ツール実行記録は通常発言の編集・削除・再試行の対象に
-          // 含めない」)。`plain`項目は常にユーザー発言のため、編集はここでのみ
-          // 起こりうる。編集と削除は対象が同じ。
+          // 編集・削除。対象はツール実行記録を除く通常発言のみ(data-model.md「ツール
+          // 実行記録は通常発言の編集・削除・再試行の対象に含めない」)。`plain`項目は常に
+          // ユーザー発言のため、編集はここでのみ起こりうる。編集と削除は対象が同じ。
           const canEditOrDelete = message.role === 'user'
 
           if (editing.id === message.id) {
@@ -162,10 +161,9 @@ export default function ChatLog({
         }
 
         // SCITL自身の応答生成1ターン分。思考・内部ツール呼び出しを発生順の折りたたみで
-        // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する。
-        // 再試行・削除の対象は、この最終行の通常発言のみ。
-        // 再試行と削除は対象が同じ。
-        // 失敗したターンの返信(エラー発言)も含める。
+        // 見せたうえで、実際の返信(最終行)を通常の吹き出しとして表示する。再試行・削除の
+        // 対象は、この最終行の通常発言のみ。再試行と削除は対象が同じ。失敗したターンの返信
+        // (エラー発言)も含める。
         const finalMessage = finalEntryOf(item.entries)
         const canRetryOrDelete =
           finalMessage.kind === 'normal' &&
@@ -202,8 +200,8 @@ export default function ChatLog({
       })}
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
-          // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す。
-          // 完了したら読み直したターンに置き換わる。
+          // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す。完了したら読み直した
+          // ターンに置き換わる。
           <li key={`pending-${i}`} className="turn-group">
             <ThinkingTools items={live} />
             <div className="entry entry-pending">

@@ -35,8 +35,8 @@ impl TurnRequest {
         stored: StoredChat,
         external: &ExternalToolset,
     ) -> Result<Self> {
-        // 内部ツールと外部ツールを1つの一覧にして公開する。名前空間化と
-        // 衝突の排除は`ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
+        // 内部ツールと外部ツールを1つの一覧にして公開する。名前空間化と衝突の排除は
+        // `ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
         // (対応しないモデルにツールを渡すと、リクエストごと拒否するサーバーがある)。
         let tools_available = ctx.capabilities.tools;
         let options = HistoryOptions {
@@ -66,10 +66,10 @@ impl TurnRequest {
         self.tools_available
     }
 
-    /// ツールを渡すラウンドの数。上限のラウンドまでツールを実行したら、ツールを渡さずに
-    /// もう一度だけ呼ぶ。`u64`で数えるのは、上限が
-    /// `u32::MAX`でも最後の1回を数えられるようにするため。ツールに対応しないモデルは、
-    /// 最初の呼び出しがその最後の1回になる。
+    /// ツールを渡すラウンドの数。上限のラウンドまでツールを実行したら、ツールを渡さずにもう
+    /// 一度だけ呼ぶ。`u64`で数えるのは、上限が`u32::MAX`でも最後の1回を
+    /// 数えられるようにするため。ツールに対応しないモデルは、最初の呼び出しがその最後の
+    /// 1回になる。
     pub(super) fn tool_rounds(&self, ctx: &TurnContext<'_>) -> u64 {
         if self.tools_available {
             u64::from(ctx.limits.max_rounds_per_turn)

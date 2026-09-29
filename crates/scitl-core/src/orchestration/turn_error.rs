@@ -1,6 +1,6 @@
-//! LLM呼び出しの失敗をユーザー向けのエラー発言に変換する。
-//! 種別コードと`CoreError`からの分類をここ1箇所に閉じる。文言は
-//! 言語ファイルの`turn_error.{種別コード}`にあり、画面は種別コードから表示言語の文言を引く。
+//! LLM呼び出しの失敗をユーザー向けのエラー発言に変換する。種別コードと`CoreError`からの
+//! 分類をここ1箇所に閉じる。文言は言語ファイルの`turn_error.{種別コード}`にあり、画面は種別
+//! コードから表示言語の文言を引く。
 
 use crate::error::CoreError;
 use crate::i18n::{self, Language};
@@ -12,10 +12,10 @@ use crate::llm::{ErrorDetail, LlmError, Readiness};
 /// 文言は種別コードだけで決まる(行ごとの値を持たない)。画面が保存済みの行から
 /// 同じ文言を引き直せるのは、このためである。
 ///
-/// 詳細を持つかどうかはバリアントの形で決まる。持てるのは、アダプタが
-/// サニタイズした詳細と、秘密情報を含まない識別子だけで、どちらも`llm::ErrorDetail`の
-/// コンストラクタでしか作れない。鍵ストア・
-/// 設定ファイル・MCPサーバー由来の失敗は、鍵名・パス・URLを含みうるため詳細を持たない。
+/// 詳細を持つかどうかはバリアントの形で決まる。持てるのは、アダプタがサニタイズした詳細と、
+/// 秘密情報を含まない識別子だけで、どちらも`llm::ErrorDetail`のコンストラクタでしか作れない。
+/// 鍵ストア・設定ファイル・MCPサーバー由来の失敗は、鍵名・パス・URLを含みうるため詳細を
+/// 持たない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnFailure {
     NoProvider,
@@ -35,8 +35,8 @@ pub enum TurnFailure {
         detail: ErrorDetail,
     },
     EmptyResponse,
-    /// 文言はコンテキスト長の設定を促す。設定すると
-    /// 履歴の間引き(`orchestration::history_trim`)がその長さに収めるため。
+    /// 文言はコンテキスト長の設定を促す。設定すると履歴の間引き
+    /// (`orchestration::history_trim`)がその長さに収めるため。
     ContextExceeded {
         detail: ErrorDetail,
     },

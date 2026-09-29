@@ -43,10 +43,10 @@ pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
 /// 総合チャットの最新状態(`orchestration::state_prompt`)もこの形で渡す。ツールの結果と
 /// 最新状態で同じタスクの見え方が食い違わないようにするため。
 pub fn task_list(conn: &Connection) -> Result<Value> {
-    // 表示側のフォールバックはモデルには渡さない。`title: null` が「未設定」を
-    // 意味する状態をそのまま見せる。
-    // アーカイブ済みは返さない(旧実装と同じ。docs/spec/rebuild/tools.md 2節)。アーカイブは
-    // 溜まる一方で、返し続けるとトークンが増え続け、優先度の相談ではノイズになる。
+    // 表示側のフォールバックはモデルには渡さない。`title: null` が「未設定」を意味する
+    // 状態をそのまま見せる。アーカイブ済みは返さない(旧実装と同じ。
+    // docs/spec/rebuild/tools.md 2節)。アーカイブは溜まる一方で、返し続けるとトークンが増え
+    // 続け、優先度の相談ではノイズになる。
     let tasks: Vec<_> = tasks::list_summaries(conn)?
         .into_iter()
         .filter(|t| t.archived_at.is_none())

@@ -18,11 +18,10 @@ use crate::db::{self, task_steps};
 use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
-/// ツール実行結果を次ターン以降の入力履歴に残すか否かの分類。
-/// 状態系は次ターンの最新状態JSONで完全に代替できるため履歴に残さない。事実系(検索・
-/// 外部MCPツール等)は「現在の状態」として言い表せないため、実行記録から履歴を組み立てる。
-/// 実行したときに決まった値を実行記録に書き写し、履歴はその値だけを見る
-/// (`orchestration::tool_record`)。
+/// ツール実行結果を次ターン以降の入力履歴に残すか否かの分類。状態系は次ターンの最新状態
+/// JSONで完全に代替できるため履歴に残さない。事実系(検索・外部MCPツール等)は「現在の状態」
+/// として言い表せないため、実行記録から履歴を組み立てる。実行したときに決まった値を
+/// 実行記録に書き写し、履歴はその値だけを見る(`orchestration::tool_record`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
@@ -179,9 +178,9 @@ pub fn execute(
     result.map(ToolOutput::from)
 }
 
-/// `step_id`はタスクIDと違いモデルの文脈に頼らず渡させる引数のため、
-/// 対象タスクの取り違え(同節が修正した過去の不具合)を
-/// 防ぐには呼び出し側で所属チェックが要る。工程の更新・削除ツールで共有する。
+/// `step_id`はタスクIDと違いモデルの文脈に頼らず渡させる引数のため、対象タスクの取り違え
+/// (同節が修正した過去の不具合)を防ぐには呼び出し側で所属チェックが要る。工程の更新・削除
+/// ツールで共有する。
 fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result<()> {
     let belongs = task_steps::list_for_task(conn, task_id)?
         .iter()

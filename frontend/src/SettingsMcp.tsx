@@ -17,9 +17,8 @@ const TRANSPORT_LABELS: Record<Transport, MessageKey> = {
   streamable_http: 'settings.tools.transport_http',
 }
 
-// 「1行1件、KEY=VALUE」形式のテキストをパースする。
-// エラーは行ごとに個別指摘する。行は前後の空白を除いてから見るので、`=`が先頭でなければ
-// キーは空にならない。
+// 「1行1件、KEY=VALUE」形式のテキストをパースする。エラーは行ごとに個別指摘する。行は前後の
+// 空白を除いてから見るので、`=`が先頭でなければキーは空にならない。
 function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
   const pairs: [string, string][] = []
   const errors: string[] = []

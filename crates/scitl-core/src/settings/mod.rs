@@ -180,10 +180,10 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// 設定ファイルを読み、アクティブなプロバイダーのアダプタを組み立てる。ファイルが無ければ
-    /// プロバイダー0件で始める。既定の通信先を補わないのは、通信先をユーザーが登録したものに
-    /// 限るため。読めない・組み立てられない場合も失敗にはしない
-    /// (モジュール冒頭)。
+    /// 設定ファイルを読み、アクティブなプロバイダーのアダプタを組み立てる。ファイルが
+    /// 無ければプロバイダー0件で始める。既定の通信先を補わないのは、通信先をユーザーが
+    /// 登録したものに限るため。読めない・組み立てられない場合も失敗にはしない(モジュール
+    /// 冒頭)。
     pub fn load(path: PathBuf) -> Self {
         let (config, config_error) = match config::load(&path) {
             Ok(config) => (config, None),
@@ -430,8 +430,8 @@ impl Settings {
     }
 
     /// 最初に登録したプロバイダーをアクティブにする。鍵の保存に失敗したらプロバイダー自体の
-    /// 登録も中断し、登録に失敗したら保存した鍵を消す。どちらでも
-    /// `key_ref`と鍵の片方だけが残る状態を作らない。
+    /// 登録も中断し、登録に失敗したら保存した鍵を消す。どちらでも`key_ref`と鍵の片方だけが
+    /// 残る状態を作らない。
     pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
         let name = new.name.trim().to_string();
         if name.is_empty() {
@@ -641,9 +641,9 @@ impl Settings {
         draft.commit().inspect_err(|_| delete_secret_refs(&refs))
     }
 
-    /// 保存済みの秘密情報も消す。`delete_provider`と同じく、
-    /// 設定の保存が済んでから消す。取得済みツール一覧のキャッシュも捨てる(同じIDの
-    /// サーバーを登録し直したときに、前のサーバーの一覧が残っていてはならない。Issue #104)。
+    /// 保存済みの秘密情報も消す。`delete_provider`と同じく、設定の保存が済んでから消す。
+    /// 取得済みツール一覧のキャッシュも捨てる(同じIDのサーバーを登録し直したときに、前の
+    /// サーバーの一覧が残っていてはならない。Issue #104)。
     pub fn delete_mcp_server(&self, server_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let index = draft
@@ -689,8 +689,8 @@ impl Settings {
     }
 
     /// サーバーに接続してツール一覧を取得し、キャッシュへ載せて設定の状態ごと返す。
-    /// config.tomlには書き込まない。ロックはサーバー設定を複製するまで
-    /// だけ持ち、接続の`.await`をまたがせない。
+    /// config.tomlには書き込まない。ロックはサーバー設定を複製するまでだけ持ち、接続の
+    /// `.await`をまたがせない。
     pub async fn fetch_mcp_tools(&self, server_id: &str) -> Result<SettingsView> {
         let _in_flight = self
             .fetching

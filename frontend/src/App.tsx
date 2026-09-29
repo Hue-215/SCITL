@@ -60,8 +60,7 @@ export default function App() {
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 編集モード。ユーザー発言のみが対象。応答待ち中は開始できない
-  // (`disableActions`参照)。
+  // 編集モード。ユーザー発言のみが対象。応答待ち中は開始できない(`disableActions`参照)。
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   // 表示中の会話の鍵(`chatKey`)。非同期の処理が終わった時点で見比べるため、stateとは別に
@@ -201,8 +200,8 @@ export default function App() {
     )
   }
 
-  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す。
-  // バックエンドはコマンド最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
+  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す。バックエンドはコマンド
+  // 最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
   // ここでやっているのは「すでに起きた削除を先に見せる」ことだけ。確定後は`loadChat`が必ず
   // DBの内容で上書きするため、これが最終的な表示になることはない(楽観表示はユーザー発言の
   // プレースホルダと同じ扱い)。
@@ -253,9 +252,8 @@ export default function App() {
     )
   }
 
-  // 確認ダイアログ無しの即座に取り消し可能な論理削除。最初の
-  // ユーザー発言を消すと一覧のフォールバック表示が変わるが、引き直しは
-  // `requests`が一覧ごと行う。
+  // 確認ダイアログ無しの即座に取り消し可能な論理削除。最初のユーザー発言を消すと一覧の
+  // フォールバック表示が変わるが、引き直しは`requests`が一覧ごと行う。
   const remove = async (messageId: number) => {
     if (disableActions) return
     const target = chat

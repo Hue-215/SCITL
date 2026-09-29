@@ -1,5 +1,4 @@
-//! 会話履歴の間引き。どこまで送るかの判断は
-//! ここに閉じる。
+//! 会話履歴の間引き。どこまで送るかの判断はここに閉じる。
 
 use crate::llm::{estimate_message, estimate_tools, ChatMessage, ToolSchema};
 

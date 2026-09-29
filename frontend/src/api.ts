@@ -23,8 +23,8 @@ import type {
 // docs/spec/rebuild/architecture.md 7節。
 
 /**
- * コマンドの失敗を画面に出す文字列にする唯一の入口。今はcoreのエラー文(英語の診断文)を
- * そのまま返し、表示言語には訳していない。
+ * コマンドの失敗を画面に出す文字列にする唯一の入口。今はcoreのエラー文(英語の診断文)
+ * をそのまま返し、表示言語には訳していない。
  */
 export function failureText(e: unknown): string {
   return String(e)
@@ -41,8 +41,8 @@ export function createTask(): Promise<TaskCreation> {
   return invoke('create_task')
 }
 
-// ヘッダーからのタスク操作。変更と会話ログへの記録はRust側が一緒に書く。
-// どれも応答を生成中のタスクでは断られる。
+// ヘッダーからのタスク操作。変更と会話ログへの記録はRust側が一緒に書く。どれも応答を
+// 生成中のタスクでは断られる。
 export function renameTask(taskId: number, title: string): Promise<void> {
   return invoke('rename_task', { taskId, title })
 }
@@ -55,9 +55,9 @@ export function deleteTask(taskId: number): Promise<void> {
   return invoke('delete_task', { taskId })
 }
 
-// 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。
-// 経路(Channel)はコマンドの呼び出しごとに作るので、届いた
-// イベントがどの会話のものかは呼び出し側が知っている。
+// 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)
+// はコマンドの呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が
+// 知っている。
 export function openTaskChat(
   taskId: number,
   onEvent: (event: TurnEvent) => void,
@@ -123,8 +123,8 @@ export function listChatMessages(chat: Chat): Promise<MessageView[]> {
   return invoke('list_chat_messages', { chat })
 }
 
-// 編集・再試行・削除。いずれも対象は`messageId`で指定し、
-// 会話の取り違え防止のため`chat`も渡す(tools.md 1節と同じ理由)。
+// 編集・再試行・削除。いずれも対象は`messageId`で指定し、会話の取り違え防止のため`chat`も
+// 渡す(tools.md 1節と同じ理由)。
 export function editChatMessage(
   chat: Chat,
   messageId: number,
@@ -171,8 +171,8 @@ export function updateGeneralSettings(args: {
   return invoke('update_general_settings', args)
 }
 
-// ツール呼び出しの上限。nullは「未設定」で、Rust側の既定値に戻る。
-// updateGeneralSettingsと同じ理由(number | nullが並ぶ)でオブジェクト引数にする。
+// ツール呼び出しの上限。nullは「未設定」で、Rust側の既定値に戻る。updateGeneralSettingsと
+// 同じ理由(number | nullが並ぶ)でオブジェクト引数にする。
 export function updateToolSettings(args: {
   maxRoundsPerTurn: number | null
   totalTimeoutSecs: number | null
@@ -198,8 +198,8 @@ export function addModels(providerId: string, models: string[]): Promise<Setting
   return invoke('add_models', { providerId, models })
 }
 
-// プロバイダーが提供するモデル名。名前順で、登録済みのものも含む。
-// 設定には書かないので、登録はaddModelsで行う。
+// プロバイダーが提供するモデル名。名前順で、登録済みのものも含む。設定には書かないので、
+// 登録はaddModelsで行う。
 export function listProviderModels(providerId: string): Promise<AvailableModel[]> {
   return invoke('list_provider_models', { providerId })
 }
@@ -241,8 +241,8 @@ export function detectModelCapabilities(providerId: string): Promise<SettingsVie
   return invoke('detect_model_capabilities', { providerId })
 }
 
-// チャット入力欄の下のモデル選択。選び直した後は一覧を引き直す
-// (能力の問い合わせを伴うため、Rust側で保存とは別のコマンドにしてある)。
+// チャット入力欄の下のモデル選択。選び直した後は一覧を引き直す(能力の問い合わせを伴うため、
+// Rust側で保存とは別のコマンドにしてある)。
 export function getChatModels(): Promise<ChatModelsView> {
   return invoke('get_chat_models')
 }
@@ -283,14 +283,14 @@ export function setMcpToolEnabled(
   return invoke('set_mcp_tool_enabled', { serverId, toolName, enabled })
 }
 
-// 取得した一覧はRust側のキャッシュに載り、設定画面の状態ごと返ってくる。
-// フロントエンド側で一覧を保持しない(画面移動で消えるのを防ぐ)。
+// 取得した一覧はRust側のキャッシュに載り、設定画面の状態ごと返ってくる。フロントエンド側で
+// 一覧を保持しない(画面移動で消えるのを防ぐ)。
 export function fetchMcpTools(serverId: string): Promise<SettingsView> {
   return invoke('fetch_mcp_tools', { serverId })
 }
 
-// 本文中のリンク。開く側でもRustが判定し直すため、確認ダイアログを経ずに
-// openConfirmedLinkを呼んでも許可されないURLは開かない。
+// 本文中のリンク。開く側でもRustが判定し直すため、確認ダイアログを経ずにopenConfirmedLinkを
+// 呼んでも許可されないURLは開かない。
 export function inspectLink(url: string): Promise<LinkInspection> {
   return invoke('inspect_link', { url })
 }

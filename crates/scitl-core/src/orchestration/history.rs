@@ -25,9 +25,8 @@ pub(super) struct StoredChat {
 }
 
 /// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
-/// 発言を先頭に補う。まだ1行も無いまま
-/// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。総合チャットは聞き取りを
-/// 持たず、必ずユーザー発言から始まるので補わない。
+/// 発言を先頭に補う。まだ1行も無いまま応答を生成するのは聞き取りの開始そのものなので、
+/// 同じく補う。総合チャットは聞き取りを持たず、必ずユーザー発言から始まるので補わない。
 pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
     Ok(StoredChat {
         messages: messages::list_rows_for_chat(conn, chat)?,

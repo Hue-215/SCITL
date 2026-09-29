@@ -1,5 +1,5 @@
-//! 添付ファイルの行。テキスト添付は本文をこの表に、それ以外は
-//! 実体を`attachments::AttachmentStore`に置き、この表はそのハッシュだけを持つ。
+//! 添付ファイルの行。テキスト添付は本文をこの表に、それ以外は実体を
+//! `attachments::AttachmentStore`に置き、この表はそのハッシュだけを持つ。
 
 use std::collections::HashMap;
 
@@ -167,8 +167,7 @@ pub fn get_in_chat(conn: &Connection, chat: Chat, id: i64) -> Result<Attachment>
     .ok_or(CoreError::AttachmentNotFound(id))
 }
 
-/// 編集で新しい発言へ添付を引き継ぐ。実体は共有し、行だけを写す。
-/// 写した数を返す。
+/// 編集で新しい発言へ添付を引き継ぐ。実体は共有し、行だけを写す。写した数を返す。
 pub fn copy_to_message(
     conn: &Connection,
     from_message_id: i64,

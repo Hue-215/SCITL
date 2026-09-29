@@ -203,8 +203,8 @@ pub struct McpServerConfig {
     pub enabled_tools: BTreeSet<String>,
 }
 
-/// サーバー識別子の長さの上限。画面は入力欄の上限と案内文にこの値を
-/// 使う(`settings::SettingsView`)。
+/// サーバー識別子の長さの上限。画面は入力欄の上限と案内文にこの値を使う
+/// (`settings::SettingsView`)。
 pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
 
 /// サーバー識別子を検証する([`MCP_SERVER_NAME_MAX_CHARS`]字以内、英数字とアンダースコア

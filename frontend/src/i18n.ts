@@ -13,9 +13,9 @@ import type { Language } from './types'
 
 export type MessageKey = keyof typeof ja
 
-// 正本(すべてのキーを持つ)で、未設定のときの表示言語。core側の`Language::DEFAULT`と
-// 同じ言語を指す。キーと差し込む値の名前が言語間で揃っていることは、
-// core側のテスト(scitl_core::i18n)が確かめる。
+// 正本(すべてのキーを持つ)で、未設定のときの表示言語。core側の`Language::DEFAULT`と同じ
+// 言語を指す。キーと差し込む値の名前が言語間で揃っていることは、core側のテスト
+// (scitl_core::i18n)が確かめる。
 export const DEFAULT_LANGUAGE: Language = 'ja'
 
 const CATALOGS: Record<Language, Record<string, string>> = { ja, en }
@@ -71,8 +71,8 @@ function fill(text: string, params: Record<string, string | number>): string {
 }
 
 /**
- * 文言に差し込む、モデル・ユーザー由来の値。双方向制御文字を含んでいても、文言の残りの
- * 並び順を入れ替えないよう、分離の制御文字(FSI・PDI)で閉じ込める。
+ * 文言に差し込む、モデル・ユーザー由来の値。双方向制御文字を含んでいても、文言の残りの並び
+ * 順を入れ替えないよう、分離の制御文字(FSI・PDI)で閉じ込める。
  */
 export function isolated(value: string): string {
   return `\u2068${value}\u2069`
@@ -115,8 +115,8 @@ export function formatBytes(bytes: number): string {
 
 /**
  * エラー発言(role='error')の本文。保存された`content`は英語の定型文言なので、画面は種別
- * コードから表示言語の文言を引く。知らない種別の行(別の版で
- * 保存された等)は`content`をそのまま出す。キーの組み立て方はcoreの`turn_error`と同じ。
+ * コードから表示言語の文言を引く。知らない種別の行(別の版で保存された等)は
+ * `content`をそのまま出す。キーの組み立て方はcoreの`turn_error`と同じ。
  */
 export function turnErrorText(errorKind: string | null, content: string): string {
   if (errorKind === null) return content

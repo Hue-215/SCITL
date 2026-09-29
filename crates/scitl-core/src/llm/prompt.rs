@@ -60,11 +60,11 @@ pub struct PromptText(String);
 
 impl PromptText {
     /// ユーザー発言を、APIに送る本文に組み立てる。プロバイダーごとに形が割れると
-    /// 「どこまでが本文か」の判断が散らばるため、方言を吸収する層ではなくここに1箇所だけ置く。
-    /// 日時の有無で形を変えないのは、囲まれていない発言が
-    /// あると、本文に予約タグを書いた発言が「日時付きの発言」に見せかけられるため。
-    /// `sent_at`はISO8601 UTCで、生成元はこのアプリ自身(`db::now_iso8601`)に限る。DBに無い
-    /// 発言(プロバイダーの都合で補うダミー発言等)は`None`にし、日時を捏造しない。
+    /// 「どこまでが本文か」の判断が散らばるため、方言を吸収する層ではなくここに1箇所だけ
+    /// 置く。日時の有無で形を変えないのは、囲まれていない発言があると、本文に予約タグを
+    /// 書いた発言が「日時付きの発言」に見せかけられるため。`sent_at`はISO8601 UTCで、
+    /// 生成元はこのアプリ自身(`db::now_iso8601`)に限る。DBに無い発言(プロバイダーの都合で
+    /// 補うダミー発言等)は`None`にし、日時を捏造しない。
     pub fn user_message(text: &str, sent_at: Option<&str>) -> Self {
         Self::user_message_with_attachments(text, sent_at, &[])
     }
@@ -185,8 +185,8 @@ pub fn user_message_format_note() -> String {
 }
 
 /// `<scitl:...>`・`</scitl:...>`の`<`を実体参照に置き換え、タグとして読まれないようにする。
-/// 予約タグの名前空間`scitl:`ごと
-/// 対象にするのは、今後タグを増やしたときに無害化の対象を足し忘れないため。
+/// 予約タグの名前空間`scitl:`ごと対象にするのは、今後タグを増やしたときに無害化の対象を足し
+/// 忘れないため。
 fn neutralize_reserved_tags(text: &str) -> String {
     const NAMESPACE: &str = "scitl:";
     let mut out = String::with_capacity(text.len());

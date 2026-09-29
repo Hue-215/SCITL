@@ -19,9 +19,8 @@ pub use token_estimate::{estimate_message, estimate_tools};
 use crate::config::ReasoningEffort;
 use crate::error::CoreError;
 
-/// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び。
-/// ストリーミングしないプロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る
-/// ([`LlmAdapter::send`])。
+/// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び。ストリーミングしない
+/// プロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る([`LlmAdapter::send`])。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -29,10 +28,9 @@ pub enum ResponseEvent {
     TextDelta {
         text: String,
     },
-    /// モデルの思考(reasoning)の断片。表示・`messages.reasoning`への保存
-    /// 専用のイベントであり、`ChatMessage`には対応する構成要素が無い。
-    /// 次のAPI呼び出しの
-    /// 入力に混ざり込む経路が型として存在しないようにするための意図的な非対称設計。
+    /// モデルの思考(reasoning)の断片。表示・`messages.reasoning`への保存専用の
+    /// イベントであり、`ChatMessage`には対応する構成要素が無い。次のAPI呼び出しの入力に
+    /// 混ざり込む経路が型として存在しないようにするための意図的な非対称設計。
     ReasoningDelta {
         text: String,
     },
@@ -62,11 +60,10 @@ pub enum FinishReason {
 /// 「userなのに`tool_call_id`を持つ」といった不正な組み合わせを型で防ぐため
 /// (docs/spec/rebuild/architecture.md 3節。`config.rs`の`McpEndpoint`と同じ理由)。
 ///
-/// ツール呼び出しと結果は、同一ターン内のループでは分類(状態系/事実系)によらず
-/// モデルに返す。この往復を表現するために
-/// `Assistant`の`tool_calls`と`Tool`を持つ。DBの`messages`テーブルには保存しない
-/// (次ターン以降の入力履歴に残さないのはdocs/spec/principles.md 3節、テーブルへの
-/// 不保存はdocs/spec/rebuild/data-model.md 2節)。
+/// ツール呼び出しと結果は、同一ターン内のループでは分類(状態系/事実系)によらずモデルに返す。
+/// この往復を表現するために`Assistant`の`tool_calls`と`Tool`を持つ。DBの`messages`
+/// テーブルには保存しない(次ターン以降の入力履歴に残さないのはdocs/spec/principles.md 3節、
+/// テーブルへの不保存はdocs/spec/rebuild/data-model.md 2節)。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatMessage {
     System(String),
@@ -246,9 +243,9 @@ impl ToolSchema {
     }
 }
 
-/// アダプタが構成不足で呼び出しに進めない状態。プロバイダの選択有無など、
-/// アダプタ自体が無い場合は`orchestration::TurnContext::adapter`の`Err`で表すため
-/// ここには含めない(`orchestration::turn_error::from_readiness`参照)。
+/// アダプタが構成不足で呼び出しに進めない状態。プロバイダの選択有無など、アダプタ自体が無い
+/// 場合は`orchestration::TurnContext::adapter`の`Err`で表すためここには含めない
+/// (`orchestration::turn_error::from_readiness`参照)。
 ///
 /// APIキーの空・未設定はここに含めない。ローカルプロバイダーは認証不要で意図的に
 /// 空のままにする場合があり、空文字列だけでは「未設定で使えない」のか「設定不要」なのかを
@@ -275,8 +272,8 @@ pub trait LlmAdapter: Send + Sync {
     /// 呼び出し元が能力から決める。
     ///
     /// 応答のイベントは、生成した順に1件ずつ`on_event`へ渡す。ストリーミングするかどうかは
-    /// アダプタの都合で、呼び出し側は区別しない。渡したイベントは
-    /// そのまま画面へ流れるため、次を守る。
+    /// アダプタの都合で、呼び出し側は区別しない。渡したイベントはそのまま画面へ流れるため、
+    /// 次を守る。
     ///
     /// - 失敗は`Err`で返し、イベントにしない(ストリームの途中で届くエラーも同じ)。
     ///   エラー本文を本文のイベントに載せると、`orchestration::turn_error`の伏せ字と長さの
