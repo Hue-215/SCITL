@@ -52,7 +52,7 @@ pub fn classify_host(url: &Url) -> HostClass {
 }
 
 /// スキーム・ホスト・query/fragment/userinfoの検証。LLMプロバイダーのbase_url、
-/// MCP streamable_httpのURLの両方に適用する(principles.md 4節、architecture.md 5節)。
+/// MCP streamable_httpのURLの両方に適用する。
 ///
 /// query/fragment/userinfoを拒否する理由: エンドポイントは`Url::join`で組み立てるため、
 /// これらが混ざっているとリクエストパスや認証情報の置き場所として悪用されかねない

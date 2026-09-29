@@ -2,8 +2,7 @@
 
 /**
  * サイドバーの1行。`TaskSummary`に、表示側だけで使うフォールバックを添える。
- * `title`は未設定(null)のまま返し、書き換えない
- * (docs/spec/rebuild/data-model.md「title は TEXT NULL」)。
+ * `title`は未設定(null)のまま返し、書き換えない。
  */
 export type TaskListItem = { 
 /**

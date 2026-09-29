@@ -1,6 +1,6 @@
 //! プロンプトの形式に属するもの(予約タグ・ユーザー発言の囲み・その読み方の説明)と、
 //! 未信頼の中身を運ぶ[`PromptText`]。予約タグの無害化をここに閉じるのは、タグを変えたときに
-//! 無害化も追従させるため(docs/spec/rebuild/architecture.md 10節)。
+//! 無害化も追従させるため。
 
 use serde::Serialize;
 use serde_json::Value;
@@ -21,7 +21,7 @@ const ATTACHMENTS_TAG: &str = "scitl:attachments";
 /// そこで切れるため、変わらない部分より後ろに回す。発言の囲みの外に置くのは添付と同じ理由。
 const STATE_TAG: &str = "scitl:state";
 
-/// 添付1件についてモデルに伝える情報(Issue #21)。JSONに直列化してから予約タグを無害化する
+/// 添付1件についてモデルに伝える情報。JSONに直列化してから予約タグを無害化する
 /// ので、ファイル名・本文の改行や引用符はJSONのエスケープに閉じ込められる。
 #[derive(Debug, Clone, Serialize)]
 pub struct AttachmentNote<'a> {
@@ -60,8 +60,8 @@ pub struct PromptText(String);
 
 impl PromptText {
     /// ユーザー発言を、APIに送る本文に組み立てる。プロバイダーごとに形が割れると
-    /// 「どこまでが本文か」の判断が散らばるため、方言を吸収する層ではなくここに1箇所だけ置く
-    /// (docs/spec/principles.md 5節)。日時の有無で形を変えないのは、囲まれていない発言が
+    /// 「どこまでが本文か」の判断が散らばるため、方言を吸収する層ではなくここに1箇所だけ置く。
+    /// 日時の有無で形を変えないのは、囲まれていない発言が
     /// あると、本文に予約タグを書いた発言が「日時付きの発言」に見せかけられるため。
     /// `sent_at`はISO8601 UTCで、生成元はこのアプリ自身(`db::now_iso8601`)に限る。DBに無い
     /// 発言(プロバイダーの都合で補うダミー発言等)は`None`にし、日時を捏造しない。
@@ -144,8 +144,7 @@ pub(super) fn neutralize_json_value(value: &Value) -> Option<Value> {
 }
 
 /// 予約タグの読み方をモデルに説明する一文。[`PromptText::user_message`]が組み立てる形から
-/// 生成するのは、タグ名や属性を変えたときに説明だけが古くなるのを防ぐため
-/// (docs/spec/principles.md 5節「1つの機能に関わる判断を1箇所に閉じる」)。
+/// 生成するのは、タグ名や属性を変えたときに説明だけが古くなるのを防ぐため。
 pub fn user_message_format_note() -> String {
     let example = PromptText::user_message_with_attachments(
         "body",
@@ -185,8 +184,8 @@ pub fn user_message_format_note() -> String {
     )
 }
 
-/// `<scitl:...>`・`</scitl:...>`の`<`を実体参照に置き換え、タグとして読まれないようにする
-/// (docs/spec/principles.md 4節「予約タグは無効化する」)。予約タグの名前空間`scitl:`ごと
+/// `<scitl:...>`・`</scitl:...>`の`<`を実体参照に置き換え、タグとして読まれないようにする。
+/// 予約タグの名前空間`scitl:`ごと
 /// 対象にするのは、今後タグを増やしたときに無害化の対象を足し忘れないため。
 fn neutralize_reserved_tags(text: &str) -> String {
     const NAMESPACE: &str = "scitl:";

@@ -14,7 +14,7 @@ interface TaskHeaderProps {
   onDelete: () => void
 }
 
-// タスクチャットのヘッダー(Issue #75、legacy/frontend.md 1節)。名前のその場での変更・
+// タスクチャットのヘッダー。名前のその場での変更・
 // 締切と工程の進捗・アーカイブの切り替え・削除。タスクを切り替えたら編集中の状態を捨てるよう、
 // 呼び出し側はタスクのidを`key`に渡す。
 export default function TaskHeader({
@@ -58,7 +58,7 @@ export default function TaskHeader({
                   setEditing(false)
                 }
               }}
-              // フォーカスを外したら取り消す(legacy/frontend.md 1節)。確定はEnterだけ。
+              // フォーカスを外したら取り消す。確定はEnterだけ。
               onBlur={() => setEditing(false)}
               autoFocus
             />

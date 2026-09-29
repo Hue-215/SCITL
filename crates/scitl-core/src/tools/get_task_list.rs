@@ -18,8 +18,7 @@ pub(super) const TOOL: InternalTool = InternalTool {
     run: Run::Read(execute),
 };
 
-/// 引数なし。文脈から決まる情報を持たないため面によらず同一のスキーマ
-/// (docs/spec/rebuild/tools.md 2節)。
+/// 引数なし。文脈から決まる情報を持たないため面によらず同一のスキーマ。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(
@@ -44,8 +43,8 @@ pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
 /// 総合チャットの最新状態(`orchestration::state_prompt`)もこの形で渡す。ツールの結果と
 /// 最新状態で同じタスクの見え方が食い違わないようにするため。
 pub fn task_list(conn: &Connection) -> Result<Value> {
-    // 表示側のフォールバック(Issue #61)はモデルには渡さない。`title: null` が「未設定」を
-    // 意味する状態をそのまま見せる(docs/spec/rebuild/tools.md「変更点の詳細」)。
+    // 表示側のフォールバックはモデルには渡さない。`title: null` が「未設定」を
+    // 意味する状態をそのまま見せる。
     // アーカイブ済みは返さない(旧実装と同じ。docs/spec/rebuild/tools.md 2節)。アーカイブは
     // 溜まる一方で、返し続けるとトークンが増え続け、優先度の相談ではノイズになる。
     let tasks: Vec<_> = tasks::list_summaries(conn)?

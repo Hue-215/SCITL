@@ -154,7 +154,7 @@ input:not([type='radio']) {
     var(--focus-glow, 0 0 transparent);
 }
 
-/* 奥行き(ui.md 2節)。押せる部品は浮かせ、値を入れる所は沈ませる。輪郭は背景との
+/* 奥行き。押せる部品は浮かせ、値を入れる所は沈ませる。輪郭は背景との
    塗りの差で作り、影は奥行きの補助に留める。 */
 button,
 select {
@@ -250,7 +250,7 @@ textarea:disabled {
   cursor: not-allowed;
 }
 
-/* 内容に応じて一定の高さまで自動で伸び、それ以降は内側でスクロールする(Issue #96)。
+/* 内容に応じて一定の高さまで自動で伸び、それ以降は内側でスクロールする。
    field-sizingの対応は実機(WebKitGTK)で確認済み(2.52.6)。自動で高さが決まる以上、
    手動リサイズと二重に高さの決定権を持たせない(principles.md 5節)ため resize は切る。 */
 textarea {
@@ -519,7 +519,7 @@ option {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 端の行の浮きを切らさないための余白(ui.md 4節)。 */
+  /* 端の行の浮きを切らさないための余白。 */
   padding-block: var(--space-1);
 }
 
@@ -567,7 +567,7 @@ option {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  /* 端の行の浮き・フォーカスの光を切らさないための余白(ui.md 4節)。外との間隔は
+  /* 端の行の浮き・フォーカスの光を切らさないための余白。外との間隔は
      .sidebarのgapと合わせて作る。 */
   padding-block: var(--space-2);
 }
@@ -698,7 +698,7 @@ option {
   margin-right: var(--bubble-margin-near);
 }
 
-/* 塗りのある吹き出しは、押せない面として持ち上げる(ui.md 2節)。 */
+/* 塗りのある吹き出しは、押せない面として持ち上げる。 */
 .entry-user,
 .entry-assistant,
 .entry-error {
@@ -1077,7 +1077,7 @@ option {
   font-size: var(--font-size-sm);
 }
 
-/* モデル表(Issue #65)。列が多く、狭い窓では収まらないため、表の中だけで横に
+/* モデル表。列が多く、狭い窓では収まらないため、表の中だけで横に
    スクロールさせる(カードを押し広げない。.markdown tableと同じ扱い)。 */
 .model-table-scroll {
   overflow-x: auto;
@@ -1201,7 +1201,7 @@ option {
   min-width: 0;
 }
 
-/* 取得したモデルの候補欄(Issue #33)。検索欄と操作ボタンは留まり、候補だけが
+/* 取得したモデルの候補欄。検索欄と操作ボタンは留まり、候補だけが
    スクロールする(ui.md 4節)。左右の余白はスクロールしない子と、候補の各行が持つ。 */
 .model-picker {
   display: flex;
@@ -1220,7 +1220,7 @@ option {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 端の行のチェックボックスのフォーカスの光を切らさないための余白(ui.md 4節)。 */
+  /* 端の行のチェックボックスのフォーカスの光を切らさないための余白。 */
   padding-block: var(--space-1);
 }
 
@@ -1358,7 +1358,7 @@ button.danger {
   user-select: text;
 }
 
-/* ダイアログの共通枠(legacy/frontend.md 5節)。タスク削除・プロバイダー削除・
+/* ダイアログの共通枠。タスク削除・プロバイダー削除・
    外部ツールサーバー削除の確認のほか、リンク確認・画像プレビュー・テキスト添付の
    全文表示でも共通で使う。ウィンドウ全体を覆う都合、内容領域の幅基準(5節)ではなく
    overlay自身の幅(100%)を基準にする。 */

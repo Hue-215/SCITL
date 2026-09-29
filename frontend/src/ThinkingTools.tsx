@@ -2,11 +2,11 @@ import { t } from './i18n'
 import { operationSourceLabel, type ThoughtItem } from './thinking'
 import type { MessageView, ToolExecutionView } from './types'
 
-// 「思考・ツール」の折りたたみ表示(Issue #42、docs/spec/legacy/frontend.md 1節)。
+// 「思考・ツール」の折りたたみ表示。
 // モデルの思考(reasoning)と内部ツール呼び出しを発生順に混在させて表示する。
 // 応答生成以外の経路(画面・MCP等)での操作の記録はここに含めず、独立した1行として扱う
 // (`OperationLine`)。
-// 保存済みのターンも、応答待ちの間の途中経過(Issue #70)もこれで描く。
+// 保存済みのターンも、応答待ちの間の途中経過もこれで描く。
 //
 // 表示専用のコンポーネントであり、モデルへの再送信経路には一切関与しない
 // (docs/spec/principles.md 3節「思考は履歴に送り返さない」。思考はAPIへ送る
@@ -30,8 +30,7 @@ function ToolCallDetail({ execution }: { execution: ToolExecutionView }) {
   )
 }
 
-// ツール名はモデルが書いたものなので、続く「()」や失敗の印の並びを入れ替えないよう閉じ込める
-// (ui.md 2節「部品ごとの決まり」)。
+// ツール名はモデルが書いたものなので、続く「()」や失敗の印の並びを入れ替えないよう閉じ込める。
 function ToolName({ execution }: { execution: ToolExecutionView }) {
   return <bdi>{execution.tool ?? t('chat.tool_unknown')}</bdi>
 }
@@ -77,7 +76,7 @@ export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
 /**
  * 応答生成以外の経路(画面・MCP等)での操作の記録1件を、「思考・ツール」折りたたみとは
  * 独立した1行として表示する。行末に経路のラベルを出し、ターンの中の呼び出しと見分けられる
- * ようにする(docs/spec/legacy/frontend.md 1節)。
+ * ようにする。
  */
 export function OperationLine({ message }: { message: MessageView }) {
   const execution = message.tool_execution

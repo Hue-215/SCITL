@@ -1,8 +1,7 @@
 //! 設定画面・CLIへ見せる設定の形。
 //!
 //! `key_ref`も平文の秘密情報も含めない。プロバイダーに鍵が設定済みかどうかは
-//! `has_api_key`という真偽値だけで伝え、MCPサーバーの環境変数・ヘッダーも名前だけを伝える
-//! (architecture.md 7節「フロントエンドは秘密情報を一切受け取らない」)。
+//! `has_api_key`という真偽値だけで伝え、MCPサーバーの環境変数・ヘッダーも名前だけを伝える。
 
 use serde::Serialize;
 
@@ -35,18 +34,18 @@ pub struct ProviderView {
     pub has_api_key: bool,
     /// モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
     pub can_detect_capabilities: bool,
-    /// このプロバイダーをアクティブにしているが、組み立てられない理由(Issue #155)。
+    /// このプロバイダーをアクティブにしているが、組み立てられない理由。
     pub error: Option<String>,
 }
 
-/// モデル表の1行(Issue #65)。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
+/// モデル表の1行。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ModelView {
     /// 登録した名前。操作の鍵として送り返すだけで、画面には描かない(描くのは`label`)。
     pub name: String,
     /// 画面に出す名前。プロバイダーの一覧から選んだ名前はサーバーが書いた文字列なので、
-    /// 見えない文字を除いた写しを渡す(architecture.md 10節)。
+    /// 見えない文字を除いた写しを渡す。
     pub label: String,
     pub visible: bool,
     pub capabilities: ModelCapabilities,
@@ -79,8 +78,7 @@ pub struct McpToolView {
     /// サーバーが返したままの名前。有効化を切り替えるときの鍵として送り返すだけで、
     /// 画面には描かない(描くのは`label`)。
     pub name: String,
-    /// 画面に出す名前と説明。サーバーが書いた文字列なので、見えない文字を除いた写しを渡す
-    /// (architecture.md 10節)。
+    /// 画面に出す名前と説明。サーバーが書いた文字列なので、見えない文字を除いた写しを渡す。
     pub label: String,
     pub description: Option<String>,
     /// モデルへ公開できる名前か。公開できないツールは有効にできない。
@@ -95,7 +93,7 @@ pub struct McpServerView {
     pub enabled: bool,
     pub endpoint: McpEndpointView,
     pub enabled_tools: Vec<String>,
-    /// 画面に出すツール一覧。取得済みの一覧(Issue #104)に、そこに無い有効化済みのツールを
+    /// 画面に出すツール一覧。取得済みの一覧に、そこに無い有効化済みのツールを
     /// 足したもの。有効化済みのツールを必ず出すのは、出さないと確認することも外すことも
     /// できないため(一覧のキャッシュはアプリ起動中だけなので、再起動直後は未取得になる。
     /// サーバーが消したツールは、同じ名前のツールが後から足されると選び直さずに公開される)。
@@ -122,7 +120,7 @@ pub struct GeneralSettingsView {
     pub language: Language,
 }
 
-/// ツール呼び出しの上限(Issue #71)。設定値そのもの(未設定は`None`)に加え、未設定時に
+/// ツール呼び出しの上限。設定値そのもの(未設定は`None`)に加え、未設定時に
 /// 実際に使われる既定値も渡す。画面はプレースホルダにこれを出すだけで、既定値を
 /// TS側に書き写さない(2箇所に持つと必ずどちらかが古くなる)。
 #[derive(Debug, Serialize)]
@@ -137,7 +135,7 @@ pub struct ToolSettingsView {
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct SettingsView {
-    /// 起動時に設定ファイルを読めなかった理由(Issue #155)。あれば設定は保存されない。
+    /// 起動時に設定ファイルを読めなかった理由。あれば設定は保存されない。
     pub config_error: Option<String>,
     pub general: GeneralSettingsView,
     pub tools: ToolSettingsView,
@@ -148,7 +146,7 @@ pub struct SettingsView {
     pub mcp_server_name_max_chars: usize,
 }
 
-/// チャット入力欄の下のモデル選択・思考の強さ選択(Issue #64)。設定画面の[`SettingsView`]
+/// チャット入力欄の下のモデル選択・思考の強さ選択。設定画面の[`SettingsView`]
 /// とは別に持ち、選ぶのに要るものだけを渡す。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -300,7 +298,7 @@ pub(super) fn build(
     }
 }
 
-/// プロバイダーの一覧から取得したモデル1件(Issue #33)。
+/// プロバイダーの一覧から取得したモデル1件。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AvailableModel {

@@ -19,8 +19,8 @@ pub(super) const TOOL: InternalTool = InternalTool {
     run: Run::UpdateTask(execute),
 };
 
-/// タスクチャット版のスキーマ。`task_id`を引数に含めない
-/// (docs/spec/rebuild/tools.md 1節)。説明は常に配列のみを受ける
+/// タスクチャット版のスキーマ。`task_id`を引数に含めない。
+/// 説明は常に配列のみを受ける
 /// (同2節「変更点の詳細」— 文字列/配列の多相引数をやめる)。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {

@@ -1,6 +1,5 @@
 //! 設定・登録の操作(設定画面の各タブ、Issue #22・#28・#71)。GUIのコマンドもCLIも
-//! ここを1つ呼ぶだけにし、登録の規則・入力検証・秘密情報の出し入れ・保存を同じ経路に通す
-//! (architecture.md 1節、principles.md 5節)。
+//! ここを1つ呼ぶだけにし、登録の規則・入力検証・秘密情報の出し入れ・保存を同じ経路に通す。
 //!
 //! 変更はすべて[`Draft`]を通る。書き込み同士は`writer`で直列化し、設定の複製を変更→
 //! アダプタの組み立て→保存→差し替え、の順で進める。途中で失敗すれば何も差し替えないので、
@@ -166,7 +165,7 @@ pub struct Settings {
     config_error: Option<String>,
     current: Mutex<Current>,
     writer: Mutex<()>,
-    /// 取得済みのMCPツール一覧(Issue #104)。アプリ起動中だけ保持するメモリキャッシュで、
+    /// 取得済みのMCPツール一覧。アプリ起動中だけ保持するメモリキャッシュで、
     /// config.tomlには書かない(ツール名・説明はユーザーの設定ではなくサーバー側の持ち物で、
     /// 永続化した写しはサーバー側の更新を検知できない)。設定画面の表示と、ターン開始時の
     /// ツール公開(`orchestration::McpAccess`)が同じここを読む。
@@ -183,7 +182,7 @@ pub struct Settings {
 impl Settings {
     /// 設定ファイルを読み、アクティブなプロバイダーのアダプタを組み立てる。ファイルが無ければ
     /// プロバイダー0件で始める。既定の通信先を補わないのは、通信先をユーザーが登録したものに
-    /// 限るため(principles.md 1節)。読めない・組み立てられない場合も失敗にはしない
+    /// 限るため。読めない・組み立てられない場合も失敗にはしない
     /// (モジュール冒頭)。
     pub fn load(path: PathBuf) -> Self {
         let (config, config_error) = match config::load(&path) {
@@ -241,7 +240,7 @@ impl Settings {
         self.snapshot()
     }
 
-    /// チャット入力欄の下のモデル選択(Issue #64)。思考の強さを選べるかは能力で決まるので、
+    /// チャット入力欄の下のモデル選択。思考の強さを選べるかは能力で決まるので、
     /// ターンの開始と同じく、アクティブなモデルを先に問い合わせる。失敗したら自動検出より
     /// 下の層の値で出す。
     pub async fn chat_models(&self) -> ChatModelsView {
@@ -285,7 +284,7 @@ impl Settings {
         Ok(self.view())
     }
 
-    /// プロバイダーが提供するモデル名を問い合わせる(Issue #33)。登録済みのものも含めて
+    /// プロバイダーが提供するモデル名を問い合わせる。登録済みのものも含めて
     /// 名前順に返し、設定には書かない。どれを登録するかは利用者が選び、[`Self::add_models`]で
     /// 登録する(一括で登録しない理由はarchitecture.md 3節)。
     pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<AvailableModel>> {
@@ -399,8 +398,7 @@ impl Settings {
         draft.commit()
     }
 
-    /// 保存した表示言語。画面は起動時に1度だけ読み、切り替えは再起動で反映する
-    /// (legacy/frontend.md 2節)。
+    /// 保存した表示言語。画面は起動時に1度だけ読み、切り替えは再起動で反映する。
     pub fn display_language(&self) -> Language {
         self.current().config.general.language()
     }
@@ -432,7 +430,7 @@ impl Settings {
     }
 
     /// 最初に登録したプロバイダーをアクティブにする。鍵の保存に失敗したらプロバイダー自体の
-    /// 登録も中断し(legacy/frontend.md 3節)、登録に失敗したら保存した鍵を消す。どちらでも
+    /// 登録も中断し、登録に失敗したら保存した鍵を消す。どちらでも
     /// `key_ref`と鍵の片方だけが残る状態を作らない。
     pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
         let name = new.name.trim().to_string();
@@ -534,7 +532,7 @@ impl Settings {
         Ok(view)
     }
 
-    /// チャット入力欄の下で選んだモデルに切り替える(Issue #64)。一覧はプロバイダーを跨ぐので、
+    /// チャット入力欄の下で選んだモデルに切り替える。一覧はプロバイダーを跨ぐので、
     /// アクティブなプロバイダーとそのモデルを1回の保存で切り替える。2回に分けると、間で
     /// 落ちたときに意図しない組が残る。
     pub fn select_chat_model(&self, provider_id: &str, model: &str) -> Result<()> {
@@ -573,7 +571,7 @@ impl Settings {
         draft.commit()
     }
 
-    /// 手動設定より下の層と同じ値にしたら、手動設定を外す(architecture.md 3節)。
+    /// 手動設定より下の層と同じ値にしたら、手動設定を外す。
     pub fn set_model_capability(
         &self,
         provider_id: &str,
@@ -643,7 +641,7 @@ impl Settings {
         draft.commit().inspect_err(|_| delete_secret_refs(&refs))
     }
 
-    /// 保存済みの秘密情報も消す(legacy/frontend.md 4節)。`delete_provider`と同じく、
+    /// 保存済みの秘密情報も消す。`delete_provider`と同じく、
     /// 設定の保存が済んでから消す。取得済みツール一覧のキャッシュも捨てる(同じIDの
     /// サーバーを登録し直したときに、前のサーバーの一覧が残っていてはならない。Issue #104)。
     pub fn delete_mcp_server(&self, server_id: &str) -> Result<SettingsView> {
@@ -690,8 +688,8 @@ impl Settings {
         draft.commit()
     }
 
-    /// サーバーに接続してツール一覧を取得し、キャッシュへ載せて設定の状態ごと返す
-    /// (Issue #104)。config.tomlには書き込まない。ロックはサーバー設定を複製するまで
+    /// サーバーに接続してツール一覧を取得し、キャッシュへ載せて設定の状態ごと返す。
+    /// config.tomlには書き込まない。ロックはサーバー設定を複製するまで
     /// だけ持ち、接続の`.await`をまたがせない。
     pub async fn fetch_mcp_tools(&self, server_id: &str) -> Result<SettingsView> {
         let _in_flight = self
@@ -1252,7 +1250,7 @@ name = "m"
     }
 
     /// 設定ファイルを読めなくても起動し、理由を画面とターンへ渡す。読めなかったファイルは
-    /// 上書きしない(Issue #155)。
+    /// 上書きしない。
     #[test]
     fn unreadable_config_file_starts_empty_and_refuses_to_save() {
         let dir = tempfile::tempdir().unwrap();
@@ -1274,7 +1272,7 @@ name = "m"
     }
 
     /// アクティブなプロバイダーを組み立てられなくても起動し、そのプロバイダーを使えない
-    /// ものとして扱う。無関係な変更は通し、削除すれば直る(Issue #155)。
+    /// ものとして扱う。無関係な変更は通し、削除すれば直る。
     #[test]
     fn broken_active_provider_does_not_block_startup_or_unrelated_changes() {
         let dir = tempfile::tempdir().unwrap();

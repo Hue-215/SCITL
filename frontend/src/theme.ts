@@ -1,7 +1,7 @@
-// 単色シードから明暗2種のカラースキームを生成し、CSS変数として適用する(Issue #79)。
+// 単色シードから明暗2種のカラースキームを生成し、CSS変数として適用する。
 // 役割(background/surface/text/primary...)ごとに彩度・明度を決め打ちし、シードの色相(と
 // 危険色を除く彩度)だけを引き継ぐ。デザイントークンを1箇所に集約する方針
-// (docs/spec/principles.md 6節)の一部。奥行きの影(--shadow-*)も明暗で中身が変わるため、
+// の一部。奥行きの影(--shadow-*)も明暗で中身が変わるため、
 // 同じ切り替えに乗せてここで発行する。
 //
 // シードの色味が乗るのは背景・面・境界線・プライマリだけで、文字(on*を含む)は
@@ -33,7 +33,7 @@ const DANGER_HUE = 4
 const ROLES = {
   bg: { light: { saturationFactor: 0.08, lightness: 98 }, dark: { saturationFactor: 0.12, lightness: 9 } },
   // surfaceは沈んだ部品(入力欄・選択中の項目)、surfaceAltは浮いた部品(ボタン)の塗り。
-  // どちらも背景(bg)との差で部品の輪郭を作り、影は奥行きの補助に留める(ui.md 2節)。
+  // どちらも背景(bg)との差で部品の輪郭を作り、影は奥行きの補助に留める。
   surface: { light: { saturationFactor: 0.1, lightness: 94 }, dark: { saturationFactor: 0.14, lightness: 14 } },
   surfaceAlt: { light: { saturationFactor: 0.12, lightness: 90 }, dark: { saturationFactor: 0.16, lightness: 21 } },
   border: { light: { saturationFactor: 0.14, lightness: 82 }, dark: { saturationFactor: 0.16, lightness: 32 } },

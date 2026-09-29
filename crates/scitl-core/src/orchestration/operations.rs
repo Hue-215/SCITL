@@ -1,5 +1,5 @@
-//! 応答生成以外の経路(画面・CLI。将来はMCP)からのタスク操作(Issue #75)。変更と会話ログへの
-//! 記録を同じトランザクションで書く(data-model.md「応答生成以外の経路での操作の記録」)。
+//! 応答生成以外の経路(画面・CLI。将来はMCP)からのタスク操作。変更と会話ログへの
+//! 記録を同じトランザクションで書く。
 //! 状態の列は現在の状態だけを持ち、いつ何をしたかはこの記録が持つ。
 //!
 //! どの操作も、そのタスクが応答を生成中なら断る([`super::turn`]の生成中の集合)。モデルの
@@ -22,7 +22,7 @@ use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn::begin_generating;
 use crate::tools::update_task;
 
-/// 削除の記録に載せる操作名。モデルには公開しないツール(tools.md 2節)だが、記録の語彙は
+/// 削除の記録に載せる操作名。モデルには公開しないツールだが、記録の語彙は
 /// 他の操作と同じくツール名に揃える。
 const DELETE_TASK: &str = "delete_task";
 

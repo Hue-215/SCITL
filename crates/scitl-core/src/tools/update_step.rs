@@ -19,8 +19,7 @@ pub(super) const TOOL: InternalTool = InternalTool {
     run: Run::UpdateTask(execute),
 };
 
-/// タスクチャット版のスキーマ。`task_id`を引数に含めない
-/// (docs/spec/rebuild/tools.md 1節)。
+/// タスクチャット版のスキーマ。`task_id`を引数に含めない。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(

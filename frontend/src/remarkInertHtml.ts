@@ -2,7 +2,7 @@ import type { Html, Image, ImageReference, Nodes, Parent, PhrasingContent, Root 
 import { t } from './i18n'
 
 // Markdownの構文木から、描画時に外部へのアクセスや生のHTML解釈を起こしうる要素を
-// 取り除く remark プラグイン(principles.md 4節「画像の自動取得を防ぐ」)。
+// 取り除く remark プラグイン。
 //
 // - 画像記法(`![alt](url)`・参照形式)は、画像と分かるラベルを付けたリンクに変える。
 //   リンクは確認ダイアログを経てしか開けない(Markdown.tsx)

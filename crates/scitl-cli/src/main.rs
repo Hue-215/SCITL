@@ -1,5 +1,5 @@
 //! SCITLのCLI。GUIと同じcoreを直接呼び、GUIを開かずに同じ検証を通って操作・確認できる
-//! 状態を保つ(architecture.md 1節)。応答生成(送信・再試行)は行わない。送信内容の
+//! 状態を保つ。応答生成(送信・再試行)は行わない。送信内容の
 //! プレビューは、モデルを呼ばずに次のターンのリクエストを組み立てて見せる。
 //!
 //! 出力はJSONに揃え、端末へは[`print_json`]・[`print_error`]・[`print_clap`]だけから書く。
@@ -115,7 +115,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     }
     let db: SharedConnection = Arc::new(Mutex::new(db::open(data.database())?));
     // CLIは応答を生成しないので、この集合は常に空。別プロセス(GUI)が生成中かどうかは
-    // 見えない(data-model.md 4節)。
+    // 見えない。
     let generating = InFlightSet::new();
 
     match cli.command {
@@ -182,8 +182,7 @@ enum CliError {
     Core(#[from] CoreError),
 }
 
-/// 見えない文字を端末へ書かないよう、JSONのエスケープの形にしてから書く
-/// (architecture.md 10節「端末」)。
+/// 見えない文字を端末へ書かないよう、JSONのエスケープの形にしてから書く。
 fn print_json(value: &impl Serialize) {
     let json = serde_json::to_string_pretty(value).expect("views serialize to JSON");
     println!("{}", text::reveal_invisible(&json));

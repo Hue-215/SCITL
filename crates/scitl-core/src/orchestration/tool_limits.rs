@@ -1,8 +1,8 @@
-//! 1ターンでのツール呼び出しに掛ける上限(Issue #71)。
+//! 1ターンでのツール呼び出しに掛ける上限。
 //!
 //! 設定([`crate::config::ToolConfig`])は「未設定」を`None`で持ち、既定値は持たない。
 //! 既定値の実体はここ1箇所だけにあり、上限の解釈も[`crate::orchestration::turn`]と
-//! ここに閉じる(`docs/spec/principles.md` 5節)。
+//! ここに閉じる。
 
 use std::time::Duration;
 

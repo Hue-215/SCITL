@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::CoreError;
 use crate::i18n::Language;
 
-/// 対応するプロバイダーAPIの方言。現状はOpenAI互換チャットコンプリーションAPIのみ
-/// (architecture.md 2節)。将来プロバイダーを追加する際はここにバリアントを足す。
+/// 対応するプロバイダーAPIの方言。現状はOpenAI互換チャットコンプリーションAPIのみ。
+/// 将来プロバイダーを追加する際はここにバリアントを足す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
@@ -56,7 +56,7 @@ impl ProviderConfig {
     }
 }
 
-/// 登録済みの1モデル(Issue #65)。
+/// 登録済みの1モデル。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub name: String,
@@ -123,19 +123,18 @@ pub type ModelOverrides = crate::llm::CapabilityLayer;
 /// 待てるよう、余裕を持たせる。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 
-/// システムプロンプト等、モデル・プロバイダーに依存しない全般設定
-/// (legacy/frontend.md 2節)。
+/// システムプロンプト等、モデル・プロバイダーに依存しない全般設定。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeneralConfig {
     pub system_prompt: Option<String>,
-    /// タスクチャットでのみ追加するシステムプロンプト。総合チャット(#43)と
-    /// タスクチャットでは公開ツールが異なるため(docs/spec/rebuild/tools.md 5節)、
+    /// タスクチャットでのみ追加するシステムプロンプト。総合チャットと
+    /// タスクチャットでは公開ツールが異なるため、
     /// 工程ツールの使い分けのようなタスクチャット固有の指示は`system_prompt`とは
-    /// 別に持つ(docs/spec/legacy/data-model.md 3節「システムプロンプト3種」)。
+    /// 別に持つ。
     /// 未設定は表示言語の既定の文面で、解釈は`orchestration::SystemPrompts::from_config`に
     /// 閉じる。
     pub task_chat_system_prompt: Option<String>,
-    /// 新規タスクで聞き取りを始めるとき、ユーザーの代わりに送る発言(Issue #76)。未設定は
+    /// 新規タスクで聞き取りを始めるとき、ユーザーの代わりに送る発言。未設定は
     /// 表示言語の既定の文面で、解釈は`orchestration::opening_message`に閉じる。
     pub task_opening_message: Option<String>,
     /// 応答タイムアウト(秒)。未設定は[`DEFAULT_RESPONSE_TIMEOUT_SECS`]。値の解釈は
@@ -164,7 +163,7 @@ impl GeneralConfig {
     }
 }
 
-/// ツール呼び出しの上限(legacy/frontend.md 4節「共通設定」)。設定画面「ツール/MCP」
+/// ツール呼び出しの上限。設定画面「ツール/MCP」
 /// タブの末尾で編集する。プロバイダーではなくツールの使い方に関する設定なので、
 /// `GeneralConfig`ではなく独立した節として持つ。
 ///
@@ -213,7 +212,7 @@ pub enum McpEndpoint {
     },
 }
 
-/// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない(architecture.md 6節)。
+/// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない。
 /// ツール一覧そのもの(名前・説明)はここに永続化せず、アプリ起動中だけ
 /// [`crate::mcp::ToolCatalog`]に持つ。永続化すると、起動のたびに古い一覧と実サーバーの
 /// 食い違いを気にする必要が生まれるため
@@ -232,7 +231,7 @@ pub struct McpServerConfig {
     pub enabled_tools: BTreeSet<String>,
 }
 
-/// サーバー識別子の長さの上限(legacy/frontend.md 4節)。画面は入力欄の上限と案内文にこの値を
+/// サーバー識別子の長さの上限。画面は入力欄の上限と案内文にこの値を
 /// 使う(`settings::SettingsView`)。
 pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
 

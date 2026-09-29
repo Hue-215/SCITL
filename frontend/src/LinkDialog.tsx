@@ -9,7 +9,7 @@ interface LinkDialogProps {
   onClose: () => void
 }
 
-// 本文中のリンクを開く前の確認(legacy/frontend.md 1節)。何を警告するかの判定は
+// 本文中のリンクを開く前の確認。何を警告するかの判定は
 // Rust側(scitl-core/src/link.rs)に閉じ、ここは結果を表示するだけにする。
 export default function LinkDialog({ url, onClose }: LinkDialogProps) {
   const [inspection, setInspection] = useState<LinkInspection | null>(null)

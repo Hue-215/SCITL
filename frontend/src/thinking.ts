@@ -1,7 +1,7 @@
 import type { MessageKey } from './i18n'
 import type { MessageView, ToolExecutionView, TurnEvent } from './types'
 
-// 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック(Issue #42)。
+// 「思考・ツール」の折りたたみ表示のためのデータ整形ロジック。
 // コンポーネント本体は./ThinkingTools.tsxに置き、こちらは純粋な変換関数のみを持つ
 // (react/only-export-componentsに合わせてコンポーネントと非コンポーネントのエクスポートを
 // ファイルごとに分ける)。
@@ -26,7 +26,7 @@ export type DisplayItem = TurnGroup | PlainEntry
  * (docs/spec/rebuild/data-model.md「ターン境界」の3分類)。
  *
  * 連続した行ではなく`turn_id`でまとめ、ターンは最初の行の位置に1つだけ置く。別プロセスの
- * 操作の記録がターンの途中に挟まりうるため(data-model.md「応答生成以外の経路での操作の記録」)。
+ * 操作の記録がターンの途中に挟まりうるため。
  */
 export function groupMessages(messages: MessageView[]): DisplayItem[] {
   const items: DisplayItem[] = []
@@ -53,8 +53,8 @@ export function groupMessages(messages: MessageView[]): DisplayItem[] {
  * 内部ツール実行を除く最後の行(通常応答 or エラー発言)。
  *
  * 最終行が`kind='normal'`であることは`list_for_chat`が保証する。通常発言が1行も残らない
- * ターン(編集で破棄されたターン)はクエリの時点で会話から外れるため、ここへ届かない
- * (Issue #95)。破棄されたかどうかの判定を表示側にも持たせると同じ判断が2箇所に分かれる
+ * ターン(編集で破棄されたターン)はクエリの時点で会話から外れるため、ここへ届かない。
+ * 破棄されたかどうかの判定を表示側にも持たせると同じ判断が2箇所に分かれる
  * ので、ここでは判定しない(../../docs/spec/principles.md 5節)。
  */
 export function finalEntryOf(entries: MessageView[]): MessageView {
@@ -96,7 +96,7 @@ export function buildThoughtItems(entries: MessageView[]): ThoughtItem[] {
   return items
 }
 
-/** 応答待ちの間に届いたイベントから組み立てる思考・ツールの項目(Issue #70)。 */
+/** 応答待ちの間に届いたイベントから組み立てる思考・ツールの項目。 */
 export interface LiveThoughts {
   items: ThoughtItem[]
   /** 最後の項目が、続きの届きうる思考か。ラウンドの区切り(`done`)とツールの実行で閉じる。 */

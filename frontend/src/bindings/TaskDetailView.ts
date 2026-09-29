@@ -3,8 +3,7 @@
 /**
  * 画面のヘッダー向けのタスク詳細。`TaskListItem`と同じ工程の数とフォールバックを添え、
  * 一覧とヘッダーで進捗と未設定時の呼び方を揃える。`Task`そのものには足さない:`Task`はモデルへ渡す
- * `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する
- * (docs/spec/rebuild/tools.md「モデルには `title: null` をそのまま見せる」)。
+ * `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する。
  */
 export type TaskDetailView = { steps_done: number, steps_total: number, 
 /**

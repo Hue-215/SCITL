@@ -1,5 +1,5 @@
-//! LLM呼び出しの失敗をユーザー向けのエラー発言に変換する(Issue #40)。
-//! 種別コードと`CoreError`からの分類をここ1箇所に閉じる(`principles.md` 5節)。文言は
+//! LLM呼び出しの失敗をユーザー向けのエラー発言に変換する。
+//! 種別コードと`CoreError`からの分類をここ1箇所に閉じる。文言は
 //! 言語ファイルの`turn_error.{種別コード}`にあり、画面は種別コードから表示言語の文言を引く。
 
 use crate::error::CoreError;
@@ -12,14 +12,14 @@ use crate::llm::{ErrorDetail, LlmError, Readiness};
 /// 文言は種別コードだけで決まる(行ごとの値を持たない)。画面が保存済みの行から
 /// 同じ文言を引き直せるのは、このためである。
 ///
-/// 詳細を持つかどうかはバリアントの形で決まる(Issue #159)。持てるのは、アダプタが
+/// 詳細を持つかどうかはバリアントの形で決まる。持てるのは、アダプタが
 /// サニタイズした詳細と、秘密情報を含まない識別子だけで、どちらも`llm::ErrorDetail`の
 /// コンストラクタでしか作れない。鍵ストア・
 /// 設定ファイル・MCPサーバー由来の失敗は、鍵名・パス・URLを含みうるため詳細を持たない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnFailure {
     NoProvider,
-    /// 起動時に設定ファイルを読めなかった(Issue #155)。理由は設定画面に出す。
+    /// 起動時に設定ファイルを読めなかった。理由は設定画面に出す。
     SettingsUnreadable,
     NoModel,
     /// 応答タイムアウト(設定画面「一般」)までに応答を読み切れなかった。
@@ -35,7 +35,7 @@ pub enum TurnFailure {
         detail: ErrorDetail,
     },
     EmptyResponse,
-    /// 文言はコンテキスト長の設定を促す(`legacy/backend.md` 4節手順6)。設定すると
+    /// 文言はコンテキスト長の設定を促す。設定すると
     /// 履歴の間引き(`orchestration::history_trim`)がその長さに収めるため。
     ContextExceeded {
         detail: ErrorDetail,
@@ -52,7 +52,7 @@ pub enum TurnFailure {
     /// ツールに対応しないモデルとして扱っている(ツールを渡していない)のに、モデルが
     /// ツールを呼んできた。手動設定で対応を外したか、能力の判定がモデルの実物と違う。
     ToolsDisabled,
-    /// 1ターン内のツール実行に使える合計時間を使い切った(Issue #71)。
+    /// 1ターン内のツール実行に使える合計時間を使い切った。
     ToolTimeout,
     /// APIキー未設定・不正のどちらも実際の呼び出しがHTTP 401/403を返してここに落ちる
     /// (`Readiness`のドキュメント参照。事前チェックでは「未設定」と「認証不要」を
@@ -101,7 +101,7 @@ impl TurnFailure {
     }
 
     /// `messages.content`に入れる英語の定型文言。エクスポートとアプリの外で読むためのもので、
-    /// 画面は`kind()`から表示言語の文言を引く(`data-model.md` messages)。
+    /// 画面は`kind()`から表示言語の文言を引く。
     pub fn user_message(&self) -> String {
         i18n::text(Language::En, &message_key(self.kind())).to_string()
     }
@@ -145,8 +145,7 @@ pub fn from_readiness(readiness: Readiness) -> Option<TurnFailure> {
 }
 
 /// `CoreError`の全バリアントを網羅する(`_ =>`を書かない)。バリアントが増えたときに
-/// このmatchがコンパイルエラーになることで、分類漏れが黙って`unexpected`に落ちるのを防ぐ
-/// (`principles.md` 1節「症状ではなく原因を直す」)。
+/// このmatchがコンパイルエラーになることで、分類漏れが黙って`unexpected`に落ちるのを防ぐ。
 pub fn classify(err: &CoreError) -> TurnFailure {
     match err {
         CoreError::Llm(e) => from_llm_error(e),
@@ -264,7 +263,7 @@ mod tests {
         }
     }
 
-    /// アダプタが作った詳細は詳細の列にだけ載せ、定型文言には混ぜない(Issue #159)。
+    /// アダプタが作った詳細は詳細の列にだけ載せ、定型文言には混ぜない。
     #[test]
     fn llm_failures_keep_their_detail_out_of_the_user_message() {
         let with_detail = [

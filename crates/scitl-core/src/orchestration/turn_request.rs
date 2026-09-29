@@ -1,5 +1,5 @@
 //! 1ターンの各ラウンドでモデルへ送る発言列とツールの組み立て。ターン([`super::turn`])と
-//! 送信内容のプレビュー([`super::preview`])が同じ組み立てを通る(principles.md 5節)。
+//! 送信内容のプレビュー([`super::preview`])が同じ組み立てを通る。
 
 use crate::blocking;
 use crate::db::messages::Chat;
@@ -35,7 +35,7 @@ impl TurnRequest {
         stored: StoredChat,
         external: &ExternalToolset,
     ) -> Result<Self> {
-        // 内部ツールと外部ツールを1つの一覧にして公開する(Issue #44)。名前空間化と
+        // 内部ツールと外部ツールを1つの一覧にして公開する。名前空間化と
         // 衝突の排除は`ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
         // (対応しないモデルにツールを渡すと、リクエストごと拒否するサーバーがある)。
         let tools_available = ctx.capabilities.tools;
@@ -67,7 +67,7 @@ impl TurnRequest {
     }
 
     /// ツールを渡すラウンドの数。上限のラウンドまでツールを実行したら、ツールを渡さずに
-    /// もう一度だけ呼ぶ(docs/spec/rebuild/tools.md 4節)。`u64`で数えるのは、上限が
+    /// もう一度だけ呼ぶ。`u64`で数えるのは、上限が
     /// `u32::MAX`でも最後の1回を数えられるようにするため。ツールに対応しないモデルは、
     /// 最初の呼び出しがその最後の1回になる。
     pub(super) fn tool_rounds(&self, ctx: &TurnContext<'_>) -> u64 {

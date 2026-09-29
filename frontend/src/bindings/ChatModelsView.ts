@@ -3,7 +3,7 @@ import type { ModelChoice } from "./ModelChoice";
 import type { SelectedModel } from "./SelectedModel";
 
 /**
- * チャット入力欄の下のモデル選択・思考の強さ選択(Issue #64)。設定画面の[`SettingsView`]
+ * チャット入力欄の下のモデル選択・思考の強さ選択。設定画面の[`SettingsView`]
  * とは別に持ち、選ぶのに要るものだけを渡す。
  */
 export type ChatModelsView = { 

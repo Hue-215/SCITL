@@ -1,6 +1,6 @@
 //! ツール実行記録(`kind='tool_execution'`の行)の`content`の形。書き込み(`turn`・
 //! `operations`)と読み戻し(`history`)、実行を画面へ知らせるイベント(`turn_event`)で
-//! 同じ形を使うため、ここに1つだけ置く(principles.md 5節)。
+//! 同じ形を使うため、ここに1つだけ置く。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,7 +9,7 @@ use crate::tools::ToolKind;
 
 /// フィールドをcoreの外に開かないのは、記録を作るのがcoreの中(ターンの処理と、応答生成以外の
 /// 経路での操作)だけだから(外へは直列化した形で渡るだけ)。操作の記録は`tool_kind`・
-/// `call_id`を持たない(data-model.md「応答生成以外の経路での操作の記録」)。
+/// `call_id`を持たない。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolExecutionRecord {
     pub(crate) tool: String,
@@ -18,7 +18,7 @@ pub struct ToolExecutionRecord {
     /// 呼び出しは実行しないので`tool_kind`を持たない。
     pub(crate) arguments: Value,
     pub(crate) result: Value,
-    /// 実行したときにツール定義が決めた分類(tools.md 4節)。実行しなかった呼び出し
+    /// 実行したときにツール定義が決めた分類。実行しなかった呼び出し
     /// (引数が読めない・公開していない名前・接続先が無い)と、Issue #11より前の記録には無い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) tool_kind: Option<ToolKind>,
@@ -36,8 +36,8 @@ pub(super) fn is_error_result(result: &Value) -> bool {
 }
 
 /// 画面に出すツール実行記録。記録はモデルや外部ツールが何を出したかをそのまま確かめるための
-/// 表示なので、引数と結果は整形したJSONのまま、見えない文字だけを見える形にして渡す
-/// (architecture.md 10節)。どの文字が見えないかの判定を画面に写さないため、ここで作る。
+/// 表示なので、引数と結果は整形したJSONのまま、見えない文字だけを見える形にして渡す。
+/// どの文字が見えないかの判定を画面に写さないため、ここで作る。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ToolExecutionView {

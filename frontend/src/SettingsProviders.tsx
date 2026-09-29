@@ -1,4 +1,4 @@
-// 設定画面の「プロバイダー」タブ(legacy/frontend.md 3節)。
+// 設定画面の「プロバイダー」タブ。
 import { useId, useState } from 'react'
 import {
   addModels,
@@ -329,7 +329,7 @@ interface ModelTableProps {
   onUpdate: (action: () => Promise<SettingsView>) => void
 }
 
-// モデル表(legacy/frontend.md 3節、Issue #65)。能力は解決済みの値を描くだけで、
+// モデル表。能力は解決済みの値を描くだけで、
 // 手動設定の正規化(初期値と同じ値なら手動設定を外す)はRust側が持つ。
 function ModelTable({ provider, onUpdate }: ModelTableProps) {
   const models = provider.models
@@ -340,7 +340,7 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
   // 検索欄は畳める件数のときだけ出す。削除で件数が減って欄が消えたら、打った語は消せない
   // ので、欄が無いあいだは絞り込まない。
   const { matched, searching } = matchQuery(models, collapsible ? query : '', (m) => m.label)
-  // 折りたたんでいても、検索したら当たった行は出す(legacy/frontend.md 3節)。
+  // 折りたたんでいても、検索したら当たった行は出す。
   const shown = collapsible && !expanded && !searching ? [] : matched
 
   return (

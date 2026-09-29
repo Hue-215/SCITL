@@ -1,5 +1,5 @@
 //! 外部ツールサーバー(MCP)クライアント。サーバーの登録・接続・ツール一覧の取得
-//! (Issue #28)と、応答生成1ターンの中でのツール呼び出し(Issue #44)を担う。
+//! と、応答生成1ターンの中でのツール呼び出しを担う。
 //!
 //! 接続は会話1ターンの間だけ張り、ターンが終われば切断する([`McpSessions`]。常駐接続や
 //! コネクションプールは持たない。legacy/backend.md 9節「方針として重要」)。設定画面からの
@@ -65,7 +65,7 @@ pub struct McpToolInfo {
     pub input_schema: Value,
 }
 
-/// 取得済みツール一覧のメモリキャッシュ(Issue #104)。アプリ起動中のみ有効で、
+/// 取得済みツール一覧のメモリキャッシュ。アプリ起動中のみ有効で、
 /// config.tomlには書かない。設定画面の表示と、ターン開始時のツール公開の両方が
 /// ここを読む(同じ一覧の出どころを2つ持たない。principles.md 5節)。
 #[derive(Debug, Default)]
@@ -96,7 +96,7 @@ impl ToolCatalog {
     }
 }
 
-/// 応答生成1ターンの間だけ生きるセッション置き場(legacy/backend.md 9節)。
+/// 応答生成1ターンの間だけ生きるセッション置き場。
 /// サーバーごとに最初に必要になった時点で接続し、ターンの終わりに[`Self::close`]で
 /// まとめて切断する。呼び出し側は成功・失敗どちらの経路でも必ず`close`を通ること。
 #[derive(Default)]
@@ -368,8 +368,7 @@ async fn resolve_secrets(refs: &[SecretRef]) -> Result<Vec<(String, SecretString
 
 /// サーバーとのやり取りの失敗を、エラー文言に載せる形にする。rmcpのエラー表示には
 /// サーバーが書いた`message`と任意のJSON(`data`)がそのまま入り、設定画面・ツール実行記録・
-/// モデルへ返す結果のすべてに載るため、画面に出す診断文字列として整える
-/// (architecture.md 10節)。
+/// モデルへ返す結果のすべてに載るため、画面に出す診断文字列として整える。
 const MAX_SERVER_ERROR_CHARS: usize = 512;
 
 fn describe_server_error(e: &impl std::fmt::Display) -> String {

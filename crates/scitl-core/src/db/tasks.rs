@@ -32,8 +32,7 @@ pub struct TaskUpdate {
 }
 
 /// 消せる項目の変更。「指定なし」と「消す」を別の値にする。`null`を「消す」の意味にすると、
-/// 型に緩いモデルが変えないつもりの項目にも`null`を入れて値が消える
-/// (docs/spec/rebuild/tools.md 2節)。
+/// 型に緩いモデルが変えないつもりの項目にも`null`を入れて値が消える。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum FieldChange {
     #[default]
@@ -85,8 +84,7 @@ pub struct TaskSummary {
 }
 
 /// サイドバーの1行。`TaskSummary`に、表示側だけで使うフォールバックを添える。
-/// `title`は未設定(null)のまま返し、書き換えない
-/// (docs/spec/rebuild/data-model.md「title は TEXT NULL」)。
+/// `title`は未設定(null)のまま返し、書き換えない。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskListItem {
@@ -99,8 +97,7 @@ pub struct TaskListItem {
 
 /// 画面のヘッダー向けのタスク詳細。`TaskListItem`と同じ工程の数とフォールバックを添え、
 /// 一覧とヘッダーで進捗と未設定時の呼び方を揃える。`Task`そのものには足さない:`Task`はモデルへ渡す
-/// `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する
-/// (docs/spec/rebuild/tools.md「モデルには `title: null` をそのまま見せる」)。
+/// `task_detail`にも乗るため、混ぜるとモデルがタイトル設定済みと誤解する。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskDetailView {
@@ -156,8 +153,7 @@ pub fn list_summaries(conn: &Connection) -> Result<Vec<TaskSummary>> {
     Ok(rows)
 }
 
-/// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う
-/// (principles.md 1節「チャットが操作の中心」)。
+/// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う。
 pub fn create_task(conn: &Connection) -> Result<Task> {
     let now = now_iso8601();
     conn.execute(
@@ -213,7 +209,7 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
         if let FieldChange::Set(deadline) = &update.deadline {
             validate_deadline(deadline)?;
         }
-        // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので(principles.md 2節)、
+        // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので、
         // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない(同3節)。
         if let FieldChange::Set(description) = &update.description {
             if description.trim().is_empty() {
@@ -272,8 +268,8 @@ pub(super) fn touch(conn: &Connection, task_id: i64) -> Result<()> {
 const MAX_TITLE_CHARS: usize = 40;
 
 /// タイトル文字列を、1行のタイトルとして書き込める形に正規化する。値の形を決めるもので、
-/// 防御としての無害化は出力先ごとに掛ける(docs/spec/rebuild/architecture.md 10節)。
-/// 書き込みの唯一の経路である`update_task`に集約する(docs/spec/principles.md 5節)。
+/// 防御としての無害化は出力先ごとに掛ける。
+/// 書き込みの唯一の経路である`update_task`に集約する。
 /// 制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、連続空白を1つに
 /// まとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので省略の印は付けない。
 /// 画面からの変更は、これで空になるタイトルを書く前に断る(`orchestration::operations`)。
@@ -286,9 +282,9 @@ pub(crate) fn sanitize_title(raw: &str) -> String {
 }
 
 /// `deadline`として書き込める形(`YYYY-MM-DD`)かを検証する。タイトルと違い、外れた値を
-/// 丸めずエラーとして返す(`docs/spec/principles.md` 3節「暗黙の型変換をしない」)。
+/// 丸めずエラーとして返す。
 /// 日時形式や自然文を受け付けると、辞書順=時系列順という前提と、タイムゾーンで締切が
-/// 前後しない性質が壊れる(`docs/spec/rebuild/data-model.md` 1節)。
+/// 前後しない性質が壊れる。
 fn validate_deadline(raw: &str) -> Result<()> {
     let invalid = || CoreError::InvalidArgument {
         name: "deadline".to_string(),
@@ -348,15 +344,15 @@ fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, 
 }
 
 /// ユーザー発言から、タイトルの代わりに出せる1行を作る。DBには書き戻さない
-/// 表示専用の処理(Issue #61)。空白しか無い発言では`None`を返す。
+/// 表示専用の処理。空白しか無い発言では`None`を返す。
 fn fallback_label(first_user_message: &str) -> Option<String> {
     let squeezed = collapse_whitespace(first_user_message);
     (!squeezed.is_empty()).then(|| ellipsize(&squeezed, MAX_FALLBACK_LABEL_CHARS))
 }
 
-/// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない
-/// (docs/spec/rebuild/data-model.md「論理削除の伝播について」)。ツールには非公開
-/// (docs/spec/rebuild/tools.md 2節「意図的に非公開」)、画面・CLIからのみ呼ぶ。
+/// 論理削除の書き込み側。配下の工程の`deleted_at`は書き換えない。
+/// ツールには非公開、
+/// 画面・CLIからのみ呼ぶ。
 /// 削除後の行を返す(`get_task`は削除済みを引けないので、操作の記録に載せる値はここで取る)。
 pub fn delete_task(conn: &Connection, task_id: i64) -> Result<Task> {
     conn.query_row(
@@ -783,7 +779,7 @@ mod tests {
             items[0].fallback_label.as_deref(),
             Some("来週の 発表資料を 作りたい")
         );
-        // 表示側だけの処理であり、`title`は未設定のまま(data-model.md)。
+        // 表示側だけの処理であり、`title`は未設定のまま。
         assert!(items[0].summary.title.is_none());
         assert!(get_task(&conn, id).unwrap().title.is_none());
     }

@@ -21,8 +21,7 @@ pub(super) const TOOL: InternalTool = InternalTool {
 /// `clear`で消せる項目。タイトルは未設定に戻す操作を持たないので含めない。
 const CLEARABLE: &[&str] = &["deadline", "description"];
 
-/// タスクチャット版のスキーマ。`task_id`を引数に含めない
-/// (docs/spec/rebuild/tools.md 1節「確定方針」)。
+/// タスクチャット版のスキーマ。`task_id`を引数に含めない。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(

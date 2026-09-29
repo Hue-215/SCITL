@@ -18,7 +18,7 @@ use crate::db::{self, task_steps};
 use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
-/// ツール実行結果を次ターン以降の入力履歴に残すか否かの分類(docs/spec/rebuild/tools.md 4節)。
+/// ツール実行結果を次ターン以降の入力履歴に残すか否かの分類。
 /// 状態系は次ターンの最新状態JSONで完全に代替できるため履歴に残さない。事実系(検索・
 /// 外部MCPツール等)は「現在の状態」として言い表せないため、実行記録から履歴を組み立てる。
 /// 実行したときに決まった値を実行記録に書き写し、履歴はその値だけを見る
@@ -32,8 +32,7 @@ pub enum ToolKind {
 
 /// 内部ツール1回の実行結果。
 ///
-/// 結果を得たターンでだけモデルへ渡す中身(添付の本文・画像)は、実行記録に残さない
-/// (docs/spec/rebuild/tools.md「添付の読み込み」)。
+/// 結果を得たターンでだけモデルへ渡す中身(添付の本文・画像)は、実行記録に残さない。
 pub struct ToolOutput {
     /// 実行記録に残す結果。事実系なら次ターン以降の履歴にも載る。
     pub result: Value,
@@ -70,13 +69,13 @@ enum Run {
     /// 会話の対象タスクの読み取り。
     ReadTask(fn(&Connection, i64, &Value) -> Result<Value>),
     /// 会話の対象タスクの更新。対象の確認から変更後の全体の読み直しまでを1単位にする。
-    /// 確認のあとや返す全体に、別プロセスの書き込みが割り込まない(data-model.md 4節)。
+    /// 確認のあとや返す全体に、別プロセスの書き込みが割り込まない。
     UpdateTask(fn(&Connection, i64, &Value) -> Result<Value>),
     /// 会話の添付の読み込み。結果にこのターンでだけ渡す中身を伴う。
     ReadAttachment,
 }
 
-/// 公開面(docs/spec/rebuild/tools.md 2節)。MCPは枠のみ(Issue #73)。
+/// 公開面。MCPは枠のみ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
     General,
@@ -85,7 +84,7 @@ pub enum Surface {
 }
 
 impl Surface {
-    /// 会話ごとの面。総合チャットは読み取り専用のツールだけを公開する(tools.md 5節)。
+    /// 会話ごとの面。総合チャットは読み取り専用のツールだけを公開する。
     fn of(chat: Chat) -> Self {
         match chat {
             Chat::General => Self::General,
@@ -93,8 +92,7 @@ impl Surface {
         }
     }
 
-    /// 面ごとの公開ツール。実装関数は1つのまま、公開するスキーマだけを面で分ける
-    /// (docs/spec/rebuild/tools.md 1節「確定方針」)。
+    /// 面ごとの公開ツール。実装関数は1つのまま、公開するスキーマだけを面で分ける。
     fn tools(self) -> &'static [InternalTool] {
         match self {
             Self::General => GENERAL,
@@ -128,7 +126,7 @@ fn find(chat: Chat, name: &str) -> Option<&'static InternalTool> {
 }
 
 /// 会話で公開する内部ツールの一覧。タスクチャットの`task_id`はターン開始時に
-/// オーケストレーション層が束縛するため、引数として公開しない(architecture.md 7節)。
+/// オーケストレーション層が束縛するため、引数として公開しない。
 pub fn schemas(chat: Chat) -> Vec<ToolSchema> {
     Surface::of(chat)
         .tools()
@@ -181,8 +179,8 @@ pub fn execute(
     result.map(ToolOutput::from)
 }
 
-/// `step_id`はタスクIDと違いモデルの文脈に頼らず渡させる引数のため
-/// (docs/spec/rebuild/tools.md 1節)、対象タスクの取り違え(同節が修正した過去の不具合)を
+/// `step_id`はタスクIDと違いモデルの文脈に頼らず渡させる引数のため、
+/// 対象タスクの取り違え(同節が修正した過去の不具合)を
 /// 防ぐには呼び出し側で所属チェックが要る。工程の更新・削除ツールで共有する。
 fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result<()> {
     let belongs = task_steps::list_for_task(conn, task_id)?

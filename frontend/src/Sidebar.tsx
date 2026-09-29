@@ -44,7 +44,7 @@ function TaskList({
 }
 
 // サイドバー: 総合チャット行(固定)・タスク一覧・アーカイブ折りたたみ・
-// 新規タスク追加ボタン(legacy/frontend.md 1節)。
+// 新規タスク追加ボタン。
 export default function Sidebar({
   tasks,
   selected,

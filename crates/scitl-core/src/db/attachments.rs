@@ -1,4 +1,4 @@
-//! 添付ファイルの行(data-model.md attachments)。テキスト添付は本文をこの表に、それ以外は
+//! 添付ファイルの行。テキスト添付は本文をこの表に、それ以外は
 //! 実体を`attachments::AttachmentStore`に置き、この表はそのハッシュだけを持つ。
 
 use std::collections::HashMap;
@@ -156,7 +156,7 @@ pub fn get(conn: &Connection, id: i64) -> Result<Attachment> {
 
 /// 1つの会話の添付を1件引く。他の会話の添付と、論理削除した発言の添付は、見つからない
 /// ものとして扱う([`for_chat`]と同じ範囲)。モデルが添付IDを選ぶ経路で、対象の会話を
-/// 文脈から固定するため(docs/spec/principles.md 3節)。
+/// 文脈から固定するため。
 pub fn get_in_chat(conn: &Connection, chat: Chat, id: i64) -> Result<Attachment> {
     conn.query_row(
         &format!("SELECT {CONTENT_COLUMNS} {IN_CHAT} AND a.id = ?2"),
@@ -167,7 +167,7 @@ pub fn get_in_chat(conn: &Connection, chat: Chat, id: i64) -> Result<Attachment>
     .ok_or(CoreError::AttachmentNotFound(id))
 }
 
-/// 編集で新しい発言へ添付を引き継ぐ(legacy/frontend.md 1節)。実体は共有し、行だけを写す。
+/// 編集で新しい発言へ添付を引き継ぐ。実体は共有し、行だけを写す。
 /// 写した数を返す。
 pub fn copy_to_message(
     conn: &Connection,

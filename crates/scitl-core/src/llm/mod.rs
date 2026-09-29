@@ -19,8 +19,7 @@ pub use token_estimate::{estimate_message, estimate_tools};
 use crate::config::ReasoningEffort;
 use crate::error::CoreError;
 
-/// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び
-/// (docs/spec/principles.md 3節「応答はイベントの並びとして受け取る」、Issue #8)。
+/// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び。
 /// ストリーミングしないプロバイダーも各イベントを1回ずつ渡せば同じ経路に乗る
 /// ([`LlmAdapter::send`])。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -30,9 +29,9 @@ pub enum ResponseEvent {
     TextDelta {
         text: String,
     },
-    /// モデルの思考(reasoning)の断片(Issue #42)。表示・`messages.reasoning`への保存
-    /// 専用のイベントであり、`ChatMessage`には対応する構成要素が無い
-    /// (`docs/spec/principles.md` 3節「思考は履歴に送り返さない」)。次のAPI呼び出しの
+    /// モデルの思考(reasoning)の断片。表示・`messages.reasoning`への保存
+    /// 専用のイベントであり、`ChatMessage`には対応する構成要素が無い。
+    /// 次のAPI呼び出しの
     /// 入力に混ざり込む経路が型として存在しないようにするための意図的な非対称設計。
     ReasoningDelta {
         text: String,
@@ -64,7 +63,7 @@ pub enum FinishReason {
 /// (docs/spec/rebuild/architecture.md 3節。`config.rs`の`McpEndpoint`と同じ理由)。
 ///
 /// ツール呼び出しと結果は、同一ターン内のループでは分類(状態系/事実系)によらず
-/// モデルに返す(docs/spec/rebuild/tools.md 4節)。この往復を表現するために
+/// モデルに返す。この往復を表現するために
 /// `Assistant`の`tool_calls`と`Tool`を持つ。DBの`messages`テーブルには保存しない
 /// (次ターン以降の入力履歴に残さないのはdocs/spec/principles.md 3節、テーブルへの
 /// 不保存はdocs/spec/rebuild/data-model.md 2節)。
@@ -74,7 +73,7 @@ pub enum ChatMessage {
     /// ユーザー発言。送信日時と添付の情報を本文の外に置いた囲みとして、組み立て済みの形で運ぶ
     /// ([`PromptText::user_message`]。Issue #68。`docs/spec/legacy/backend.md` 4節手順2
     /// 「本文とは別の構造化情報として付与する。地の文に混ぜない」)。`images`は一緒に送る
-    /// 添付画像(Issue #21)で、どの画像を送るかは`attachments::delivery`が決める。
+    /// 添付画像で、どの画像を送るかは`attachments::delivery`が決める。
     User {
         text: PromptText,
         images: Vec<InlineImage>,
@@ -190,7 +189,7 @@ impl From<serde_json::Value> for ToolArguments {
 }
 
 /// モデルへ公開するツールの定義。どちらのコンストラクタを通ったかで、説明と引数スキーマに
-/// 無害化が掛かっているかが決まる(docs/spec/rebuild/architecture.md 10節)。
+/// 無害化が掛かっているかが決まる。
 #[derive(Debug, Clone)]
 pub struct ToolSchema {
     name: String,
@@ -247,7 +246,7 @@ impl ToolSchema {
     }
 }
 
-/// アダプタが構成不足で呼び出しに進めない状態(Issue #40)。プロバイダの選択有無など、
+/// アダプタが構成不足で呼び出しに進めない状態。プロバイダの選択有無など、
 /// アダプタ自体が無い場合は`orchestration::TurnContext::adapter`の`Err`で表すため
 /// ここには含めない(`orchestration::turn_error::from_readiness`参照)。
 ///
@@ -264,7 +263,7 @@ pub enum Readiness {
 }
 
 /// 具象プロバイダの境界。`orchestration::turn`はこのtraitのみを知り、
-/// プロバイダ固有の癖は各実装内に閉じ込める(architecture.md 3節)。
+/// プロバイダ固有の癖は各実装内に閉じ込める。
 #[async_trait::async_trait]
 pub trait LlmAdapter: Send + Sync {
     /// 実際にAPIを呼ぶ前に分かる構成不足(モデル未選択)を判定する。APIキーは判定しない
@@ -276,7 +275,7 @@ pub trait LlmAdapter: Send + Sync {
     /// 呼び出し元が能力から決める。
     ///
     /// 応答のイベントは、生成した順に1件ずつ`on_event`へ渡す。ストリーミングするかどうかは
-    /// アダプタの都合で、呼び出し側は区別しない(architecture.md 3節)。渡したイベントは
+    /// アダプタの都合で、呼び出し側は区別しない。渡したイベントは
     /// そのまま画面へ流れるため、次を守る。
     ///
     /// - 失敗は`Err`で返し、イベントにしない(ストリームの途中で届くエラーも同じ)。

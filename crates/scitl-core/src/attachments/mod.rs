@@ -1,4 +1,4 @@
-//! 添付ファイル(Issue #21)。種別の判定・実体の置き場所・送信前の添付と、画面が添付を
+//! 添付ファイル。種別の判定・実体の置き場所・送信前の添付と、画面が添付を
 //! 開くときの読み出しをここに閉じる。行の読み書きは`db::attachments`。
 
 mod classify;
@@ -22,7 +22,7 @@ use crate::db::attachments::{self, AttachmentContent, AttachmentKind, NewAttachm
 use crate::db::{with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 
-/// 添付をモデルへどう渡すか(Issue #21)。履歴の組み立てと、画面が添付に出す警告
+/// 添付をモデルへどう渡すか。履歴の組み立てと、画面が添付に出す警告
 /// (`settings::ChatModelsView`)の両方がこれで決める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -37,7 +37,7 @@ pub enum Delivery {
 }
 
 /// テキストは毎ターン全文を送る(履歴の間引きが予算を守る)。画像は直近のユーザー発言の
-/// ものだけを、画像に対応するモデルへ送る(legacy/backend.md 4節手順2)。古い画像まで
+/// ものだけを、画像に対応するモデルへ送る。古い画像まで
 /// 毎ターン送ると、1枚ごとにコンテキストを大きく使い続けるため。その他は中身を送らない。
 pub fn delivery(kind: AttachmentKind, image_input: bool, in_latest_message: bool) -> Delivery {
     match kind {

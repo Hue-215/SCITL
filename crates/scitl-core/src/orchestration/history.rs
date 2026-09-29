@@ -1,5 +1,5 @@
-//! API送信用の履歴の組み立て。DBの行のうち何をどの形でモデルへ送るかの判断はここに閉じる
-//! (principles.md 5節)。どこまで送るか(間引き)は`history_trim`。
+//! API送信用の履歴の組み立て。DBの行のうち何をどの形でモデルへ送るかの判断はここに閉じる。
+//! どこまで送るか(間引き)は`history_trim`。
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,7 +25,7 @@ pub(super) struct StoredChat {
 }
 
 /// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
-/// 発言を先頭に補う(architecture.md 3節「聞き取りの開始」)。まだ1行も無いまま
+/// 発言を先頭に補う。まだ1行も無いまま
 /// 応答を生成するのは聞き取りの開始そのものなので、同じく補う。総合チャットは聞き取りを
 /// 持たず、必ずユーザー発言から始まるので補わない。
 pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
@@ -75,8 +75,8 @@ pub(super) struct HistoryOptions {
 /// (Issue #68。組み立ては`llm::PromptText::user_message`)。アシスタント発言に日時を付けないのは、
 /// モデルが自分の過去の発言の形を真似て、応答の地の文に日時やタグを書き出すのを避けるため。
 ///
-/// ユーザー発言の添付は、囲みの直後に情報を置き、渡し方は`attachments::delivery`で決める
-/// (Issue #21)。画像を送るのは直近のユーザー発言だけなので、ここで実体を読んで埋めてよい。
+/// ユーザー発言の添付は、囲みの直後に情報を置き、渡し方は`attachments::delivery`で決める。
+/// 画像を送るのは直近のユーザー発言だけなので、ここで実体を読んで埋めてよい。
 /// 直近のユーザー発言は間引き(`history_trim`)で必ず残り、画像の見積もりは実体の大きさに
 /// よらない(`llm::estimate_message`)ため、埋めても間引きの計算は狂わない。実体を読めない
 /// 画像は、名前だけを送る(会話を止めない)。
@@ -85,7 +85,7 @@ pub(super) struct HistoryOptions {
 /// (`legacy/backend.md` 4節手順2「エラー発言・ツール実行記録はこのAPI送信用の履歴からは
 /// 除外する」)。表示・エクスポートには`list_for_chat`経由で引き続き残る。
 ///
-/// ツール実行記録は、事実系の結果だけを呼び出しと結果の組にして送る(tools.md 4節)。
+/// ツール実行記録は、事実系の結果だけを呼び出しと結果の組にして送る。
 pub(super) fn build_history(
     mut stored: StoredChat,
     options: &HistoryOptions,
@@ -194,7 +194,7 @@ fn replied_turns(stored: &[Message]) -> HashSet<String> {
 /// 1呼び出しにつき1組とする。
 fn fact_round_trip(m: &Message, replied_turns: &HashSet<String>) -> Option<[ChatMessage; 2]> {
     // `turn_id`を持たないのは応答生成以外の経路(画面・MCP等)での操作の記録で、このモデルの
-    // 呼び出しではない(data-model.md「ターン境界」)。
+    // 呼び出しではない。
     if !replied_turns.contains(m.turn_id.as_deref()?) {
         return None;
     }
@@ -218,10 +218,9 @@ fn fact_round_trip(m: &Message, replied_turns: &HashSet<String>) -> Option<[Chat
         },
         ChatMessage::Tool {
             tool_call_id: id,
-            // 結果は外部から来た文字列を含む。保存したままの値に送る直前で無害化する
-            // (architecture.md 10節)。
+            // 結果は外部から来た文字列を含む。保存したままの値に送る直前で無害化する。
             content: PromptText::json(&record.result),
-            // ツール結果の画像は、結果を得たターンでだけ送る(tools.md「添付の読み込み」)。
+            // ツール結果の画像は、結果を得たターンでだけ送る。
             images: Vec::new(),
         },
     ])

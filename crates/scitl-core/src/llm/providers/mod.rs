@@ -117,7 +117,7 @@ pub async fn detect_capabilities(
     }
 }
 
-/// プロバイダーが提供するモデル名の一覧(Issue #33)。名前順で、登録済みのものも含む。
+/// プロバイダーが提供するモデル名の一覧。名前順で、登録済みのものも含む。
 pub async fn list_models(provider: &ProviderConfig) -> Result<Vec<String>, CoreError> {
     let api_key = load_api_key_off_thread(provider).await?;
     match provider.api_format {

@@ -6,7 +6,7 @@ import type { ToolSettingsView } from "./ToolSettingsView";
 
 export type SettingsView = { 
 /**
- * 起動時に設定ファイルを読めなかった理由(Issue #155)。あれば設定は保存されない。
+ * 起動時に設定ファイルを読めなかった理由。あれば設定は保存されない。
  */
 config_error: string | null, general: GeneralSettingsView, tools: ToolSettingsView, providers: Array<ProviderView>, active_provider_id: string | null, mcp_servers: Array<McpServerView>, 
 /**

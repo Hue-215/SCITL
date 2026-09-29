@@ -9,10 +9,10 @@ export function httpPlainTextHint(secret: string): string {
   return t('settings.http_warning', { secret })
 }
 
-// フォーカスを外すと自動保存する数値入力(legacy/frontend.md 2節・4節)。入力中は自身の
+// フォーカスを外すと自動保存する数値入力。入力中は自身の
 // stateだけを更新し、blur時にのみ親へ確定した値を渡す。入力チェック(空欄は未設定、
 // それ以外は1以上の整数)をこの1箇所に閉じ、設定欄(NumberField)とモデル表の
-// コンテキスト長の両方がこれを使う(ui.md 1節)。
+// コンテキスト長の両方がこれを使う。
 export function usePositiveIntegerInput(
   value: number | null,
   onSave: (value: number | null) => void,

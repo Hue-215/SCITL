@@ -45,7 +45,7 @@ interface DropdownProps {
 // するため。
 //
 // 開いている一覧は、外を押すか、フォーカスが外へ移ると閉じる。隣り合う一覧のうち1つだけが
-// 開いている状態(legacy/frontend.md 1節「片方を開くともう片方は自動で閉じる」)はこれで保つ。
+// 開いている状態はこれで保つ。
 export default function Dropdown({
   labelledBy,
   label,

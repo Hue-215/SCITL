@@ -1,9 +1,9 @@
-//! LLM呼び出しの失敗の種類(Issue #180)。種類はアダプタが決めて返し、
+//! LLM呼び出しの失敗の種類。種類はアダプタが決めて返し、
 //! `orchestration::turn_error`は種類から文言と`error_kind`を選ぶだけにする。
 //!
 //! 方言によらない失敗(通信の失敗と、状態コードだけで決まるもの)の変換はここに置き、
 //! 全アダプタがこれを呼ぶ。応答本文でしか分からない失敗(コンテキスト超過等)の判定は
-//! 各`providers/*.rs`が持つ(architecture.md 3節)。
+//! 各`providers/*.rs`が持つ。
 
 use std::error::Error as _;
 use std::fmt;
@@ -99,13 +99,13 @@ impl LlmError {
 }
 
 /// エラー発言の詳細(`messages.error_detail`)になる文字列。プロバイダーや通信経路から来た
-/// 文字列は、DBに残り画面にも出る(Issue #159。`data-model.md` messages「error_detail」)。
+/// 文字列は、DBに残り画面にも出る。
 /// サニタイズするコンストラクタでしか作れないようにし、アダプタが掛け忘れる経路を作らない。
 ///
 /// 掛けるのは、送信した鍵の伏せ字と、画面に出す診断文字列としての整形(1行に畳み、
 /// 不可視の書式文字を除き、長さを制限する。architecture.md 10節)。伏せ字が要るのは、
 /// ゲートウェイがリクエストヘッダーをエコーバックする構成だと`Authorization`ヘッダーの値が
-/// 本文にそのまま現れうるため(principles.md 4節)。鍵をURLに置く構成は
+/// 本文にそのまま現れうるため。鍵をURLに置く構成は
 /// `net::validate_external_url`がクエリ・userinfoを拒否して塞いでいるため、対象は鍵1つで足りる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorDetail(String);

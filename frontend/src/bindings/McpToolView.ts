@@ -11,8 +11,7 @@ export type McpToolView = {
  */
 name: string, 
 /**
- * 画面に出す名前と説明。サーバーが書いた文字列なので、見えない文字を除いた写しを渡す
- * (architecture.md 10節)。
+ * 画面に出す名前と説明。サーバーが書いた文字列なので、見えない文字を除いた写しを渡す。
  */
 label: string, description: string | null, 
 /**

@@ -1,4 +1,4 @@
-// 設定画面の「ツール」タブ(legacy/frontend.md 4節)。
+// 設定画面の「ツール」タブ。
 import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { NewMcpEndpoint } from './api'
@@ -17,7 +17,7 @@ const TRANSPORT_LABELS: Record<Transport, MessageKey> = {
   streamable_http: 'settings.tools.transport_http',
 }
 
-// 「1行1件、KEY=VALUE」形式のテキストをパースする(legacy/frontend.md 4節)。
+// 「1行1件、KEY=VALUE」形式のテキストをパースする。
 // エラーは行ごとに個別指摘する。行は前後の空白を除いてから見るので、`=`が先頭でなければ
 // キーは空にならない。
 function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
@@ -133,7 +133,7 @@ interface McpServerCardProps {
 
 // 取得済みのツール一覧は`server.tools`(Rust側のキャッシュ)から来る。カード自身では
 // 保持しない——保持すると設定画面を閉じた時点で消え、有効にしたツールを確認することも
-// 外すこともできなくなる(Issue #104)。
+// 外すこともできなくなる。
 function McpServerCard({
   server,
   onDelete,

@@ -47,7 +47,7 @@ export default function App() {
   const [task, setTask] = useState<TaskDetailView | null>(null)
   const [messages, setMessages] = useState<MessageView[]>([])
   const [draft, setDraft] = useState('')
-  // 入力欄の送信前の添付(Issue #21)。本文と同じく、会話を切り替えても残す。
+  // 入力欄の送信前の添付。本文と同じく、会話を切り替えても残す。
   const staged = useStagedAttachments()
   const fileInputRef = useRef<HTMLInputElement>(null)
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
@@ -60,7 +60,7 @@ export default function App() {
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 編集モード(Issue #41)。ユーザー発言のみが対象。応答待ち中は開始できない
+  // 編集モード。ユーザー発言のみが対象。応答待ち中は開始できない
   // (`disableActions`参照)。
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
@@ -140,7 +140,7 @@ export default function App() {
     void loadChat(chat)
   }, [chat, loadChat])
 
-  // 作ったらユーザーの発言を待たずに聞き取りを始める(Issue #76、legacy/frontend.md 1節)。
+  // 作ったらユーザーの発言を待たずに聞き取りを始める。
   const addTask = async () => {
     if (adding) return
     setAdding(true)
@@ -185,7 +185,7 @@ export default function App() {
     setDraft('')
     stick()
     // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
-    // DBから引き直す(docs/spec/principles.md 3節「保存するのは組み立て終わった応答」)。
+    // DBから引き直す。
     await requests.run(
       target,
       [
@@ -201,7 +201,7 @@ export default function App() {
     )
   }
 
-  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す(Issue #95)。
+  // 編集・再試行で置き換わる行を、応答の確定を待たずに画面から外す。
   // バックエンドはコマンド最初のトランザクションで論理削除まで済ませてから応答生成に入るので、
   // ここでやっているのは「すでに起きた削除を先に見せる」ことだけ。確定後は`loadChat`が必ず
   // DBの内容で上書きするため、これが最終的な表示になることはない(楽観表示はユーザー発言の
@@ -253,8 +253,8 @@ export default function App() {
     )
   }
 
-  // 確認ダイアログ無しの即座に取り消し可能な論理削除(legacy/frontend.md 1節)。最初の
-  // ユーザー発言を消すと一覧のフォールバック表示が変わる(Issue #61)が、引き直しは
+  // 確認ダイアログ無しの即座に取り消し可能な論理削除。最初の
+  // ユーザー発言を消すと一覧のフォールバック表示が変わるが、引き直しは
   // `requests`が一覧ごと行う。
   const remove = async (messageId: number) => {
     if (disableActions) return
@@ -262,9 +262,9 @@ export default function App() {
     await requests.run(target, [], () => deleteChatMessage(target, messageId), settle)
   }
 
-  // ヘッダーからのタスク操作(Issue #75)。発言の操作と同じく会話ごとの応答待ちに載せ、
+  // ヘッダーからのタスク操作。発言の操作と同じく会話ごとの応答待ちに載せ、
   // 実行中は他の操作を止め、失敗はその会話に残す。アーカイブ・削除のあとは総合チャットへ
-  // 戻る(legacy/frontend.md 1節)。その間に別の会話へ移っていたら、そのままにする。
+  // 戻る。その間に別の会話へ移っていたら、そのままにする。
   const runTaskOperation = (taskId: number, operation: () => Promise<unknown>) => {
     if (disableActions) return
     const target = taskChat(taskId)
