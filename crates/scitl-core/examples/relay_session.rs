@@ -9,9 +9,8 @@
 //! STEPは`@new`(タスクを作って聞き取りを始める)・`@general`(総合チャットへ移る)・
 //! それ以外(今の会話へのユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
 //!
-//! 方言は環境変数`RELAY_DIALECT`で選ぶ(`openai`(既定)・`anthropic`・`gemini`)。モデルは疑似APIが
-//! 方言ごとに受けるダミー(`dummy-o`・`dummy-a`・`dummy-g`)を使う。BASE_URLはOpenAI互換だけ`/v1`を
-//! 付け、ほかは付けない。Anthropic形式とGemini形式は思考の強さ「中」で呼ぶ。
+//! 方言は環境変数`RELAY_DIALECT`(`openai`・`anthropic`・`gemini`)で選ぶ。BASE_URLとモデルは
+//! `docs/llm-relay.md`。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
