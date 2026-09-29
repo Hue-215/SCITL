@@ -421,8 +421,12 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 - `default-src 'self'` / `img-src 'self' data:`(外部画像を読み込ませない。
   本文中の画像記法をリンクへ変換する自前処理と合わせた多層防御。片方が破れても止まる)/
   `script-src 'self'`(CDN・inline eval不可)
-- `connect-src 'none'`。全通信はRust側で行う設計なので、WebViewからの
-  外部接続は本来ゼロのはず。将来広げる必要が出たら「Rustが全通信を担う」境界が破れた合図
+- `connect-src ipc: http://ipc.localhost`。全通信はRust側で行う設計なので、WebViewからの
+  外部接続は本来ゼロのはず。許可しているのはRust側へのIPCの窓口(Linux・macOSは`ipc:`、
+  Windowsは`http://ipc.localhost`)だけで、これ以外に広げる必要が出たら「Rustが全通信を担う」
+  境界が破れた合図。IPCの窓口を塞ぐと、Tauriは`postMessage`へ黙って切り替えて動き続けるが、
+  そちらは本文を必ずJSONにするため、生のバイト列を受け取るコマンド(添付の`stage_attachment`)
+  だけが本番ビルドで失敗する。開発時(devUrl)はこの差が表に出ないので、本番ビルドで確かめる
 - 開発時のVite HMRはWebSocketを使うため、Tauri 2の `devCsp` を本番CSPと分離して設定する
   (開発と本番で同じCSPにしようとして本番を緩めるのが典型的な失敗)
 - **自前コマンドはcapabilities/permissionsでは絞れない**(capabilities/permissionsが
