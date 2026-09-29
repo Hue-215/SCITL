@@ -159,6 +159,8 @@ Tauri版でも出来ること。この基準に入るIssueはマイルストー�
 - `docs/vertical-slice-order.md` — マイルストーン「縦切り完成」の着手順と、その順にする理由
 - `docs/architecture-overview.md` — プロセス境界とモジュール構成・1ターンの流れ・
   データモデルのMermaid図。全体を読み通さずに構成を掴むための地図で、正本は`rebuild/`とコード
+- `docs/llm-relay.md` — LLM役が応答を書く疑似API(`tools/llm-relay/`)の仕様と使い方。
+  Anthropic形式の検査の範囲と出典
 
 ## CLAUDE.mdに含めていい内容
 
