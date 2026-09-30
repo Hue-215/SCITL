@@ -28,9 +28,9 @@ pub fn schema() -> &'static ToolSchema {
             "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
              scitl:attachments block. The result has the same fields as that block. A text \
              attachment returns its text in \"content\", and an image is shown to you with the \
-             result. What you read is available in this turn only; read it again in a later turn \
-             if you need it. Use this to look at an image whose \"delivered\" is \"name_only\". \
-             Other kinds of files cannot be read.",
+             result. Use this to look at an image whose \"delivered\" is \"name_only\", or at an \
+             attachment whose content is no longer in the conversation. Other kinds of files \
+             cannot be read.",
             json!({
                 "type": "object",
                 "properties": {
