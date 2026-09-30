@@ -8,13 +8,12 @@ use crate::error::Result;
 use crate::llm::ToolSchema;
 
 use super::args::Args;
-use super::{InternalTool, Run, ToolKind};
+use super::{InternalTool, Run};
 
 pub const NAME: &str = "get_task_list";
 
 pub(super) const TOOL: InternalTool = InternalTool {
     schema,
-    kind: ToolKind::State,
     run: Run::Read(execute),
 };
 

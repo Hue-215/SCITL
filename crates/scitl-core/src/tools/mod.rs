@@ -10,7 +10,6 @@ pub mod update_step;
 pub mod update_task;
 
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::messages::Chat;
@@ -18,22 +17,11 @@ use crate::db::{self, task_steps};
 use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
-/// ツール実行結果を次ターン以降の入力履歴に残すか否かの分類。状態系は次ターンの最新状態
-/// JSONで完全に代替できるため履歴に残さない。事実系(検索・外部MCPツール等)は「現在の状態」
-/// として言い表せないため、実行記録から履歴を組み立てる。実行したときに決まった値を
-/// 実行記録に書き写し、履歴はその値だけを見る(`orchestration::tool_record`)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
-    State,
-    Fact,
-}
-
 /// 内部ツール1回の実行結果。
 ///
 /// 結果を得たターンでだけモデルへ渡す中身(添付の本文・画像)は、実行記録に残さない。
 pub struct ToolOutput {
-    /// 実行記録に残す結果。事実系なら次ターン以降の履歴にも載る。
+    /// 実行記録に残す結果。次ターン以降の履歴にも載る。
     pub result: Value,
     /// このターンの往復で`result`の代わりにモデルへ返す結果。`None`なら`result`を返す。
     pub turn_result: Option<Value>,
@@ -56,7 +44,6 @@ impl From<Value> for ToolOutput {
 /// 実行できる状態を構造で保つ。
 pub(crate) struct InternalTool {
     schema: fn() -> &'static ToolSchema,
-    kind: ToolKind,
     run: Run,
 }
 
@@ -143,11 +130,6 @@ pub fn names(chat: Chat) -> Vec<String> {
         .iter()
         .map(|tool| (tool.schema)().name().to_string())
         .collect()
-}
-
-/// 会話で公開する内部ツールの分類。公開していない名前には`None`を返す。
-pub fn kind(chat: Chat, name: &str) -> Option<ToolKind> {
-    find(chat, name).map(|tool| tool.kind)
 }
 
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]にする。

@@ -5,23 +5,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::tools::ToolKind;
-
 /// フィールドをcoreの外に開かないのは、記録を作るのがcoreの中(ターンの処理と、応答生成以外の
-/// 経路での操作)だけだから(外へは直列化した形で渡るだけ)。操作の記録は`tool_kind`・
-/// `call_id`を持たない。
+/// 経路での操作)だけだから(外へは直列化した形で渡るだけ)。操作の記録は`call_id`を持たない。
+///
+/// 古い記録には今は使わないキー(`tool_kind`)が残っているので、知らないキーは拒まずに無視する。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolExecutionRecord {
     pub(crate) tool: String,
     /// 読めなかった引数は、モデルが実際に何を出したかが分かるよう生の文字列で残す。
     /// この形は「正しく読めた引数が文字列だった」場合と見分けられないが、読めなかった
-    /// 呼び出しは実行しないので`tool_kind`を持たない。
+    /// 呼び出しは実行せず、結果は必ず失敗になる([`is_error_result`])。
     pub(crate) arguments: Value,
     pub(crate) result: Value,
-    /// 実行したときにツール定義が決めた分類。実行しなかった呼び出し(引数が読めない・
-    /// 公開していない名前・接続先が無い)と、古い記録には無い。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) tool_kind: Option<ToolKind>,
     /// プロバイダーが払い出した呼び出しID。記録のためだけに持ち、次ターン以降の履歴には
     /// 使わない(`history::history_call_id`)。
     #[serde(default, skip_serializing_if = "Option::is_none")]

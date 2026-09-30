@@ -10,13 +10,12 @@ use crate::error::{CoreError, Result};
 use crate::llm::{AttachmentNote, ToolSchema};
 
 use super::args::Args;
-use super::{InternalTool, Run, ToolKind, ToolOutput};
+use super::{InternalTool, Run, ToolOutput};
 
 pub const NAME: &str = "read_attachment";
 
 pub(super) const TOOL: InternalTool = InternalTool {
     schema,
-    kind: ToolKind::Fact,
     run: Run::ReadAttachment,
 };
 

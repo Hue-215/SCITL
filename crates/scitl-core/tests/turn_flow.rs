@@ -665,9 +665,9 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
 }
 
 #[tokio::test]
-async fn state_tool_results_stay_in_their_own_turn() {
-    // 状態系の結果は最新状態JSONが代わりに伝えるので、次のターンの履歴には載せない。
-    // 実行記録には分類と払い出されたIDを残す。
+async fn tool_results_carry_over_to_the_next_turn() {
+    // タスクの状態を変えた結果も、次のターンの履歴に呼び出しと結果の組として載る。
+    // 実行記録には払い出されたIDを残し、分類は書かない。
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let adapter = adds_a_step();
@@ -686,12 +686,12 @@ async fn state_tool_results_stay_in_their_own_turn() {
 
     let sent = adapter.sent_messages();
     let next_turn = sent.last().unwrap();
-    assert!(!next_turn
-        .iter()
-        .any(|m| matches!(m, ChatMessage::Tool { .. })));
-    assert!(!next_turn
-        .iter()
-        .any(|m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())));
+    assert!(next_turn.iter().any(
+        |m| matches!(m, ChatMessage::Tool { content, .. } if content.as_str().contains("買い出し"))
+    ));
+    assert!(next_turn.iter().any(
+        |m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if tool_calls.iter().any(|c| c.name == "add_steps"))
+    ));
 
     let conn = db.lock().unwrap();
     let record = db::messages::list_for_chat(&conn, Chat::Task(task_id))
@@ -700,7 +700,7 @@ async fn state_tool_results_stay_in_their_own_turn() {
         .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let record: serde_json::Value = serde_json::from_str(&record.content).unwrap();
-    assert_eq!(record["tool_kind"], "state");
+    assert!(record.get("tool_kind").is_none());
     assert_eq!(record["call_id"], "call_1");
 }
 
@@ -735,7 +735,7 @@ async fn history_carries_send_time_beside_the_user_text() {
     };
     assert_eq!(stored_user_times.len(), 2);
 
-    // 2ターン目の履歴: user(1ターン目) / assistant / user(2ターン目)。
+    // 2ターン目の履歴: user(1ターン目) / 工程の追加の呼び出しと結果 / assistant / user(2ターン目)。
     let rounds = adapter.sent_messages();
     let last = rounds.last().unwrap();
     let history = &last[1..];
@@ -748,7 +748,7 @@ async fn history_carries_send_time_beside_the_user_text() {
         }
         other => panic!("expected User, got {other:?}"),
     }
-    match &history[1] {
+    match &history[3] {
         // アシスタント発言に日時は付けない(モデルが形を真似て応答に書き出すのを避ける)。
         ChatMessage::Assistant { content, .. } => {
             assert_eq!(content.as_deref(), Some("工程を追加しました"));
@@ -756,7 +756,7 @@ async fn history_carries_send_time_beside_the_user_text() {
         other => panic!("expected Assistant, got {other:?}"),
     }
     assert_eq!(
-        user_text(&history[2]),
+        user_text(&history[4]),
         PromptText::user_message("ありがとう", Some(&stored_user_times[1])).as_str()
     );
 }

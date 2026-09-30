@@ -125,7 +125,6 @@ fn record(
         tool: tool.to_string(),
         arguments,
         result,
-        tool_kind: None,
         call_id: None,
     })
     .expect("a record of JSON values serializes");
