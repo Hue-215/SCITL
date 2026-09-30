@@ -70,6 +70,16 @@ fn user_text(message: &ChatMessage) -> &str {
     }
 }
 
+/// 保存した発言列(`db::transcripts`の`rounds`)の、発言ごとの役割。
+fn roles_of(stored: &serde_json::Value) -> Vec<String> {
+    stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m.as_object().unwrap().keys().next().unwrap().clone())
+        .collect()
+}
+
 /// ツールの上限に達したことを伝える一節か。
 fn mentions_round_limit(message: &ChatMessage) -> bool {
     matches!(message, ChatMessage::User { text, .. } if text.as_str().contains("tool call limit"))
@@ -1366,6 +1376,19 @@ async fn history_that_exceeds_the_context_length_drops_the_oldest_turns() {
         )));
     }
     assert!(matches!(rounds[1].last(), Some(ChatMessage::Tool { .. })));
+
+    // 保存には、最初に並べたユーザー発言(間引きの位置)を添える。
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    let second = messages.iter().rfind(|m| m.role == Role::User).unwrap();
+    let reply = messages
+        .iter()
+        .rfind(|m| m.role == Role::Assistant)
+        .unwrap();
+    let saved = db::transcripts::find(&conn, reply.turn_id.as_deref().unwrap(), 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.history_start, Some(second.id));
 }
 
 /// 編集: 対象のユーザー発言以降(自身を含む)が論理削除され、編集後の内容から会話が
@@ -1707,17 +1730,11 @@ async fn a_replied_turn_saves_what_was_sent() {
 
     let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
     assert_eq!(input["rows"], json!([user.id]));
-    assert_eq!(input["messages"][0]["text"], user_text(&sent[0][1]));
+    assert_eq!(input["messages"][0]["user"]["text"], user_text(&sent[0][1]));
     let rounds: serde_json::Value = serde_json::from_str(&saved.rounds).unwrap();
-    let roles: Vec<_> = rounds
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| m["role"].as_str().unwrap())
-        .collect();
-    assert_eq!(roles, ["assistant", "tool", "assistant"]);
-    assert_eq!(rounds[0]["tool_calls"][0]["name"], "add_steps");
-    assert_eq!(rounds[2]["content"], "工程を追加しました");
+    assert_eq!(roles_of(&rounds), ["assistant", "tool", "assistant"]);
+    assert_eq!(rounds[0]["assistant"]["tool_calls"][0]["name"], "add_steps");
+    assert_eq!(rounds[2]["assistant"]["content"], "工程を追加しました");
 }
 
 /// 失敗したターンは、送った形を保存しない(次のターンに並べないため)。
@@ -1784,7 +1801,7 @@ async fn a_retry_saves_its_own_input() {
     let saved = db::transcripts::find(&conn, &turn_id, 2).unwrap().unwrap();
     let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
     assert_eq!(input["rows"], json!([user_id, record_id]));
-    assert!(input["messages"][0]["text"]
+    assert!(input["messages"][0]["user"]["text"]
         .as_str()
         .unwrap()
         .contains("scitl:operations"));
@@ -2303,6 +2320,27 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     let reply = messages.last().unwrap();
     assert_eq!(reply.role, Role::Assistant);
     assert_eq!(reply.content, "ここまでの結果でお答えします");
+
+    // 上限の一節も送ったものなので、最後の応答の前に保存する。
+    let saved = db::transcripts::find(&conn, reply.turn_id.as_deref().unwrap(), 1)
+        .unwrap()
+        .unwrap();
+    let saved_rounds: serde_json::Value = serde_json::from_str(&saved.rounds).unwrap();
+    assert_eq!(
+        roles_of(&saved_rounds),
+        [
+            "assistant",
+            "tool",
+            "assistant",
+            "tool",
+            "user",
+            "assistant"
+        ]
+    );
+    assert!(saved_rounds[4]["user"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("tool call limit"));
 }
 
 /// ツールに対応しないモデルには、ツールを渡さずに1回だけ呼び、注意書きを添える。
@@ -2336,7 +2374,21 @@ async fn models_without_tool_support_are_called_once_without_tools() {
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(tool_execution_count(&messages), 0);
-    assert_eq!(messages.last().unwrap().role, Role::Assistant);
+    let reply = messages.last().unwrap();
+    assert_eq!(reply.role, Role::Assistant);
+
+    // ツールを渡していないので、保存するツール定義は空で、往復も無い。
+    let saved = db::transcripts::find(&conn, reply.turn_id.as_deref().unwrap(), 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        db::transcripts::blob(&conn, &saved.tools_digest)
+            .unwrap()
+            .as_deref(),
+        Some("[]")
+    );
+    let saved_rounds: serde_json::Value = serde_json::from_str(&saved.rounds).unwrap();
+    assert_eq!(roles_of(&saved_rounds), ["assistant"]);
 }
 
 fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
@@ -2381,6 +2433,19 @@ async fn open_task_chat_answers_the_opening_message_without_saving_it() {
         ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか"
     ));
     assert!(matches!(&histories[1][2], ChatMessage::User { .. }));
+
+    // 補った開始の発言は行を持たないが、最初の試行の入力として保存する。
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    let saved = db::transcripts::find(&conn, messages[0].turn_id.as_deref().unwrap(), 1)
+        .unwrap()
+        .unwrap();
+    let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
+    assert_eq!(input["rows"], json!([]));
+    assert_eq!(
+        input["messages"][0]["user"]["text"],
+        user_text(&opening_message())
+    );
 }
 
 #[tokio::test]

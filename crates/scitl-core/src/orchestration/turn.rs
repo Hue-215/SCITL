@@ -558,7 +558,15 @@ async fn run_tool_rounds(
                 return fail_turn(db, attempt, TurnFailure::EmptyResponse).await;
             }
 
-            let transcript = adapter.identity().zip(request.transcript(&rounds));
+            let transcript = adapter.identity().and_then(|identity| {
+                let saved = request.transcript(&rounds);
+                if saved.is_none() {
+                    eprintln!(
+                        "cannot save what was sent: an image was not read from an attachment"
+                    );
+                }
+                Some((identity, saved?))
+            });
             let attempt = attempt.clone();
             with_conn(db, move |conn| {
                 in_transaction(conn, |conn| {
@@ -570,8 +578,12 @@ async fn run_tool_rounds(
                         None,
                         reasoning_for_db.as_deref(),
                     )?;
+                    // 保存は会話ログの補助なので、失敗しても返信は書く(保存の無いターンは
+                    // 実行記録から組み立てる)。
                     if let Some((identity, saved)) = &transcript {
-                        attempt.save_transcript(conn, identity, saved)?;
+                        if let Err(e) = attempt.save_transcript(conn, identity, saved) {
+                            eprintln!("failed to save what was sent: {e}");
+                        }
                     }
                     Ok(())
                 })

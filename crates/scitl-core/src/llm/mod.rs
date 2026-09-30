@@ -368,6 +368,13 @@ pub trait LlmAdapter: Send + Sync {
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<Replay, CoreError>;
 
+    /// 送り先の方言とモデル。送った形の保存に添える(`orchestration::transcript`)。実際の
+    /// プロバイダーは必ず実装する。既定の`None`はテスト用のアダプタのためのもので、`None`なら
+    /// 送った形を保存しない。
+    fn identity(&self) -> Option<AdapterIdentity> {
+        None
+    }
+
     /// [`Self::send`]が同じ引数で送るリクエストの本文を、送らずに返す(送信内容のプレビュー)。
     /// 実際のプロバイダーは必ず実装し、`send`と同じ組み立てを通す。既定の`None`はテスト用の
     /// アダプタのためのもの。
@@ -376,13 +383,6 @@ pub trait LlmAdapter: Send + Sync {
     /// 縮めるのは方言の上で画像を置く位置に限る。他の文字列まで縮めると、モデルに渡る文を
     /// プレビューから隠せてしまう。要求URLは返さない(エラーの詳細と同じく、パスに鍵を置く
     /// ゲートウェイがあるため)。
-    /// 送り先の方言とモデル。送った形の保存に添える(`orchestration::transcript`)。実際の
-    /// プロバイダーは必ず実装する。既定の`None`はテスト用のアダプタのためのもので、`None`なら
-    /// 送った形を保存しない。
-    fn identity(&self) -> Option<AdapterIdentity> {
-        None
-    }
-
     fn request_preview(
         &self,
         _messages: &[ChatMessage],

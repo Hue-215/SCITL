@@ -9,8 +9,11 @@ use crate::llm::{ChatMessage, InlineImage, Replay, ToolArguments, ToolCallReques
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
+///
+/// 外部タグの形(`{"assistant": {...}}`)で直列化する。内部タグの形(`"role"`のキー)は、読むときに
+/// 値をいったん溜めてから読み直すため、思考の生ブロック([`Replay`])を読めない。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "role", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub(super) enum StoredMessage {
     User {
         text: String,
@@ -182,17 +185,38 @@ mod tests {
 
     #[test]
     fn a_stored_message_reads_back_to_the_same_value() {
+        let call = |id: &str, raw: &str| ToolCallRequest {
+            id: Some(id.to_string()),
+            name: "search".to_string(),
+            arguments: ToolArguments::parse(raw.to_string()),
+        };
+        // 読めなかった引数も、モデルが出した生の文字列のまま往復する。
         let message = StoredMessage::of(&ChatMessage::Assistant {
             content: Some("a".to_string()),
-            tool_calls: vec![ToolCallRequest {
-                id: Some("call_1".to_string()),
-                name: "search".to_string(),
-                arguments: ToolArguments::parse("{\"q\":1}".to_string()),
-            }],
+            tool_calls: vec![call("call_1", "{\"q\":1}"), call("call_2", "{\"q\":")],
             replay: Replay::default(),
         })
         .unwrap();
         let text = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serde_json::from_str::<StoredMessage>(&text).unwrap(),
+            message
+        );
+    }
+
+    /// 思考の生ブロックを持つ発言も、受け取ったままの形で読み戻せる。
+    #[test]
+    fn a_message_with_a_replay_reads_back_verbatim() {
+        let replay: Replay =
+            serde_json::from_str(r#"[{"type":"thinking","thinking":"","signature":"sig"}]"#)
+                .unwrap();
+        let message = StoredMessage::Assistant {
+            content: None,
+            tool_calls: Vec::new(),
+            replay,
+        };
+        let text = serde_json::to_string(&message).unwrap();
+        assert!(text.contains(r#"{"type":"thinking","thinking":"","signature":"sig"}"#));
         assert_eq!(
             serde_json::from_str::<StoredMessage>(&text).unwrap(),
             message
