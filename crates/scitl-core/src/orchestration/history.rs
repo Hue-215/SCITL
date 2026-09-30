@@ -91,14 +91,9 @@ pub(super) struct HistoryOptions {
 ///
 /// エラー発言は送らない。返信のある試行の実行記録は、失敗でない結果を呼び出しと結果の組にして
 /// 送る。それ以外の実行記録(会話の外での操作、失敗したターンと捨てた試行での実行)は、失敗で
-/// ない結果を操作の記録にまとめ、行の並びで決まる位置に置く
-/// (`docs/spec/rebuild/architecture.md`「会話の外での操作の伝え方」)。
-/// - 次のユーザー発言の前(同じ発言の中で、囲みの前)
-/// - 返信のある試行が始まる位置(再試行)では、その試行が答えるユーザー発言の後ろ
-/// - 返信のある試行の行の間に挟まった記録は、その試行を飛ばして次のユーザー発言の前
-/// - どちらにも当たらない末尾の記録は、最後のユーザー発言の後ろ
-///
-/// 位置は行の並びだけで決まるので、次のターンでも同じ位置に並ぶ。
+/// ない結果を操作の記録にまとめ、行の並びだけで決まる位置に置く
+/// (`docs/spec/rebuild/architecture.md`「会話の外での操作の伝え方」)。位置が行の並びだけで
+/// 決まるので、次のターンでも同じ位置に並ぶ。
 pub(super) fn build_history(
     mut stored: StoredChat,
     options: &HistoryOptions,
@@ -128,6 +123,7 @@ pub(super) fn build_history(
             .turn_id
             .as_deref()
             .filter(|turn| shown && replied_turns.contains(*turn));
+        // 返信のある試行が始まる位置(再試行)。それまでの記録は、その試行が答える発言にあったものとする。
         if let Some(turn) = replied {
             if current_turn != Some(turn) {
                 current_turn = Some(turn);
@@ -143,6 +139,7 @@ pub(super) fn build_history(
                 }
                 None => pending.extend(Operation::of(m, shown)),
             },
+            // 試行の途中に挟まった記録も含め、待っている記録は次のユーザー発言の囲みの前に置く。
             (Kind::Normal, Role::User) => {
                 current_turn = None;
                 let attached = stored.attachments.remove(&m.id).unwrap_or_default();
@@ -165,7 +162,13 @@ pub(super) fn build_history(
             _ => {}
         }
     }
-    append_operations(&mut history, &mut pending);
+    // 末尾に残った記録。再試行では、答えるユーザー発言の後ろに置く(次のターンでは試行の始まりの
+    // 位置として同じところに並ぶ)。返信のある試行のあと(新しいユーザー発言の無い会話の送信内容の
+    // プレビュー)なら、返信の後ろに操作の記録だけのユーザー発言として置く。
+    match current_turn {
+        Some(_) => history.extend(take_operations(&mut pending).map(ChatMessage::user)),
+        None => append_operations(&mut history, &mut pending),
+    }
     history
 }
 
@@ -189,13 +192,14 @@ struct Operation<'a> {
 }
 
 impl<'a> Operation<'a> {
-    /// 失敗した結果と読めない記録は`None`。`shown`は表示される行か(捨てた試行の記録でないか)。
+    /// 失敗した結果と読めない記録は`None`。`shown`は表示される行か。
     fn of(m: &'a Message, shown: bool) -> Option<Self> {
         let record: ToolExecutionRecord = serde_json::from_str(&m.content).ok()?;
         if is_error_result(&record.result) {
             return None;
         }
-        // 経路の印を持つのは会話の外での操作の記録だけで、ほかは失敗したターンか捨てた試行の記録。
+        // 経路の印を持つ表示される行は、会話の外での操作の記録。ほか(失敗したターンの試行と、
+        // 表示されない捨てた試行)はモデル自身が実行したもの。
         let source = match (&m.source, shown) {
             (Some(source), true) => source.as_str(),
             _ => DISCARDED_ATTEMPT_SOURCE,
@@ -442,11 +446,22 @@ mod tests {
             content: &str,
             turn: Option<(&str, i64)>,
         ) -> i64 {
+            self.insert_in(Chat::Task(self.task_id), role, kind, content, turn)
+        }
+
+        fn insert_in(
+            &self,
+            chat: Chat,
+            role: Role,
+            kind: Kind,
+            content: &str,
+            turn: Option<(&str, i64)>,
+        ) -> i64 {
             let error = matches!(role, Role::Error).then_some("provider");
             messages::insert_message(
                 &self.conn,
                 NewMessage {
-                    chat: Chat::Task(self.task_id),
+                    chat,
                     role,
                     content,
                     kind,
@@ -455,7 +470,10 @@ mod tests {
                             turn_id,
                             attempt_no,
                         },
-                        None => Origin::Operation(OperationSource::Ui),
+                        None if kind == Kind::ToolExecution => {
+                            Origin::Operation(OperationSource::Ui)
+                        }
+                        None => Origin::User,
                     },
                     error_kind: error,
                     error_detail: None,
@@ -483,14 +501,17 @@ mod tests {
         }
 
         fn record(&self, turn: Option<&str>, result: Value) -> i64 {
-            let content = serde_json::to_string(&ToolExecutionRecord {
-                tool: "web__search".to_string(),
-                arguments: json!({ "q": "tokyo" }),
-                result,
-                call_id: Some("call_0".to_string()),
-            })
-            .unwrap();
-            self.insert(Role::Tool, Kind::ToolExecution, &content, turn)
+            self.insert(
+                Role::Tool,
+                Kind::ToolExecution,
+                &record_content(result),
+                turn,
+            )
+        }
+
+        fn record_attempt(&self, turn: &str, attempt: i64, result: Value) {
+            let content = record_content(result);
+            self.insert_attempt(Role::Tool, Kind::ToolExecution, &content, turn, attempt);
         }
 
         fn reply(&self, turn: &str, text: &str) {
@@ -500,6 +521,16 @@ mod tests {
         fn history(&self, tools_available: bool) -> Vec<ChatMessage> {
             self.build(Chat::Task(self.task_id), tools_available, false)
         }
+    }
+
+    fn record_content(result: Value) -> String {
+        serde_json::to_string(&ToolExecutionRecord {
+            tool: "web__search".to_string(),
+            arguments: json!({ "q": "tokyo" }),
+            result,
+            call_id: Some("call_0".to_string()),
+        })
+        .unwrap()
     }
 
     fn user_texts(history: &[ChatMessage]) -> Vec<&str> {
@@ -760,6 +791,145 @@ mod tests {
             operations_in(texts[0])[0]["source"],
             DISCARDED_ATTEMPT_SOURCE
         );
+    }
+
+    /// 再試行で置き換えた試行と新しい試行は同じ`turn_id`を持つ。古い試行の記録は操作の記録に、
+    /// 新しい試行の記録は呼び出しと結果の組にする。
+    #[test]
+    fn keeps_the_new_attempts_calls_as_pairs_and_reports_the_old_ones() {
+        let f = Fixture::new();
+        f.user("u");
+        f.record(Some("t1"), json!({ "text": "古い" }));
+        let first_reply = f.insert(Role::Assistant, Kind::Normal, "a", Some("t1"));
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), first_reply).unwrap();
+        f.record_attempt("t1", 2, json!({ "text": "新しい" }));
+        f.insert_attempt(Role::Assistant, Kind::Normal, "b", "t1", 2);
+
+        let history = f.history(true);
+        assert_eq!(tool_contents(&history), vec![r#"{"text":"新しい"}"#]);
+        let operations = operations_in(user_texts(&history)[0]);
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0]["result"], json!({ "text": "古い" }));
+    }
+
+    /// 聞き取りから始まった会話では、開始への返信より前の記録は補った開始の発言に、返信のあとの
+    /// 記録は最初のユーザー発言に付く。
+    #[test]
+    fn attaches_operations_to_the_opening_message_and_the_first_user_message() {
+        let f = Fixture::new();
+        f.record(None, json!({ "n": 1 }));
+        f.reply("t1", "どんなタスクですか");
+        f.record(None, json!({ "n": 2 }));
+        f.user("レポート");
+
+        let history = f.history(true);
+        assert_eq!(history.len(), 3);
+        let texts = user_texts(&history);
+        let opening = PromptText::user_message(OPENING, None);
+        assert!(texts[0].starts_with(opening.as_str()));
+        assert_eq!(operations_in(texts[0])[0]["result"], json!({ "n": 1 }));
+        assert_eq!(operations_in(texts[1])[0]["result"], json!({ "n": 2 }));
+    }
+
+    /// 返信のあとに記録があり、ユーザー発言が続かない(新しい発言の無い送信内容のプレビュー)なら、
+    /// 返信より前の発言に付けず、返信の後ろに操作の記録だけの発言として置く。
+    #[test]
+    fn puts_operations_after_the_last_reply_when_no_user_message_follows() {
+        let f = Fixture::new();
+        f.user("u");
+        f.reply("t1", "a");
+        f.record(None, json!({ "n": 1 }));
+
+        let history = f.history(true);
+        assert_eq!(history.len(), 3);
+        assert!(!user_texts(&history)[0].contains("scitl:operations"));
+        let last = user_texts(&history)[1];
+        assert!(last.starts_with("<scitl:operations>"));
+        assert!(!last.contains("scitl:user-message"));
+    }
+
+    /// 操作の記録は呼び出しの組ではないので、ツールに対応しないモデルにも置く。
+    #[test]
+    fn reports_operations_even_when_the_model_has_no_tools() {
+        let f = Fixture::new();
+        f.record(None, json!({ "n": 1 }));
+        f.user("u");
+        assert_eq!(
+            operations_in(user_texts(&f.history(false))[0])[0]["result"],
+            json!({ "n": 1 })
+        );
+    }
+
+    #[test]
+    fn reports_a_failed_turn_in_the_general_chat() {
+        let f = Fixture::new();
+        let general = Chat::General;
+        f.insert_in(general, Role::User, Kind::Normal, "u1", None);
+        let content = record_content(json!({ "text": "x" }));
+        f.insert_in(
+            general,
+            Role::Tool,
+            Kind::ToolExecution,
+            &content,
+            Some(("g1", 1)),
+        );
+        f.insert_in(
+            general,
+            Role::Error,
+            Kind::Normal,
+            "失敗しました",
+            Some(("g1", 1)),
+        );
+        f.insert_in(general, Role::User, Kind::Normal, "u2", None);
+
+        let history = f.build(general, true, false);
+        let operations = operations_in(user_texts(&history)[1]);
+        assert_eq!(operations[0]["source"], DISCARDED_ATTEMPT_SOURCE);
+    }
+
+    /// 囲みの前に置くときは添付の情報より前に、再試行で発言の後ろに置くときは添付の情報より後ろに
+    /// 並ぶ。
+    #[test]
+    fn places_operations_around_the_attachments() {
+        let f = Fixture::new();
+        f.record(None, json!({ "n": 1 }));
+        let first = f.user("u1");
+        f.attach(first, "a.txt", AttachmentKind::Text, b"a");
+        f.reply("t1", "a");
+        let second = f.user("u2");
+        f.attach(second, "b.txt", AttachmentKind::Text, b"b");
+        f.record(Some("t2"), json!({ "n": 2 }));
+        let reply = f.insert(Role::Assistant, Kind::Normal, "b", Some("t2"));
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), reply).unwrap();
+
+        let history = f.history(true);
+        let texts = user_texts(&history);
+        let before = |text: &str, a: &str, b: &str| text.find(a).unwrap() < text.find(b).unwrap();
+        assert!(before(
+            texts[0],
+            "<scitl:operations>",
+            "<scitl:attachments>"
+        ));
+        assert!(before(
+            texts[1],
+            "<scitl:attachments>",
+            "<scitl:operations>"
+        ));
+    }
+
+    /// 複数の記録は行の順に並べ、読めない記録と失敗した結果は飛ばす。
+    #[test]
+    fn lists_operations_in_order_and_skips_what_cannot_be_reported() {
+        let f = Fixture::new();
+        f.record(None, json!({ "n": 1 }));
+        f.insert(Role::Tool, Kind::ToolExecution, "{}", None);
+        f.record(None, json!({ "error": "down" }));
+        f.record(None, json!({ "n": 2 }));
+        f.user("u");
+
+        let operations = operations_in(user_texts(&f.history(true))[0]);
+        let results: Vec<_> = operations.iter().map(|o| o["result"].clone()).collect();
+        assert_eq!(results, vec![json!({ "n": 1 }), json!({ "n": 2 })]);
     }
 
     fn opening_message() -> ChatMessage {

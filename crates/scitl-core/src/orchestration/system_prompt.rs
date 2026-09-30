@@ -17,7 +17,7 @@ const TOOLS_UNAVAILABLE_NOTE: &str = "Tools are not available with the current m
 
 /// 総合チャットであることの注記。総合チャットには読み取り専用のツールしか渡さない
 /// ので、伝えないとモデルは変更を頼まれたときに、できたつもりの返事をする。
-/// ツールに対応しないモデルでも、変更についてはこれだけを伝える(下の注意書きと並べると、
+/// ツールに対応しないモデルでも、変更についてはこれだけを伝える(上の注意書きと並べると、
 /// 頼まれた変更をどう案内するかの指示が2つになる)。
 const GENERAL_CHAT_NOTE: &str = "This conversation is not tied to a single task; it is for \
      looking across all tasks. Tasks cannot be changed from this conversation. If the user \

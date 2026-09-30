@@ -646,7 +646,7 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
 #[tokio::test]
 async fn tool_results_carry_over_to_the_next_turn() {
     // タスクの状態を変えた結果も、次のターンの履歴に呼び出しと結果の組として載る。
-    // 実行記録には払い出されたIDを残し、分類は書かない。
+    // 実行記録には払い出されたIDを残す。
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let adapter = adds_a_step();
@@ -679,7 +679,6 @@ async fn tool_results_carry_over_to_the_next_turn() {
         .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let record: serde_json::Value = serde_json::from_str(&record.content).unwrap();
-    assert!(record.get("tool_kind").is_none());
     assert_eq!(record["call_id"], "call_1");
 }
 

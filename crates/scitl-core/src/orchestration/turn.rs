@@ -445,8 +445,8 @@ async fn run_tool_rounds(
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
     let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
     let tools_available = request.tools_available();
-    // 同一ターン内のツール呼び出しの往復。分類によらずモデルに返し、DBには書かない
-    // (書くと次ターン以降の履歴に残る)。
+    // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
+    // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
     let mut round_trip: Vec<ChatMessage> = Vec::new();
     // ツール実行に使った時間の合計。LLMの応答待ちは数えない(アダプタのタイムアウトが見る)。
     let mut tool_time_used = Duration::ZERO;
