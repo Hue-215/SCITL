@@ -75,8 +75,7 @@ pub enum ChatMessage {
     Assistant {
         content: Option<String>,
         tool_calls: Vec<ToolCallRequest>,
-        /// この発言を返したアダプタが、次の呼び出しで送り返すよう求めたもの。同一ターン内の
-        /// 往復でだけ持ち、履歴から組み立てた発言では空。
+        /// 同一ターン内の往復でだけ持つ([`Replay`])。履歴から組み立てた発言では空。
         replay: Replay,
     },
     Tool {
@@ -320,8 +319,7 @@ pub trait LlmAdapter: Send + Sync {
     ///   出るため。やり直すなら最初のイベントを渡す前に限る
     /// - `Done`は成功したときに最後に1回だけ渡す(画面はこれをラウンドの区切りに使う)
     ///
-    /// 次の呼び出しで送り返してほしいものがあれば[`Replay`]で返す。呼び出し側は、この応答から
-    /// 組み立てたアシスタント発言に載せて、同じターンの次の呼び出しに渡す。
+    /// 応答のうち、同じターンの次の呼び出しで送り返しが要るものは[`Replay`]で返す。
     async fn send(
         &self,
         messages: &[ChatMessage],

@@ -226,8 +226,7 @@ fn request_body<'a>(
 /// - ユーザー発言は`user_input`、アシスタント発言は`model_output`と`function_call`、
 ///   ツール結果は`function_result`にする。結果の画像は`function_result`の中に置く
 /// - 最初のステップがユーザー発言でなければ、その前にユーザー発言を補う
-/// - アダプタが送り返しを求めた応答([`Replay`])を持つアシスタント発言は、受け取った
-///   ステップをそのまま返す
+/// - [`Replay`]を持つアシスタント発言は、本文と呼び出しから組み立てずに、受け取ったステップを返す
 fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
     let mut system = String::new();
     let mut steps: Vec<Value> = Vec::with_capacity(messages.len() + 1);
@@ -492,7 +491,6 @@ impl LlmAdapter for GeminiAdapter {
             }
         };
 
-        // 送り返すのは、モデルの出力にあたるステップだけ。
         let mut replayed = Vec::new();
         let mut thought = false;
         for step in response.steps {
@@ -541,7 +539,7 @@ impl LlmAdapter for GeminiAdapter {
         on_event(ResponseEvent::Done { finish_reason });
 
         // 思考のステップは、次の呼び出しで受け取ったまま返す必要がある。並びも変えないよう、
-        // 出力のステップをすべてそのまま返す。
+        // 上で読んだ出力のステップ(思考・本文・呼び出し)を並びごと返す。
         Ok(if thought {
             Replay::new(Value::Array(replayed))
         } else {

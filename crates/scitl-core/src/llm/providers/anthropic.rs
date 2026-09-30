@@ -264,8 +264,7 @@ fn request_body<'a>(
 /// - 同じ役割が続いたら1つにまとめる。ツール結果のあとに続くユーザー発言(ツールの上限の
 ///   一節等)は、`tool_result`のブロックの後ろに並ぶ
 /// - 最初の発言がアシスタント発言なら、その前にユーザー発言を補う
-/// - アダプタが送り返しを求めた応答([`Replay`])を持つアシスタント発言は、受け取った
-///   ブロックをそのまま返す
+/// - [`Replay`]を持つアシスタント発言は、本文と呼び出しから組み立てずに、受け取ったブロックを返す
 fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMessage>) {
     let mut system_text = String::new();
     let mut out: Vec<RequestMessage> = Vec::with_capacity(messages.len() + 1);

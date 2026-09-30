@@ -482,7 +482,7 @@ async fn run_tool_rounds(
 
         let mut text = String::new();
         // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの
-        // 再送信用)には載せない。
+        // 再送信用)には載せない(送り返しが要る方言の分は、アダプタが`replay`で運ぶ)。
         let mut reasoning = String::new();
         let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
         for event in &events {
