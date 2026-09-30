@@ -804,10 +804,19 @@ option {
   color: var(--color-text-secondary);
 }
 
+/* 発言の下の操作ボタン(編集・再試行・削除)。文字だけの控えめなボタンで、ホバーで塗られる箱に
+   左右の余白を持たせる。行を余白の分だけ左へ出し、文字の位置(左端が発言の時刻と揃う)と文字どうしの
+   間隔は、余白が無いときと同じに保つ。 */
+.entry-actions {
+  --entry-action-padding-inline: var(--space-1);
+  margin-inline-start: calc(-1 * var(--entry-action-padding-inline));
+  gap: calc(var(--space-2) - 2 * var(--entry-action-padding-inline));
+}
+
 .entry-actions button {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  padding: 0;
+  padding: 0 var(--entry-action-padding-inline);
 }
 
 .entry-edit-textarea {
