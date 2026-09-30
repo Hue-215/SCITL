@@ -205,7 +205,7 @@ mod tests {
             &json!({
                 "tool": "update_task",
                 "arguments": { "title": "「買い物」" },
-                "result": serde_json::to_value(f.task()).unwrap(),
+                "result": { "task": serde_json::to_value(f.task()).unwrap(), "steps": [] },
             })
         );
     }

@@ -8,6 +8,7 @@ use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
 use super::args::Args;
+use super::get_current_task_detail::task_detail;
 use super::{InternalTool, Run};
 
 pub const NAME: &str = "update_task";
@@ -97,7 +98,7 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
         .map(|s| TaskStatus::parse(&s))
         .transpose()?;
 
-    let updated = tasks::update_task(
+    tasks::update_task(
         conn,
         task_id,
         TaskUpdate {
@@ -108,7 +109,8 @@ pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Val
         },
     )?;
 
-    Ok(serde_json::to_value(updated).expect("Task serialization cannot fail"))
+    // 工程の書き込みと同じく、変更後のタスクと工程の全体を返す。
+    task_detail(conn, task_id)
 }
 
 #[cfg(test)]
@@ -155,11 +157,11 @@ mod tests {
 
         // nullは「変えない」。
         let result = execute(&conn, task_id, &json!({ "deadline": null })).unwrap();
-        assert_eq!(result["deadline"], "2026-10-01");
+        assert_eq!(result["task"]["deadline"], "2026-10-01");
 
         let result = execute(&conn, task_id, &json!({ "clear": ["deadline"] })).unwrap();
-        assert!(result["deadline"].is_null());
-        assert_eq!(result["description"], "牛乳");
+        assert!(result["task"]["deadline"].is_null());
+        assert_eq!(result["task"]["description"], "牛乳");
     }
 
     #[test]
@@ -194,6 +196,6 @@ mod tests {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
         let result = execute(&conn, task_id, &json!({ "title": "買い物" })).unwrap();
-        assert_eq!(result["title"], "買い物");
+        assert_eq!(result["task"]["title"], "買い物");
     }
 }

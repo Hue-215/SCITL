@@ -238,7 +238,8 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
   (`architecture.md` 3節「会話の外での操作の伝え方」)
 - `tool`と`arguments`はモデル向けツールの語彙に揃える: タイトルの変更は`update_task`と
   `{"title": …}`、アーカイブ・解除は`update_task`と`{"status": "archived"|"unarchived"}`、
-  削除は`delete_task`と`{}`。`result`は変更後のタスク行(削除は`deleted_at`の入った行)
+  削除は`delete_task`と`{}`。`result`はモデル向けの同じツールが返すのと同じ形(タスクの更新は
+  変更後のタスクと工程の全体。削除は`deleted_at`の入ったタスク行)
 - 記録する`arguments`は実行した値そのものから作る(記録用と実行用を別に組み立てない)
 - 状態が変わらない操作(整形すると今と同じになるタイトル、アーカイブ済みのアーカイブ)は、
   変更も記録もしない。何も起きなかった記録を会話ログに残さないため。変わるかどうかは
