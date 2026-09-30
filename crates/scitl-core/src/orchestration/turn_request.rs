@@ -105,19 +105,29 @@ impl TurnRequest {
                 &head.tools,
             )
         };
-        let (front, keep_from, notify) = match frozen {
+        let (front, keep_from, notify, frozen) = match frozen {
             Some(head) => {
                 let notice = (head.settings_system_digest != digest(&current.system))
                     .then(|| ChatMessage::user(PromptText::system_update(&current.system)));
                 let kept = trim(&head, notice.as_ref());
                 if kept.trimmed {
                     // 間引いたら前はどのみち変わるので、今の設定で固定し直す。
-                    (current.clone(), trim(&current, None).keep_from, false)
+                    (
+                        current.clone(),
+                        trim(&current, None).keep_from,
+                        false,
+                        false,
+                    )
                 } else {
-                    (head, kept.keep_from, notice.is_some())
+                    (head, kept.keep_from, notice.is_some(), true)
                 }
             }
-            None => (current.clone(), trim(&current, None).keep_from, false),
+            None => (
+                current.clone(),
+                trim(&current, None).keep_from,
+                false,
+                false,
+            ),
         };
         // 間引きは最後のユーザー発言より前でしか切らないが、入力が複数の発言にわたると一部が
         // 落ちうる。残った分だけを入力とする。
@@ -145,7 +155,11 @@ impl TurnRequest {
         let mut opening = Vec::with_capacity(1 + history.messages.len() - keep_from);
         opening.push(ChatMessage::System(front.system.clone()));
         opening.extend(history.messages.into_iter().skip(keep_from));
-        settle_replays(&mut opening, &segments, &front.tools_body, adapter);
+        let unchanged = settle_replays(&mut opening, &segments, &front.tools_body, adapter);
+        // 直前の保存を送ったときより前の並びが変わっていれば(変更の通知を置いた試行を、保存を
+        // 使えずに記録から組み立て直した等)、伝えたはずの変更が並びから消えていることがある。
+        // 固定した先頭が今の設定と違えば、もう一度伝える(重ねて伝えても害は無い)。
+        let notify = notify || (frozen && !unchanged && front.system != current.system);
         let input_from = at(input_from);
         if notify {
             notify_system_update(&mut opening, input_from, &current.system);
@@ -312,13 +326,17 @@ struct OpeningSegment {
 /// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。先頭から順に、並べた形
 /// (残した`Replay`ごと)で指紋を取り直し、区間の始まりで保存した指紋と一致し、要求URLの
 /// オリジンが今の送り先と同じで、今の送り先が受け付ける区間だけ残す。思考は別の送り先には
-/// 渡さない(`docs/spec/principles.md` 3節「思考は受け取ったまま送り返す」)。途中の`Replay`だけを外すと、それより後ろの区間の指紋も合わなくなる。
+/// 渡さない(`docs/spec/principles.md` 3節「思考は受け取ったまま送り返す」)。途中の`Replay`
+/// だけを外すと、それより後ろの区間の指紋も合わなくなる。
+///
+/// 最後の区間の指紋が一致したか(区間が無ければ真)を返す。一致しなければ、最後の区間を送った
+/// ときより前の並びが変わっている。
 fn settle_replays(
     opening: &mut [ChatMessage],
     segments: &[OpeningSegment],
     tools: &str,
     adapter: &dyn LlmAdapter,
-) {
+) -> bool {
     let ChatMessage::System(system) = &opening[0] else {
         unreachable!("the opening starts with the system prompt");
     };
@@ -326,11 +344,13 @@ fn settle_replays(
     let mut digest = Some(PrefixDigest::start(system, tools));
     let server = adapter.identity().map(|current| current.server);
     let mut keep_until = 0;
+    let mut last_matches = true;
     for (i, message) in opening.iter_mut().enumerate().skip(1) {
         if let Some(segment) = segments.iter().find(|s| s.start == i) {
             let matches = digest
                 .as_ref()
                 .is_some_and(|d| d.as_str() == segment.prefix_digest);
+            last_matches = matches;
             let same_server = server.as_deref() == Some(segment.origin.server.as_str());
             keep_until = if matches && same_server && adapter.accepts_replay(&segment.origin) {
                 segment.end
@@ -348,6 +368,7 @@ fn settle_replays(
             Some(d)
         });
     }
+    last_matches
 }
 
 #[cfg(test)]
@@ -460,12 +481,12 @@ mod tests {
             segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
         ];
         let mut messages = opening();
-        settle_replays(
+        assert!(settle_replays(
             &mut messages,
             &segments,
             TOOLS,
             &Accepting(ApiFormat::Anthropic),
-        );
+        ));
         assert_eq!(kept(&messages), [true, true]);
     }
 
@@ -478,12 +499,13 @@ mod tests {
             segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
         ];
         let mut messages = opening();
-        settle_replays(
+        // 最後の区間より前の並びが変わったことも返す。
+        assert!(!settle_replays(
             &mut messages,
             &segments,
             TOOLS,
             &Accepting(ApiFormat::Anthropic),
-        );
+        ));
         assert_eq!(kept(&messages), [false, false]);
 
         // 今の送り先が受け付けない思考も、外せば同じく後ろが合わなくなる。

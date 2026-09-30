@@ -433,11 +433,17 @@ mod tests {
             PromptText::operations(&operations).as_str().to_string(),
             PromptText::note("note").as_str().to_string(),
             PromptText::system_update(hostile).as_str().to_string(),
+            tools_body(&[ToolSchema::external(
+                "srv__tool".to_string(),
+                hostile,
+                &json!({ "k": hostile }),
+            )
+            .unwrap()]),
             user_message_format_note(),
         ];
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
-            (2, "de4ae48cf458f2bc6e92331006dd872ec56467eba837d039dee30b8ff4afa158"),
+            (2, "f1bad8598448473a20b17894b9c05ae10b46ee0868d225f68f8164caec8e273a"),
             "無害化の規則か囲みの形が変わった。前の規則で保存した本文を並べないよう、FORM_VERSIONを\
              上げてから期待値を今の出力に更新する"
         );
