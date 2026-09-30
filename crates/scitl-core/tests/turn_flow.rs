@@ -1970,6 +1970,78 @@ async fn a_changed_system_prompt_is_told_without_changing_the_front() {
     assert_eq!(replay_of(sent, "返信2"), thinking_2);
 }
 
+/// 変更の通知は、それを置いたターンが失敗して保存されなければ、次のターンでまた置く。
+#[tokio::test]
+async fn a_system_update_is_told_again_when_the_turn_that_told_it_failed() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let before = SystemPrompts {
+        base: Some("BEFORE"),
+        task_chat: None,
+    };
+    let after = SystemPrompts {
+        base: Some("AFTER"),
+        task_chat: None,
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, before, task_id, "1回目").await;
+    let failed = fails_to_authenticate();
+    turn_with(&db, &failed, after, task_id, "2回目").await;
+    let third = ScriptedAdapter::texts(&["返信3"]);
+    turn_with(&db, &third, after, task_id, "3回目").await;
+
+    for sent in [&failed.sent_messages()[0], &third.sent_messages()[0]] {
+        assert!(system_of(sent).contains("BEFORE"));
+        let notices: Vec<_> = user_texts(sent)
+            .into_iter()
+            .filter(|t| t.contains("<scitl:system-update>"))
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("2回目"));
+    }
+}
+
+/// 間引いたターンは前がどのみち変わるので、通知を置かずに先頭ごと今の設定で作り直す。
+#[tokio::test]
+async fn a_trimmed_turn_takes_the_new_system_prompt_instead_of_telling_it() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 20_000;
+    let padding = "あ".repeat(8_000);
+    let turn = |adapter, prompts, text: String| {
+        let db = db.clone();
+        async move {
+            let ctx = TurnContext {
+                capabilities,
+                prompts,
+                ..context(adapter)
+            };
+            run_turn(db, &ctx, Chat::Task(task_id), text).await.unwrap();
+        }
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    let before = SystemPrompts {
+        base: Some("BEFORE"),
+        task_chat: None,
+    };
+    turn(&first, before, format!("1回目{padding}")).await;
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    let after = SystemPrompts {
+        base: Some("AFTER"),
+        task_chat: None,
+    };
+    turn(&second, after, format!("2回目{padding}")).await;
+
+    let sent = &second.sent_messages()[0];
+    assert!(system_of(sent).contains("AFTER"));
+    let texts = user_texts(sent);
+    assert!(texts[0].contains("2回目"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("<scitl:system-update>")));
+}
+
 /// 間引きの位置はターンをまたいで保ち、予算を超えたときだけ予算の半分までまとめて動かす。
 /// 位置が動かないターンでは前が変わらないので、前のターンの思考も送り返す。
 #[tokio::test]

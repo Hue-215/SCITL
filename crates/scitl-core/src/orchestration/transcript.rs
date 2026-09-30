@@ -168,29 +168,44 @@ fn read_images(hashes: &[String], store: &AttachmentStore) -> Option<Vec<InlineI
         .collect()
 }
 
-/// 保存に添えた、前を固定する材料(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。
-/// 使っている直前の保存のものを次のターンで使う。
+/// 保存に添えた、前を固定する材料(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」
+/// 「間引きの位置」)。使っている直前の保存のものを次のターンで使う。
 pub(super) struct Front {
+    /// 最初に並べたユーザー発言(間引きの位置)。`None`は会話の最初から。
+    pub(super) history_start: Option<i64>,
+    system_digest: String,
+    settings_system_digest: String,
+    tools_digest: String,
+}
+
+impl Front {
+    fn of(transcript: &Transcript) -> Self {
+        Self {
+            history_start: transcript.history_start,
+            system_digest: transcript.system_digest.clone(),
+            settings_system_digest: transcript.settings_system_digest.clone(),
+            tools_digest: transcript.tools_digest.clone(),
+        }
+    }
+
+    /// 本文を引いた先頭。`blobs`は本文の指紋から本文への対応で、本文が無ければ`None`。
+    pub(super) fn head(&self, blobs: &HashMap<String, String>) -> Option<SavedHead> {
+        Some(SavedHead {
+            system: blobs.get(&self.system_digest)?.clone(),
+            settings_system_digest: self.settings_system_digest.clone(),
+            tools: blobs.get(&self.tools_digest)?.clone(),
+        })
+    }
+}
+
+/// 保存に添えた先頭(システムプロンプトとツール定義)の本文。
+pub(super) struct SavedHead {
     /// 先頭に置いたシステムプロンプト。
     pub(super) system: String,
     /// そのとき設定から作ったシステムプロンプトの指紋。変更の通知を置いたかを見分ける。
     pub(super) settings_system_digest: String,
     /// 渡したツール定義の一覧の本文([`tools_body`])。
     pub(super) tools: String,
-    /// 最初に並べたユーザー発言(間引きの位置)。`None`は会話の最初から。
-    pub(super) history_start: Option<i64>,
-}
-
-impl Front {
-    /// `blobs`は本文の指紋から本文への対応。本文が無ければ`None`。
-    pub(super) fn of(transcript: &Transcript, blobs: &HashMap<String, String>) -> Option<Self> {
-        Some(Self {
-            system: blobs.get(&transcript.system_digest)?.clone(),
-            settings_system_digest: transcript.settings_system_digest.clone(),
-            tools: blobs.get(&transcript.tools_digest)?.clone(),
-            history_start: transcript.history_start,
-        })
-    }
 }
 
 /// 次のターンに並べる、読み戻した1試行分。
@@ -202,8 +217,8 @@ pub(super) struct Replayable {
     pub(super) input_rows: Vec<i64>,
     /// 入力と往復と最後の応答。
     pub(super) messages: Vec<ChatMessage>,
-    /// 前を固定する材料。本文を読めなければ`None`。
-    pub(super) front: Option<Front>,
+    /// 前を固定する材料。
+    pub(super) front: Front,
 }
 
 impl Replayable {
@@ -244,12 +259,8 @@ impl Replayable {
                 .iter()
                 .map(|m| m.restore(store))
                 .collect::<Option<_>>()?,
-            front: None,
+            front: Front::of(transcript),
         })
-    }
-
-    pub(super) fn with_front(self, front: Option<Front>) -> Self {
-        Self { front, ..self }
     }
 }
 

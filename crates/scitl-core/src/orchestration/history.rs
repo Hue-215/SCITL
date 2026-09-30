@@ -15,7 +15,7 @@ use crate::llm::{
     ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
 };
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
-use crate::orchestration::transcript::{Front, Replayable};
+use crate::orchestration::transcript::{Front, Replayable, SavedHead};
 
 /// 履歴の組み立てに要るDBの行。DBのロックを持つ間に引き終え、添付画像の読み出し
 /// ([`build_history`])はロックの外で行う。
@@ -223,6 +223,7 @@ pub(super) fn build_history(
         None => history.append_operations(&mut pending),
     }
     history.place_opening();
+    history.head = history.front.as_ref().and_then(|f| f.head(&stored.blobs));
     history
 }
 
@@ -241,6 +242,8 @@ pub(super) struct History {
     opening: Option<ChatMessage>,
     /// 使っている直前の保存(最後に並べた保存)の、前を固定する材料。
     pub(super) front: Option<Front>,
+    /// `front`の先頭の本文。本文を読めなければ`None`(先頭は作り直すが、間引きの位置は保つ)。
+    pub(super) head: Option<SavedHead>,
 }
 
 /// 送った形の保存から並べた1試行分の区間(`messages[start..end]`)。
@@ -261,6 +264,7 @@ impl History {
             saved_turns: HashSet::new(),
             opening: None,
             front: None,
+            head: None,
         }
     }
 
@@ -281,7 +285,7 @@ impl History {
             self.opening = None;
         }
         let start = self.messages.len();
-        self.front = saved.front;
+        self.front = Some(saved.front);
         let mut rows = Some(saved.input_rows);
         for message in saved.messages {
             self.push(message, rows.take().unwrap_or_default());
@@ -332,8 +336,17 @@ impl History {
 
     /// 間引きの位置`row`(行のid)から並べ始める単位の始まり。その行か、それより後ろの行から
     /// 作った最初の単位(その行が消えていれば、後ろの最初のユーザー発言)。無ければ最後の単位
-    /// (応答すべき発言は必ず送る)。
+    /// (応答すべき発言は必ず送る)。保存から並べた区間の入力に含まれる行なら、区間の始まりから
+    /// 並べる(記録から組み立てていたときに決めた位置が、あとで区間の途中になりうる。区間ごと
+    /// 飛ばすと、そこに置いた変更の通知も黙って落ちる)。
     pub(super) fn start_at(&self, starts: &[usize], row: i64) -> usize {
+        if let Some(segment) = self
+            .segments
+            .iter()
+            .find(|s| self.rows[s.start].contains(&row))
+        {
+            return segment.start;
+        }
         starts
             .iter()
             .copied()
@@ -399,8 +412,7 @@ fn used_transcripts(
         .iter()
         .filter(|t| replied.contains(&(t.turn_id.as_str(), t.attempt_no)))
         .filter_map(|t| {
-            let saved = Replayable::load(t, options.tools_available, options.image_input, store)?
-                .with_front(Front::of(t, &stored.blobs));
+            let saved = Replayable::load(t, options.tools_available, options.image_input, store)?;
             Some((t.turn_id.clone(), saved))
         })
         .collect()
@@ -1317,8 +1329,8 @@ mod tests {
 
         assert_eq!(history.start_at(&starts, u1), position("u1"));
         assert_eq!(history.start_at(&starts, u2a), position("送った u2a"));
-        // 区間の入力の途中の行からは、区間の後ろから並べる。
-        assert_eq!(history.start_at(&starts, u2b), position("u3"));
+        // 区間の入力の途中の行からは、区間の始まりから並べる。
+        assert_eq!(history.start_at(&starts, u2b), position("送った u2a"));
         // 単位の始まりでない行(消えたユーザー発言の代わり)からは、後ろの最初の単位から。
         assert_eq!(history.start_at(&starts, a1), position("送った u2a"));
         // 後ろに単位が無ければ、最後の単位(応答すべき発言)は必ず並べる。

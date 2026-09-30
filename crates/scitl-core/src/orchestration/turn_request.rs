@@ -15,7 +15,7 @@ use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::system_prompt::build_system_prompt;
 use crate::orchestration::transcript::{
-    tool_entry, tools_body, tools_from_body, Front, PrefixDigest, SavedTurn, StoredInput,
+    tool_entry, tools_body, tools_from_body, PrefixDigest, SavedHead, SavedTurn, StoredInput,
     StoredMessage,
 };
 use crate::orchestration::TurnContext;
@@ -84,31 +84,41 @@ impl TurnRequest {
             build_system_prompt(chat, &ctx.prompts, tools_available),
             current_tools,
         );
-        let front = history.front.take();
         let starts = history.unit_starts();
-        let from = match front.as_ref().and_then(|f| f.history_start) {
+        let from = match history.front.as_ref().and_then(|f| f.history_start) {
             Some(row) => history.start_at(&starts, row),
             None => 0,
         };
-        let frozen = front.and_then(|f| Head::frozen(f, &current, external));
-        let trim = {
-            let front = frozen.as_ref().unwrap_or(&current);
+        let frozen = history
+            .head
+            .take()
+            .and_then(|head| Head::frozen(head, &current, external));
+        // 間引きの見積もりには、送る先頭と、置くなら変更の通知も含める。
+        let trim = |head: &Head, notice: Option<&ChatMessage>| {
+            let system = ChatMessage::System(head.system.clone());
             trim_history(
                 &history.messages,
                 &starts,
                 from,
                 ctx.capabilities.context_length,
-                [&ChatMessage::System(front.system.clone())],
-                &front.tools,
+                std::iter::once(&system).chain(notice),
+                &head.tools,
             )
         };
-        // 間引いたら前はどのみち変わるので、今の設定で固定し直す。
-        let frozen = frozen.filter(|_| !trim.trimmed);
-        let notify = frozen
-            .as_ref()
-            .is_some_and(|f| f.settings_system_digest != digest(&current.system));
-        let front = frozen.unwrap_or_else(|| current.clone());
-        let keep_from = trim.keep_from;
+        let (front, keep_from, notify) = match frozen {
+            Some(head) => {
+                let notice = (head.settings_system_digest != digest(&current.system))
+                    .then(|| ChatMessage::user(PromptText::system_update(&current.system)));
+                let kept = trim(&head, notice.as_ref());
+                if kept.trimmed {
+                    // 間引いたら前はどのみち変わるので、今の設定で固定し直す。
+                    (current.clone(), trim(&current, None).keep_from, false)
+                } else {
+                    (head, kept.keep_from, notice.is_some())
+                }
+            }
+            None => (current.clone(), trim(&current, None).keep_from, false),
+        };
         // 間引きは最後のユーザー発言より前でしか切らないが、入力が複数の発言にわたると一部が
         // 落ちうる。残った分だけを入力とする。
         let input_from = history.input_from.max(keep_from);
@@ -250,7 +260,7 @@ impl Head {
     /// 繋がらない外部サーバーのツールが欠けていることだけなら使う(呼ばれたら今は使えないと
     /// いう失敗を返す)。ほかの違い(ツールの有効化・無効化、サーバーが返す定義の変化)は、
     /// 方言によらずに定義を後から足す形が無いので作り直す(`None`)。
-    fn frozen(front: Front, current: &Self, external: &ExternalToolset) -> Option<Self> {
+    fn frozen(front: SavedHead, current: &Self, external: &ExternalToolset) -> Option<Self> {
         let tools = if front.tools == current.tools_body {
             current.tools.clone()
         } else {
@@ -555,12 +565,11 @@ mod tests {
         assert_eq!(kept(&messages), [false, false]);
     }
 
-    fn front(system: &str, tools: &[ToolSchema]) -> Front {
-        Front {
+    fn front(system: &str, tools: &[ToolSchema]) -> SavedHead {
+        SavedHead {
             system: system.to_string(),
             settings_system_digest: digest(system),
             tools: tools_body(tools),
-            history_start: None,
         }
     }
 
@@ -571,6 +580,10 @@ mod tests {
             &serde_json::json!({"type": "object"}),
         )
         .unwrap()
+    }
+
+    fn down_tool() -> ToolSchema {
+        external_tool("down__search")
     }
 
     /// `down`がサーバー`down`の`search`を有効にしたまま繋がらなかった外部ツールの集まり。
@@ -593,7 +606,7 @@ mod tests {
     #[test]
     fn keeps_the_frozen_tools_unless_they_really_changed() {
         let internal = ToolSchema::internal("get_task", "d", serde_json::json!({"type": "object"}));
-        let down = external_tool("down__search");
+        let down = down_tool();
         let other = external_tool("up__search");
         let current = Head::current("now".to_string(), vec![internal.clone()]);
         let external = with_down_server();
@@ -612,6 +625,11 @@ mod tests {
         assert_eq!(kept.tools_body, tools_body(&frozen));
         let names: Vec<_> = kept.tools.iter().map(ToolSchema::name).collect();
         assert_eq!(names, ["get_task", "down__search"]);
+
+        // 並びだけが違っても、固定した定義(の並び)を残す。
+        let reordered = [down_tool(), internal.clone()];
+        let kept = Head::frozen(front("then", &reordered), &current, &external).unwrap();
+        assert_eq!(kept.tools_body, tools_body(&reordered));
 
         // 繋がっているのに欠けたツール(無効化)・増えたツール・読めない本文は、作り直す。
         let disabled = [internal.clone(), other];

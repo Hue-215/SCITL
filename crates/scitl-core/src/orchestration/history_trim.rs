@@ -177,6 +177,17 @@ mod tests {
     }
 
     #[test]
+    fn keeps_an_empty_history_as_it_is() {
+        assert_eq!(
+            trim_history(&[], &[], 0, 1, &[], &[]),
+            Trim {
+                keep_from: 0,
+                trimmed: false
+            }
+        );
+    }
+
+    #[test]
     fn subtracts_what_is_always_sent_from_the_budget() {
         let history = vec![user("u1"), assistant("a1"), user("u2")];
         let length = context_length_fitting(&history, 0);
