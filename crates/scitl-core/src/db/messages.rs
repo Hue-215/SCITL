@@ -205,6 +205,24 @@ pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Me
     Ok(rows)
 }
 
+/// 会話のツール実行記録すべて。[`list_rows_for_chat`]と違い、捨てた試行(古い試行・通常発言の
+/// 生き残っていないターン)の記録も含む。履歴に載らない試行で実行したことをモデルに伝えるため
+/// (`orchestration::history`)。
+pub(crate) fn list_tool_records_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {MESSAGE_COLUMNS}
+         FROM messages
+         WHERE task_id IS ?1
+           AND deleted_at IS NULL
+           AND kind = 'tool_execution'
+         ORDER BY created_at ASC, id ASC"
+    ))?;
+    let rows = stmt
+        .query_map([chat.task_id()], message_from_row)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// idで1件取得する(論理削除済みは対象外)。
 pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     let found = conn

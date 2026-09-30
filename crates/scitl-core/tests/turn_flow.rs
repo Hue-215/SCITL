@@ -1665,6 +1665,56 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     assert_eq!(messages[1].attempt_no, Some(2));
 }
 
+/// 再試行で捨てた試行の中で実行したツール(DBの変更は残る)は、新しい試行に操作の記録として
+/// 伝わる。伝えないと、モデルは同じ工程をもう一度足す。
+#[tokio::test]
+async fn a_retry_is_told_what_the_discarded_attempt_did() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&adds_a_step()),
+        Chat::Task(task_id),
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+    let reply_id = {
+        let conn = db.lock().unwrap();
+        db::messages::list_for_chat(&conn, Chat::Task(task_id))
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
+    };
+
+    let retry = ScriptedAdapter::texts(&["工程は追加済みです"]);
+    retry_reply(db.clone(), &context(&retry), Chat::Task(task_id), reply_id)
+        .await
+        .unwrap();
+
+    let sent = retry.sent_messages();
+    let user = sent[0]
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            ChatMessage::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let operations = user.split_once("<scitl:operations>").unwrap().1;
+    assert!(operations.contains(r#""source":"discarded_attempt""#));
+    assert!(operations.contains(r#""tool":"add_steps""#));
+    assert!(operations.contains("買い出し"));
+    // 捨てた試行の往復は、呼び出しと結果の組としては送らない。
+    assert!(!sent[0]
+        .iter()
+        .any(|m| matches!(m, ChatMessage::Tool { .. })));
+}
+
 /// 再試行の対象はターンの返信のみ。ユーザー発言を再試行しようとするとエラーになる。
 #[tokio::test]
 async fn retry_reply_rejects_user_target() {
