@@ -507,7 +507,7 @@ fn round_trip(m: &Message) -> Option<[ChatMessage; 2]> {
             tool_call_id: id,
             // 結果は外部から来た文字列を含む。保存したままの値に送る直前で無害化する。
             content: PromptText::json(&record.result),
-            // ツール結果の画像は、結果を得たターンでだけ送る。
+            // 実行記録は画像を持たない。送った形の保存がある試行は、保存の側で画像ごと並べる。
             images: Vec::new(),
         },
     ])

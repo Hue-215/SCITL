@@ -713,8 +713,8 @@ async fn execute_call(
     Ok(CallOutcome::plain(result))
 }
 
-/// ツール1件の実行の結果。`turn_result`と`images`はこのターンのモデルへの往復にだけ載せ、
-/// 実行記録には残さない([`ToolOutput`])。
+/// ツール1件の実行の結果。`turn_result`と`images`はモデルへの往復(と送った形の保存)にだけ
+/// 載せ、実行記録には残さない([`ToolOutput`])。
 struct CallOutcome {
     result: serde_json::Value,
     turn_result: Option<serde_json::Value>,
