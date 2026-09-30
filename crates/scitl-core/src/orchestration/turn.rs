@@ -228,8 +228,10 @@ pub async fn retry_reply(
     generate_turn_response(db, ctx, attempt).await
 }
 
-/// 発言を1件削除する([`messages::soft_delete_message`])。生成中の会話では断る(生成中の
-/// ターンが読んだ履歴と、DBの発言が食い違うため)。
+/// 発言と、それより後ろの通常発言をまとめて論理削除する(編集・再試行と同じく、その地点から
+/// 後ろを消す。`docs/spec/rebuild/data-model.md`「ターン境界」)。対象はユーザー発言とターンの
+/// 返信(アシスタント発言・エラー発言)。生成中の会話では断る(生成中のターンが読んだ履歴と、
+/// DBの発言が食い違うため)。
 pub async fn delete_message(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,
@@ -240,7 +242,8 @@ pub async fn delete_message(
     with_conn(db, move |conn| {
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
-            messages::soft_delete_message(conn, target.id)
+            expect_normal(&target, &[Role::User, Role::Assistant, Role::Error])?;
+            messages::soft_delete_normal_from(conn, chat, target.id)
         })
     })
     .await
@@ -287,7 +290,7 @@ fn find_in_chat(conn: &Connection, chat: Chat, message_id: i64) -> Result<Messag
     Ok(target)
 }
 
-/// `edit_user_message`/`retry_reply`共通の役割・種別の確認。
+/// 編集・再試行・削除の対象の役割・種別の確認。
 fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
     if target.kind != Kind::Normal || !expected_roles.contains(&target.role) {
         let roles: Vec<&str> = expected_roles.iter().map(|r| r.as_str()).collect();

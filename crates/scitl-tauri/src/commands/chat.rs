@@ -101,7 +101,7 @@ pub async fn retry_chat_message(
     .map_err(|e| e.to_string())
 }
 
-/// 発言を1件削除する([`delete_message`])。
+/// 発言と、それより後ろの発言をまとめて削除する([`delete_message`])。
 #[tauri::command]
 pub async fn delete_chat_message(
     state: State<'_, AppState>,

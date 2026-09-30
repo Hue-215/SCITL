@@ -10,6 +10,8 @@
   "attachment.too_large": "Too large to attach (limit {limit})",
   "attachment.too_many": "A message can carry at most {count} attachments",
   "chat.command_failed": "The operation failed: {error}",
+  "chat.delete_dialog_message": "This deletes this message and every message after it.",
+  "chat.delete_dialog_title": "Delete this message and everything after it?",
   "chat.edit_button": "Edit",
   "chat.error_detail_summary": "Show details",
   "chat.general_title": "General chat",

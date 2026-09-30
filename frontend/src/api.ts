@@ -141,6 +141,7 @@ export function retryChatMessage(
   return invoke('retry_chat_message', { chat, messageId, onEvent: new Channel(onEvent) })
 }
 
+// 削除は、対象とそれより後ろの発言をまとめて消す。
 export function deleteChatMessage(chat: Chat, messageId: number): Promise<void> {
   return invoke('delete_chat_message', { chat, messageId })
 }
