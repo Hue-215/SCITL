@@ -1,5 +1,6 @@
 import type { RefObject, UIEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
+import { ConfirmButton } from './Dialog'
 import { formatDateTime, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
@@ -24,6 +25,7 @@ function EntryBody({
 }
 
 // 発言の下の操作ボタン行。ユーザー発言(編集・削除)と返信(再試行・削除)で同じ形。
+// 削除はその発言より後ろもまとめて消すので、確認を挟む。
 function EntryActions({
   label,
   onAction,
@@ -40,9 +42,14 @@ function EntryActions({
       <button type="button" disabled={disabled} onClick={onAction}>
         {label}
       </button>
-      <button type="button" disabled={disabled} onClick={onDelete}>
-        {t('common.delete')}
-      </button>
+      <ConfirmButton
+        label={t('common.delete')}
+        confirmTitle={t('chat.delete_dialog_title')}
+        confirmMessage={t('chat.delete_dialog_message')}
+        confirmLabel={t('common.delete')}
+        onConfirm={onDelete}
+        disabled={disabled}
+      />
     </div>
   )
 }

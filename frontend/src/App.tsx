@@ -249,8 +249,8 @@ export default function App() {
     )
   }
 
-  // 確認ダイアログ無しで削除する(取り消し可能な論理削除)。最初のユーザー発言を消すと一覧の
-  // フォールバック表示が変わるので、`requests`が一覧ごと引き直す。
+  // 発言とそれより後ろをまとめて削除する(確認は発言の操作ボタンが挟む)。最初のユーザー発言を
+  // 消すと一覧のフォールバック表示が変わるので、`requests`が一覧ごと引き直す。
   const remove = async (messageId: number) => {
     if (disableActions) return
     const target = chat

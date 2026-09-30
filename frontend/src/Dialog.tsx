@@ -116,7 +116,7 @@ interface ConfirmButtonProps {
 }
 
 // 破壊的操作のトリガーボタン+確認ダイアログの組。確定したら閉じてから本処理を呼ぶ。呼び出し側は
-// 文言と実処理だけを渡す。
+// 文言と実処理だけを渡す。トリガーはホバーしたときだけ警告色にし、確定のボタンは常に警告色。
 export function ConfirmButton({
   label,
   confirmTitle,
@@ -128,7 +128,12 @@ export function ConfirmButton({
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button type="button" className="danger" disabled={disabled} onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className="danger-hover"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
         {label}
       </button>
       {open && (
