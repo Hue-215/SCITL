@@ -189,11 +189,11 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   各 `providers/*.rs` の内部で吸収する
 
 **プロバイダーが送り返しを求める応答は`llm::Replay`で運ぶ**: ツールの往復の次のリクエストで、
-直前の応答の一部(署名付きの思考等)を受け取ったまま返すよう求める方言がある(`../principles.md`
+直前の応答を署名付きの思考ごと受け取ったまま返すよう求める方言がある(`../principles.md`
 3節「思考は履歴に送り返さない」の例外)。アダプタは返すべきものを`Replay`として返し、
 `orchestration::turn`はそれを往復のアシスタント発言に載せるだけにする。`Replay`の中身は`llm`の
-外からは読めず、表示も保存もされない。何を入れるかは方言ごとに下に書く。ターンをまたいで返すのは
-Issue #128
+外からは読めず、表示も保存もされない。何を入れるかは方言ごとに下に書く。ターンをまたいで返すことには
+対応していない(Issue #128)
 
 **Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
 ストリーミングせずに呼ぶ。出典は公式ドキュメント(errors・thinking・prompt caching・models)。
@@ -207,9 +207,9 @@ Issue #128
   予算で指定する古い世代(`budget_tokens`)には対応しない(Issue #272)。adaptiveを拒むモデルには、
   思考のチェックを外すよう促すエラー発言になる
 - **ツールの往復の途中の思考ブロック**: ツール呼び出しの次のリクエストでは、直前のアシスタント
-  発言の思考ブロックを受け取ったまま返さないと400になる。並びも変えられないので、思考ブロックを
-  含む応答は、応答のブロックを並びごと`Replay`に入れる。返すブロックより前が変わると受け付けない
-  モデルもあるので、ターン内の組み立ては追記だけにしてある(3節「最新状態の渡し方」)
+  発言の思考ブロックを受け取ったまま返さないと400になる。中身だけでなく並びも変えられないので、
+  思考ブロックを含む応答は、応答のブロックを並びごと`Replay`に入れる。返すブロックより前が
+  変わると受け付けないモデルもあるので、ターン内の組み立ては追記だけにしてある(3節「最新状態の渡し方」)
 - 最後の呼び出し(ツールの上限)は、ツールの定義を残して`tool_choice: {type: "none"}`で禁じる。
   定義を外すと、上の思考ブロックが受け付けられない
 - プロンプトキャッシュは、システムプロンプトの末尾に目印を置き(ツールの定義とシステム
@@ -223,8 +223,8 @@ Issue #128
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
 
 **Gemini形式**(`llm::providers::gemini`、Issue #81): Interactions API(`POST {base_url}/v1beta/interactions`)を
-ストリーミングせずに呼ぶ。`generateContent`ではなくこちらにしたのは、`generateContent`が旧来のAPIとされ、
-新しい機能はInteractions APIにだけ入るため。出典は公式ドキュメント(Interactions API reference・thinking・
+ストリーミングせずに呼ぶ。旧来のAPIとされる`generateContent`ではなくこちらを使うのは、新しい機能が
+Interactions APIにだけ入るため。出典は公式ドキュメント(Interactions API reference・thinking・
 function calling・api-errors・models)。
 
 - ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る
@@ -246,9 +246,10 @@ function calling・api-errors・models)。
 - 状態(`status`)の`completed`は通常の終了、`requires_action`はツール呼び出し、`incomplete`は長さによる
   打ち切りにする。`failed`は、途中まで書いた本文を渡さずにエラーにする
 - 方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、`failed`の応答の中に
-  あっても、非成功の状態コードの応答にあっても`LlmError::Refused`にする。それ以外の`failed`はプロバイダーの
+  あっても、HTTPのエラー応答にあっても`LlmError::Refused`にする。それ以外の`failed`はプロバイダーの
   エラー(`LlmError::Http`)にする
-- 入力が長すぎることを表す専用のエラーコードは無いので、`invalid_request`の文面から見分ける
+- 入力が長すぎることを表す専用のエラーコードは無いので、400(`invalid_request`)の応答の文面から見分けて
+  `LlmError::ContextExceeded`にする
 - 能力の自動検出は`GET /v1beta/models/{id}`で行う。コンテキスト長は`inputTokenLimit`、思考は`thinking`で
   決め、ツールは常にありとする。画像入力の可否は情報に無いので決めない
 
