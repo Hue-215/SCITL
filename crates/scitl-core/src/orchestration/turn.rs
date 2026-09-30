@@ -387,6 +387,7 @@ impl Attempt {
                     .as_str()
                     .expect("an API format serializes to a string"),
                 model: &identity.model,
+                server: &identity.server,
                 system: &saved.system,
                 settings_system: &saved.settings_system,
                 tools: &saved.tools,

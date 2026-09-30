@@ -376,7 +376,8 @@ pub trait LlmAdapter: Send + Sync {
 
     /// 別の試行で受け取った[`Replay`](送り先は`origin`)を、この送り先に送り返してよいか
     /// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。方言が違えば形を読めない。
-    /// 既定は送り返さない。
+    /// 既定は送り返さない。要求URLのオリジンが同じかは呼び出し側が見るので、ここでは方言と
+    /// モデルだけで答える。
     fn accepts_replay(&self, _origin: &AdapterIdentity) -> bool {
         false
     }
@@ -404,6 +405,9 @@ pub trait LlmAdapter: Send + Sync {
 pub struct AdapterIdentity {
     pub api_format: ApiFormat,
     pub model: String,
+    /// 要求URLのオリジン(スキーム・ホスト・ポート)。同じ方言を話す別の業者やゲートウェイを
+    /// 見分ける。パスは持たない(パスに鍵を置くゲートウェイがあるため)。
+    pub server: String,
 }
 
 /// 送らずに組み立てたリクエストの本文。認証情報(ヘッダー)は持たない。本文はアダプタの

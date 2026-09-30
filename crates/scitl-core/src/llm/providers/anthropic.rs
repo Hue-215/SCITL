@@ -448,6 +448,7 @@ impl LlmAdapter for AnthropicAdapter {
         Some(AdapterIdentity {
             api_format: ApiFormat::Anthropic,
             model: self.model.clone(),
+            server: super::server(&self.base_url),
         })
     }
 
@@ -843,6 +844,7 @@ mod tests {
         let origin = |api_format, model: &str| AdapterIdentity {
             api_format,
             model: model.to_string(),
+            server: "http://127.0.0.1:9".to_string(),
         };
         assert!(adapter.accepts_replay(&origin(ApiFormat::Anthropic, "claude-other")));
         assert!(!adapter.accepts_replay(&origin(ApiFormat::Gemini, "claude-test")));

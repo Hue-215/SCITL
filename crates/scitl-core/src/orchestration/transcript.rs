@@ -178,7 +178,8 @@ pub(super) struct Replayable {
 }
 
 impl Replayable {
-    /// 保存を読み戻す。形を読めない保存、形の版が違う保存、画像の実体を読めない保存と、今の
+    /// 保存を読み戻す。形を読めない保存、形の版が違う保存、送り先の分からない保存、画像の実体を
+    /// 読めない保存と、今の
     /// モデルが受け付けない形(ツールに対応しないモデルでのツールの往復・画像に対応しないモデル
     /// での画像)を含む保存は使わない(`None`)。使わない試行は実行記録から組み立てる。
     pub(super) fn load(
@@ -206,6 +207,7 @@ impl Replayable {
             origin: AdapterIdentity {
                 api_format,
                 model: transcript.model.clone(),
+                server: transcript.server.clone()?,
             },
             prefix_digest: transcript.prefix_digest.clone(),
             input_rows: input.rows,
@@ -314,6 +316,7 @@ mod tests {
             attempt_no: 1,
             api_format: api_format.to_string(),
             model: "m".to_string(),
+            server: Some("https://api.anthropic.com".to_string()),
             system_digest: String::new(),
             settings_system_digest: String::new(),
             tools_digest: String::new(),
@@ -344,6 +347,7 @@ mod tests {
         .unwrap();
         assert_eq!(loaded.origin.api_format, ApiFormat::Anthropic);
         assert_eq!(loaded.origin.model, "m");
+        assert_eq!(loaded.origin.server, "https://api.anthropic.com");
         assert_eq!(loaded.input_rows, [1, 2]);
         assert_eq!(loaded.messages.len(), 2);
     }
@@ -360,6 +364,9 @@ mod tests {
         assert!(load(&plain, false, false));
 
         assert!(!load(&saved("unknown", &input, &[reply("a")]), true, true));
+        let mut no_server = plain.clone();
+        no_server.server = None;
+        assert!(!load(&no_server, true, true));
         let mut other_version = plain.clone();
         other_version.input = other_version
             .input

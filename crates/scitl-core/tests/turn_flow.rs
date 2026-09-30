@@ -248,6 +248,7 @@ impl LlmAdapter for ScriptedAdapter {
         Some(AdapterIdentity {
             api_format: ApiFormat::OpenAiCompat,
             model: "scripted".to_string(),
+            server: "http://127.0.0.1:1".to_string(),
         })
     }
 

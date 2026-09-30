@@ -21,6 +21,8 @@ pub struct NewTranscript<'a> {
     pub attempt_no: i64,
     pub api_format: &'a str,
     pub model: &'a str,
+    /// 送った要求URLのオリジン(`llm::AdapterIdentity::server`)。
+    pub server: &'a str,
     /// 先頭に置いたシステムプロンプト。
     pub system: &'a str,
     /// そのとき設定から作ったシステムプロンプト。
@@ -41,16 +43,17 @@ pub fn insert(conn: &Connection, new: &NewTranscript) -> Result<()> {
     let tools = put_blob(conn, new.tools)?;
     conn.execute(
         "INSERT INTO turn_transcripts (
-             task_id, turn_id, attempt_no, api_format, model,
+             task_id, turn_id, attempt_no, api_format, model, server,
              system_digest, settings_system_digest, tools_digest,
              prefix_digest, history_start, input, rounds, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             new.chat.task_id(),
             new.turn_id,
             new.attempt_no,
             new.api_format,
             new.model,
+            new.server,
             system,
             settings_system,
             tools,
@@ -80,6 +83,8 @@ pub struct Transcript {
     pub attempt_no: i64,
     pub api_format: String,
     pub model: String,
+    /// 送った要求URLのオリジン。この列を足す前の行は`None`。
+    pub server: Option<String>,
     pub system_digest: String,
     pub settings_system_digest: String,
     pub tools_digest: String,
@@ -89,8 +94,9 @@ pub struct Transcript {
     pub rounds: String,
 }
 
-const TRANSCRIPT_COLUMNS: &str = "turn_id, attempt_no, api_format, model, system_digest,
-     settings_system_digest, tools_digest, prefix_digest, history_start, input, rounds";
+const TRANSCRIPT_COLUMNS: &str = "turn_id, attempt_no, api_format, model, server,
+     system_digest, settings_system_digest, tools_digest, prefix_digest, history_start, input,
+     rounds";
 
 fn transcript_from_row(row: &rusqlite::Row) -> rusqlite::Result<Transcript> {
     Ok(Transcript {
@@ -98,13 +104,14 @@ fn transcript_from_row(row: &rusqlite::Row) -> rusqlite::Result<Transcript> {
         attempt_no: row.get(1)?,
         api_format: row.get(2)?,
         model: row.get(3)?,
-        system_digest: row.get(4)?,
-        settings_system_digest: row.get(5)?,
-        tools_digest: row.get(6)?,
-        prefix_digest: row.get(7)?,
-        history_start: row.get(8)?,
-        input: row.get(9)?,
-        rounds: row.get(10)?,
+        server: row.get(4)?,
+        system_digest: row.get(5)?,
+        settings_system_digest: row.get(6)?,
+        tools_digest: row.get(7)?,
+        prefix_digest: row.get(8)?,
+        history_start: row.get(9)?,
+        input: row.get(10)?,
+        rounds: row.get(11)?,
     })
 }
 
@@ -156,6 +163,7 @@ mod tests {
             attempt_no,
             api_format: "anthropic",
             model: "claude-test",
+            server: "https://api.anthropic.com",
             system,
             settings_system: system,
             tools: "[]",

@@ -697,6 +697,7 @@ mod tests {
                     attempt_no: attempt,
                     api_format: "open_ai_compat",
                     model: "m",
+                    server: "https://api.example.com",
                     system: "s",
                     settings_system: "s",
                     tools: "[]",

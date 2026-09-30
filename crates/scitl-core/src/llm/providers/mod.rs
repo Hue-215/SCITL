@@ -48,6 +48,11 @@ fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
     ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)
 }
 
+/// 送り先の識別に使う、要求URLのオリジン(`AdapterIdentity::server`)。
+fn server(base_url: &ExternalUrl) -> String {
+    base_url.as_url().origin().ascii_serialization()
+}
+
 /// `base_url`の下の`chat/completions`等のパス。
 fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreError> {
     base_url.join(path).map_err(CoreError::ProviderConfig)

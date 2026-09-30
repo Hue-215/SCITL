@@ -204,8 +204,9 @@ struct OpeningSegment {
 
 /// 保存から並べた区間の思考(`Replay`)を、送り返せるものだけ残す
 /// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。先頭から順に、並べた形
-/// (残した`Replay`ごと)で指紋を取り直し、区間の始まりで保存した指紋と一致し、今の送り先が
-/// 受け付ける区間だけ残す。途中の`Replay`だけを外すと、それより後ろの区間の指紋も合わなくなる。
+/// (残した`Replay`ごと)で指紋を取り直し、区間の始まりで保存した指紋と一致し、要求URLの
+/// オリジンが今の送り先と同じで、今の送り先が受け付ける区間だけ残す。思考は別の送り先には
+/// 渡さない(`docs/spec/principles.md` 3節「思考は受け取ったまま送り返す」)。途中の`Replay`だけを外すと、それより後ろの区間の指紋も合わなくなる。
 fn settle_replays(
     opening: &mut [ChatMessage],
     segments: &[OpeningSegment],
@@ -217,13 +218,15 @@ fn settle_replays(
     };
     // 保存できない形の発言があれば、それより後ろの指紋は取れず、どの区間とも一致しない。
     let mut digest = Some(PrefixDigest::start(system, tools));
+    let server = adapter.identity().map(|current| current.server);
     let mut keep_until = 0;
     for (i, message) in opening.iter_mut().enumerate().skip(1) {
         if let Some(segment) = segments.iter().find(|s| s.start == i) {
             let matches = digest
                 .as_ref()
                 .is_some_and(|d| d.as_str() == segment.prefix_digest);
-            keep_until = if matches && adapter.accepts_replay(&segment.origin) {
+            let same_server = server.as_deref() == Some(segment.origin.server.as_str());
+            keep_until = if matches && same_server && adapter.accepts_replay(&segment.origin) {
                 segment.end
             } else {
                 0
@@ -248,6 +251,8 @@ mod tests {
     use crate::error::CoreError;
     use crate::llm::{Readiness, ResponseEvent};
 
+    const SERVER: &str = "https://api.example.com";
+
     /// 決まった方言の思考だけを受け付ける送り先。送りはしない。
     struct Accepting(ApiFormat);
 
@@ -255,6 +260,14 @@ mod tests {
     impl LlmAdapter for Accepting {
         fn readiness(&self) -> Readiness {
             Readiness::Ready
+        }
+
+        fn identity(&self) -> Option<AdapterIdentity> {
+            Some(AdapterIdentity {
+                api_format: self.0,
+                model: "m".to_string(),
+                server: SERVER.to_string(),
+            })
         }
 
         fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
@@ -317,6 +330,7 @@ mod tests {
             origin: AdapterIdentity {
                 api_format,
                 model: "m".to_string(),
+                server: SERVER.to_string(),
             },
             prefix_digest,
         }
@@ -371,6 +385,23 @@ mod tests {
             segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
             segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
         ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
+    }
+
+    /// 同じ方言でも、要求URLのオリジンが違う送り先(別の業者・ゲートウェイ)には思考を渡さない。
+    #[test]
+    fn does_not_send_thinking_to_another_server() {
+        let sent = opening();
+        let mut elsewhere = segment(1, ApiFormat::Anthropic, digest_before(&sent, 1));
+        elsewhere.origin.server = "https://gateway.example.com".to_string();
+        let segments = [elsewhere];
         let mut messages = opening();
         settle_replays(
             &mut messages,

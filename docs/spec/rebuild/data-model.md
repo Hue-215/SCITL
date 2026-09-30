@@ -303,6 +303,7 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 | attempt_no | INTEGER | NOT NULL。`UNIQUE (turn_id, attempt_no)` |
 | api_format | TEXT | NOT NULL。送った方言(`config::ApiFormat`の値) |
 | model | TEXT | NOT NULL。送ったモデル名(記録として持つ) |
+| server | TEXT | NULL可。送った要求URLのオリジン(スキーム・ホスト・ポート)。思考を同じ送り先にだけ送り返すために見る。パスは持たない(鍵を置くゲートウェイがあるため)。NULL=列を足す前の行で、使わない |
 | system_digest | TEXT | NOT NULL。先頭に置いたシステムプロンプト(`transcript_blobs`) |
 | settings_system_digest | TEXT | NOT NULL。そのとき設定から作ったシステムプロンプト(`transcript_blobs`)。先頭と違えば入力に変更の通知を置いた |
 | tools_digest | TEXT | NOT NULL。渡したツール定義の一覧(`transcript_blobs`) |

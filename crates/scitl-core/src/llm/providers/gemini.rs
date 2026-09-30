@@ -431,6 +431,7 @@ impl LlmAdapter for GeminiAdapter {
         Some(AdapterIdentity {
             api_format: ApiFormat::Gemini,
             model: self.model.clone(),
+            server: super::server(&self.base_url),
         })
     }
 
@@ -796,6 +797,7 @@ mod tests {
         let origin = |api_format, model: &str| AdapterIdentity {
             api_format,
             model: model.to_string(),
+            server: "http://127.0.0.1:1".to_string(),
         };
         assert!(adapter.accepts_replay(&origin(ApiFormat::Gemini, "gemini-test")));
         assert!(!adapter.accepts_replay(&origin(ApiFormat::Gemini, "gemini-other")));
