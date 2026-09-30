@@ -300,7 +300,7 @@ fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
 }
 
 /// `call_id`の呼び出しの名前。結果は呼び出しの後ろに並ぶので、組み立て済みのステップから引く。
-/// 名前は定義の上では任意だが、公式ドキュメントの例はどれも結果に名前を添えている。
+/// 名前は定義の上では任意だが、添えないとツールの往復の2回目の呼び出しが断られる。
 fn called_name(steps: &[Value], call_id: &str) -> Option<String> {
     steps
         .iter()

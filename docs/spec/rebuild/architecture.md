@@ -223,8 +223,9 @@ Issue #128
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
 
 **Gemini形式**(`llm::providers::gemini`、Issue #81): Interactions API(`POST {base_url}/v1beta/interactions`)を
-ストリーミングせずに呼ぶ。`generateContent`は旧来のAPIとされ、新しい機能はInteractions APIにだけ入るため。
-出典は公式ドキュメント(Interactions API reference・thinking・function calling・api-errors・models)。
+ストリーミングせずに呼ぶ。`generateContent`ではなくこちらにしたのは、`generateContent`が旧来のAPIとされ、
+新しい機能はInteractions APIにだけ入るため。出典は公式ドキュメント(Interactions API reference・thinking・
+function calling・api-errors・models)。
 
 - ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る
 - **`store: false`を常に送る**。既定ではやり取りがGoogle側に保存される(有料で55日、無料で1日)。
@@ -240,12 +241,14 @@ Issue #128
   前のターンの推論を引き継げない分の質の差は測っていない
 - `function_result`には、対応する`function_call`の名前を添える。定義の上では任意だが、添えないと
   ツールの往復の2回目が`invalid_request`(`Invalid input received.`)で断られた
-- 最後の呼び出し(ツールの上限)は、ツールの定義を残して`tool_choice: "none"`で禁じる
+- 最後の呼び出し(ツールの上限)は、ツールの定義を残して`generation_config.tool_choice: "none"`で禁じる
 - 出力の上限(`max_output_tokens`)は送らず、モデルの既定に任せる(必須ではないため)
 - 状態(`status`)の`completed`は通常の終了、`requires_action`はツール呼び出し、`incomplete`は長さによる
-  打ち切りにする。`failed`と、方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、
-  途中まで書いた本文を渡さずに`LlmError::Refused`(ブロック)またはHTTPのエラーにする。入力が長すぎる
-  専用のエラーコードは無いので、`invalid_request`の文面から見分ける
+  打ち切りにする。`failed`は、途中まで書いた本文を渡さずにエラーにする
+- 方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、`failed`の応答の中に
+  あっても、非成功の状態コードの応答にあっても`LlmError::Refused`にする。それ以外の`failed`はプロバイダーの
+  エラー(`LlmError::Http`)にする
+- 入力が長すぎることを表す専用のエラーコードは無いので、`invalid_request`の文面から見分ける
 - 能力の自動検出は`GET /v1beta/models/{id}`で行う。コンテキスト長は`inputTokenLimit`、思考は`thinking`で
   決め、ツールは常にありとする。画像入力の可否は情報に無いので決めない
 
