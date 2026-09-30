@@ -101,8 +101,8 @@ impl ChatMessage {
 
 /// プロバイダーが、同じターンの次の呼び出しで受け取ったまま送り返すよう求める応答の一部
 /// (Anthropic形式の署名付きの思考ブロック等)。中身を読み書きするのは、それを返したアダプタ
-/// だけで、中核は同じターンの往復のアシスタント発言に載せて運ぶだけにする。表示も保存もしない
-/// (`docs/spec/principles.md`「思考は履歴に送り返さない」)。
+/// だけで、中核は同じターンの往復のアシスタント発言に載せて運ぶだけにする。表示しない。今は
+/// 同じターンの往復でだけ運び、保存しない(`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Replay(Option<serde_json::Value>);
 
