@@ -6,6 +6,7 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 
 use crate::config::ReasoningEffort;
@@ -185,7 +186,20 @@ struct RequestBody<'a> {
 #[derive(Serialize)]
 struct RequestMessage {
     role: &'static str,
-    content: Vec<Value>,
+    content: Vec<ContentBlock>,
+}
+
+/// メッセージのブロック。組み立てたものと、受け取ったまま送り返すもの([`Replay`])。受け取った
+/// ブロックは`Value`に読み直すとキーの順が変わるので、生のJSONのまま埋め込む。
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ContentBlock {
+    Built(Value),
+    Received(Box<RawValue>),
+}
+
+fn built(blocks: impl IntoIterator<Item = Value>) -> Vec<ContentBlock> {
+    blocks.into_iter().map(ContentBlock::Built).collect()
 }
 
 /// 思考をどう指定するか。
@@ -280,16 +294,16 @@ fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMess
             ChatMessage::User { text, images } => {
                 let mut content = text_block(text.as_str());
                 content.extend(images.iter().map(image_block));
-                ("user", content)
+                ("user", built(content))
             }
             ChatMessage::Assistant {
                 content,
                 tool_calls,
                 replay,
             } => {
-                let blocks = match replay.get() {
-                    Some(Value::Array(blocks)) => blocks.clone(),
-                    _ => {
+                let blocks = match replay.elements() {
+                    Some(blocks) => blocks.into_iter().map(ContentBlock::Received).collect(),
+                    None => {
                         let mut blocks = content.as_deref().map(text_block).unwrap_or_default();
                         blocks.extend(tool_calls.iter().map(|call| {
                             json!({
@@ -299,7 +313,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMess
                                 "input": super::object_arguments(&call.arguments),
                             })
                         }));
-                        blocks
+                        built(blocks)
                     }
                 };
                 ("assistant", blocks)
@@ -313,11 +327,11 @@ fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMess
                 result.extend(images.iter().map(image_block));
                 (
                     "user",
-                    vec![json!({
+                    built([json!({
                         "type": "tool_result",
                         "tool_use_id": tool_call_id.clone().unwrap_or_default(),
                         "content": result,
-                    })],
+                    })]),
                 )
             }
         };
@@ -330,9 +344,9 @@ fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMess
                 if role == "assistant" && last.is_none() {
                     out.push(RequestMessage {
                         role: "user",
-                        content: text_block(
+                        content: built(text_block(
                             PromptText::user_message(super::PLACEHOLDER_USER_TEXT, None).as_str(),
-                        ),
+                        )),
                     });
                 }
                 out.push(RequestMessage { role, content });
@@ -388,8 +402,9 @@ fn abbreviate_images(value: &mut Value) {
 
 #[derive(Deserialize)]
 struct MessageResponse {
+    /// ブロックを受け取ったままの生のJSONで持つ(送り返すため。[`Replay`])。
     #[serde(default)]
-    content: Vec<Value>,
+    content: Vec<Box<RawValue>>,
     stop_reason: Option<String>,
     stop_details: Option<Value>,
 }
@@ -498,7 +513,8 @@ impl LlmAdapter for AnthropicAdapter {
         }
 
         let mut replay = false;
-        for block in &response.content {
+        for raw in &response.content {
+            let block: Value = serde_json::from_str(raw.get()).expect("a received block is JSON");
             match block.get("type").and_then(Value::as_str) {
                 Some("thinking") => {
                     replay = true;
@@ -545,7 +561,8 @@ impl LlmAdapter for AnthropicAdapter {
         // 思考ブロックは、ツールの往復の次の呼び出しで受け取ったまま返す必要がある。並びも
         // 変えられないので、応答のブロックをすべてそのまま返す。
         Ok(if replay {
-            Replay::new(Value::Array(response.content))
+            let blocks: Vec<&RawValue> = response.content.iter().map(AsRef::as_ref).collect();
+            Replay::new(&blocks)
         } else {
             Replay::default()
         })
@@ -700,22 +717,27 @@ mod tests {
             .contains("limit reached"));
     }
 
+    /// 受け取ったブロックは、キーの順も変えずにそのまま返す。
     #[test]
     fn echoes_the_replayed_blocks_instead_of_rebuilding_the_assistant_message() {
-        let blocks = json!([
-            {"type": "thinking", "thinking": "", "signature": "sig"},
-            {"type": "tool_use", "id": "toolu_1", "name": "add_steps", "input": {}},
-        ]);
+        let thinking = r#"{"type":"thinking","thinking":"","signature":"sig"}"#;
+        let tool_use = r#"{"type":"tool_use","id":"toolu_1","name":"add_steps","input":{}}"#;
         let messages = [
             user("hi"),
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: Vec::new(),
-                replay: Replay::new(blocks.clone()),
+                replay: Replay::from_json(&format!("[{thinking},{tool_use}]")),
             },
         ];
-        let body = body(&messages, ToolOffer::NONE, Thinking::Unspecified);
-        assert_eq!(body["messages"][1]["content"], blocks);
+        let request = request_body(
+            "claude-test",
+            &messages,
+            ToolOffer::NONE,
+            Thinking::Unspecified,
+        );
+        let text = serde_json::to_string(&request).unwrap();
+        assert!(text.contains(&format!(r#""content":[{thinking},{tool_use}]"#)));
     }
 
     #[test]
@@ -804,8 +826,11 @@ mod tests {
                 },
             ]
         );
-        let expected: Value = serde_json::from_str(THINKING_AND_TOOL_USE).unwrap();
-        assert_eq!(replay.get(), Some(&expected["content"]));
+        let expected: MessageResponse = serde_json::from_str(THINKING_AND_TOOL_USE).unwrap();
+        let expected: Vec<&str> = expected.content.iter().map(|b| b.get()).collect();
+        let replayed = replay.elements().unwrap();
+        let replayed: Vec<&str> = replayed.iter().map(|b| b.get()).collect();
+        assert_eq!(replayed, expected);
     }
 
     #[tokio::test]

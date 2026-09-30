@@ -6,6 +6,7 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 
 use crate::config::ReasoningEffort;
@@ -165,11 +166,20 @@ struct RequestBody<'a> {
     store: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_instruction: Option<String>,
-    input: Vec<Value>,
+    input: Vec<InputStep>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     generation_config: Option<Value>,
+}
+
+/// 入力のステップ。組み立てたものと、受け取ったまま送り返すもの([`Replay`])。受け取った
+/// ステップは`Value`に読み直すとキーの順が変わるので、生のJSONのまま埋め込む。
+#[derive(Serialize)]
+#[serde(untagged)]
+enum InputStep {
+    Built(Value),
+    Received(Box<RawValue>),
 }
 
 /// 思考の強さ(`thinking_level`)。思考を切る指定は無いので、「オフ」はいちばん弱い
@@ -227,9 +237,9 @@ fn request_body<'a>(
 ///   ツール結果は`function_result`にする。結果の画像は`function_result`の中に置く
 /// - 最初のステップがユーザー発言でなければ、その前にユーザー発言を補う
 /// - [`Replay`]を持つアシスタント発言は、本文と呼び出しから組み立てずに、受け取ったステップを返す
-fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
+fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<InputStep>) {
     let mut system = String::new();
-    let mut steps: Vec<Value> = Vec::with_capacity(messages.len() + 1);
+    let mut steps: Vec<InputStep> = Vec::with_capacity(messages.len() + 1);
     for message in messages {
         match message {
             ChatMessage::System(text) => {
@@ -239,10 +249,10 @@ fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
                 system.push_str(text);
             }
             ChatMessage::User { text, images } => {
-                steps.push(json!({
+                steps.push(InputStep::Built(json!({
                     "type": "user_input",
                     "content": content(text.as_str(), images),
-                }));
+                })));
             }
             ChatMessage::Assistant {
                 content: text,
@@ -250,30 +260,30 @@ fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
                 replay,
             } => {
                 if steps.is_empty() {
-                    steps.push(json!({
+                    steps.push(InputStep::Built(json!({
                         "type": "user_input",
                         "content": content(
                             PromptText::user_message(super::PLACEHOLDER_USER_TEXT, None).as_str(),
                             &[],
                         ),
-                    }));
+                    })));
                 }
-                match replay.get() {
-                    Some(Value::Array(replayed)) => steps.extend(replayed.iter().cloned()),
-                    _ => {
+                match replay.elements() {
+                    Some(replayed) => steps.extend(replayed.into_iter().map(InputStep::Received)),
+                    None => {
                         if let Some(text) = text.as_deref().filter(|t| !t.is_empty()) {
-                            steps.push(json!({
+                            steps.push(InputStep::Built(json!({
                                 "type": "model_output",
                                 "content": [{ "type": "text", "text": text }],
-                            }));
+                            })));
                         }
                         steps.extend(tool_calls.iter().map(|call| {
-                            json!({
+                            InputStep::Built(json!({
                                 "type": "function_call",
                                 "id": call.id.clone().unwrap_or_default(),
                                 "name": call.name,
                                 "arguments": super::object_arguments(&call.arguments),
-                            })
+                            }))
                         }));
                     }
                 }
@@ -292,24 +302,30 @@ fn to_input(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
                 if let Some(name) = called_name(&steps, &call_id) {
                     step["name"] = json!(name);
                 }
-                steps.push(step);
+                steps.push(InputStep::Built(step));
             }
         }
     }
     ((!system.is_empty()).then_some(system), steps)
 }
 
-/// `call_id`の呼び出しの名前。結果は呼び出しの後ろに並ぶので、組み立て済みのステップから引く。
-/// 名前は定義の上では任意だが、添えないとツールの往復の2回目の呼び出しが断られることがある。
-fn called_name(steps: &[Value], call_id: &str) -> Option<String> {
-    steps
-        .iter()
-        .rev()
-        .find(|s| {
-            s.get("type").and_then(Value::as_str) == Some("function_call")
-                && s.get("id").and_then(Value::as_str) == Some(call_id)
-        })
-        .and_then(|s| s.get("name")?.as_str().map(str::to_string))
+/// `call_id`の呼び出しの名前を、それまでのステップから引く。受け取ったまま返すステップは
+/// その場で読む。
+fn called_name(steps: &[InputStep], call_id: &str) -> Option<String> {
+    steps.iter().rev().find_map(|step| {
+        let received;
+        let step = match step {
+            InputStep::Built(value) => value,
+            InputStep::Received(raw) => {
+                received = serde_json::from_str::<Value>(raw.get()).ok()?;
+                &received
+            }
+        };
+        (step.get("type").and_then(Value::as_str) == Some("function_call")
+            && step.get("id").and_then(Value::as_str) == Some(call_id))
+        .then(|| step.get("name")?.as_str().map(str::to_string))
+        .flatten()
+    })
 }
 
 /// 本文を先に、画像をその後に並べる。
@@ -346,8 +362,9 @@ fn abbreviate_images(value: &mut Value) {
 #[derive(Deserialize)]
 struct InteractionResponse {
     status: String,
+    /// ステップを受け取ったままの生のJSONで持つ(送り返すため。[`Replay`])。
     #[serde(default)]
-    steps: Vec<Value>,
+    steps: Vec<Box<RawValue>>,
     #[serde(default)]
     errors: Vec<Value>,
 }
@@ -491,9 +508,10 @@ impl LlmAdapter for GeminiAdapter {
             }
         };
 
-        let mut replayed = Vec::new();
+        let mut replayed: Vec<&RawValue> = Vec::new();
         let mut thought = false;
-        for step in response.steps {
+        for raw in &response.steps {
+            let step: Value = serde_json::from_str(raw.get()).expect("a received step is JSON");
             match step.get("type").and_then(Value::as_str) {
                 Some("thought") => {
                     thought = true;
@@ -534,14 +552,14 @@ impl LlmAdapter for GeminiAdapter {
                 }),
                 _ => continue,
             }
-            replayed.push(step);
+            replayed.push(raw);
         }
         on_event(ResponseEvent::Done { finish_reason });
 
         // 思考のステップは、次の呼び出しで受け取ったまま返す必要がある。並びも変えないよう、
         // 上で読んだ出力のステップ(思考・本文・呼び出し)を並びごと返す。
         Ok(if thought {
-            Replay::new(Value::Array(replayed))
+            Replay::new(&replayed)
         } else {
             Replay::default()
         })
@@ -677,25 +695,22 @@ mod tests {
         assert_eq!(input[3]["result"][1]["mime_type"], "image/png");
     }
 
+    /// 受け取ったステップは、キーの順も変えずにそのまま返す。
     #[test]
     fn echoes_the_replayed_steps_instead_of_rebuilding_the_assistant_message() {
-        let steps = json!([
-            {"type": "thought", "signature": "sig"},
-            {"type": "function_call", "id": "call_1", "name": "add_steps", "arguments": {}},
-        ]);
+        let thought = r#"{"type":"thought","signature":"sig"}"#;
+        let call = r#"{"type":"function_call","id":"call_1","name":"add_steps","arguments":{}}"#;
         let messages = [
             user("hi"),
             ChatMessage::Assistant {
                 content: None,
                 tool_calls: Vec::new(),
-                replay: Replay::new(steps.clone()),
+                replay: Replay::from_json(&format!("[{thought},{call}]")),
             },
         ];
-        let body = body(&messages, ToolOffer::NONE, None);
-        assert_eq!(
-            body["input"].as_array().unwrap()[1..],
-            steps.as_array().unwrap()[..]
-        );
+        let request = request_body("gemini-test", &messages, ToolOffer::NONE, None);
+        let text = serde_json::to_string(&request).unwrap();
+        assert!(text.contains(&format!("{thought},{call}]")));
     }
 
     #[test]
@@ -772,8 +787,11 @@ mod tests {
                 },
             ]
         );
-        let expected: Value = serde_json::from_str(THOUGHT_AND_CALL).unwrap();
-        assert_eq!(replay.get(), Some(&expected["steps"]));
+        let expected: InteractionResponse = serde_json::from_str(THOUGHT_AND_CALL).unwrap();
+        let expected: Vec<&str> = expected.steps.iter().map(|s| s.get()).collect();
+        let replayed = replay.elements().unwrap();
+        let replayed: Vec<&str> = replayed.iter().map(|s| s.get()).collect();
+        assert_eq!(replayed, expected);
     }
 
     #[tokio::test]
