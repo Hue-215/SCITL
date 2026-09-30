@@ -147,6 +147,13 @@ impl PromptText {
         Self(format!("{}\n{}", self.0, next.0))
     }
 
+    /// 送った形の保存から読み戻す(`orchestration::transcript`)。保存したのは無害化を通った値
+    /// だけなので、そのまま信じる。無害化の規則を強めたときは、ここで掛け直す
+    /// (`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。
+    pub(crate) fn from_stored(text: String) -> Self {
+        Self(text)
+    }
+
     /// 囲みを持たずにそのまま埋め込む自由入力(外部ツールの説明等)。
     pub fn untrusted(text: &str) -> Self {
         Self(neutralize_reserved_tags(text))

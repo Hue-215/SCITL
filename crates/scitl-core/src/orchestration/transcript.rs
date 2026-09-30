@@ -4,8 +4,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::db::transcripts::digest;
-use crate::llm::{ChatMessage, InlineImage, Replay, ToolArguments, ToolCallRequest, ToolSchema};
+use crate::attachments::AttachmentStore;
+use crate::config::ApiFormat;
+use crate::db::transcripts::{digest, Transcript};
+use crate::llm::{
+    AdapterIdentity, ChatMessage, InlineImage, PromptText, Replay, ToolArguments, ToolCallRequest,
+    ToolSchema,
+};
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
@@ -73,6 +78,49 @@ impl StoredMessage {
     pub(super) fn all_of(messages: &[ChatMessage]) -> Option<Vec<Self>> {
         messages.iter().map(Self::of).collect()
     }
+
+    /// 保存した発言を読み戻す。画像の実体を読めなければ`None`。
+    fn restore(&self, store: &AttachmentStore) -> Option<ChatMessage> {
+        Some(match self {
+            Self::User { text, images } => ChatMessage::User {
+                text: PromptText::from_stored(text.clone()),
+                images: read_images(images, store)?,
+            },
+            Self::Assistant {
+                content,
+                tool_calls,
+                replay,
+            } => ChatMessage::Assistant {
+                content: content.clone(),
+                tool_calls: tool_calls.iter().map(StoredToolCall::restore).collect(),
+                replay: replay.clone(),
+            },
+            Self::Tool {
+                tool_call_id,
+                content,
+                images,
+            } => ChatMessage::Tool {
+                tool_call_id: tool_call_id.clone(),
+                content: PromptText::from_stored(content.clone()),
+                images: read_images(images, store)?,
+            },
+        })
+    }
+
+    fn has_images(&self) -> bool {
+        match self {
+            Self::User { images, .. } | Self::Tool { images, .. } => !images.is_empty(),
+            Self::Assistant { .. } => false,
+        }
+    }
+
+    fn has_tool_calls(&self) -> bool {
+        match self {
+            Self::Assistant { tool_calls, .. } => !tool_calls.is_empty(),
+            Self::Tool { .. } => true,
+            Self::User { .. } => false,
+        }
+    }
 }
 
 impl StoredToolCall {
@@ -83,6 +131,14 @@ impl StoredToolCall {
             arguments: call.arguments.clone(),
         }
     }
+
+    fn restore(&self) -> ToolCallRequest {
+        ToolCallRequest {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            arguments: self.arguments.clone(),
+        }
+    }
 }
 
 fn sources(images: &[InlineImage]) -> Option<Vec<String>> {
@@ -90,6 +146,67 @@ fn sources(images: &[InlineImage]) -> Option<Vec<String>> {
         .iter()
         .map(|image| image.source().map(str::to_string))
         .collect()
+}
+
+fn read_images(hashes: &[String], store: &AttachmentStore) -> Option<Vec<InlineImage>> {
+    hashes
+        .iter()
+        .map(|hash| match store.read_image(hash) {
+            Ok(image) => Some(image),
+            Err(e) => {
+                eprintln!("failed to read a saved image {hash}: {e}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// 次のターンに並べる、読み戻した1試行分。
+pub(super) struct Replayable {
+    /// 送り先。`Replay`を今の送り先に送り返してよいかの判断に使う。
+    pub(super) origin: AdapterIdentity,
+    pub(super) prefix_digest: String,
+    /// 入力に含めた行。記録から組み立て直さずに、この試行の位置で並べる。
+    pub(super) input_rows: Vec<i64>,
+    /// 入力と往復と最後の応答。
+    pub(super) messages: Vec<ChatMessage>,
+}
+
+impl Replayable {
+    /// 保存を読み戻す。形を読めない保存、画像の実体を読めない保存と、今のモデルが受け付けない
+    /// 形(ツールに対応しないモデルでのツールの往復・画像に対応しないモデルでの画像)を含む
+    /// 保存は使わない(`None`)。使わない試行は実行記録から組み立てる。
+    pub(super) fn load(
+        transcript: &Transcript,
+        tools_available: bool,
+        image_input: bool,
+        store: &AttachmentStore,
+    ) -> Option<Self> {
+        let api_format: ApiFormat =
+            serde_json::from_value(serde_json::Value::String(transcript.api_format.clone()))
+                .ok()?;
+        let input: StoredInput = serde_json::from_str(&transcript.input).ok()?;
+        let rounds: Vec<StoredMessage> = serde_json::from_str(&transcript.rounds).ok()?;
+        let stored: Vec<StoredMessage> = input.messages.into_iter().chain(rounds).collect();
+        let unsupported = stored
+            .iter()
+            .any(|m| (!tools_available && m.has_tool_calls()) || (!image_input && m.has_images()));
+        if unsupported {
+            return None;
+        }
+        Some(Self {
+            origin: AdapterIdentity {
+                api_format,
+                model: transcript.model.clone(),
+            },
+            prefix_digest: transcript.prefix_digest.clone(),
+            input_rows: input.rows,
+            messages: stored
+                .iter()
+                .map(|m| m.restore(store))
+                .collect::<Option<_>>()?,
+        })
+    }
 }
 
 /// 試行の入力。入力に含めた行(ユーザー発言と、それに置いた操作の記録)のidを添える。

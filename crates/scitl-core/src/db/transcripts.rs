@@ -89,32 +89,48 @@ pub struct Transcript {
     pub rounds: String,
 }
 
+const TRANSCRIPT_COLUMNS: &str = "turn_id, attempt_no, api_format, model, system_digest,
+     settings_system_digest, tools_digest, prefix_digest, history_start, input, rounds";
+
+fn transcript_from_row(row: &rusqlite::Row) -> rusqlite::Result<Transcript> {
+    Ok(Transcript {
+        turn_id: row.get(0)?,
+        attempt_no: row.get(1)?,
+        api_format: row.get(2)?,
+        model: row.get(3)?,
+        system_digest: row.get(4)?,
+        settings_system_digest: row.get(5)?,
+        tools_digest: row.get(6)?,
+        prefix_digest: row.get(7)?,
+        history_start: row.get(8)?,
+        input: row.get(9)?,
+        rounds: row.get(10)?,
+    })
+}
+
 /// 試行1つ分の保存。無ければ`None`。
 pub fn find(conn: &Connection, turn_id: &str, attempt_no: i64) -> Result<Option<Transcript>> {
     Ok(conn
         .query_row(
-            "SELECT turn_id, attempt_no, api_format, model, system_digest,
-                    settings_system_digest, tools_digest, prefix_digest, history_start,
-                    input, rounds
-             FROM turn_transcripts WHERE turn_id = ?1 AND attempt_no = ?2",
+            &format!(
+                "SELECT {TRANSCRIPT_COLUMNS} FROM turn_transcripts
+                 WHERE turn_id = ?1 AND attempt_no = ?2"
+            ),
             params![turn_id, attempt_no],
-            |row| {
-                Ok(Transcript {
-                    turn_id: row.get(0)?,
-                    attempt_no: row.get(1)?,
-                    api_format: row.get(2)?,
-                    model: row.get(3)?,
-                    system_digest: row.get(4)?,
-                    settings_system_digest: row.get(5)?,
-                    tools_digest: row.get(6)?,
-                    prefix_digest: row.get(7)?,
-                    history_start: row.get(8)?,
-                    input: row.get(9)?,
-                    rounds: row.get(10)?,
-                })
-            },
+            transcript_from_row,
         )
         .optional()?)
+}
+
+/// 会話の保存すべて。どの試行の保存を使うかは呼び出し側が`messages`から決める。
+pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Transcript>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {TRANSCRIPT_COLUMNS} FROM turn_transcripts WHERE task_id IS ?1 ORDER BY id"
+    ))?;
+    let rows = stmt
+        .query_map([chat.task_id()], transcript_from_row)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 /// 指紋が指す本文。無ければ`None`。
@@ -171,6 +187,13 @@ mod tests {
         // システムプロンプト(設定から作ったものと同じ)とツール定義の2つ。
         assert_eq!(blobs, 2);
         assert!(find(&conn, "t1", 2).unwrap().is_none());
+        let listed: Vec<_> = list_for_chat(&conn, Chat::General)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.turn_id)
+            .collect();
+        assert_eq!(listed, ["t1", "t2"]);
+        assert!(list_for_chat(&conn, Chat::Task(1)).unwrap().is_empty());
     }
 
     #[test]
