@@ -7,7 +7,7 @@
 //! 検証はしない(信頼境界はユーザーが登録したこと自体に置く)が、アプリ自身の予約タグの
 //! 無害化だけは掛ける(`ToolSchema::external`)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
@@ -34,6 +34,8 @@ struct Entry {
 pub struct ExternalToolset {
     entries: Vec<Entry>,
     routes: HashMap<String, usize>,
+    /// 有効なのに繋がらなかった(一覧を取れなかった)サーバーで、有効化してあるツールの公開名。
+    unavailable: HashSet<String>,
 }
 
 impl ExternalToolset {
@@ -73,6 +75,28 @@ impl ExternalToolset {
             }
         }
         toolset
+    }
+
+    /// 有効なのに繋がらなかったサーバーを記録する。そのツールは公開しないが、前に固定した
+    /// ツール定義には残す(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。
+    pub fn with_unavailable<'a>(
+        mut self,
+        servers: impl IntoIterator<Item = &'a McpServerConfig>,
+    ) -> Self {
+        for server in servers {
+            self.unavailable.extend(
+                server
+                    .enabled_tools
+                    .iter()
+                    .filter_map(|tool| exposed_name(&server.name, tool)),
+            );
+        }
+        self
+    }
+
+    /// 繋がらなかったサーバーのツールの公開名か。
+    pub fn is_unavailable(&self, exposed_name: &str) -> bool {
+        self.unavailable.contains(exposed_name)
     }
 
     pub fn is_empty(&self) -> bool {

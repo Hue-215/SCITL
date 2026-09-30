@@ -434,13 +434,15 @@ impl Attempt {
 ///
 /// 一覧はキャッシュを優先し、無ければ取得してキャッシュに載せる。接続・取得に失敗した
 /// サーバーはこのターンでは公開しない。ここでターン全体を失敗させると、外部サーバーが1つ
-/// 落ちているだけでチャットが使えなくなるため。
+/// 落ちているだけでチャットが使えなくなるため。前に固定したツール定義には残し、呼ばれたら
+/// 今は使えないという失敗を返す(`ExternalToolset::with_unavailable`)。
 pub(super) async fn prepare_external_tools(
     mcp: &McpAccess<'_>,
     chat: Chat,
     sessions: &mut McpSessions,
 ) -> ExternalToolset {
     let mut fetched = Vec::new();
+    let mut unavailable = Vec::new();
     for server in mcp
         .servers
         .iter()
@@ -462,10 +464,11 @@ pub(super) async fn prepare_external_tools(
                     "failed to list tools from MCP server '{}': {e}",
                     server.name
                 );
+                unavailable.push(server);
             }
         }
     }
-    ExternalToolset::build(fetched, &tools::names(chat))
+    ExternalToolset::build(fetched, &tools::names(chat)).with_unavailable(unavailable)
 }
 
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
@@ -691,6 +694,13 @@ async fn execute_call(
             return Ok(CallOutcome::plain(result));
         }
     };
+    if external.is_unavailable(&call.name) {
+        let result = json!({
+            "error": "the server providing this tool cannot be reached right now; \
+                      the tool was not run."
+        });
+        return Ok(CallOutcome::plain(result));
+    }
     let Some((server_id, tool_name)) = external.route(&call.name) else {
         let name = call.name.clone();
         let arguments = arguments.clone();
