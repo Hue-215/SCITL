@@ -1280,9 +1280,8 @@ button.danger {
   color: var(--color-on-danger-container);
 }
 
-/* 破壊的操作の入口(確認ダイアログを開くボタン)。並んだほかのボタンと同じ見た目のまま、
-   ホバーしたときだけ警告色にする。発言ごとに並ぶので、常に塗ると画面がうるさくなる。
-   控えめなボタン(.entry-actions button 等)のホバーの浮きより後に書き、詳細度を揃えて上書きする。 */
+/* 破壊的操作の入口(確認ダイアログを開くボタン。ui.md「部品ごとの決まり」)。控えめなボタン
+   (.entry-actions button 等)のホバーの浮きと詳細度が同じなので、それより後に書いて上書きする。 */
 @media (hover: hover) {
   button.danger-hover:not(:disabled):not(.selected):hover {
     background-color: var(--color-danger-container);
