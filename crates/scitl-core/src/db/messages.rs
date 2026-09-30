@@ -265,6 +265,9 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
 /// 発言を1件だけ論理削除する。対象はユーザー発言とターンの返信(アシスタント発言・
 /// エラー発言)の通常発言のみで、ツール実行記録は消さない。`deleted_at`を立てるだけなので、
 /// NULLに戻せば復元できる。
+///
+/// 発言の削除の入口(`orchestration::delete_message`)には使わない。途中の発言だけを消すと、その
+/// 後ろに送った会話の前提が変わるため、削除は[`soft_delete_normal_from`]で以降をまとめて消す。
 pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
     let msg = find_message(conn, id)?.ok_or(CoreError::MessageNotFound(id))?;
     if msg.kind != Kind::Normal || !matches!(msg.role, Role::User | Role::Assistant | Role::Error) {

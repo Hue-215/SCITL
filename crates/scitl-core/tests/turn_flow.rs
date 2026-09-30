@@ -1791,6 +1791,66 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     assert_eq!(messages[1].attempt_no, Some(2));
 }
 
+/// ユーザー発言を消すと、そのターンの返信もまとめて消え、実行記録だけが残ったターンは会話から
+/// 外れる(記録の行はDBに残る)。実行記録は削除の対象にできず、別の会話の発言は巻き込まない。
+#[tokio::test]
+async fn deleting_a_user_message_removes_its_turn_but_keeps_the_records() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&adds_a_step()),
+        Chat::Task(task_id),
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+    run_turn(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["総合の応答"])),
+        Chat::General,
+        "今週は?".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let (user_id, record_id) = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        let user = messages.iter().find(|m| m.role == Role::User).unwrap();
+        let record = messages
+            .iter()
+            .find(|m| m.kind == Kind::ToolExecution)
+            .unwrap();
+        (user.id, record.id)
+    };
+    let generating = InFlightSet::new();
+    let refused = delete_message(db.clone(), &generating, Chat::Task(task_id), record_id).await;
+    assert!(matches!(
+        refused,
+        Err(CoreError::InvalidMessageOperation(_))
+    ));
+
+    delete_message(db.clone(), &generating, Chat::Task(task_id), user_id)
+        .await
+        .unwrap();
+
+    let conn = db.lock().unwrap();
+    assert!(db::messages::list_for_chat(&conn, Chat::Task(task_id))
+        .unwrap()
+        .is_empty());
+    assert!(db::messages::find_message(&conn, record_id)
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        db::messages::list_for_chat(&conn, Chat::General)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
 /// エラー発言も削除できる。返信を失ったターンは会話から外れ、ユーザー発言だけが残る。
 #[tokio::test]
 async fn delete_message_removes_an_error_reply() {
@@ -1828,9 +1888,10 @@ async fn delete_message_removes_an_error_reply() {
     assert_eq!(contents, vec!["質問"]);
 }
 
-/// 削除: カスケードしない単発の論理削除。対象以外の発言はそのまま残る。
+/// 削除は、対象とそれより後ろの発言をまとめて論理削除する(編集・再試行と同じく、その地点から
+/// 後ろを消す)。
 #[tokio::test]
-async fn delete_message_removes_only_the_target_without_cascade() {
+async fn delete_message_removes_the_target_and_everything_after_it() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
@@ -1852,17 +1913,21 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     .await
     .unwrap();
 
-    let first_user_id = {
+    let first_reply_id = {
         let conn = db.lock().unwrap();
         let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-        messages.iter().find(|m| m.role == Role::User).unwrap().id
+        messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
     };
 
     delete_message(
         db.clone(),
         &InFlightSet::new(),
         Chat::Task(task_id),
-        first_user_id,
+        first_reply_id,
     )
     .await
     .unwrap();
@@ -1870,12 +1935,12 @@ async fn delete_message_removes_only_the_target_without_cascade() {
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
-    // カスケードしないため、1回目の応答・2回目のやり取りはそのまま残る。
-    assert_eq!(contents, vec!["応答1", "2回目", "応答2"]);
+    assert_eq!(contents, vec!["1回目"]);
 }
 
 /// ユーザー発言だけを消したターンの返信は、再試行すると応答すべき発言が無いので断る。
-/// モデルは呼ばず、返信も消えない。
+/// モデルは呼ばず、返信も消えない。ユーザー発言だけが消えたターンは、削除の入口からは作れないが
+/// 既存のデータにはありうる形なので、DBで直接作る。
 #[tokio::test]
 async fn retry_reply_is_refused_when_the_turn_lost_its_user_message() {
     for turns in [1, 2] {
@@ -1902,14 +1967,7 @@ async fn retry_reply_is_refused_when_the_turn_lost_its_user_message() {
                 .unwrap();
             (user.id, reply.id)
         };
-        delete_message(
-            db.clone(),
-            &InFlightSet::new(),
-            Chat::Task(task_id),
-            last_user_id,
-        )
-        .await
-        .unwrap();
+        db::messages::soft_delete_message(&db.lock().unwrap(), last_user_id).unwrap();
 
         let adapter = ScriptedAdapter::texts(&["作り直した応答"]);
         let result = retry_reply(

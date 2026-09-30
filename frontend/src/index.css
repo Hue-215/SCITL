@@ -804,10 +804,19 @@ option {
   color: var(--color-text-secondary);
 }
 
+/* 発言の下の操作ボタン(編集・再試行・削除)。文字だけの控えめなボタンで、ホバーで塗られる箱に
+   左右の余白を持たせる。行を余白の分だけ左へ出し、文字の位置(左端が発言の時刻と揃う)と文字どうしの
+   間隔は、余白が無いときと同じに保つ。 */
+.entry-actions {
+  --entry-action-padding-inline: var(--space-1);
+  margin-inline-start: calc(-1 * var(--entry-action-padding-inline));
+  gap: calc(var(--space-2) - 2 * var(--entry-action-padding-inline));
+}
+
 .entry-actions button {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  padding: 0;
+  padding: 0 var(--entry-action-padding-inline);
 }
 
 .entry-edit-textarea {
@@ -1274,9 +1283,19 @@ button.primary {
   color: var(--color-on-primary-container);
 }
 
+/* 破壊的操作を確定するボタン(確認ダイアログの実行)。 */
 button.danger {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);
+}
+
+/* 破壊的操作の入口(確認ダイアログを開くボタン。ui.md「部品ごとの決まり」)。控えめなボタン
+   (.entry-actions button 等)のホバーの浮きと詳細度が同じなので、それより後に書いて上書きする。 */
+@media (hover: hover) {
+  button.danger-hover:not(:disabled):not(.selected):hover {
+    background-color: var(--color-danger-container);
+    color: var(--color-on-danger-container);
+  }
 }
 
 /* チップの共通部品(Chip.tsx)。添付ファイルの名前を、発言の中と入力欄の上で同じ形に
