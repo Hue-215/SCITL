@@ -19,7 +19,7 @@ pub use prompt::{
 };
 pub use token_estimate::{estimate_message, estimate_tools};
 
-use crate::config::ReasoningEffort;
+use crate::config::{ApiFormat, ReasoningEffort};
 use crate::error::CoreError;
 
 /// アダプタ層が上位に渡す形は完成した応答1つではなくイベントの並び。ストリーミングしない
@@ -104,13 +104,15 @@ impl ChatMessage {
 
 /// プロバイダーが、次の呼び出しで受け取ったまま送り返すよう求める応答の一部(Anthropic形式の
 /// 署名付きの思考ブロック等)。中身を読み書きするのは、それを返したアダプタだけで、中核は
-/// 往復のアシスタント発言に載せて運ぶだけにする。表示も保存もしない
-/// (`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。
+/// 往復のアシスタント発言に載せて運ぶだけにする。表示しない
+/// (`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。送った形の保存
+/// (`orchestration::transcript`)には直列化して載せるが、中核は形を読まずにそのまま持つ。
 ///
 /// 応答の要素を、受け取った生のJSONのまま並びごと持つ。`serde_json::Value`に読み直すと
 /// オブジェクトのキーの順が変わり、受け取ったままではなくなる。空なら送り返すものは無い。
-// TODO(#280): 保存して、ターンをまたいで送り返す。
-#[derive(Debug, Clone, Default)]
+// TODO(#280): ターンをまたいで送り返す。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Replay(Vec<Box<RawValue>>);
 
 impl PartialEq for Replay {
@@ -146,6 +148,8 @@ impl Replay {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InlineImage {
     data_url: Arc<str>,
+    /// 読み出した添付の実体のハッシュ。送った形を保存するとき、実体の代わりに持つ。
+    source: Option<Arc<str>>,
 }
 
 impl InlineImage {
@@ -159,7 +163,21 @@ impl InlineImage {
         base64::engine::general_purpose::STANDARD.encode_string(bytes, &mut data_url);
         Some(Self {
             data_url: data_url.into(),
+            source: None,
         })
+    }
+
+    /// 添付の実体(`hash`)から読み出した画像であることを添える。
+    pub fn with_source(self, hash: &str) -> Self {
+        Self {
+            source: Some(hash.into()),
+            ..self
+        }
+    }
+
+    /// 読み出した添付の実体のハッシュ。添付から読み出したものでなければ`None`。
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
     }
 
     pub fn data_url(&self) -> &str {
@@ -358,6 +376,13 @@ pub trait LlmAdapter: Send + Sync {
     /// 縮めるのは方言の上で画像を置く位置に限る。他の文字列まで縮めると、モデルに渡る文を
     /// プレビューから隠せてしまう。要求URLは返さない(エラーの詳細と同じく、パスに鍵を置く
     /// ゲートウェイがあるため)。
+    /// 送り先の方言とモデル。送った形の保存に添える(`orchestration::transcript`)。実際の
+    /// プロバイダーは必ず実装する。既定の`None`はテスト用のアダプタのためのもので、`None`なら
+    /// 送った形を保存しない。
+    fn identity(&self) -> Option<AdapterIdentity> {
+        None
+    }
+
     fn request_preview(
         &self,
         _messages: &[ChatMessage],
@@ -366,6 +391,13 @@ pub trait LlmAdapter: Send + Sync {
     ) -> Option<RequestPreview> {
         None
     }
+}
+
+/// 送り先の方言とモデル([`LlmAdapter::identity`])。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterIdentity {
+    pub api_format: ApiFormat,
+    pub model: String,
 }
 
 /// 送らずに組み立てたリクエストの本文。認証情報(ヘッダー)は持たない。本文はアダプタの

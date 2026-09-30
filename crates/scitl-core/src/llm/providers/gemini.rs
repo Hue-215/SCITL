@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
 
-use crate::config::ReasoningEffort;
+use crate::config::{ApiFormat, ReasoningEffort};
 use crate::error::CoreError;
 use crate::llm::{
-    ChatMessage, DetectedCapabilities, ErrorDetail, FinishReason, InlineImage, LlmAdapter,
-    LlmError, PromptText, Readiness, Replay, RequestPreview, ResponseEvent, ToolArguments,
-    ToolOffer,
+    AdapterIdentity, ChatMessage, DetectedCapabilities, ErrorDetail, FinishReason, InlineImage,
+    LlmAdapter, LlmError, PromptText, Readiness, Replay, RequestPreview, ResponseEvent,
+    ToolArguments, ToolOffer,
 };
 use crate::net::ExternalUrl;
 
@@ -436,6 +436,13 @@ impl LlmAdapter for GeminiAdapter {
         } else {
             Readiness::Ready
         }
+    }
+
+    fn identity(&self) -> Option<AdapterIdentity> {
+        Some(AdapterIdentity {
+            api_format: ApiFormat::Gemini,
+            model: self.model.clone(),
+        })
     }
 
     fn request_preview(
