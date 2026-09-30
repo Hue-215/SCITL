@@ -387,6 +387,7 @@ impl Attempt {
                     .as_str()
                     .expect("an API format serializes to a string"),
                 model: &identity.model,
+                server: &identity.server,
                 system: &saved.system,
                 settings_system: &saved.settings_system,
                 tools: &saved.tools,
@@ -479,7 +480,7 @@ async fn run_tool_rounds(
 ) -> Result<()> {
     let chat = attempt.chat;
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
-    let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
+    let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
     let tools_available = request.tools_available();
     // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
     // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
@@ -713,8 +714,8 @@ async fn execute_call(
     Ok(CallOutcome::plain(result))
 }
 
-/// ツール1件の実行の結果。`turn_result`と`images`はこのターンのモデルへの往復にだけ載せ、
-/// 実行記録には残さない([`ToolOutput`])。
+/// ツール1件の実行の結果。`turn_result`と`images`はモデルへの往復(と送った形の保存)にだけ
+/// 載せ、実行記録には残さない([`ToolOutput`])。
 struct CallOutcome {
     result: serde_json::Value,
     turn_result: Option<serde_json::Value>,

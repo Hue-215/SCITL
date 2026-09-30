@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use scitl_core::attachments::{AttachmentStore, Attachments, StageOutcome};
 use scitl_core::config::{ApiFormat, McpEndpoint, McpServerConfig, ReasoningEffort};
-use scitl_core::db;
 use scitl_core::db::messages::{Chat, Kind, Role};
+use scitl_core::db::{self, SharedConnection};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
@@ -102,6 +102,10 @@ struct ScriptedAdapter {
     repeat_last: bool,
     /// ツールを呼べない呼び出しでは、台本の代わりにこれを返す。
     without_tools: Option<Vec<ResponseEvent>>,
+    /// 台本どおりの応答と一緒に返す、送り返しの要る思考。
+    replay: Replay,
+    /// 別の試行で受け取った思考を送り返してよいか。
+    accepts_replays: bool,
     calls: AtomicUsize,
     sent: Mutex<Vec<Sent>>,
     previewed: Mutex<Vec<Sent>>,
@@ -114,6 +118,8 @@ impl ScriptedAdapter {
             script: script.into_iter().map(Ok).collect(),
             repeat_last: false,
             without_tools: None,
+            replay: Replay::default(),
+            accepts_replays: true,
             calls: AtomicUsize::new(0),
             sent: Mutex::new(Vec::new()),
             previewed: Mutex::new(Vec::new()),
@@ -158,6 +164,22 @@ impl ScriptedAdapter {
     fn replying_without_tools(self, events: Vec<ResponseEvent>) -> Self {
         Self {
             without_tools: Some(events),
+            ..self
+        }
+    }
+
+    /// 応答と一緒に、送り返しの要る思考(`blocks`はJSONの配列)を返す。
+    fn with_replay(self, blocks: &str) -> Self {
+        Self {
+            replay: serde_json::from_str(blocks).unwrap(),
+            ..self
+        }
+    }
+
+    /// 別の試行で受け取った思考を読めない送り先。
+    fn refusing_replays(self) -> Self {
+        Self {
+            accepts_replays: false,
             ..self
         }
     }
@@ -226,7 +248,12 @@ impl LlmAdapter for ScriptedAdapter {
         Some(AdapterIdentity {
             api_format: ApiFormat::OpenAiCompat,
             model: "scripted".to_string(),
+            server: "http://127.0.0.1:1".to_string(),
         })
+    }
+
+    fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
+        self.accepts_replays && Some(origin) == self.identity().as_ref()
     }
 
     async fn send(
@@ -258,7 +285,7 @@ impl LlmAdapter for ScriptedAdapter {
         match self.script.get(index) {
             Some(Ok(events)) => {
                 events.iter().cloned().for_each(on_event);
-                Ok(Replay::default())
+                Ok(self.replay.clone())
             }
             Some(Err(error)) => Err(error.clone().into()),
             None => panic!("no scripted response for call {call}"),
@@ -1809,6 +1836,113 @@ async fn a_retry_saves_its_own_input() {
     assert!(db::transcripts::find(&conn, &turn_id, 1).unwrap().is_some());
 }
 
+const THINKING_1: &str = r#"[{"type":"thinking","thinking":"一つ目","signature":"s1"}]"#;
+const THINKING_2: &str = r#"[{"type":"thinking","thinking":"二つ目","signature":"s2"}]"#;
+
+/// 送った発言列のうち、`content`の本文を持つアシスタント発言の思考。
+fn replay_of(messages: &[ChatMessage], content: &str) -> Replay {
+    messages
+        .iter()
+        .find_map(|m| match m {
+            ChatMessage::Assistant {
+                content: Some(c),
+                replay,
+                ..
+            } if c == content => Some(replay.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no assistant message {content:?} in {messages:?}"))
+}
+
+/// 1ターン分を送る(思考を返す台本の応答を1つ返す)。
+async fn turn_with(
+    db: &SharedConnection,
+    adapter: &ScriptedAdapter,
+    prompts: SystemPrompts<'_>,
+    task_id: i64,
+    text: &str,
+) {
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            prompts,
+            ..context(adapter)
+        },
+        Chat::Task(task_id),
+        text.to_string(),
+    )
+    .await
+    .unwrap();
+}
+
+/// 前のターンの思考は、送った形のまま次のターンで送り返す。
+#[tokio::test]
+async fn thinking_is_sent_back_across_turns() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+
+    let expected: Replay = serde_json::from_str(THINKING_1).unwrap();
+    assert_eq!(replay_of(&second.sent_messages()[0], "返信1"), expected);
+}
+
+/// 読めない送り先には、前のターンの思考を送り返さない(本文はそのまま並ぶ)。
+#[tokio::test]
+async fn thinking_is_not_sent_back_to_a_provider_that_cannot_read_it() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let second = ScriptedAdapter::texts(&["返信2"]).refusing_replays();
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+
+    assert_eq!(
+        replay_of(&second.sent_messages()[0], "返信1"),
+        Replay::default()
+    );
+}
+
+/// 前が変わると(ここではシステムプロンプト)、それより前に送った思考は外れ、変わったあとに
+/// 送った思考からまた送り返す。
+#[tokio::test]
+async fn after_a_change_only_the_thinking_sent_since_is_sent_back() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let before = SystemPrompts {
+        base: Some("before"),
+        task_chat: None,
+    };
+    let after = SystemPrompts {
+        base: Some("after"),
+        task_chat: None,
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, before, task_id, "1回目").await;
+    let second = ScriptedAdapter::texts(&["返信2"]).with_replay(THINKING_2);
+    turn_with(&db, &second, after, task_id, "2回目").await;
+    let third = ScriptedAdapter::texts(&["返信3"]);
+    turn_with(&db, &third, after, task_id, "3回目").await;
+
+    assert_eq!(
+        replay_of(&second.sent_messages()[0], "返信1"),
+        Replay::default()
+    );
+    let sent = &third.sent_messages()[0];
+    assert_eq!(replay_of(sent, "返信1"), Replay::default());
+    let expected: Replay = serde_json::from_str(THINKING_2).unwrap();
+    assert_eq!(replay_of(sent, "返信2"), expected);
+}
+
 /// 再試行で捨てた試行の中で実行したツール(DBの変更は残る)は、新しい試行に操作の記録として
 /// 伝わる。伝えないと、モデルは同じ工程をもう一度足す。
 #[tokio::test]
@@ -2932,16 +3066,18 @@ async fn attachments_reach_the_model_with_the_message() {
     assert!(images[0].data_url().starts_with("data:image/png;base64,"));
 }
 
-/// 過去の添付は、添付の読み込みツールで読み直せる。中身(本文・画像)は読んだ
-/// ターンでだけ送り、次のターンの履歴には名前などの情報だけが残る。
+/// 前の発言の添付は、送った形のまま(画像も)次のターン以降に並ぶ。添付の読み込みツールで
+/// 読み直すこともでき、読んだ中身(本文・画像)も送った形のまま次のターンに並ぶ。
 #[tokio::test]
-async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
+async fn an_earlier_attachment_stays_as_sent_and_can_be_read_again() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let chat = Chat::Task(task_id);
     let db = Arc::new(Mutex::new(conn));
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.image = true;
+    // 画像は1枚ごとに大きく見積もるので、既定のコンテキスト長では前のターンが間引かれる。
+    capabilities.context_length = 200_000;
     let temp = TempAttachments::new();
     let attachments = &temp.attachments;
 
@@ -2992,12 +3128,12 @@ async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
     .unwrap();
     {
         let sent = reader.sent_messages();
-        // 読む前は、前の発言の画像は名前だけ。
+        // 前の発言の画像は、送った形のまま(画像として)並ぶ。
         let ChatMessage::User { text, images } = &sent[0][1] else {
             panic!("expected the earlier user message, got {:?}", sent[0][1]);
         };
-        assert!(text.as_str().contains(r#""delivered":"name_only""#));
-        assert!(images.is_empty());
+        assert!(text.as_str().contains(r#""delivered":"image""#));
+        assert_eq!(images.len(), 1);
         let results: Vec<_> = sent[1]
             .iter()
             .filter_map(|m| match m {
@@ -3037,13 +3173,12 @@ async fn an_earlier_attachment_can_be_read_again_only_for_that_turn() {
             _ => None,
         })
         .collect();
+    // 読み込んだ中身も、送った形のまま次のターンに並ぶ。
     assert_eq!(results.len(), 2);
-    assert!(results[0].0.as_str().contains(r#""name":"memo.txt""#));
-    assert!(results[1].0.as_str().contains(r#""name":"photo.png""#));
-    for (content, images) in results {
-        assert!(!content.as_str().contains(r#""content":"#));
-        assert!(images.is_empty());
-    }
+    assert!(results[0].0.as_str().contains(r#""content":"memo""#));
+    assert!(results[0].1.is_empty());
+    assert!(results[1].0.as_str().contains(r#""delivered":"image""#));
+    assert_eq!(results[1].1.len(), 1);
 }
 
 /// 読み込んだ画像の実体を読めなくても、ツールの失敗としてモデルに返し、ターンは続ける。

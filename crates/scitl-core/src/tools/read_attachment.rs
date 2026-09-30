@@ -28,9 +28,9 @@ pub fn schema() -> &'static ToolSchema {
             "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
              scitl:attachments block. The result has the same fields as that block. A text \
              attachment returns its text in \"content\", and an image is shown to you with the \
-             result. What you read is available in this turn only; read it again in a later turn \
-             if you need it. Use this to look at an image whose \"delivered\" is \"name_only\". \
-             Other kinds of files cannot be read.",
+             result. Use this to look at an image whose \"delivered\" is \"name_only\", or at an \
+             attachment whose content is no longer in the conversation. Other kinds of files \
+             cannot be read.",
             json!({
                 "type": "object",
                 "properties": {
@@ -48,10 +48,10 @@ pub fn schema() -> &'static ToolSchema {
 /// このターンでモデルに渡すので、直近の発言の添付と同じ扱いにする。名前しか渡せない添付
 /// (画像に対応しないモデルでの画像・その他の形式)は、読んでも何も増えないので失敗にする。
 ///
-/// 中身(テキストの本文・画像)はこのターンでだけ渡し、実行記録には名前などの情報だけを残す。
-/// 実行記録は次ターン以降の履歴に載るので、本文を残すと、元の発言を削除しても
-/// 本文が送られ続けるため。画像は実体のハッシュを[`ToolOutput::image_hashes`]に添えて返し、
-/// 読み出しは呼び出し元に任せる。
+/// 中身(テキストの本文・画像)は往復で渡し、実行記録には名前などの情報だけを残す
+/// ([`ToolOutput`])。実行記録は会話ログとして表示・エクスポートにも出るので、添付の本文を
+/// 重ねて持たない。画像は実体のハッシュを[`ToolOutput::image_hashes`]に添えて返し、読み出しは
+/// 呼び出し元に任せる。
 pub fn execute(
     conn: &Connection,
     chat: Chat,

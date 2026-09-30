@@ -366,25 +366,14 @@ fn image_block(image: &crate::llm::InlineImage) -> Value {
     })
 }
 
-/// プレビューの本文で、画像の本体(`source.data`)だけを長さに縮める
-/// (`LlmAdapter::request_preview`)。
-fn abbreviate_images(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            let is_image = map.get("type").and_then(Value::as_str) == Some("image");
-            if is_image {
-                if let Some(Value::String(data)) =
-                    map.get_mut("source").and_then(|s| s.get_mut("data"))
-                {
-                    *data = format!("… ({} bytes)", data.len());
-                }
-            }
-            map.values_mut().for_each(abbreviate_images);
-        }
-        Value::Array(items) => items.iter_mut().for_each(abbreviate_images),
-        _ => {}
-    }
-}
+/// プレビューの本文で縮める値。画像の実体と、送り返す思考の署名。ブロックは発言の`content`と、
+/// ツール結果の`content`に並ぶ。
+const NESTED: &[&str] = &["content"];
+const ABBREVIATED: &[(&str, &[&str])] = &[
+    ("image", &["source", "data"]),
+    ("thinking", &["signature"]),
+    ("redacted_thinking", &["data"]),
+];
 
 // ---- 応答 ----
 
@@ -459,7 +448,14 @@ impl LlmAdapter for AnthropicAdapter {
         Some(AdapterIdentity {
             api_format: ApiFormat::Anthropic,
             model: self.model.clone(),
+            server: super::server(&self.base_url),
         })
+    }
+
+    /// 別のモデルが出したブロックも送り返す。読めないモデルのブロックはAPIが黙って捨て、元の
+    /// モデルに戻ったときにまた読まれる。
+    fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
+        origin.api_format == ApiFormat::Anthropic
     }
 
     fn request_preview(
@@ -475,7 +471,7 @@ impl LlmAdapter for AnthropicAdapter {
             Thinking::from_effort(reasoning_effort),
         );
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
-        abbreviate_images(&mut body);
+        super::abbreviate(&mut body["messages"], NESTED, ABBREVIATED);
         Some(RequestPreview { body })
     }
 
@@ -782,6 +778,76 @@ mod tests {
             .map(|m| m["role"].as_str().unwrap())
             .collect();
         assert_eq!(roles, ["user", "assistant", "user"]);
+    }
+
+    /// プレビューでは、送り返す思考の署名も縮める(読めないので)。思考の要約は縮めない。
+    #[test]
+    fn preview_shortens_the_signature_of_replayed_thinking() {
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: Vec::new(),
+                replay: Replay::from_json(
+                    r#"[{"type":"thinking","thinking":"plan","signature":"0123456789"}]"#,
+                ),
+            },
+            user("next"),
+        ];
+        let preview = adapter("http://127.0.0.1:9", "")
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap();
+        let block = &preview.body["messages"][1]["content"][0];
+        assert_eq!(block["signature"], "… (10 bytes)");
+        assert_eq!(block["thinking"], "plan");
+    }
+
+    /// ツール結果の画像も縮める。ツールの引数の中は、同じ形の値でも縮めない(モデルに渡る値を
+    /// 隠さない)。
+    #[test]
+    fn preview_shortens_the_result_image_but_not_the_arguments() {
+        let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![ToolCallRequest {
+                    id: Some("toolu_1".to_string()),
+                    name: "look".to_string(),
+                    arguments: json!({"type": "image", "source": {"data": "kept"}}).into(),
+                }],
+                replay: Replay::default(),
+            },
+            ChatMessage::Tool {
+                tool_call_id: Some("toolu_1".to_string()),
+                content: PromptText::untrusted("{}"),
+                images: vec![image],
+            },
+        ];
+        let preview = adapter("http://127.0.0.1:9", "")
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap()
+            .body;
+        let call = &preview["messages"][1]["content"][0];
+        assert_eq!(call["input"]["source"]["data"], "kept");
+        let result = &preview["messages"][2]["content"][0]["content"][1];
+        assert!(result["source"]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("… ("));
+    }
+
+    /// 同じ方言なら、別のモデルの思考も送り返す(読めないブロックはAPIが捨てる)。
+    #[test]
+    fn accepts_replays_from_any_model_of_the_same_format() {
+        let adapter = adapter("http://127.0.0.1:9", "");
+        let origin = |api_format, model: &str| AdapterIdentity {
+            api_format,
+            model: model.to_string(),
+            server: "http://127.0.0.1:9".to_string(),
+        };
+        assert!(adapter.accepts_replay(&origin(ApiFormat::Anthropic, "claude-other")));
+        assert!(!adapter.accepts_replay(&origin(ApiFormat::Gemini, "claude-test")));
     }
 
     #[test]

@@ -556,6 +556,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
         Some(AdapterIdentity {
             api_format: ApiFormat::OpenAiCompat,
             model: self.model.clone(),
+            server: super::server(&self.base_url),
         })
     }
 

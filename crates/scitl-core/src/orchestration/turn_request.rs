@@ -7,7 +7,9 @@
 use crate::blocking;
 use crate::db::messages::Chat;
 use crate::error::Result;
-use crate::llm::{ChatMessage, PromptText, ToolOffer, ToolSchema};
+use crate::llm::{
+    AdapterIdentity, ChatMessage, LlmAdapter, PromptText, Replay, ToolOffer, ToolSchema,
+};
 use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::system_prompt::build_system_prompt;
@@ -33,6 +35,8 @@ pub(super) struct TurnRequest {
     /// 最初に並べた行(間引きの位置)。会話の最初から並べたなら`None`。
     history_start: Option<i64>,
     exposed_tools: Vec<ToolSchema>,
+    /// `exposed_tools`の本文(指紋と保存に使う)。
+    tools_body: String,
     tools_available: bool,
 }
 
@@ -44,6 +48,7 @@ impl TurnRequest {
     /// 部分が変わる)ので、そのときはプロバイダーのコンテキスト超過のエラーでターンが終わる。
     pub(super) async fn prepare(
         ctx: &TurnContext<'_>,
+        adapter: &dyn LlmAdapter,
         chat: Chat,
         stored: StoredChat,
         external: &ExternalToolset,
@@ -67,8 +72,10 @@ impl TurnRequest {
             exposed_tools.extend(external.schemas());
         }
         let system = ChatMessage::System(build_system_prompt(chat, &ctx.prompts, tools_available));
+        let saved: Vec<_> = history.segments.iter().map(|s| s.start..s.end).collect();
         let kept = trim_history(
             &history.messages,
+            &saved,
             ctx.capabilities.context_length,
             [&system],
             &exposed_tools,
@@ -84,16 +91,33 @@ impl TurnRequest {
             history.first_row(keep_from)
         };
         let input_rows = history.rows_from(input_from);
+        // 発言の位置を、先頭にシステムプロンプトを置いた`opening`の位置に直す。保存から並べた
+        // 区間は途中で切らないので、残った区間はすべて丸ごと残っている。
+        let at = |i: usize| 1 + i.saturating_sub(keep_from);
+        let segments: Vec<_> = history
+            .segments
+            .into_iter()
+            .filter(|s| s.start >= keep_from)
+            .map(|s| OpeningSegment {
+                start: at(s.start),
+                end: at(s.end),
+                origin: s.origin,
+                prefix_digest: s.prefix_digest,
+            })
+            .collect();
         let mut opening = Vec::with_capacity(1 + kept);
         opening.push(system);
         opening.extend(history.messages.into_iter().skip(keep_from));
+        let tools_body = tools_body(&exposed_tools);
+        settle_replays(&mut opening, &segments, &tools_body, adapter);
 
         Ok(Self {
             opening,
-            input_from: 1 + input_from - keep_from,
+            input_from: at(input_from),
             input_rows,
             history_start,
             exposed_tools,
+            tools_body,
             tools_available,
         })
     }
@@ -114,21 +138,20 @@ impl TurnRequest {
         let ChatMessage::System(system) = &self.opening[0] else {
             unreachable!("the opening starts with the system prompt");
         };
-        let tools = tools_body(&self.exposed_tools);
-        let mut prefix = PrefixDigest::start(system, &tools);
+        let mut prefix = PrefixDigest::start(system, &self.tools_body);
         for message in StoredMessage::all_of(&self.opening[1..self.input_from])? {
             prefix.push(&message);
         }
-        let input = StoredInput {
-            rows: self.input_rows.clone(),
-            messages: StoredMessage::all_of(&self.opening[self.input_from..])?,
-        };
+        let input = StoredInput::new(
+            self.input_rows.clone(),
+            StoredMessage::all_of(&self.opening[self.input_from..])?,
+        );
         let rounds = StoredMessage::all_of(rounds)?;
         Some(SavedTurn {
             system: system.clone(),
             // TODO(#280): システムプロンプトの変更を後ろに足して伝える形にしたら、先頭と分かれる。
             settings_system: system.clone(),
-            tools,
+            tools: self.tools_body.clone(),
             prefix_digest: prefix.as_str().to_string(),
             history_start: self.history_start,
             input: serde_json::to_string(&input).expect("a stored input serializes"),
@@ -168,5 +191,271 @@ impl TurnRequest {
             callable: !final_call,
         };
         (messages, offer)
+    }
+}
+
+/// 保存から並べた区間の、`opening`での位置(`start..end`)。
+struct OpeningSegment {
+    start: usize,
+    end: usize,
+    origin: AdapterIdentity,
+    prefix_digest: String,
+}
+
+/// 保存から並べた区間の思考(`Replay`)を、送り返せるものだけ残す
+/// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。先頭から順に、並べた形
+/// (残した`Replay`ごと)で指紋を取り直し、区間の始まりで保存した指紋と一致し、要求URLの
+/// オリジンが今の送り先と同じで、今の送り先が受け付ける区間だけ残す。思考は別の送り先には
+/// 渡さない(`docs/spec/principles.md` 3節「思考は受け取ったまま送り返す」)。途中の`Replay`だけを外すと、それより後ろの区間の指紋も合わなくなる。
+fn settle_replays(
+    opening: &mut [ChatMessage],
+    segments: &[OpeningSegment],
+    tools: &str,
+    adapter: &dyn LlmAdapter,
+) {
+    let ChatMessage::System(system) = &opening[0] else {
+        unreachable!("the opening starts with the system prompt");
+    };
+    // 保存できない形の発言があれば、それより後ろの指紋は取れず、どの区間とも一致しない。
+    let mut digest = Some(PrefixDigest::start(system, tools));
+    let server = adapter.identity().map(|current| current.server);
+    let mut keep_until = 0;
+    for (i, message) in opening.iter_mut().enumerate().skip(1) {
+        if let Some(segment) = segments.iter().find(|s| s.start == i) {
+            let matches = digest
+                .as_ref()
+                .is_some_and(|d| d.as_str() == segment.prefix_digest);
+            let same_server = server.as_deref() == Some(segment.origin.server.as_str());
+            keep_until = if matches && same_server && adapter.accepts_replay(&segment.origin) {
+                segment.end
+            } else {
+                0
+            };
+        }
+        if i >= keep_until {
+            if let ChatMessage::Assistant { replay, .. } = message {
+                *replay = Replay::default();
+            }
+        }
+        digest = digest.and_then(|mut d| {
+            d.push(&StoredMessage::of(message)?);
+            Some(d)
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ApiFormat, ReasoningEffort};
+    use crate::error::CoreError;
+    use crate::llm::{Readiness, ResponseEvent};
+
+    const SERVER: &str = "https://api.example.com";
+
+    /// 決まった方言の思考だけを受け付ける送り先。送りはしない。
+    struct Accepting(ApiFormat);
+
+    #[async_trait::async_trait]
+    impl LlmAdapter for Accepting {
+        fn readiness(&self) -> Readiness {
+            Readiness::Ready
+        }
+
+        fn identity(&self) -> Option<AdapterIdentity> {
+            Some(AdapterIdentity {
+                api_format: self.0,
+                model: "m".to_string(),
+                server: SERVER.to_string(),
+            })
+        }
+
+        fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
+            origin.api_format == self.0
+        }
+
+        async fn send(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: ToolOffer<'_>,
+            _reasoning_effort: Option<ReasoningEffort>,
+            _on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+        ) -> std::result::Result<Replay, CoreError> {
+            unreachable!("settling replays sends nothing")
+        }
+    }
+
+    const TOOLS: &str = "[]";
+
+    fn user(text: &str) -> ChatMessage {
+        ChatMessage::user(PromptText::user_message(text, None))
+    }
+
+    fn thinking(signature: &str) -> ChatMessage {
+        ChatMessage::Assistant {
+            content: Some("a".to_string()),
+            tool_calls: Vec::new(),
+            replay: serde_json::from_str(&format!(
+                r#"[{{"type":"thinking","thinking":"","signature":"{signature}"}}]"#
+            ))
+            .unwrap(),
+        }
+    }
+
+    /// `[system, u1, a1(思考), u2, a2(思考), u3]`。
+    fn opening() -> Vec<ChatMessage> {
+        vec![
+            ChatMessage::System("s".to_string()),
+            user("u1"),
+            thinking("sig1"),
+            user("u2"),
+            thinking("sig2"),
+            user("u3"),
+        ]
+    }
+
+    /// `messages[1..end]`をこの形で並べたときの指紋。
+    fn digest_before(messages: &[ChatMessage], end: usize) -> String {
+        let mut digest = PrefixDigest::start("s", TOOLS);
+        for message in &messages[1..end] {
+            digest.push(&StoredMessage::of(message).unwrap());
+        }
+        digest.as_str().to_string()
+    }
+
+    fn segment(start: usize, api_format: ApiFormat, prefix_digest: String) -> OpeningSegment {
+        OpeningSegment {
+            start,
+            end: start + 2,
+            origin: AdapterIdentity {
+                api_format,
+                model: "m".to_string(),
+                server: SERVER.to_string(),
+            },
+            prefix_digest,
+        }
+    }
+
+    fn kept(opening: &[ChatMessage]) -> Vec<bool> {
+        opening
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Assistant { replay, .. } => Some(*replay != Replay::default()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn keeps_the_thinking_of_segments_whose_prefix_is_unchanged() {
+        let sent = opening();
+        let segments = [
+            segment(1, ApiFormat::Anthropic, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [true, true]);
+    }
+
+    /// 前の区間の思考が外れると、それより後ろの区間の指紋も合わなくなる。
+    #[test]
+    fn dropping_earlier_thinking_drops_everything_after() {
+        let sent = opening();
+        let segments = [
+            segment(1, ApiFormat::Anthropic, "changed".to_string()),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
+
+        // 今の送り先が受け付けない思考も、外せば同じく後ろが合わなくなる。
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
+    }
+
+    /// 同じ方言でも、要求URLのオリジンが違う送り先(別の業者・ゲートウェイ)には思考を渡さない。
+    #[test]
+    fn does_not_send_thinking_to_another_server() {
+        let sent = opening();
+        let mut elsewhere = segment(1, ApiFormat::Anthropic, digest_before(&sent, 1));
+        elsewhere.origin.server = "https://gateway.example.com".to_string();
+        let segments = [elsewhere];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
+    }
+
+    /// 前が変わったあとに送った区間は、変わった形で指紋を取っているので、また一致する。
+    #[test]
+    fn matches_again_from_the_segment_sent_after_the_change() {
+        // 1つ目の区間は別の方言に送ったもので、2つ目はその思考を含めずに送った。
+        let mut sent = opening();
+        if let ChatMessage::Assistant { replay, .. } = &mut sent[2] {
+            *replay = Replay::default();
+        }
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, true]);
+
+        // 元の方言に戻ると、1つ目の思考が返り、2つ目は前が変わるので外れる。
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Gemini),
+        );
+        assert_eq!(kept(&messages), [true, false]);
+    }
+
+    /// 保存から並べた区間の外にある思考は送らない。
+    #[test]
+    fn drops_thinking_outside_saved_segments() {
+        let sent = opening();
+        let segments = [segment(3, ApiFormat::Anthropic, digest_before(&sent, 3))];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
     }
 }

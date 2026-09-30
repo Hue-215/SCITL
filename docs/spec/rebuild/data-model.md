@@ -303,12 +303,13 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 | attempt_no | INTEGER | NOT NULL。`UNIQUE (turn_id, attempt_no)` |
 | api_format | TEXT | NOT NULL。送った方言(`config::ApiFormat`の値) |
 | model | TEXT | NOT NULL。送ったモデル名(記録として持つ) |
+| server | TEXT | NULL可。送った要求URLのオリジン(スキーム・ホスト・ポート)。思考を同じ送り先にだけ送り返すために見る。パスは持たない(鍵を置くゲートウェイがあるため)。NULL=列を足す前の行で、使わない |
 | system_digest | TEXT | NOT NULL。先頭に置いたシステムプロンプト(`transcript_blobs`) |
 | settings_system_digest | TEXT | NOT NULL。そのとき設定から作ったシステムプロンプト(`transcript_blobs`)。先頭と違えば入力に変更の通知を置いた |
 | tools_digest | TEXT | NOT NULL。渡したツール定義の一覧(`transcript_blobs`) |
 | prefix_digest | TEXT | NOT NULL。入力より前(system・ツール定義・それまでの発言列)の指紋 |
 | history_start | INTEGER | NULL可。最初に並べたユーザー発言の`messages.id`(間引きの位置。その発言に置いた操作の記録も一緒に並ぶ)。NULL=会話の最初から |
-| input | TEXT | NOT NULL, `CHECK (json_valid(input))`。末尾に足した入力の発言と、含めた行(ユーザー発言・操作の記録)のid |
+| input | TEXT | NOT NULL, `CHECK (json_valid(input))`。末尾に足した入力の発言と、含めた行(ユーザー発言・操作の記録)のidと、この行(`rounds`を含む)の形の版(`architecture.md` 3節「前が変わる場面の扱い」) |
 | rounds | TEXT | NOT NULL, `CHECK (json_valid(rounds))`。各ラウンドで足したassistant・tool結果と、最後の応答。`Replay`は受け取った生のJSONの文字列のまま持つ |
 | created_at | TEXT | ISO8601。NOT NULL |
 

@@ -147,6 +147,14 @@ impl PromptText {
         Self(format!("{}\n{}", self.0, next.0))
     }
 
+    /// 送った形の保存から読み戻す(`orchestration::transcript`)。保存したのは無害化を通った値
+    /// だけなので、そのまま信じる。保存した本文からはこのアプリが置いた囲みと中身を分けられず、
+    /// 無害化を掛け直せない。無害化の規則を変えたときは保存の形の版を上げ、前の規則で保存した
+    /// 本文をここに通さない(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。
+    pub(crate) fn from_stored(text: String) -> Self {
+        Self(text)
+    }
+
     /// 囲みを持たずにそのまま埋め込む自由入力(外部ツールの説明等)。
     pub fn untrusted(text: &str) -> Self {
         Self(neutralize_reserved_tags(text))
@@ -208,7 +216,7 @@ pub fn user_message_format_note() -> String {
 
 /// `<scitl:...>`・`</scitl:...>`の`<`を実体参照に置き換え、タグとして読まれないようにする。
 /// 予約タグの名前空間`scitl:`ごと対象にするのは、今後タグを増やしたときに無害化の対象を足し
-/// 忘れないため。
+/// 忘れないため。規則を変えたら保存の形の版も上げる([`PromptText::from_stored`])。
 fn neutralize_reserved_tags(text: &str) -> String {
     const NAMESPACE: &str = "scitl:";
     let mut out = String::with_capacity(text.len());

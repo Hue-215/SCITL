@@ -110,7 +110,6 @@ impl ChatMessage {
 ///
 /// 応答の要素を、受け取った生のJSONのまま並びごと持つ。`serde_json::Value`に読み直すと
 /// オブジェクトのキーの順が変わり、受け取ったままではなくなる。空なら送り返すものは無い。
-// TODO(#280): ターンをまたいで送り返す。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Replay(Vec<Box<RawValue>>);
@@ -375,14 +374,22 @@ pub trait LlmAdapter: Send + Sync {
         None
     }
 
+    /// 別の試行で受け取った[`Replay`](送り先は`origin`)を、この送り先に送り返してよいか
+    /// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。方言が違えば形を読めない。
+    /// 既定は送り返さない。要求URLのオリジンが同じかは呼び出し側が見るので、ここでは方言と
+    /// モデルだけで答える。
+    fn accepts_replay(&self, _origin: &AdapterIdentity) -> bool {
+        false
+    }
+
     /// [`Self::send`]が同じ引数で送るリクエストの本文を、送らずに返す(送信内容のプレビュー)。
     /// 実際のプロバイダーは必ず実装し、`send`と同じ組み立てを通す。既定の`None`はテスト用の
     /// アダプタのためのもの。
     ///
-    /// 変えてよいのは画像の実体だけで、形式と長さに縮める(1枚で数MBになり、端末では読めない)。
-    /// 縮めるのは方言の上で画像を置く位置に限る。他の文字列まで縮めると、モデルに渡る文を
-    /// プレビューから隠せてしまう。要求URLは返さない(エラーの詳細と同じく、パスに鍵を置く
-    /// ゲートウェイがあるため)。
+    /// 変えてよいのは画像の実体と、送り返す思考の署名だけで、長さに縮める(画像は1枚で数MBに
+    /// なり、署名は読めない)。縮めるのは方言の上でそれらを置く位置に限る。他の文字列まで
+    /// 縮めると、モデルに渡る文をプレビューから隠せてしまう。要求URLは返さない(エラーの詳細と
+    /// 同じく、パスに鍵を置くゲートウェイがあるため)。
     fn request_preview(
         &self,
         _messages: &[ChatMessage],
@@ -398,6 +405,9 @@ pub trait LlmAdapter: Send + Sync {
 pub struct AdapterIdentity {
     pub api_format: ApiFormat,
     pub model: String,
+    /// 要求URLのオリジン(スキーム・ホスト・ポート)。同じ方言を話す別の業者やゲートウェイを
+    /// 見分ける。パスは持たない(パスに鍵を置くゲートウェイがあるため)。
+    pub server: String,
 }
 
 /// 送らずに組み立てたリクエストの本文。認証情報(ヘッダー)は持たない。本文はアダプタの
