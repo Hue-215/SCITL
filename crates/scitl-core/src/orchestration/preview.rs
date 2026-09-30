@@ -16,7 +16,7 @@ use crate::orchestration::turn::{
 };
 use crate::orchestration::turn_request::TurnRequest;
 use crate::orchestration::{TurnContext, TurnFailure};
-use crate::tools::external::ExternalToolset;
+use crate::tools::{self, external::ExternalToolset};
 
 #[derive(Debug, Default)]
 pub struct PreviewOptions {
@@ -83,6 +83,7 @@ pub async fn preview_request(
                 .servers
                 .iter()
                 .filter(|s| s.enabled && !s.enabled_tools.is_empty()),
+            &tools::names(chat),
         )
     } else {
         ExternalToolset::default()

@@ -586,7 +586,7 @@ mod tests {
             },
             enabled_tools: ["search".to_string()].into(),
         };
-        ExternalToolset::default().with_unavailable([&server])
+        ExternalToolset::default().with_unavailable([&server], &[])
     }
 
     /// 固定したツール定義は、今と同じか、繋がらないサーバーのツールが欠けているだけなら残す。

@@ -468,7 +468,8 @@ pub(super) async fn prepare_external_tools(
             }
         }
     }
-    ExternalToolset::build(fetched, &tools::names(chat)).with_unavailable(unavailable)
+    let reserved = tools::names(chat);
+    ExternalToolset::build(fetched, &reserved).with_unavailable(unavailable, &reserved)
 }
 
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から

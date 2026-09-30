@@ -79,17 +79,23 @@ impl ExternalToolset {
 
     /// 有効なのに繋がらなかったサーバーを記録する。そのツールは公開しないが、前に固定した
     /// ツール定義には残す(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。
+    /// `reserved`は[`Self::build`]と同じく内部ツールの名前で、公開しているツールや内部ツールと
+    /// 同じ名前は記録しない(呼ばれたら、そちらを実行する)。
     pub fn with_unavailable<'a>(
         mut self,
         servers: impl IntoIterator<Item = &'a McpServerConfig>,
+        reserved: &[String],
     ) -> Self {
         for server in servers {
-            self.unavailable.extend(
-                server
-                    .enabled_tools
-                    .iter()
-                    .filter_map(|tool| exposed_name(&server.name, tool)),
-            );
+            for name in server
+                .enabled_tools
+                .iter()
+                .filter_map(|tool| exposed_name(&server.name, tool))
+            {
+                if !reserved.contains(&name) && !self.routes.contains_key(&name) {
+                    self.unavailable.insert(name);
+                }
+            }
         }
         self
     }
@@ -230,6 +236,24 @@ mod tests {
         let toolset =
             ExternalToolset::build([(&s, vec![tool("read file"), tool(&"x".repeat(80))])], &[]);
         assert!(toolset.is_empty());
+    }
+
+    /// 繋がらなかったサーバーの有効なツールを記録する。公開しているツールや内部ツールと同じ
+    /// 名前は記録せず、呼ばれたらそちらを実行する。
+    #[test]
+    fn records_tools_of_unreachable_servers_unless_the_name_is_taken() {
+        let up = server("s1", "a__b", &["c"]);
+        let down = server("s2", "a", &["b__c", "search"]);
+        let reserved = vec!["a__search".to_string()];
+        let toolset = ExternalToolset::build([(&up, vec![tool("c")])], &reserved)
+            .with_unavailable([&down], &reserved);
+        assert!(!toolset.is_unavailable("a__b__c"));
+        assert!(toolset.route("a__b__c").is_some());
+        assert!(!toolset.is_unavailable("a__search"));
+        let other = server("s3", "down", &["search", "disabled_later"]);
+        let toolset = toolset.with_unavailable([&other], &reserved);
+        assert!(toolset.is_unavailable("down__search"));
+        assert!(!toolset.is_unavailable("down__missing"));
     }
 
     #[test]
