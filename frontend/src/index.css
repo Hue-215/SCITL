@@ -1274,9 +1274,20 @@ button.primary {
   color: var(--color-on-primary-container);
 }
 
+/* 破壊的操作を確定するボタン(確認ダイアログの実行)。 */
 button.danger {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);
+}
+
+/* 破壊的操作の入口(確認ダイアログを開くボタン)。並んだほかのボタンと同じ見た目のまま、
+   ホバーしたときだけ警告色にする。発言ごとに並ぶので、常に塗ると画面がうるさくなる。
+   控えめなボタン(.entry-actions button 等)のホバーの浮きより後に書き、詳細度を揃えて上書きする。 */
+@media (hover: hover) {
+  button.danger-hover:not(:disabled):not(.selected):hover {
+    background-color: var(--color-danger-container);
+    color: var(--color-on-danger-container);
+  }
 }
 
 /* チップの共通部品(Chip.tsx)。添付ファイルの名前を、発言の中と入力欄の上で同じ形に
