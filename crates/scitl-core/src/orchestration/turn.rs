@@ -479,7 +479,7 @@ async fn run_tool_rounds(
 ) -> Result<()> {
     let chat = attempt.chat;
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
-    let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
+    let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
     let tools_available = request.tools_available();
     // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
     // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。

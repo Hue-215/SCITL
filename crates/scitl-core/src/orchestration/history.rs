@@ -8,12 +8,14 @@ use rusqlite::Connection;
 use crate::attachments::{self, AttachmentStore, Delivery};
 use crate::db::attachments::{self as db_attachments, Attachment, AttachmentContent};
 use crate::db::messages::{self, Chat, Kind, Message, Opener, Role};
+use crate::db::transcripts::{self, Transcript};
 use crate::error::Result;
 use crate::llm::{
-    AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText, ToolArguments,
-    ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
+    AdapterIdentity, AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText,
+    ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
 };
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
+use crate::orchestration::transcript::Replayable;
 
 /// 履歴の組み立てに要るDBの行。DBのロックを持つ間に引き終え、添付画像の読み出し
 /// ([`build_history`])はロックの外で行う。
@@ -23,6 +25,8 @@ pub(super) struct StoredChat {
     /// 入っていない。
     discarded_records: Vec<Message>,
     attachments: HashMap<i64, Vec<Attachment>>,
+    /// 会話の送った形の保存。使うのは表示される返信のある試行の分だけ。
+    transcripts: Vec<Transcript>,
     /// 保存していない開始の発言を先頭に補うか。
     starts_with_opening: bool,
 }
@@ -41,6 +45,7 @@ pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
         messages,
         discarded_records,
         attachments: db_attachments::for_chat(conn, chat)?,
+        transcripts: transcripts::list_for_chat(conn, chat)?,
         starts_with_opening: starts_with_opening(conn, chat)?,
     })
 }
@@ -106,25 +111,45 @@ pub(super) fn build_history(
         .rev()
         .find(|m| m.kind == Kind::Normal && m.role == Role::User)
         .map(|m| m.id);
+    let mut used = used_transcripts(&stored, options, store);
+    // 保存から並べる試行の入力に含めた行。記録からは組み立て直さない。
+    let in_saved_input: HashSet<i64> = used
+        .values()
+        .flat_map(|saved| saved.input_rows.iter().copied())
+        .collect();
     let rows = in_order(&stored.messages, &stored.discarded_records);
     let mut history = History::with_capacity(rows.len() + 1);
     if stored.starts_with_opening {
-        history.push(
-            ChatMessage::user(PromptText::user_message(&options.opening, None)),
-            Vec::new(),
-        );
+        history.opening = Some(ChatMessage::user(PromptText::user_message(
+            &options.opening,
+            None,
+        )));
     }
     // 置く位置を待っている操作の記録と、いま行を読んでいる返信のある試行。
     let mut pending: Vec<Operation> = Vec::new();
     let mut current_turn: Option<&str> = None;
     for (m, shown) in rows {
+        if in_saved_input.contains(&m.id) {
+            continue;
+        }
         // 捨てた試行の記録は、同じ`turn_id`のまま返信のある試行と並ぶので、表示される行かで分ける。
         let replied = m
             .turn_id
             .as_deref()
             .filter(|turn| shown && replied_turns.contains(*turn));
-        // 返信のある試行が始まる位置(再試行)。それまでの記録は、その試行が答える発言にあったものとする。
         if let Some(turn) = replied {
+            // 送った形の保存がある試行は、その位置で保存をそのまま並べ、試行の行は読まない。
+            // 待っている記録は、この試行の前に差し込むと送った形が変わるので、次に回す。
+            if let Some(saved) = used.remove(turn) {
+                current_turn = Some(turn);
+                history.push_saved(turn, saved);
+                continue;
+            }
+            if history.saved_turn(turn) {
+                continue;
+            }
+            // 返信のある試行が始まる位置(再試行)。それまでの記録は、その試行が答える発言に
+            // あったものとする。
             if current_turn != Some(turn) {
                 current_turn = Some(turn);
                 history.append_operations(&mut pending);
@@ -182,6 +207,7 @@ pub(super) fn build_history(
         }
         None => history.append_operations(&mut pending),
     }
+    history.place_opening();
     history
 }
 
@@ -192,6 +218,20 @@ pub(super) struct History {
     rows: Vec<Vec<i64>>,
     /// このターンの新しい入力(最後の返信のある試行より後ろ)が始まる位置。
     pub(super) input_from: usize,
+    /// 送った形の保存から並べた区間。思考を送り返すかは、区間ごとに指紋で決める。
+    pub(super) segments: Vec<SavedSegment>,
+    /// 保存から並べた試行の`turn_id`。
+    saved_turns: HashSet<String>,
+    /// まだ置いていない、補う開始の発言。最初に何かを並べるときに先頭に置く。
+    opening: Option<ChatMessage>,
+}
+
+/// 送った形の保存から並べた1試行分の区間(`messages[start..end]`)。
+pub(super) struct SavedSegment {
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) origin: AdapterIdentity,
+    pub(super) prefix_digest: String,
 }
 
 impl History {
@@ -200,10 +240,49 @@ impl History {
             messages: Vec::with_capacity(capacity),
             rows: Vec::with_capacity(capacity),
             input_from: 0,
+            segments: Vec::new(),
+            saved_turns: HashSet::new(),
+            opening: None,
         }
     }
 
+    /// 補う開始の発言を、まだ置いていなければ先頭に置く。
+    fn place_opening(&mut self) {
+        if let Some(opening) = self.opening.take() {
+            self.messages.push(opening);
+            self.rows.push(Vec::new());
+        }
+    }
+
+    /// 保存から1試行分を並べる。入力に含めた行は、入力の最初の発言に添える(間引きの位置を
+    /// 行で表すため。区間の途中から並べることは無い)。
+    fn push_saved(&mut self, turn: &str, saved: Replayable) {
+        // 最初に並べるのが保存なら、その試行は開始の発言に答えたもので、保存の入力に開始の発言が
+        // 入っている。
+        if self.messages.is_empty() {
+            self.opening = None;
+        }
+        let start = self.messages.len();
+        let mut rows = Some(saved.input_rows);
+        for message in saved.messages {
+            self.push(message, rows.take().unwrap_or_default());
+        }
+        self.segments.push(SavedSegment {
+            start,
+            end: self.messages.len(),
+            origin: saved.origin,
+            prefix_digest: saved.prefix_digest,
+        });
+        self.input_from = self.messages.len();
+        self.saved_turns.insert(turn.to_string());
+    }
+
+    fn saved_turn(&self, turn: &str) -> bool {
+        self.saved_turns.contains(turn)
+    }
+
     fn push(&mut self, message: ChatMessage, rows: Vec<i64>) {
+        self.place_opening();
         self.messages.push(message);
         self.rows.push(rows);
     }
@@ -240,6 +319,7 @@ impl History {
         let Some((operations, ids)) = take_operations(pending) else {
             return;
         };
+        self.place_opening();
         let last_user = self
             .messages
             .iter()
@@ -254,6 +334,33 @@ impl History {
             None => self.push(ChatMessage::user(operations), ids),
         }
     }
+}
+
+/// 表示される返信のある試行のうち、送った形の保存を読み戻せるもの(`turn_id`ごと)。ツールに
+/// 対応しないモデルでは使わない(保存したツールの往復を送ることになるため)。
+fn used_transcripts(
+    stored: &StoredChat,
+    options: &HistoryOptions,
+    store: &AttachmentStore,
+) -> HashMap<String, Replayable> {
+    if !options.tools_available {
+        return HashMap::new();
+    }
+    let replied: HashSet<(&str, i64)> = stored
+        .messages
+        .iter()
+        .filter(|m| m.kind == Kind::Normal && m.role == Role::Assistant)
+        .filter_map(|m| Some((m.turn_id.as_deref()?, m.attempt_no?)))
+        .collect();
+    stored
+        .transcripts
+        .iter()
+        .filter(|t| replied.contains(&(t.turn_id.as_str(), t.attempt_no)))
+        .filter_map(|t| {
+            let saved = Replayable::load(t, options.tools_available, options.image_input, store)?;
+            Some((t.turn_id.clone(), saved))
+        })
+        .collect()
 }
 
 /// 表示される行と捨てた試行の記録を、行の並び(`db::messages::list_rows_for_chat`と同じ
@@ -439,6 +546,7 @@ mod tests {
     use crate::db;
     use crate::db::attachments::{AttachmentKind, NewAttachment};
     use crate::db::messages::{Kind, NewMessage, OperationSource, Origin, Role};
+    use crate::orchestration::transcript::{StoredInput, StoredMessage};
 
     const OPENING: &str = "開始の発言";
 
@@ -562,6 +670,46 @@ mod tests {
                 },
             )
             .unwrap()
+        }
+
+        /// 試行の送った形を保存する(指紋は使わないので固定の値)。
+        fn save(&self, turn: &str, attempt: i64, rows: Vec<i64>, input: &[&str], reply: &str) {
+            let stored_input = StoredInput {
+                rows,
+                messages: input
+                    .iter()
+                    .map(|text| {
+                        StoredMessage::of(&ChatMessage::user(PromptText::user_message(text, None)))
+                            .unwrap()
+                    })
+                    .collect(),
+            };
+            let rounds = vec![StoredMessage::of(&ChatMessage::Assistant {
+                content: Some(reply.to_string()),
+                tool_calls: Vec::new(),
+                replay: Default::default(),
+            })
+            .unwrap()];
+            let input = serde_json::to_string(&stored_input).unwrap();
+            let rounds = serde_json::to_string(&rounds).unwrap();
+            transcripts::insert(
+                &self.conn,
+                &transcripts::NewTranscript {
+                    chat: Chat::Task(self.task_id),
+                    turn_id: turn,
+                    attempt_no: attempt,
+                    api_format: "open_ai_compat",
+                    model: "m",
+                    system: "s",
+                    settings_system: "s",
+                    tools: "[]",
+                    prefix_digest: "p",
+                    history_start: None,
+                    input: &input,
+                    rounds: &rounds,
+                },
+            )
+            .unwrap();
         }
 
         fn record(&self, turn: Option<&str>, result: Value) -> i64 {
@@ -1043,6 +1191,75 @@ mod tests {
         assert_eq!(history.messages, vec![opening_message()]);
         assert_eq!(history.input_from, 0);
         assert_eq!(history.first_row(0), None);
+    }
+
+    /// 送った形の保存がある試行は、記録から組み立て直さずに保存をそのまま並べる。
+    #[test]
+    fn places_a_saved_attempt_as_it_was_sent() {
+        let f = Fixture::new();
+        let user = f.user("u1");
+        f.record(Some("t1"), json!({ "text": "x" }));
+        f.reply("t1", "a1");
+        f.save("t1", 1, vec![user], &["送った u1"], "送った a1");
+        let next = f.user("u2");
+
+        let history = f.build_full(Chat::Task(f.task_id), true, false);
+        let texts = user_texts(&history.messages);
+        assert!(texts[0].contains("送った u1"));
+        assert!(matches!(
+            &history.messages[1],
+            ChatMessage::Assistant { content: Some(c), .. } if c == "送った a1"
+        ));
+        assert!(tool_contents(&history.messages).is_empty());
+        assert_eq!(history.messages.len(), 3);
+        assert_eq!(history.segments.len(), 1);
+        assert_eq!((history.segments[0].start, history.segments[0].end), (0, 2));
+        assert_eq!(history.input_from, 2);
+        assert_eq!(history.rows_from(2), vec![next]);
+    }
+
+    /// 保存した入力に含まれていない操作の記録は、保存の前に差し込まず、新しい入力に積む。
+    #[test]
+    fn carries_operations_missing_from_a_saved_input_to_the_new_input() {
+        let f = Fixture::new();
+        let user = f.user("u1");
+        let op = f.record(None, json!({ "n": 1 }));
+        f.reply("t1", "a1");
+        f.save("t1", 1, vec![user], &["送った u1"], "送った a1");
+        f.user("u2");
+
+        let history = f.build(Chat::Task(f.task_id), true, false);
+        let texts = user_texts(&history);
+        assert!(!texts[0].contains("scitl:operations"));
+        assert_eq!(operations_in(texts[1])[0]["result"], json!({ "n": 1 }));
+        let history = f.build_full(Chat::Task(f.task_id), true, false);
+        assert!(history.rows_from(history.input_from).contains(&op));
+    }
+
+    /// 捨てた試行の保存と、ツールに対応しないモデルでは、保存を使わず記録から組み立てる。
+    #[test]
+    fn uses_only_the_saved_form_of_a_replied_attempt_the_model_can_take() {
+        let f = Fixture::new();
+        let user = f.user("u1");
+        let first = f.insert(Role::Assistant, Kind::Normal, "a", Some("t1"));
+        f.save("t1", 1, vec![user], &["送った u1"], "送った a");
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), first).unwrap();
+        f.insert_attempt(Role::Assistant, Kind::Normal, "b", "t1", 2);
+        let history = f.build_full(Chat::Task(f.task_id), true, false);
+        assert!(history.segments.is_empty());
+        assert!(!user_texts(&history.messages)[0].contains("送った"));
+
+        f.save("t1", 2, vec![user], &["送った u1"], "送った b");
+        assert_eq!(
+            f.build_full(Chat::Task(f.task_id), true, false)
+                .segments
+                .len(),
+            1
+        );
+        assert!(f
+            .build_full(Chat::Task(f.task_id), false, false)
+            .segments
+            .is_empty());
     }
 
     fn opening_message() -> ChatMessage {

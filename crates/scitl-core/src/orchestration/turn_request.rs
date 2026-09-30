@@ -7,7 +7,9 @@
 use crate::blocking;
 use crate::db::messages::Chat;
 use crate::error::Result;
-use crate::llm::{ChatMessage, PromptText, ToolOffer, ToolSchema};
+use crate::llm::{
+    AdapterIdentity, ChatMessage, LlmAdapter, PromptText, Replay, ToolOffer, ToolSchema,
+};
 use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::system_prompt::build_system_prompt;
@@ -33,6 +35,8 @@ pub(super) struct TurnRequest {
     /// 最初に並べた行(間引きの位置)。会話の最初から並べたなら`None`。
     history_start: Option<i64>,
     exposed_tools: Vec<ToolSchema>,
+    /// `exposed_tools`の本文(指紋と保存に使う)。
+    tools_body: String,
     tools_available: bool,
 }
 
@@ -44,6 +48,7 @@ impl TurnRequest {
     /// 部分が変わる)ので、そのときはプロバイダーのコンテキスト超過のエラーでターンが終わる。
     pub(super) async fn prepare(
         ctx: &TurnContext<'_>,
+        adapter: &dyn LlmAdapter,
         chat: Chat,
         stored: StoredChat,
         external: &ExternalToolset,
@@ -84,16 +89,33 @@ impl TurnRequest {
             history.first_row(keep_from)
         };
         let input_rows = history.rows_from(input_from);
+        // 発言の位置を、先頭にシステムプロンプトを置いた`opening`の位置に直す。
+        let at = |i: usize| 1 + i.saturating_sub(keep_from);
+        let segments: Vec<_> = history
+            .segments
+            .into_iter()
+            .filter(|s| s.end > keep_from)
+            .map(|s| OpeningSegment {
+                start: at(s.start),
+                end: at(s.end),
+                whole: s.start >= keep_from,
+                origin: s.origin,
+                prefix_digest: s.prefix_digest,
+            })
+            .collect();
         let mut opening = Vec::with_capacity(1 + kept);
         opening.push(system);
         opening.extend(history.messages.into_iter().skip(keep_from));
+        let tools_body = tools_body(&exposed_tools);
+        settle_replays(&mut opening, &segments, &tools_body, adapter);
 
         Ok(Self {
             opening,
-            input_from: 1 + input_from - keep_from,
+            input_from: at(input_from),
             input_rows,
             history_start,
             exposed_tools,
+            tools_body,
             tools_available,
         })
     }
@@ -114,8 +136,7 @@ impl TurnRequest {
         let ChatMessage::System(system) = &self.opening[0] else {
             unreachable!("the opening starts with the system prompt");
         };
-        let tools = tools_body(&self.exposed_tools);
-        let mut prefix = PrefixDigest::start(system, &tools);
+        let mut prefix = PrefixDigest::start(system, &self.tools_body);
         for message in StoredMessage::all_of(&self.opening[1..self.input_from])? {
             prefix.push(&message);
         }
@@ -128,7 +149,7 @@ impl TurnRequest {
             system: system.clone(),
             // TODO(#280): システムプロンプトの変更を後ろに足して伝える形にしたら、先頭と分かれる。
             settings_system: system.clone(),
-            tools,
+            tools: self.tools_body.clone(),
             prefix_digest: prefix.as_str().to_string(),
             history_start: self.history_start,
             input: serde_json::to_string(&input).expect("a stored input serializes"),
@@ -168,5 +189,55 @@ impl TurnRequest {
             callable: !final_call,
         };
         (messages, offer)
+    }
+}
+
+/// 保存から並べた区間の、`opening`での位置(`start..end`)。
+struct OpeningSegment {
+    start: usize,
+    end: usize,
+    /// 区間がすべて残っているか(間引きで前の一部が落ちていないか)。
+    whole: bool,
+    origin: AdapterIdentity,
+    prefix_digest: String,
+}
+
+/// 保存から並べた区間の思考(`Replay`)を、送り返せるものだけ残す
+/// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。先頭から順に、並べた形
+/// (残した`Replay`ごと)で指紋を取り直し、区間の始まりで保存した指紋と一致し、今の送り先が
+/// 受け付ける区間だけ残す。途中の`Replay`だけを外すと、それより後ろの区間の指紋も合わなくなる。
+fn settle_replays(
+    opening: &mut [ChatMessage],
+    segments: &[OpeningSegment],
+    tools: &str,
+    adapter: &dyn LlmAdapter,
+) {
+    let ChatMessage::System(system) = &opening[0] else {
+        unreachable!("the opening starts with the system prompt");
+    };
+    // 保存できない形の発言があれば、それより後ろの指紋は取れず、どの区間とも一致しない。
+    let mut digest = Some(PrefixDigest::start(system, tools));
+    let mut segments = segments.iter().peekable();
+    let mut keep_until = 0;
+    for (i, message) in opening.iter_mut().enumerate().skip(1) {
+        if let Some(segment) = segments.next_if(|s| s.start == i) {
+            let matches = digest
+                .as_ref()
+                .is_some_and(|d| d.as_str() == segment.prefix_digest);
+            keep_until = if segment.whole && matches && adapter.accepts_replay(&segment.origin) {
+                segment.end
+            } else {
+                0
+            };
+        }
+        if i >= keep_until {
+            if let ChatMessage::Assistant { replay, .. } = message {
+                *replay = Replay::default();
+            }
+        }
+        digest = digest.and_then(|mut d| {
+            d.push(&StoredMessage::of(message)?);
+            Some(d)
+        });
     }
 }
