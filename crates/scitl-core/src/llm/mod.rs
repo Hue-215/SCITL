@@ -7,6 +7,7 @@ mod token_estimate;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 
 pub use capabilities::{
     fallback_capabilities, resolve_capabilities, CapabilityLayer, DetectedCapabilities,
@@ -101,21 +102,39 @@ impl ChatMessage {
     }
 }
 
-/// プロバイダーが、同じターンの次の呼び出しで受け取ったまま送り返すよう求める応答の一部
-/// (Anthropic形式の署名付きの思考ブロック等)。中身を読み書きするのは、それを返したアダプタ
-/// だけで、中核は同じターンの往復のアシスタント発言に載せて運ぶだけにする。表示も保存もしない
+/// プロバイダーが、次の呼び出しで受け取ったまま送り返すよう求める応答の一部(Anthropic形式の
+/// 署名付きの思考ブロック等)。中身を読み書きするのは、それを返したアダプタだけで、中核は
+/// 往復のアシスタント発言に載せて運ぶだけにする。表示も保存もしない
 /// (`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。
+///
+/// 応答の要素を、受け取った生のJSONのまま並びごと持つ。`serde_json::Value`に読み直すと
+/// オブジェクトのキーの順が変わり、受け取ったままではなくなる。空なら送り返すものは無い。
 // TODO(#280): 保存して、ターンをまたいで送り返す。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Replay(Option<serde_json::Value>);
+#[derive(Debug, Clone, Default)]
+pub struct Replay(Vec<Box<RawValue>>);
+
+impl PartialEq for Replay {
+    fn eq(&self, other: &Self) -> bool {
+        self.0
+            .iter()
+            .map(|e| e.get())
+            .eq(other.0.iter().map(|e| e.get()))
+    }
+}
 
 impl Replay {
-    pub(in crate::llm) fn new(value: serde_json::Value) -> Self {
-        Self(Some(value))
+    pub(in crate::llm) fn new(elements: Vec<Box<RawValue>>) -> Self {
+        Self(elements)
     }
 
-    pub(in crate::llm) fn get(&self) -> Option<&serde_json::Value> {
-        self.0.as_ref()
+    pub(in crate::llm) fn elements(&self) -> &[Box<RawValue>] {
+        &self.0
+    }
+
+    /// JSONの配列の文字列から作る。要素の中の文字列はそのまま持つ。
+    #[cfg(test)]
+    pub(in crate::llm) fn from_json(array: &str) -> Self {
+        Self(serde_json::from_str(array).unwrap())
     }
 }
 

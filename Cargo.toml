@@ -9,7 +9,7 @@ license = "MIT"
 [workspace.dependencies]
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time"] }
 # LLMアダプタとMCPクライアントの双方が使う唯一のHTTPクライアント。バージョンはrmcpの
 # 要求(0.13.2以上)に合わせてある。`rustls` featureはaws-lc-rs + rustls-platform-verifier

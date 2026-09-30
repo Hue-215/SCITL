@@ -10,6 +10,7 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
+use serde_json::value::RawValue;
 
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::error::CoreError;
@@ -67,6 +68,48 @@ async fn read_success_json<T: DeserializeOwned>(
     })
     .await?;
     Ok(read_json(response, api_key).await?)
+}
+
+/// リクエストに並べる要素(Anthropic形式のブロック・Gemini形式のステップ)。組み立てたものか、
+/// 受け取ったまま送り返すもの([`crate::llm::Replay`])か。
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum RequestPart {
+    Built(serde_json::Value),
+    Received(Box<RawValue>),
+}
+
+fn built(parts: impl IntoIterator<Item = serde_json::Value>) -> Vec<RequestPart> {
+    parts.into_iter().map(RequestPart::Built).collect()
+}
+
+fn received(replay: &crate::llm::Replay) -> Vec<RequestPart> {
+    replay
+        .elements()
+        .iter()
+        .cloned()
+        .map(RequestPart::Received)
+        .collect()
+}
+
+/// 受け取った応答の要素を読む。生のJSONとして正しくても`Value`に読めない要素(範囲を超える
+/// 数値等)があれば、応答の解釈の失敗にする。
+fn read_elements(
+    elements: &[Box<RawValue>],
+    api_key: &SecretString,
+) -> Result<Vec<serde_json::Value>, LlmError> {
+    elements
+        .iter()
+        .map(|raw| {
+            serde_json::from_str(raw.get()).map_err(|e| {
+                LlmError::InvalidResponse(ErrorDetail::http(
+                    StatusCode::OK,
+                    &e.to_string(),
+                    api_key.expose_secret(),
+                ))
+            })
+        })
+        .collect()
 }
 
 /// ツール呼び出しの引数を、オブジェクトしか受け付けない方言に渡す形にする。その方言の応答から
