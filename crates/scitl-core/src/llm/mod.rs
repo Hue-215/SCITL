@@ -107,46 +107,34 @@ impl ChatMessage {
 /// 往復のアシスタント発言に載せて運ぶだけにする。表示も保存もしない
 /// (`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。
 ///
-/// 応答の要素の配列を、受け取った生のJSONの文字列のまま持つ。`serde_json::Value`に読み直すと
-/// オブジェクトのキーの順が変わり、受け取ったままではなくなる。
+/// 応答の要素を、受け取った生のJSONのまま並びごと持つ。`serde_json::Value`に読み直すと
+/// オブジェクトのキーの順が変わり、受け取ったままではなくなる。空なら送り返すものは無い。
 // TODO(#280): 保存して、ターンをまたいで送り返す。
 #[derive(Debug, Clone, Default)]
-pub struct Replay(Option<Box<RawValue>>);
+pub struct Replay(Vec<Box<RawValue>>);
 
 impl PartialEq for Replay {
     fn eq(&self, other: &Self) -> bool {
-        self.0.as_deref().map(RawValue::get) == other.0.as_deref().map(RawValue::get)
+        self.0
+            .iter()
+            .map(|e| e.get())
+            .eq(other.0.iter().map(|e| e.get()))
     }
 }
 
 impl Replay {
-    /// 受け取った要素を並びごと持つ。要素は応答の本文から切り出した生のJSONのまま渡す。
-    pub(in crate::llm) fn new(elements: &[&RawValue]) -> Self {
-        let array = format!(
-            "[{}]",
-            elements
-                .iter()
-                .map(|e| e.get())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        Self(Some(
-            RawValue::from_string(array).expect("an array of JSON values is JSON"),
-        ))
+    pub(in crate::llm) fn new(elements: Vec<Box<RawValue>>) -> Self {
+        Self(elements)
     }
 
-    /// 送り返す要素を、受け取ったままの生のJSONで返す。持っていなければ`None`。
-    pub(in crate::llm) fn elements(&self) -> Option<Vec<Box<RawValue>>> {
-        let raw = self.0.as_ref()?;
-        Some(serde_json::from_str(raw.get()).expect("Replay holds a JSON array"))
+    pub(in crate::llm) fn elements(&self) -> &[Box<RawValue>] {
+        &self.0
     }
 
     /// JSONの配列の文字列から作る。要素の中の文字列はそのまま持つ。
     #[cfg(test)]
     pub(in crate::llm) fn from_json(array: &str) -> Self {
-        let elements: Vec<Box<RawValue>> = serde_json::from_str(array).unwrap();
-        let refs: Vec<&RawValue> = elements.iter().map(AsRef::as_ref).collect();
-        Self::new(&refs)
+        Self(serde_json::from_str(array).unwrap())
     }
 }
 

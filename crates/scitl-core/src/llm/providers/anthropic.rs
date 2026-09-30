@@ -17,7 +17,7 @@ use crate::llm::{
 };
 use crate::net::ExternalUrl;
 
-use super::KeyHeader;
+use super::{built, received, KeyHeader, RequestPart};
 
 /// Anthropic形式のアダプタ。
 pub struct AnthropicAdapter {
@@ -186,20 +186,7 @@ struct RequestBody<'a> {
 #[derive(Serialize)]
 struct RequestMessage {
     role: &'static str,
-    content: Vec<ContentBlock>,
-}
-
-/// メッセージのブロック。組み立てたものと、受け取ったまま送り返すもの([`Replay`])。受け取った
-/// ブロックは`Value`に読み直すとキーの順が変わるので、生のJSONのまま埋め込む。
-#[derive(Serialize)]
-#[serde(untagged)]
-enum ContentBlock {
-    Built(Value),
-    Received(Box<RawValue>),
-}
-
-fn built(blocks: impl IntoIterator<Item = Value>) -> Vec<ContentBlock> {
-    blocks.into_iter().map(ContentBlock::Built).collect()
+    content: Vec<RequestPart>,
 }
 
 /// 思考をどう指定するか。
@@ -302,8 +289,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMess
                 replay,
             } => {
                 let blocks = match replay.elements() {
-                    Some(blocks) => blocks.into_iter().map(ContentBlock::Received).collect(),
-                    None => {
+                    [] => {
                         let mut blocks = content.as_deref().map(text_block).unwrap_or_default();
                         blocks.extend(tool_calls.iter().map(|call| {
                             json!({
@@ -315,6 +301,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> (Vec<Value>, Vec<RequestMess
                         }));
                         built(blocks)
                     }
+                    _ => received(replay),
                 };
                 ("assistant", blocks)
             }
@@ -402,7 +389,7 @@ fn abbreviate_images(value: &mut Value) {
 
 #[derive(Deserialize)]
 struct MessageResponse {
-    /// ブロックを受け取ったままの生のJSONで持つ(送り返すため。[`Replay`])。
+    /// 受け取ったまま送り返すため、生のJSONで持つ([`Replay`])。
     #[serde(default)]
     content: Vec<Box<RawValue>>,
     stop_reason: Option<String>,
@@ -512,9 +499,9 @@ impl LlmAdapter for AnthropicAdapter {
             return Err(LlmError::Refused(ErrorDetail::http(StatusCode::OK, &details, key)).into());
         }
 
+        let blocks = super::read_elements(&response.content, &self.api_key)?;
         let mut replay = false;
-        for raw in &response.content {
-            let block: Value = serde_json::from_str(raw.get()).expect("a received block is JSON");
+        for block in &blocks {
             match block.get("type").and_then(Value::as_str) {
                 Some("thinking") => {
                     replay = true;
@@ -561,8 +548,7 @@ impl LlmAdapter for AnthropicAdapter {
         // 思考ブロックは、ツールの往復の次の呼び出しで受け取ったまま返す必要がある。並びも
         // 変えられないので、応答のブロックをすべてそのまま返す。
         Ok(if replay {
-            let blocks: Vec<&RawValue> = response.content.iter().map(AsRef::as_ref).collect();
-            Replay::new(&blocks)
+            Replay::new(response.content)
         } else {
             Replay::default()
         })
@@ -740,6 +726,36 @@ mod tests {
         assert!(text.contains(&format!(r#""content":[{thinking},{tool_use}]"#)));
     }
 
+    /// 受け取ったブロックは、要素の中の空白も含めてそのまま返す。続くアシスタント発言と同じ
+    /// 役割でまとめても、組み立てたブロックの前にそのまま並ぶ。
+    #[test]
+    fn keeps_received_blocks_verbatim_when_merged_with_built_ones() {
+        let thinking = r#"{ "type" : "thinking", "thinking": "", "signature": "sig" }"#;
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: Vec::new(),
+                replay: Replay::from_json(&format!("[{thinking}]")),
+            },
+            ChatMessage::Assistant {
+                content: Some("more".to_string()),
+                tool_calls: Vec::new(),
+                replay: Replay::default(),
+            },
+        ];
+        let request = request_body(
+            "claude-test",
+            &messages,
+            ToolOffer::NONE,
+            Thinking::Unspecified,
+        );
+        let text = serde_json::to_string(&request).unwrap();
+        assert!(text.contains(&format!(
+            r#""content":[{thinking},{{"text":"more","type":"text"}}]"#
+        )));
+    }
+
     #[test]
     fn prepends_a_user_message_when_the_conversation_starts_with_the_assistant() {
         let messages = [
@@ -828,8 +844,7 @@ mod tests {
         );
         let expected: MessageResponse = serde_json::from_str(THINKING_AND_TOOL_USE).unwrap();
         let expected: Vec<&str> = expected.content.iter().map(|b| b.get()).collect();
-        let replayed = replay.elements().unwrap();
-        let replayed: Vec<&str> = replayed.iter().map(|b| b.get()).collect();
+        let replayed: Vec<&str> = replay.elements().iter().map(|b| b.get()).collect();
         assert_eq!(replayed, expected);
     }
 
