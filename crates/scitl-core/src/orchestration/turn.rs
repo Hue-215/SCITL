@@ -443,7 +443,7 @@ async fn run_tool_rounds(
 ) -> Result<()> {
     let chat = attempt.chat;
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
-    let request = TurnRequest::prepare(db.clone(), ctx, chat, stored, external).await?;
+    let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
     let tools_available = request.tools_available();
     // 同一ターン内のツール呼び出しの往復。分類によらずモデルに返し、DBには書かない
     // (書くと次ターン以降の履歴に残る)。

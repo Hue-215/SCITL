@@ -39,9 +39,7 @@ pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
     task_list(conn)
 }
 
-/// 総合チャットの最新状態(`orchestration::state_prompt`)もこの形で渡す。ツールの結果と
-/// 最新状態で同じタスクの見え方が食い違わないようにするため。
-pub fn task_list(conn: &Connection) -> Result<Value> {
+fn task_list(conn: &Connection) -> Result<Value> {
     // 表示側のフォールバックはモデルには渡さず、`title: null`(未設定)をそのまま見せる。
     // アーカイブ済みは返さない(溜まる一方で、トークンが増え続け、優先度の相談では
     // ノイズになる)。

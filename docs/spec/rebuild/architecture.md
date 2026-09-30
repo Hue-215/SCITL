@@ -22,7 +22,7 @@ SCITL-2.0/
 │   │       ├── export/             # Markdownエクスポート(13節)
 │   │       ├── llm/                # types(イベント列), adapter trait, 失敗の種類, providers/
 │   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
-│   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), turn_request.rs(各ラウンドで送るものの組み立て), turn_event.rs(途中経過の通知), state_prompt.rs(システムプロンプト), operations.rs(応答生成以外の経路での操作と記録), preview.rs(送信内容のプレビュー)
+│   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), turn_request.rs(各ラウンドで送るものの組み立て), turn_event.rs(途中経過の通知), system_prompt.rs(システムプロンプト), operations.rs(応答生成以外の経路での操作と記録), preview.rs(送信内容のプレビュー)
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(5節)
 │   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
@@ -351,7 +351,7 @@ function calling・api-errors・models)。
   ツールは変更後の対象全体を返すので、モデルは履歴から現在の状態を追える
 - 履歴に読み取りの結果が無いこともある(会話の始まりと、間引きで古い結果が落ちたあと)。
   状態はリクエストに含まれないので要るときはツールで読むことを、システムプロンプトの固定の
-  注記(`orchestration::state_prompt::build_system_prompt`)で伝える。会話の始まりに状態を
+  注記(`orchestration::system_prompt::build_system_prompt`)で伝える。会話の始まりに状態を
   添えることはしない。聞き取りの開始ではタスクが空のことが多く、画面・CLI・MCPで中身を入れて
   から始めた会話でも、注記に従って読めば足りる
 - ツールに対応しないモデルは状態を読めないので、ツールへの対応を前提とする。ツールは常に渡し、
@@ -634,7 +634,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 
 **システムプロンプト(`ChatMessage::System`)だけは型で強制されない**(理由は下の箇条)。
 自由入力は載せない(タスクのタイトル等は、ツール結果や操作の記録として発言列の側に載る)。
-足す必要が出たら、組み立ての1箇所(`orchestration::state_prompt::build_system_prompt`)の
+足す必要が出たら、組み立ての1箇所(`orchestration::system_prompt::build_system_prompt`)の
 中で `PromptText` を通す。
 
 | 経路 | 自由入力 | 生成 |

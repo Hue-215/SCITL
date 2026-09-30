@@ -22,7 +22,7 @@ pub fn default_opening_message(language: Language) -> &'static str {
 
 impl<'a> SystemPrompts<'a> {
     /// 設定から作る組。タスクチャット用が未設定なら既定の文面にする(総合チャットは
-    /// タスクチャット用を使わない。`state_prompt::build_system_prompt`)。
+    /// タスクチャット用を使わない。`system_prompt::build_system_prompt`)。
     pub fn from_config(general: &'a GeneralConfig) -> Self {
         Self {
             base: general.system_prompt.as_deref(),

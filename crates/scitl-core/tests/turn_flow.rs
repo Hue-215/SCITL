@@ -62,27 +62,12 @@ fn system_prompt_content(message: &ChatMessage) -> &str {
     }
 }
 
-/// ユーザー発言の本文。直近のユーザー発言に添えた最新状態の囲みは除く。
+/// ユーザー発言として送った文字列。
 fn user_text(message: &ChatMessage) -> &str {
     match message {
-        ChatMessage::User { text, .. } => text.as_str().split("\n<scitl:state>").next().unwrap(),
+        ChatMessage::User { text, .. } => text.as_str(),
         other => panic!("expected User, got {other:?}"),
     }
-}
-
-/// 直近のユーザー発言に添えた最新状態の囲み。
-fn state_of(messages: &[ChatMessage]) -> String {
-    messages
-        .iter()
-        .rev()
-        .find_map(|m| match m {
-            ChatMessage::User { text, .. } => text
-                .as_str()
-                .split_once("\n<scitl:state>")
-                .map(|(_, state)| format!("<scitl:state>{state}")),
-            _ => None,
-        })
-        .expect("a user message carries the state")
 }
 
 /// ツールの上限に達したことを伝える一節か。
@@ -187,11 +172,6 @@ impl ScriptedAdapter {
             .into_iter()
             .map(|(_, _, callable)| callable)
             .collect()
-    }
-
-    /// 各呼び出しで直近のユーザー発言に添えた最新状態。
-    fn states(&self) -> Vec<String> {
-        self.sent_messages().iter().map(|m| state_of(m)).collect()
     }
 
     fn system_prompts(&self) -> Vec<String> {
@@ -604,19 +584,18 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
     assert_eq!(rounds.len(), 2);
 
     // システムプロンプトには基本/タスクチャット用の両方が入り、ラウンドをまたいで変わらない
-    // (先頭一致のプロンプトキャッシュを切らない)。最新状態はシステムプロンプトに載せない。
+    // (先頭一致のプロンプトキャッシュを切らない)。タスクの中身は載せない。
     let round1_system = system_prompt_content(&rounds[0][0]);
     assert!(round1_system.contains("base prompt"));
     assert!(round1_system.contains("task chat prompt"));
-    assert!(!round1_system.contains("current task state"));
+    assert!(!round1_system.contains("買い出し"));
     assert_eq!(round1_system, system_prompt_content(&rounds[1][0]));
 
     // 2ラウンド目は1ラウンド目に送ったものを書き換えずに、後ろへ往復を足しただけ
     // (ツールの往復中に思考ブロックを返すAPIは、それより前が変わると受け付けない)。
-    // 最新状態はターンの最初のまま、add_stepsの結果は往復の結果として伝わる。
+    // add_stepsの結果は往復の結果として伝わる。
     assert_eq!(rounds[1][..rounds[0].len()], rounds[0][..]);
     assert_eq!(rounds[1].len(), rounds[0].len() + 2);
-    assert!(!adapter.states()[1].contains("買い出し"));
 
     // 同時に、直前のツール呼び出しと結果が発言として返る。これが無いと、モデルは自分が
     // さっき呼んだことを認識できず、同じツールを呼び直す。
@@ -2291,9 +2270,12 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
         offered[0],
         vec!["get_task_list", "get_task_detail", "read_attachment"]
     );
-    let state = &adapter.states()[0];
-    assert!(state.contains("current tasks (not archived)"));
-    assert!(!state.contains("current task state"));
+    // タスクの一覧は添えず、モデルが読み取りのツールで読む。
+    let first = &adapter.sent_messages()[0];
+    assert!(!first.iter().any(
+        |m| matches!(m, ChatMessage::User { text, .. } if text.as_str().contains("scitl:state"))
+    ));
+    assert!(system_prompt_content(&first[0]).contains("get_task_list"));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::General).unwrap();
