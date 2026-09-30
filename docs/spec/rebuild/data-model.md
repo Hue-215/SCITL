@@ -278,11 +278,55 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 
 - `file_hash` は実体のSHA-256の小文字16進(64桁)。実体はアプリのデータディレクトリの
   `attachments/<file_hash>` に置き、同じ内容の添付は実体を共有する(`architecture.md` 12節)。
-  実体を消してよいのは、同じ `file_hash` を指す行が1つも無くなったときだけ
+  実体を消してよいのは、同じ `file_hash` を指す行が1つも無くなったときだけ。送った形の保存
+  (`turn_transcripts`)も同じハッシュで画像を指すが、指すのは添付の行が持つハッシュだけで、
+  添付の行は消さないので、この条件は添付の行だけで判定できる
 - `mime_type` は中身の先頭バイトから決めた値(`attachments::classify`)。拡張子からは決めない
 - 画像は預かる時点で正規化する(`architecture.md` 12節)。`mime_type`・`size_bytes`・`file_hash` は
   正規化した後の実体のもので、元のファイルのものではない
 - 編集で新しい発言へ引き継ぐときは行を写し、実体は共有する(`db::attachments::copy_to_message`)
+
+### turn_transcripts(モデルに送った形。Issue #280)
+
+返信のある試行ごとに、モデルへ送った形を1行持つ。次のターン以降は、実行記録から組み立て直さずに
+この形をそのまま並べる(`architecture.md` 3節「送った形のまま積む」)。
+
+| カラム | 型 | 制約・備考 |
+|---|---|---|
+| id | INTEGER | PRIMARY KEY |
+| task_id | INTEGER | NULL可。NULL=総合チャット。`REFERENCES tasks(id)` |
+| turn_id | TEXT | NOT NULL |
+| attempt_no | INTEGER | NOT NULL。`UNIQUE (turn_id, attempt_no)` |
+| api_format | TEXT | NOT NULL。送った方言(`config::ApiFormat`の値) |
+| model | TEXT | NOT NULL。送ったモデル名(記録として持つ) |
+| system_digest | TEXT | NOT NULL。先頭に置いたシステムプロンプト(`transcript_blobs`) |
+| settings_system_digest | TEXT | NOT NULL。そのとき設定から作ったシステムプロンプト。先頭と違えば入力に変更の通知を置いた |
+| tools_digest | TEXT | NOT NULL。渡したツール定義の一覧(`transcript_blobs`) |
+| prefix_digest | TEXT | NOT NULL。入力より前(system・ツール定義・それまでの発言列)の指紋 |
+| history_start | INTEGER | NULL可。最初に並べた行の`messages.id`(間引きの位置)。NULL=会話の最初から |
+| input | TEXT | NOT NULL, `CHECK (json_valid(input))`。末尾に足した入力の発言と、含めた行(ユーザー発言・操作の記録)のid |
+| rounds | TEXT | NOT NULL, `CHECK (json_valid(rounds))`。各ラウンドで足したassistant・tool結果と、最後の応答。`Replay`は受け取った生のJSONの文字列のまま持つ |
+| created_at | TEXT | ISO8601。NOT NULL |
+
+- **`messages`が正**。行は返信の行と同じトランザクションで書き、書いたあとは変えない。削除の状態は
+  持たず、返信の行が生きている試行の行だけを使う(編集・再試行・削除は`messages`の論理削除に
+  だけ従う)。物理削除もしない
+- 画面・エクスポート(`export`)からは読まない。モデルへ並べるときだけ使う。操作の記録(監査)ではなく
+  モデルへ並べる材料なので、`../principles.md` 2節「監査ログ用の別テーブルを作らない」には当たらない
+- 画像は実体を持たず、添付の実体のハッシュ(`attachments.file_hash`)で指す
+- 形(`input`・`rounds`のJSON)の定義は`orchestration`の1箇所に置く。方言によらない発言列
+  (`llm::ChatMessage`)の段階の形で、方言ごとのリクエストの形では持たない
+- 指紋(`*_digest`)は、保存する形を直列化した文字列のSHA-256の小文字16進
+
+### transcript_blobs(送ったシステムプロンプトとツール定義の本文)
+
+| カラム | 型 | 制約・備考 |
+|---|---|---|
+| digest | TEXT | PRIMARY KEY。`body`のSHA-256の小文字16進 |
+| body | TEXT | NOT NULL |
+
+システムプロンプトとツール定義は試行ごとにほぼ同じなので、本文をここに1度だけ置き、
+`turn_transcripts`からハッシュで指す。行は消さない。
 
 ## 3. 索引
 
@@ -291,6 +335,7 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 - `task_steps(task_id, order_index)`
 - `attachments(message_id)`
 - `attachments(file_hash)` — 実体の重複排除の判定
+- `turn_transcripts(task_id)` — 会話ごとの送った形の取得
 
 ## 4. 接続時のPRAGMA
 
