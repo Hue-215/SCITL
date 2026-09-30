@@ -188,6 +188,13 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 - 「会話は必ずユーザー発言から始まる」等と同様、ツール往復の表現方法の方言も
   各 `providers/*.rs` の内部で吸収する
 
+**プロバイダーが送り返しを求める応答は`llm::Replay`で運ぶ**: ツールの往復の次のリクエストで、
+直前の応答を署名付きの思考ごと受け取ったまま返すよう求める方言がある(`../principles.md`
+3節「思考は履歴に送り返さない」の例外)。アダプタは返すべきものを`Replay`として返し、
+`orchestration::turn`はそれを往復のアシスタント発言に載せるだけにする。`Replay`の中身は`llm`の
+外からは読めず、表示も保存もされない。何を入れるかは方言ごとに下に書く。ターンをまたいで返すことには
+対応していない(Issue #128)
+
 **Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
 ストリーミングせずに呼ぶ。出典は公式ドキュメント(errors・thinking・prompt caching・models)。
 
@@ -200,12 +207,9 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   予算で指定する古い世代(`budget_tokens`)には対応しない(Issue #272)。adaptiveを拒むモデルには、
   思考のチェックを外すよう促すエラー発言になる
 - **ツールの往復の途中の思考ブロック**: ツール呼び出しの次のリクエストでは、直前のアシスタント
-  発言の思考ブロックを受け取ったまま返さないと400になる(`../principles.md` 3節「思考は履歴に
-  送り返さない」の例外)。アダプタは思考ブロックを含む応答のブロックを、並びごと`llm::Replay`として
-  返し、`orchestration::turn`はそれを往復のアシスタント発言に載せるだけにする。`Replay`は中身を
-  アダプタしか読めず、表示も保存もされない。返すブロックより前が変わると受け付けないモデルが
-  あるため、ターン内の組み立ては追記だけにしてある(3節「最新状態の渡し方」)。ターンをまたいで
-  返すのはIssue #128
+  発言の思考ブロックを受け取ったまま返さないと400になる。中身だけでなく並びも変えられないので、
+  思考ブロックを含む応答は、応答のブロックを並びごと`Replay`に入れる。返すブロックより前が
+  変わると受け付けないモデルもあるので、ターン内の組み立ては追記だけにしてある(3節「最新状態の渡し方」)
 - 最後の呼び出し(ツールの上限)は、ツールの定義を残して`tool_choice: {type: "none"}`で禁じる。
   定義を外すと、上の思考ブロックが受け付けられない
 - プロンプトキャッシュは、システムプロンプトの末尾に目印を置き(ツールの定義とシステム
@@ -219,8 +223,9 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
 
 **Gemini形式**(`llm::providers::gemini`、Issue #81): Interactions API(`POST {base_url}/v1beta/interactions`)を
-ストリーミングせずに呼ぶ。`generateContent`は旧来のAPIとされ、新しい機能はInteractions APIにだけ入るため。
-出典は公式ドキュメント(Interactions API reference・thinking・function calling・api-errors・models)。
+ストリーミングせずに呼ぶ。旧来のAPIとされる`generateContent`ではなくこちらを使うのは、新しい機能が
+Interactions APIにだけ入るため。出典は公式ドキュメント(Interactions API reference・thinking・
+function calling・api-errors・models)。
 
 - ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る
 - **`store: false`を常に送る**。既定ではやり取りがGoogle側に保存される(有料で55日、無料で1日)。
@@ -228,20 +233,23 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   `function_result`)として送る(`previous_interaction_id`は使わない)
 - 思考の強さは`generation_config.thinking_level`で渡し、`thinking_summaries: "auto"`で要約を返させる。
   思考を切る指定は無いので「オフ」は`minimal`にし、拒まれたらイベントを渡す前に`low`で呼び直す
-- 思考は独立した`thought`ステップ(要約と署名)で返る。ツールの往復の途中では、出力のステップを
-  並びごと`llm::Replay`として次の呼び出しに返す(Anthropic形式と同じ扱い)
+- 思考は独立した`thought`ステップ(要約と署名)で返る。`thought`を含む応答は、出力のステップ
+  (`thought`・`model_output`・`function_call`)を並びごと`Replay`に入れる
 - 公式ドキュメントは、会話状態をこちらで持つ場合、過去のターンの`thought`ステップも受け取ったまま
   送り直すよう求めている。このアプリは思考を保存しないので送り直せない(Issue #128と同じ問題)。
   実際のAPI(2026-09-30、`gemini-3.5-flash-lite`)では、送らなくてもエラーにはならなかった。
   前のターンの推論を引き継げない分の質の差は測っていない
 - `function_result`には、対応する`function_call`の名前を添える。定義の上では任意だが、添えないと
   ツールの往復の2回目が`invalid_request`(`Invalid input received.`)で断られた
-- 最後の呼び出し(ツールの上限)は、ツールの定義を残して`tool_choice: "none"`で禁じる
+- 最後の呼び出し(ツールの上限)は、ツールの定義を残して`generation_config.tool_choice: "none"`で禁じる
 - 出力の上限(`max_output_tokens`)は送らず、モデルの既定に任せる(必須ではないため)
 - 状態(`status`)の`completed`は通常の終了、`requires_action`はツール呼び出し、`incomplete`は長さによる
-  打ち切りにする。`failed`と、方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、
-  途中まで書いた本文を渡さずに`LlmError::Refused`(ブロック)またはHTTPのエラーにする。入力が長すぎる
-  専用のエラーコードは無いので、`invalid_request`の文面から見分ける
+  打ち切りにする。`failed`は、途中まで書いた本文を渡さずにエラーにする
+- 方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、`failed`の応答の中に
+  あっても、HTTPのエラー応答にあっても`LlmError::Refused`にする。それ以外の`failed`はプロバイダーの
+  エラー(`LlmError::Http`)にする
+- 入力が長すぎることを表す専用のエラーコードは無いので、400(`invalid_request`)の応答の文面から見分けて
+  `LlmError::ContextExceeded`にする
 - 能力の自動検出は`GET /v1beta/models/{id}`で行う。コンテキスト長は`inputTokenLimit`、思考は`thinking`で
   決め、ツールは常にありとする。画像入力の可否は情報に無いので決めない
 
