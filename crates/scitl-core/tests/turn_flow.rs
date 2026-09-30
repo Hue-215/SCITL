@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use scitl_core::attachments::{AttachmentStore, Attachments, StageOutcome};
-use scitl_core::config::{McpEndpoint, McpServerConfig, ReasoningEffort};
+use scitl_core::config::{ApiFormat, McpEndpoint, McpServerConfig, ReasoningEffort};
 use scitl_core::db;
 use scitl_core::db::messages::{Chat, Kind, Role};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
-    ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness, Replay, RequestPreview,
-    ResponseEvent, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
+    AdapterIdentity, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
+    Replay, RequestPreview, ResponseEvent, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -210,6 +210,13 @@ impl ScriptedAdapter {
 impl LlmAdapter for ScriptedAdapter {
     fn readiness(&self) -> Readiness {
         self.readiness
+    }
+
+    fn identity(&self) -> Option<AdapterIdentity> {
+        Some(AdapterIdentity {
+            api_format: ApiFormat::OpenAiCompat,
+            model: "scripted".to_string(),
+        })
     }
 
     async fn send(
@@ -1662,6 +1669,127 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
         Some(original_turn_id.as_str())
     );
     assert_eq!(messages[1].attempt_no, Some(2));
+}
+
+/// 返信のある試行は、モデルに送った形を保存する。入力はこのターンで足した発言とその行、往復と
+/// 最後の応答はこのターンで送ったとおり。
+#[tokio::test]
+async fn a_replied_turn_saves_what_was_sent() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let adapter = adds_a_step();
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    let user = messages.iter().find(|m| m.role == Role::User).unwrap();
+    let reply = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
+    let saved = db::transcripts::find(&conn, reply.turn_id.as_deref().unwrap(), 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.api_format, "open_ai_compat");
+    assert_eq!(saved.model, "scripted");
+    assert_eq!(saved.history_start, None);
+
+    let sent = adapter.sent_messages();
+    let system = db::transcripts::blob(&conn, &saved.system_digest)
+        .unwrap()
+        .unwrap();
+    assert_eq!(system, system_prompt_content(&sent[0][0]));
+
+    let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
+    assert_eq!(input["rows"], json!([user.id]));
+    assert_eq!(input["messages"][0]["text"], user_text(&sent[0][1]));
+    let rounds: serde_json::Value = serde_json::from_str(&saved.rounds).unwrap();
+    let roles: Vec<_> = rounds
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles, ["assistant", "tool", "assistant"]);
+    assert_eq!(rounds[0]["tool_calls"][0]["name"], "add_steps");
+    assert_eq!(rounds[2]["content"], "工程を追加しました");
+}
+
+/// 失敗したターンは、送った形を保存しない(次のターンに並べないため)。
+#[tokio::test]
+async fn a_failed_turn_saves_nothing() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&replies_nothing()),
+        Chat::Task(task_id),
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    let error = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert!(
+        db::transcripts::find(&conn, error.turn_id.as_deref().unwrap(), 1)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// 再試行した試行は、捨てた試行の実行を置いたユーザー発言を自分の入力として保存する。
+#[tokio::test]
+async fn a_retry_saves_its_own_input() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&adds_a_step()),
+        Chat::Task(task_id),
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+    let (user_id, record_id, reply_id, turn_id) = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        let user = messages.iter().find(|m| m.role == Role::User).unwrap();
+        let record = messages
+            .iter()
+            .find(|m| m.kind == Kind::ToolExecution)
+            .unwrap();
+        let reply = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
+        (user.id, record.id, reply.id, reply.turn_id.clone().unwrap())
+    };
+
+    retry_reply(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["工程は追加済みです"])),
+        Chat::Task(task_id),
+        reply_id,
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let saved = db::transcripts::find(&conn, &turn_id, 2).unwrap().unwrap();
+    let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
+    assert_eq!(input["rows"], json!([user_id, record_id]));
+    assert!(input["messages"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("scitl:operations"));
+    // 捨てた試行の保存も残る(使うのは返信の生きている試行の保存だけ)。
+    assert!(db::transcripts::find(&conn, &turn_id, 1).unwrap().is_some());
 }
 
 /// 再試行で捨てた試行の中で実行したツール(DBの変更は残る)は、新しい試行に操作の記録として

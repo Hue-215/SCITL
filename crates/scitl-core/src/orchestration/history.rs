@@ -98,7 +98,7 @@ pub(super) fn build_history(
     mut stored: StoredChat,
     options: &HistoryOptions,
     store: &AttachmentStore,
-) -> Vec<ChatMessage> {
+) -> History {
     let replied_turns = replied_turns(&stored.messages);
     let latest_user = stored
         .messages
@@ -107,12 +107,12 @@ pub(super) fn build_history(
         .find(|m| m.kind == Kind::Normal && m.role == Role::User)
         .map(|m| m.id);
     let rows = in_order(&stored.messages, &stored.discarded_records);
-    let mut history = Vec::with_capacity(rows.len() + 1);
+    let mut history = History::with_capacity(rows.len() + 1);
     if stored.starts_with_opening {
-        history.push(ChatMessage::user(PromptText::user_message(
-            &options.opening,
-            None,
-        )));
+        history.push(
+            ChatMessage::user(PromptText::user_message(&options.opening, None)),
+            Vec::new(),
+        );
     }
     // 置く位置を待っている操作の記録と、いま行を読んでいる返信のある試行。
     let mut pending: Vec<Operation> = Vec::new();
@@ -127,15 +127,18 @@ pub(super) fn build_history(
         if let Some(turn) = replied {
             if current_turn != Some(turn) {
                 current_turn = Some(turn);
-                append_operations(&mut history, &mut pending);
+                history.append_operations(&mut pending);
             }
         }
         match (m.kind, m.role) {
             (Kind::ToolExecution, _) => match replied {
                 Some(_) => {
                     if options.tools_available {
-                        history.extend(round_trip(m).into_iter().flatten());
+                        for message in round_trip(m).into_iter().flatten() {
+                            history.push(message, vec![m.id]);
+                        }
                     }
+                    history.input_from = history.messages.len();
                 }
                 None => pending.extend(Operation::of(m, shown)),
             },
@@ -150,13 +153,19 @@ pub(super) fn build_history(
                     latest_user == Some(m.id),
                     store,
                 );
-                history.push(prepend_operations(message, &mut pending));
+                history.prepend_operations(message, m.id, &mut pending);
             }
-            (Kind::Normal, Role::Assistant) => history.push(ChatMessage::Assistant {
-                content: Some(m.content.clone()),
-                tool_calls: Vec::new(),
-                replay: Default::default(),
-            }),
+            (Kind::Normal, Role::Assistant) => {
+                history.push(
+                    ChatMessage::Assistant {
+                        content: Some(m.content.clone()),
+                        tool_calls: Vec::new(),
+                        replay: Default::default(),
+                    },
+                    vec![m.id],
+                );
+                history.input_from = history.messages.len();
+            }
             // エラー発言は送らない。`role='tool'`は実行記録の行だけで、上で済んでいる
             // (0002のトリガー)。
             _ => {}
@@ -166,10 +175,85 @@ pub(super) fn build_history(
     // 位置として同じところに並ぶ)。返信のある試行のあと(新しいユーザー発言の無い会話の送信内容の
     // プレビュー)なら、返信の後ろに操作の記録だけのユーザー発言として置く。
     match current_turn {
-        Some(_) => history.extend(take_operations(&mut pending).map(ChatMessage::user)),
-        None => append_operations(&mut history, &mut pending),
+        Some(_) => {
+            if let Some((operations, ids)) = take_operations(&mut pending) {
+                history.push(ChatMessage::user(operations), ids);
+            }
+        }
+        None => history.append_operations(&mut pending),
     }
     history
+}
+
+/// 組み立てた履歴。発言ごとに、それを作った行(ユーザー発言と、それに置いた操作の記録等)の
+/// idを添える。
+pub(super) struct History {
+    pub(super) messages: Vec<ChatMessage>,
+    rows: Vec<Vec<i64>>,
+    /// このターンの新しい入力(最後の返信のある試行より後ろ)が始まる位置。
+    pub(super) input_from: usize,
+}
+
+impl History {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            messages: Vec::with_capacity(capacity),
+            rows: Vec::with_capacity(capacity),
+            input_from: 0,
+        }
+    }
+
+    fn push(&mut self, message: ChatMessage, rows: Vec<i64>) {
+        self.messages.push(message);
+        self.rows.push(rows);
+    }
+
+    /// `from`番目以降の発言を作った行。
+    pub(super) fn rows_from(&self, from: usize) -> Vec<i64> {
+        self.rows[from..].concat()
+    }
+
+    /// `index`番目の発言を作った最初の行。行から作っていない発言(補った開始の発言)なら`None`。
+    pub(super) fn first_row(&self, index: usize) -> Option<i64> {
+        self.rows[index].first().copied()
+    }
+
+    /// 待っている操作の記録を、ユーザー発言(行`id`)の囲みの前に置いて並べる。
+    fn prepend_operations(&mut self, message: ChatMessage, id: i64, pending: &mut Vec<Operation>) {
+        let mut rows = vec![id];
+        let message = match (message, take_operations(pending)) {
+            (ChatMessage::User { text, images }, Some((operations, ids))) => {
+                rows.extend(ids);
+                ChatMessage::User {
+                    text: operations.followed_by(&text),
+                    images,
+                }
+            }
+            (message, _) => message,
+        };
+        self.push(message, rows);
+    }
+
+    /// 待っている操作の記録を、最後のユーザー発言の後ろに置く。ユーザー発言が無ければ(応答すべき
+    /// 発言の無い会話の送信内容のプレビュー)、操作の記録だけのユーザー発言にする。
+    fn append_operations(&mut self, pending: &mut Vec<Operation>) {
+        let Some((operations, ids)) = take_operations(pending) else {
+            return;
+        };
+        let last_user = self
+            .messages
+            .iter()
+            .rposition(|m| matches!(m, ChatMessage::User { .. }));
+        match last_user {
+            Some(i) => {
+                if let ChatMessage::User { text, .. } = &mut self.messages[i] {
+                    *text = text.followed_by(&operations);
+                }
+                self.rows[i].extend(ids);
+            }
+            None => self.push(ChatMessage::user(operations), ids),
+        }
+    }
 }
 
 /// 表示される行と捨てた試行の記録を、行の並び(`db::messages::list_rows_for_chat`と同じ
@@ -186,6 +270,7 @@ fn in_order<'a>(shown: &'a [Message], discarded: &'a [Message]) -> Vec<(&'a Mess
 
 /// 履歴に呼び出しと結果の組として載らない実行記録1件。
 struct Operation<'a> {
+    id: i64,
     record: ToolExecutionRecord,
     source: &'a str,
     at: &'a str,
@@ -205,6 +290,7 @@ impl<'a> Operation<'a> {
             _ => DISCARDED_ATTEMPT_SOURCE,
         };
         Some(Self {
+            id: m.id,
             record,
             source,
             at: &m.created_at,
@@ -212,8 +298,8 @@ impl<'a> Operation<'a> {
     }
 }
 
-/// 待っている操作の記録を1つの囲みにする。
-fn take_operations(pending: &mut Vec<Operation>) -> Option<PromptText> {
+/// 待っている操作の記録を1つの囲みにし、記録の行のidと一緒に返す。
+fn take_operations(pending: &mut Vec<Operation>) -> Option<(PromptText, Vec<i64>)> {
     if pending.is_empty() {
         return None;
     }
@@ -228,34 +314,8 @@ fn take_operations(pending: &mut Vec<Operation>) -> Option<PromptText> {
         })
         .collect();
     let text = PromptText::operations(&notes);
-    pending.clear();
-    Some(text)
-}
-
-/// 待っている操作の記録を、ユーザー発言の囲みの前に置く。
-fn prepend_operations(message: ChatMessage, pending: &mut Vec<Operation>) -> ChatMessage {
-    match (message, take_operations(pending)) {
-        (ChatMessage::User { text, images }, Some(operations)) => ChatMessage::User {
-            text: operations.followed_by(&text),
-            images,
-        },
-        (message, _) => message,
-    }
-}
-
-/// 待っている操作の記録を、最後のユーザー発言の後ろに置く。ユーザー発言が無ければ(応答すべき
-/// 発言の無い会話の送信内容のプレビュー)、操作の記録だけのユーザー発言にする。
-fn append_operations(history: &mut Vec<ChatMessage>, pending: &mut Vec<Operation>) {
-    let Some(operations) = take_operations(pending) else {
-        return;
-    };
-    match history.iter_mut().rev().find_map(|m| match m {
-        ChatMessage::User { text, .. } => Some(text),
-        _ => None,
-    }) {
-        Some(text) => *text = text.followed_by(&operations),
-        None => history.push(ChatMessage::user(operations)),
-    }
+    let ids = pending.drain(..).map(|o| o.id).collect();
+    Some((text, ids))
 }
 
 fn user_message(
@@ -400,6 +460,10 @@ mod tests {
         }
 
         fn build(&self, chat: Chat, tools_available: bool, image_input: bool) -> Vec<ChatMessage> {
+            self.build_full(chat, tools_available, image_input).messages
+        }
+
+        fn build_full(&self, chat: Chat, tools_available: bool, image_input: bool) -> History {
             let options = HistoryOptions {
                 tools_available,
                 image_input,
@@ -930,6 +994,55 @@ mod tests {
         let operations = operations_in(user_texts(&f.history(true))[0]);
         let results: Vec<_> = operations.iter().map(|o| o["result"].clone()).collect();
         assert_eq!(results, vec![json!({ "n": 1 }), json!({ "n": 2 })]);
+    }
+
+    /// 新しい入力は、最後の返信のある試行より後ろ。入力に含めた行(ユーザー発言と、それに置いた
+    /// 操作の記録)を追える。
+    #[test]
+    fn marks_where_the_new_input_starts_and_which_rows_it_holds() {
+        let f = Fixture::new();
+        let first = f.user("u1");
+        f.reply("t1", "a1");
+        let op = f.record(None, json!({ "n": 1 }));
+        let second = f.user("u2");
+
+        let history = f.build_full(Chat::Task(f.task_id), true, false);
+        assert_eq!(history.messages.len(), 3);
+        assert_eq!(history.input_from, 2);
+        assert_eq!(history.rows_from(history.input_from), vec![second, op]);
+        assert_eq!(history.first_row(0), Some(first));
+    }
+
+    /// 再試行では、捨てた試行の記録を置いたユーザー発言が新しい入力になる。失敗したターンの
+    /// ユーザー発言も、次の入力に入る。
+    #[test]
+    fn the_new_input_covers_a_retried_turn_and_a_failed_one() {
+        let f = Fixture::new();
+        let first = f.user("u1");
+        let old = f.record(Some("t1"), json!({ "n": 1 }));
+        let reply = f.insert(Role::Assistant, Kind::Normal, "a", Some("t1"));
+        messages::soft_delete_normal_from(&f.conn, Chat::Task(f.task_id), reply).unwrap();
+        let retrying = f.build_full(Chat::Task(f.task_id), true, false);
+        assert_eq!(retrying.input_from, 0);
+        assert_eq!(retrying.rows_from(0), vec![first, old]);
+
+        let g = Fixture::new();
+        let failed = g.user("u1");
+        g.insert(Role::Error, Kind::Normal, "失敗しました", Some("t1"));
+        let next = g.user("u2");
+        let history = g.build_full(Chat::Task(g.task_id), true, false);
+        assert_eq!(history.input_from, 0);
+        assert_eq!(history.rows_from(0), vec![failed, next]);
+    }
+
+    /// 聞き取りの開始で補った発言は行を持たないが、最初の試行の入力に入る。
+    #[test]
+    fn the_opening_message_is_part_of_the_first_input() {
+        let f = Fixture::new();
+        let history = f.build_full(Chat::Task(f.task_id), true, false);
+        assert_eq!(history.messages, vec![opening_message()]);
+        assert_eq!(history.input_from, 0);
+        assert_eq!(history.first_row(0), None);
     }
 
     fn opening_message() -> ChatMessage {

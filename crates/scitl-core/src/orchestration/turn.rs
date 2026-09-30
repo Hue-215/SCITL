@@ -10,16 +10,19 @@ use crate::blocking;
 use crate::db::attachments as db_attachments;
 use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
 use crate::db::tasks::{self, Task};
+use crate::db::transcripts::{self, NewTranscript};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet};
 use crate::llm::{
-    ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, ToolArguments, ToolCallRequest,
+    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent,
+    ToolArguments, ToolCallRequest,
 };
 use crate::mcp::McpSessions;
 use crate::orchestration::history;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::tool_record::{ToolExecutionRecord, ToolExecutionView};
+use crate::orchestration::transcript::SavedTurn;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::turn_request::TurnRequest;
 use crate::orchestration::{TurnContext, TurnEvent, TurnEvents};
@@ -365,6 +368,36 @@ impl Attempt {
         }
     }
 
+    /// この試行で送った形を保存する。返信の行と同じトランザクションの中で呼ぶ。
+    fn save_transcript(
+        &self,
+        conn: &Connection,
+        identity: &AdapterIdentity,
+        saved: &SavedTurn,
+    ) -> Result<()> {
+        let api_format =
+            serde_json::to_value(identity.api_format).expect("an API format serializes");
+        transcripts::insert(
+            conn,
+            &NewTranscript {
+                chat: self.chat,
+                turn_id: &self.turn_id,
+                attempt_no: self.attempt_no,
+                api_format: api_format
+                    .as_str()
+                    .expect("an API format serializes to a string"),
+                model: &identity.model,
+                system: &saved.system,
+                settings_system: &saved.settings_system,
+                tools: &saved.tools,
+                prefix_digest: &saved.prefix_digest,
+                history_start: saved.history_start,
+                input: &saved.input,
+                rounds: &saved.rounds,
+            },
+        )
+    }
+
     /// この試行に属する行を書き、行のidを返す。
     fn insert(
         &self,
@@ -510,6 +543,13 @@ async fn run_tool_rounds(
         let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
 
         if tool_calls.is_empty() {
+            // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
+            let mut rounds = request.appended(&messages_to_send).to_vec();
+            rounds.push(ChatMessage::Assistant {
+                content: (!text.is_empty()).then(|| text.clone()),
+                tool_calls: Vec::new(),
+                replay,
+            });
             if !text.is_empty() {
                 reply_parts.push(text);
             }
@@ -518,16 +558,23 @@ async fn run_tool_rounds(
                 return fail_turn(db, attempt, TurnFailure::EmptyResponse).await;
             }
 
+            let transcript = adapter.identity().zip(request.transcript(&rounds));
             let attempt = attempt.clone();
             with_conn(db, move |conn| {
-                attempt.insert(
-                    conn,
-                    Role::Assistant,
-                    &reply,
-                    Kind::Normal,
-                    None,
-                    reasoning_for_db.as_deref(),
-                )
+                in_transaction(conn, |conn| {
+                    attempt.insert(
+                        conn,
+                        Role::Assistant,
+                        &reply,
+                        Kind::Normal,
+                        None,
+                        reasoning_for_db.as_deref(),
+                    )?;
+                    if let Some((identity, saved)) = &transcript {
+                        attempt.save_transcript(conn, identity, saved)?;
+                    }
+                    Ok(())
+                })
             })
             .await?;
             return Ok(());
