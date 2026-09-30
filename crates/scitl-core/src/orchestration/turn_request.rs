@@ -6,12 +6,11 @@
 
 use crate::blocking;
 use crate::db::messages::Chat;
-use crate::db::{with_conn, SharedConnection};
 use crate::error::Result;
 use crate::llm::{ChatMessage, PromptText, ToolOffer, ToolSchema};
 use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
-use crate::orchestration::state_prompt::{build_state, build_system_prompt};
+use crate::orchestration::system_prompt::build_system_prompt;
 use crate::orchestration::TurnContext;
 use crate::tools::{self, external::ExternalToolset};
 
@@ -22,8 +21,7 @@ const ROUND_LIMIT_NOTE: &str = "The tool call limit for this turn has been reach
 
 /// 1ターンのうち、ラウンドによらない送信の材料。
 pub(super) struct TurnRequest {
-    /// システムプロンプト、間引いた履歴、最新状態を添えた直近のユーザー発言。ターンの間は
-    /// 変えない。
+    /// システムプロンプトと間引いた履歴。ターンの間は変えない。
     opening: Vec<ChatMessage>,
     exposed_tools: Vec<ToolSchema>,
     tools_available: bool,
@@ -32,11 +30,10 @@ pub(super) struct TurnRequest {
 impl TurnRequest {
     /// `stored`は、送る対象のユーザー発言の挿入・カスケード削除を済ませたあとの行。
     ///
-    /// 最新状態と履歴の間引きはここで1回だけ決める。このターンの往復の分は、間引きが応答の
+    /// 履歴の間引きはここで1回だけ決める。このターンの往復の分は、間引きが応答の
     /// ために空けておく分から使う。往復が伸びて収まらなくなっても間引き直さない(前に送った
     /// 部分が変わる)ので、そのときはプロバイダーのコンテキスト超過のエラーでターンが終わる。
     pub(super) async fn prepare(
-        db: SharedConnection,
         ctx: &TurnContext<'_>,
         chat: Chat,
         stored: StoredChat,
@@ -61,20 +58,15 @@ impl TurnRequest {
             exposed_tools.extend(external.schemas());
         }
         let system = ChatMessage::System(build_system_prompt(chat, &ctx.prompts, tools_available));
-        let state = with_conn(db, move |conn| build_state(conn, chat)).await?;
-
-        // 最新状態は直近のユーザー発言に添えるが、見積もりでは別の発言として数える。
-        let state_estimate = ChatMessage::user(state.clone());
         let kept = trim_history(
             &history,
             ctx.capabilities.context_length,
-            [&system, &state_estimate],
+            [&system],
             &exposed_tools,
         );
         let mut opening = Vec::with_capacity(1 + kept.len());
         opening.push(system);
         opening.extend(kept.iter().cloned());
-        attach_state(&mut opening, &state);
 
         Ok(Self {
             opening,
@@ -119,73 +111,5 @@ impl TurnRequest {
             callable: !final_call,
         };
         (messages, offer)
-    }
-}
-
-/// 最新状態を直近のユーザー発言の後ろに添える。システムプロンプトに置かないのは、ターンごとに
-/// 変わるものを発言列の先頭に置くと、先頭一致のプロンプトキャッシュがそこで切れるため。会話の途中に
-/// システム発言として差し込まないのは、チャットテンプレートでそれを拒むローカルの推論サーバーが
-/// あるため。ユーザー発言が無い発言列(応答すべき発言が無い)は送らない
-/// (`history::awaits_reply`)が、あれば最新状態だけのユーザー発言として足す。
-fn attach_state(messages: &mut Vec<ChatMessage>, state: &PromptText) {
-    match messages.iter_mut().rev().find_map(|m| match m {
-        ChatMessage::User { text, .. } => Some(text),
-        _ => None,
-    }) {
-        Some(text) => *text = text.followed_by(state),
-        None => messages.push(ChatMessage::user(state.clone())),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    fn state() -> PromptText {
-        PromptText::state("2026-01-01T00:00:00Z", "current task state", &json!({}))
-    }
-
-    fn user_text(message: &ChatMessage) -> &str {
-        match message {
-            ChatMessage::User { text, .. } => text.as_str(),
-            other => panic!("expected User, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn attaches_the_state_to_the_latest_user_message_only() {
-        let first = PromptText::user_message("first", None);
-        let latest = PromptText::user_message("latest", None);
-        let mut messages = vec![
-            ChatMessage::System("system".to_string()),
-            ChatMessage::user(first.clone()),
-            ChatMessage::Assistant {
-                content: Some("reply".to_string()),
-                tool_calls: Vec::new(),
-                replay: Default::default(),
-            },
-            ChatMessage::user(latest.clone()),
-        ];
-
-        attach_state(&mut messages, &state());
-
-        assert_eq!(messages.len(), 4);
-        assert_eq!(user_text(&messages[1]), first.as_str());
-        assert_eq!(
-            user_text(&messages[3]),
-            latest.followed_by(&state()).as_str()
-        );
-    }
-
-    #[test]
-    fn sends_the_state_alone_when_there_is_no_user_message() {
-        let mut messages = vec![ChatMessage::System("system".to_string())];
-
-        attach_state(&mut messages, &state());
-
-        assert_eq!(messages.len(), 2);
-        assert_eq!(user_text(&messages[1]), state().as_str());
     }
 }

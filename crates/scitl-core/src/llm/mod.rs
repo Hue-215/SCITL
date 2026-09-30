@@ -13,7 +13,9 @@ pub use capabilities::{
     DetectedCatalog, ModelCapabilities, DEFAULT_CAPABILITIES, FALLBACK_CONTEXT_LENGTH,
 };
 pub use error::{ErrorDetail, LlmError};
-pub use prompt::{user_message_format_note, AttachmentNote, PromptText};
+pub use prompt::{
+    user_message_format_note, AttachmentNote, OperationNote, PromptText, DISCARDED_ATTEMPT_SOURCE,
+};
 pub use token_estimate::{estimate_message, estimate_tools};
 
 use crate::config::ReasoningEffort;

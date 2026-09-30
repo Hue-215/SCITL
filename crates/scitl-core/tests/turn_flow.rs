@@ -62,27 +62,12 @@ fn system_prompt_content(message: &ChatMessage) -> &str {
     }
 }
 
-/// ユーザー発言の本文。直近のユーザー発言に添えた最新状態の囲みは除く。
+/// ユーザー発言として送った文字列。
 fn user_text(message: &ChatMessage) -> &str {
     match message {
-        ChatMessage::User { text, .. } => text.as_str().split("\n<scitl:state>").next().unwrap(),
+        ChatMessage::User { text, .. } => text.as_str(),
         other => panic!("expected User, got {other:?}"),
     }
-}
-
-/// 直近のユーザー発言に添えた最新状態の囲み。
-fn state_of(messages: &[ChatMessage]) -> String {
-    messages
-        .iter()
-        .rev()
-        .find_map(|m| match m {
-            ChatMessage::User { text, .. } => text
-                .as_str()
-                .split_once("\n<scitl:state>")
-                .map(|(_, state)| format!("<scitl:state>{state}")),
-            _ => None,
-        })
-        .expect("a user message carries the state")
 }
 
 /// ツールの上限に達したことを伝える一節か。
@@ -187,11 +172,6 @@ impl ScriptedAdapter {
             .into_iter()
             .map(|(_, _, callable)| callable)
             .collect()
-    }
-
-    /// 各呼び出しで直近のユーザー発言に添えた最新状態。
-    fn states(&self) -> Vec<String> {
-        self.sent_messages().iter().map(|m| state_of(m)).collect()
     }
 
     fn system_prompts(&self) -> Vec<String> {
@@ -604,19 +584,18 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
     assert_eq!(rounds.len(), 2);
 
     // システムプロンプトには基本/タスクチャット用の両方が入り、ラウンドをまたいで変わらない
-    // (先頭一致のプロンプトキャッシュを切らない)。最新状態はシステムプロンプトに載せない。
+    // (先頭一致のプロンプトキャッシュを切らない)。タスクの中身は載せない。
     let round1_system = system_prompt_content(&rounds[0][0]);
     assert!(round1_system.contains("base prompt"));
     assert!(round1_system.contains("task chat prompt"));
-    assert!(!round1_system.contains("current task state"));
+    assert!(!round1_system.contains("買い出し"));
     assert_eq!(round1_system, system_prompt_content(&rounds[1][0]));
 
     // 2ラウンド目は1ラウンド目に送ったものを書き換えずに、後ろへ往復を足しただけ
     // (ツールの往復中に思考ブロックを返すAPIは、それより前が変わると受け付けない)。
-    // 最新状態はターンの最初のまま、add_stepsの結果は往復の結果として伝わる。
+    // add_stepsの結果は往復の結果として伝わる。
     assert_eq!(rounds[1][..rounds[0].len()], rounds[0][..]);
     assert_eq!(rounds[1].len(), rounds[0].len() + 2);
-    assert!(!adapter.states()[1].contains("買い出し"));
 
     // 同時に、直前のツール呼び出しと結果が発言として返る。これが無いと、モデルは自分が
     // さっき呼んだことを認識できず、同じツールを呼び直す。
@@ -665,9 +644,9 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
 }
 
 #[tokio::test]
-async fn state_tool_results_stay_in_their_own_turn() {
-    // 状態系の結果は最新状態JSONが代わりに伝えるので、次のターンの履歴には載せない。
-    // 実行記録には分類と払い出されたIDを残す。
+async fn tool_results_carry_over_to_the_next_turn() {
+    // タスクの状態を変えた結果も、次のターンの履歴に呼び出しと結果の組として載る。
+    // 実行記録には払い出されたIDを残す。
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let adapter = adds_a_step();
@@ -686,12 +665,12 @@ async fn state_tool_results_stay_in_their_own_turn() {
 
     let sent = adapter.sent_messages();
     let next_turn = sent.last().unwrap();
-    assert!(!next_turn
-        .iter()
-        .any(|m| matches!(m, ChatMessage::Tool { .. })));
-    assert!(!next_turn
-        .iter()
-        .any(|m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())));
+    assert!(next_turn.iter().any(
+        |m| matches!(m, ChatMessage::Tool { content, .. } if content.as_str().contains("買い出し"))
+    ));
+    assert!(next_turn.iter().any(
+        |m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if tool_calls.iter().any(|c| c.name == "add_steps"))
+    ));
 
     let conn = db.lock().unwrap();
     let record = db::messages::list_for_chat(&conn, Chat::Task(task_id))
@@ -700,7 +679,6 @@ async fn state_tool_results_stay_in_their_own_turn() {
         .find(|m| m.kind == Kind::ToolExecution)
         .unwrap();
     let record: serde_json::Value = serde_json::from_str(&record.content).unwrap();
-    assert_eq!(record["tool_kind"], "state");
     assert_eq!(record["call_id"], "call_1");
 }
 
@@ -735,7 +713,7 @@ async fn history_carries_send_time_beside_the_user_text() {
     };
     assert_eq!(stored_user_times.len(), 2);
 
-    // 2ターン目の履歴: user(1ターン目) / assistant / user(2ターン目)。
+    // 2ターン目の履歴: user(1ターン目) / 工程の追加の呼び出しと結果 / assistant / user(2ターン目)。
     let rounds = adapter.sent_messages();
     let last = rounds.last().unwrap();
     let history = &last[1..];
@@ -748,7 +726,7 @@ async fn history_carries_send_time_beside_the_user_text() {
         }
         other => panic!("expected User, got {other:?}"),
     }
-    match &history[1] {
+    match &history[3] {
         // アシスタント発言に日時は付けない(モデルが形を真似て応答に書き出すのを避ける)。
         ChatMessage::Assistant { content, .. } => {
             assert_eq!(content.as_deref(), Some("工程を追加しました"));
@@ -756,7 +734,7 @@ async fn history_carries_send_time_beside_the_user_text() {
         other => panic!("expected Assistant, got {other:?}"),
     }
     assert_eq!(
-        user_text(&history[2]),
+        user_text(&history[4]),
         PromptText::user_message("ありがとう", Some(&stored_user_times[1])).as_str()
     );
 }
@@ -1686,6 +1664,56 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     assert_eq!(messages[1].attempt_no, Some(2));
 }
 
+/// 再試行で捨てた試行の中で実行したツール(DBの変更は残る)は、新しい試行に操作の記録として
+/// 伝わる。伝えないと、モデルは同じ工程をもう一度足す。
+#[tokio::test]
+async fn a_retry_is_told_what_the_discarded_attempt_did() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&adds_a_step()),
+        Chat::Task(task_id),
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+    let reply_id = {
+        let conn = db.lock().unwrap();
+        db::messages::list_for_chat(&conn, Chat::Task(task_id))
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
+    };
+
+    let retry = ScriptedAdapter::texts(&["工程は追加済みです"]);
+    retry_reply(db.clone(), &context(&retry), Chat::Task(task_id), reply_id)
+        .await
+        .unwrap();
+
+    let sent = retry.sent_messages();
+    let user = sent[0]
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            ChatMessage::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let operations = user.split_once("<scitl:operations>").unwrap().1;
+    assert!(operations.contains(r#""source":"discarded_attempt""#));
+    assert!(operations.contains(r#""tool":"add_steps""#));
+    assert!(operations.contains("買い出し"));
+    // 捨てた試行の往復は、呼び出しと結果の組としては送らない。
+    assert!(!sent[0]
+        .iter()
+        .any(|m| matches!(m, ChatMessage::Tool { .. })));
+}
+
 /// 再試行の対象はターンの返信のみ。ユーザー発言を再試行しようとするとエラーになる。
 #[tokio::test]
 async fn retry_reply_rejects_user_target() {
@@ -2349,9 +2377,12 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
         offered[0],
         vec!["get_task_list", "get_task_detail", "read_attachment"]
     );
-    let state = &adapter.states()[0];
-    assert!(state.contains("current tasks (not archived)"));
-    assert!(!state.contains("current task state"));
+    // タスクの一覧は添えず、モデルが読み取りのツールで読む。
+    let first = &adapter.sent_messages()[0];
+    assert!(!first.iter().any(
+        |m| matches!(m, ChatMessage::User { text, .. } if text.as_str().contains("scitl:state"))
+    ));
+    assert!(system_prompt_content(&first[0]).contains("get_task_list"));
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::General).unwrap();

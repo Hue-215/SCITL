@@ -23,7 +23,7 @@ use crate::orchestration::tool_record::{ToolExecutionRecord, ToolExecutionView};
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::turn_request::TurnRequest;
 use crate::orchestration::{TurnContext, TurnEvent, TurnEvents};
-use crate::tools::{self, external::ExternalToolset, ToolKind, ToolOutput};
+use crate::tools::{self, external::ExternalToolset, ToolOutput};
 
 /// 送信する発言。本文と、送信前に預けた添付のトークン(`attachments::Attachments::stage`)。
 #[derive(Debug, Clone, Default)]
@@ -446,10 +446,10 @@ async fn run_tool_rounds(
 ) -> Result<()> {
     let chat = attempt.chat;
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
-    let request = TurnRequest::prepare(db.clone(), ctx, chat, stored, external).await?;
+    let request = TurnRequest::prepare(ctx, chat, stored, external).await?;
     let tools_available = request.tools_available();
-    // 同一ターン内のツール呼び出しの往復。分類によらずモデルに返し、DBには書かない
-    // (書くと次ターン以降の履歴に残る)。
+    // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
+    // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
     let mut round_trip: Vec<ChatMessage> = Vec::new();
     // ツール実行に使った時間の合計。LLMの応答待ちは数えない(アダプタのタイムアウトが見る)。
     let mut tool_time_used = Duration::ZERO;
@@ -572,7 +572,6 @@ async fn run_tool_rounds(
                     ToolArguments::Malformed { raw, .. } => serde_json::Value::String(raw.clone()),
                 },
                 result: outcome.result.clone(),
-                tool_kind: outcome.tool_kind,
                 call_id: call.id.clone(),
             };
             save_tool_execution(db.clone(), attempt, record, reasoning_for_row, ctx.events).await?;
@@ -612,10 +611,6 @@ async fn run_tool_rounds(
 ///
 /// 引数がJSONとして読めなかった呼び出し(`ToolArguments::Malformed`)は、どのツールも
 /// 実行せずに失敗を返し、出し直させる。
-///
-/// 結果と一緒に、実行したツールの分類を返す。分類は振り分け先の定義から引き、ここでは
-/// 決めない。実行しなかった呼び出し(引数が読めない・公開していない名前・接続先が無い)は
-/// `None`で、次ターン以降の履歴に載らない。
 async fn execute_call(
     db: SharedConnection,
     chat: Chat,
@@ -633,48 +628,45 @@ async fn execute_call(
                      the tool was not run. Call it again with valid JSON arguments."
                 )
             });
-            return Ok(CallOutcome::plain(result, None));
+            return Ok(CallOutcome::plain(result));
         }
     };
-    let Some((server_id, tool_name, kind)) = external.route(&call.name) else {
+    let Some((server_id, tool_name)) = external.route(&call.name) else {
         let name = call.name.clone();
         let arguments = arguments.clone();
         let image_input = ctx.capabilities.image;
-        let (output, kind) = with_conn(db, move |conn| {
-            let output = tools::execute(conn, chat, image_input, &name, &arguments)
-                .unwrap_or_else(|e| json!({ "error": e.to_string() }).into());
-            Ok((output, tools::kind(chat, &name)))
+        let output = with_conn(db, move |conn| {
+            Ok(tools::execute(conn, chat, image_input, &name, &arguments)
+                .unwrap_or_else(|e| json!({ "error": e.to_string() }).into()))
         })
         .await?;
-        return read_tool_images(output, kind, ctx.attachments.store()).await;
+        return read_tool_images(output, ctx.attachments.store()).await;
     };
 
     let Some(server) = ctx.mcp.servers.iter().find(|s| s.id == server_id) else {
         let result = json!({ "error": format!("MCP server not found: {server_id}") });
-        return Ok(CallOutcome::plain(result, None));
+        return Ok(CallOutcome::plain(result));
     };
     let result = sessions
         .call_tool(server, tool_name, arguments)
         .await
         .unwrap_or_else(|e| json!({ "error": e.to_string() }));
-    Ok(CallOutcome::plain(result, Some(kind)))
+    Ok(CallOutcome::plain(result))
 }
 
 /// ツール1件の実行の結果。`turn_result`と`images`はこのターンのモデルへの往復にだけ載せ、
 /// 実行記録には残さない([`ToolOutput`])。
 struct CallOutcome {
     result: serde_json::Value,
-    tool_kind: Option<ToolKind>,
     turn_result: Option<serde_json::Value>,
     images: Vec<InlineImage>,
 }
 
 impl CallOutcome {
     /// 実行記録と往復で同じ結果を返し、画像を伴わない。
-    fn plain(result: serde_json::Value, tool_kind: Option<ToolKind>) -> Self {
+    fn plain(result: serde_json::Value) -> Self {
         Self {
             result,
-            tool_kind,
             turn_result: None,
             images: Vec::new(),
         }
@@ -687,15 +679,11 @@ impl CallOutcome {
 
 /// 内部ツールが添えた画像の実体を、DBのロックの外で読む。読めなければ結果を失敗に
 /// 差し替える(会話は止めない)。
-async fn read_tool_images(
-    output: ToolOutput,
-    tool_kind: Option<ToolKind>,
-    store: AttachmentStore,
-) -> Result<CallOutcome> {
+async fn read_tool_images(output: ToolOutput, store: AttachmentStore) -> Result<CallOutcome> {
     if output.image_hashes.is_empty() {
         return Ok(CallOutcome {
             turn_result: output.turn_result,
-            ..CallOutcome::plain(output.result, tool_kind)
+            ..CallOutcome::plain(output.result)
         });
     }
     let hashes = output.image_hashes;
@@ -709,11 +697,10 @@ async fn read_tool_images(
     Ok(match read {
         Ok(images) => CallOutcome {
             result: output.result,
-            tool_kind,
             turn_result: output.turn_result,
             images,
         },
-        Err(e) => CallOutcome::plain(json!({ "error": e.to_string() }), tool_kind),
+        Err(e) => CallOutcome::plain(json!({ "error": e.to_string() })),
     })
 }
 

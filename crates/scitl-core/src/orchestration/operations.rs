@@ -125,7 +125,6 @@ fn record(
         tool: tool.to_string(),
         arguments,
         result,
-        tool_kind: None,
         call_id: None,
     })
     .expect("a record of JSON values serializes");
@@ -206,7 +205,7 @@ mod tests {
             &json!({
                 "tool": "update_task",
                 "arguments": { "title": "「買い物」" },
-                "result": serde_json::to_value(f.task()).unwrap(),
+                "result": { "task": serde_json::to_value(f.task()).unwrap(), "steps": [] },
             })
         );
     }

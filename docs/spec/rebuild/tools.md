@@ -239,7 +239,7 @@ MCP版:             update_task(task_id, title?, description?, deadline?, status
 
 総合チャットのシステムプロンプトは、基本のシステムプロンプトに、総合チャットでは変更できない
 ことの注記を足したもの。タスクチャット用の追加プロンプトは入れない。組み立ては
-`orchestration::state_prompt::build_system_prompt`。
+`orchestration::system_prompt::build_system_prompt`。
 
 総合チャットにはタスクの一覧を毎ターン添えず、モデルがタスク一覧取得で読む(`architecture.md`
 3節「状態と日時の伝え方」)。タスクチャットと違い、他のタスクの会話や画面での変更はこの会話に

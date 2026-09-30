@@ -9,13 +9,12 @@ use crate::llm::ToolSchema;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
-use super::{InternalTool, Run, ToolKind};
+use super::{InternalTool, Run};
 
 pub const NAME: &str = "update_step";
 
 pub(super) const TOOL: InternalTool = InternalTool {
     schema,
-    kind: ToolKind::State,
     run: Run::UpdateTask(execute),
 };
 

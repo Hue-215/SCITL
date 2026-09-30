@@ -8,13 +8,12 @@ use crate::llm::ToolSchema;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
-use super::{InternalTool, Run, ToolKind};
+use super::{InternalTool, Run};
 
 pub const NAME: &str = "get_task_detail";
 
 pub(super) const TOOL: InternalTool = InternalTool {
     schema,
-    kind: ToolKind::State,
     run: Run::Read(execute),
 };
 

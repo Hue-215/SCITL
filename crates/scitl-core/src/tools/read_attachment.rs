@@ -10,13 +10,12 @@ use crate::error::{CoreError, Result};
 use crate::llm::{AttachmentNote, ToolSchema};
 
 use super::args::Args;
-use super::{InternalTool, Run, ToolKind, ToolOutput};
+use super::{InternalTool, Run, ToolOutput};
 
 pub const NAME: &str = "read_attachment";
 
 pub(super) const TOOL: InternalTool = InternalTool {
     schema,
-    kind: ToolKind::Fact,
     run: Run::ReadAttachment,
 };
 
@@ -50,7 +49,7 @@ pub fn schema() -> &'static ToolSchema {
 /// (画像に対応しないモデルでの画像・その他の形式)は、読んでも何も増えないので失敗にする。
 ///
 /// 中身(テキストの本文・画像)はこのターンでだけ渡し、実行記録には名前などの情報だけを残す。
-/// 実行記録は事実系として次ターン以降の履歴に載るので、本文を残すと、元の発言を削除しても
+/// 実行記録は次ターン以降の履歴に載るので、本文を残すと、元の発言を削除しても
 /// 本文が送られ続けるため。画像は実体のハッシュを[`ToolOutput::image_hashes`]に添えて返し、
 /// 読み出しは呼び出し元に任せる。
 pub fn execute(
