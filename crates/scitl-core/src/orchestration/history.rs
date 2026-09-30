@@ -15,7 +15,7 @@ use crate::llm::{
     ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
 };
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
-use crate::orchestration::transcript::Replayable;
+use crate::orchestration::transcript::{Front, Replayable};
 
 /// 履歴の組み立てに要るDBの行。DBのロックを持つ間に引き終え、添付画像の読み出し
 /// ([`build_history`])はロックの外で行う。
@@ -27,6 +27,8 @@ pub(super) struct StoredChat {
     attachments: HashMap<i64, Vec<Attachment>>,
     /// 会話の送った形の保存。使うのは表示される返信のある試行の分だけ。
     transcripts: Vec<Transcript>,
+    /// 保存が指すシステムプロンプトとツール定義の本文(指紋ごと)。
+    blobs: HashMap<String, String>,
     /// 保存していない開始の発言を先頭に補うか。
     starts_with_opening: bool,
 }
@@ -41,11 +43,24 @@ pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
         .into_iter()
         .filter(|m| !shown.contains(&m.id))
         .collect();
+    let transcripts = transcripts::list_for_chat(conn, chat)?;
+    let mut blobs = HashMap::new();
+    for digest in transcripts
+        .iter()
+        .flat_map(|t| [&t.system_digest, &t.tools_digest])
+    {
+        if !blobs.contains_key(digest) {
+            if let Some(body) = transcripts::blob(conn, digest)? {
+                blobs.insert(digest.clone(), body);
+            }
+        }
+    }
     Ok(StoredChat {
         messages,
         discarded_records,
         attachments: db_attachments::for_chat(conn, chat)?,
-        transcripts: transcripts::list_for_chat(conn, chat)?,
+        transcripts,
+        blobs,
         starts_with_opening: starts_with_opening(conn, chat)?,
     })
 }
@@ -224,6 +239,8 @@ pub(super) struct History {
     saved_turns: HashSet<String>,
     /// まだ置いていない、補う開始の発言。最初に何かを並べるときに先頭に置く。
     opening: Option<ChatMessage>,
+    /// 使っている直前の保存(最後に並べた保存)の、前を固定する材料。
+    pub(super) front: Option<Front>,
 }
 
 /// 送った形の保存から並べた1試行分の区間(`messages[start..end]`)。
@@ -243,6 +260,7 @@ impl History {
             segments: Vec::new(),
             saved_turns: HashSet::new(),
             opening: None,
+            front: None,
         }
     }
 
@@ -263,6 +281,7 @@ impl History {
             self.opening = None;
         }
         let start = self.messages.len();
+        self.front = saved.front;
         let mut rows = Some(saved.input_rows);
         for message in saved.messages {
             self.push(message, rows.take().unwrap_or_default());
@@ -295,6 +314,32 @@ impl History {
     /// `index`番目の発言を作った最初の行。行から作っていない発言(補った開始の発言)なら`None`。
     pub(super) fn first_row(&self, index: usize) -> Option<i64> {
         self.rows[index].first().copied()
+    }
+
+    /// 間引く単位の始まりの位置(昇順)。単位はユーザー発言から次のユーザー発言の手前までで、
+    /// 先頭は発言によらず単位の始まりとする。保存から並べた区間は途中で切らない(区間は入力に
+    /// 含めた行を発言ごとには持たず、途中から並べると間引きの位置を行で表せないため。途中から
+    /// 並べた区間の思考は、どのみち送り返せない)。
+    pub(super) fn unit_starts(&self) -> Vec<usize> {
+        let inside = |i: usize| self.segments.iter().any(|s| s.start < i && i < s.end);
+        self.messages
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| *i == 0 || (matches!(m, ChatMessage::User { .. }) && !inside(*i)))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// 間引きの位置`row`(行のid)から並べ始める単位の始まり。その行か、それより後ろの行から
+    /// 作った最初の単位(その行が消えていれば、後ろの最初のユーザー発言)。無ければ最後の単位
+    /// (応答すべき発言は必ず送る)。
+    pub(super) fn start_at(&self, starts: &[usize], row: i64) -> usize {
+        starts
+            .iter()
+            .copied()
+            .find(|&i| self.first_row(i).is_some_and(|first| first >= row))
+            .or_else(|| starts.last().copied())
+            .unwrap_or(0)
     }
 
     /// 待っている操作の記録を、ユーザー発言(行`id`)の囲みの前に置いて並べる。
@@ -354,7 +399,8 @@ fn used_transcripts(
         .iter()
         .filter(|t| replied.contains(&(t.turn_id.as_str(), t.attempt_no)))
         .filter_map(|t| {
-            let saved = Replayable::load(t, options.tools_available, options.image_input, store)?;
+            let saved = Replayable::load(t, options.tools_available, options.image_input, store)?
+                .with_front(Front::of(t, &stored.blobs));
             Some((t.turn_id.clone(), saved))
         })
         .collect()
@@ -1232,6 +1278,51 @@ mod tests {
         assert_eq!(operations_in(texts[1])[0]["result"], json!({ "n": 1 }));
         let history = f.build_full(Chat::Task(f.task_id), true, false);
         assert!(history.rows_from(history.input_from).contains(&op));
+    }
+
+    /// 間引く単位は保存から並べた区間の途中から始めず、間引きの位置(行)からは、その行か後ろの
+    /// 行で始まる最初の単位から並べる。
+    #[test]
+    fn starts_units_outside_saved_segments_and_at_the_kept_row() {
+        let f = Fixture::new();
+        let u1 = f.user("u1");
+        let a1 = f.insert(Role::Assistant, Kind::Normal, "a1", Some("t1"));
+        let u2a = f.user("u2a");
+        let u2b = f.user("u2b");
+        f.insert(Role::Assistant, Kind::Normal, "a2", Some("t2"));
+        f.save(
+            "t2",
+            1,
+            vec![u2a, u2b],
+            &["送った u2a", "送った u2b"],
+            "送った a2",
+        );
+        let u3 = f.user("u3");
+
+        let history = f.build_full(Chat::Task(f.task_id), true, false);
+        let position = |text: &str| {
+            history
+                .messages
+                .iter()
+                .position(
+                    |m| matches!(m, ChatMessage::User { text: t, .. } if t.as_str().contains(text)),
+                )
+                .unwrap()
+        };
+        let starts = history.unit_starts();
+        assert!(starts.contains(&position("u1")));
+        assert!(starts.contains(&position("送った u2a")));
+        assert!(!starts.contains(&position("送った u2b")));
+        assert_eq!(*starts.last().unwrap(), position("u3"));
+
+        assert_eq!(history.start_at(&starts, u1), position("u1"));
+        assert_eq!(history.start_at(&starts, u2a), position("送った u2a"));
+        // 区間の入力の途中の行からは、区間の後ろから並べる。
+        assert_eq!(history.start_at(&starts, u2b), position("u3"));
+        // 単位の始まりでない行(消えたユーザー発言の代わり)からは、後ろの最初の単位から。
+        assert_eq!(history.start_at(&starts, a1), position("送った u2a"));
+        // 後ろに単位が無ければ、最後の単位(応答すべき発言)は必ず並べる。
+        assert_eq!(history.start_at(&starts, u3 + 100), position("u3"));
     }
 
     /// 捨てた試行の保存は使わず、記録から組み立てる。今のモデルが受け付けない形を含む保存も

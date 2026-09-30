@@ -6,6 +6,7 @@
 
 use crate::blocking;
 use crate::db::messages::Chat;
+use crate::db::transcripts::digest;
 use crate::error::Result;
 use crate::llm::{
     AdapterIdentity, ChatMessage, LlmAdapter, PromptText, Replay, ToolOffer, ToolSchema,
@@ -14,7 +15,8 @@ use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::system_prompt::build_system_prompt;
 use crate::orchestration::transcript::{
-    tools_body, PrefixDigest, SavedTurn, StoredInput, StoredMessage,
+    tool_entry, tools_body, tools_from_body, Front, PrefixDigest, SavedTurn, StoredInput,
+    StoredMessage,
 };
 use crate::orchestration::TurnContext;
 use crate::tools::{self, external::ExternalToolset};
@@ -34,6 +36,8 @@ pub(super) struct TurnRequest {
     input_rows: Vec<i64>,
     /// 最初に並べた行(間引きの位置)。会話の最初から並べたなら`None`。
     history_start: Option<i64>,
+    /// 今の設定から作ったシステムプロンプト。先頭と違えば、新しい入力で伝えてある。
+    settings_system: String,
     exposed_tools: Vec<ToolSchema>,
     /// `exposed_tools`の本文(指紋と保存に使う)。
     tools_body: String,
@@ -42,6 +46,11 @@ pub(super) struct TurnRequest {
 
 impl TurnRequest {
     /// `stored`は、送る対象のユーザー発言の挿入・カスケード削除を済ませたあとの行。
+    ///
+    /// 先頭(システムプロンプトとツール定義)と間引きの位置は、使っている直前の保存のものを
+    /// 保つ(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」「間引きの位置」)。
+    /// 設定から作ったシステムプロンプトが変わっていれば、新しい入力で伝える。ツール定義が
+    /// 変わったときと間引いたときは、今の設定で作り直して固定し直す。
     ///
     /// 履歴の間引きはここで1回だけ決める。このターンの往復の分は、間引きが応答の
     /// ために空けておく分から使う。往復が伸びて収まらなくなっても間引き直さない(前に送った
@@ -64,24 +73,42 @@ impl TurnRequest {
         };
         // 添付画像の読み出しはファイルI/Oなので、DBのロックの外でブロッキング処理として行う。
         let store = ctx.attachments.store();
-        let history =
+        let mut history =
             blocking::run(move || Ok(history::build_history(stored, &options, &store))).await?;
-        let mut exposed_tools = Vec::new();
+        let mut current_tools = Vec::new();
         if tools_available {
-            exposed_tools.extend(tools::schemas(chat));
-            exposed_tools.extend(external.schemas());
+            current_tools.extend(tools::schemas(chat));
+            current_tools.extend(external.schemas());
         }
-        let system = ChatMessage::System(build_system_prompt(chat, &ctx.prompts, tools_available));
-        let saved: Vec<_> = history.segments.iter().map(|s| s.start..s.end).collect();
-        let kept = trim_history(
-            &history.messages,
-            &saved,
-            ctx.capabilities.context_length,
-            [&system],
-            &exposed_tools,
-        )
-        .len();
-        let keep_from = history.messages.len() - kept;
+        let current = Head::current(
+            build_system_prompt(chat, &ctx.prompts, tools_available),
+            current_tools,
+        );
+        let front = history.front.take();
+        let starts = history.unit_starts();
+        let from = match front.as_ref().and_then(|f| f.history_start) {
+            Some(row) => history.start_at(&starts, row),
+            None => 0,
+        };
+        let frozen = front.and_then(|f| Head::frozen(f, &current, external));
+        let trim = {
+            let front = frozen.as_ref().unwrap_or(&current);
+            trim_history(
+                &history.messages,
+                &starts,
+                from,
+                ctx.capabilities.context_length,
+                [&ChatMessage::System(front.system.clone())],
+                &front.tools,
+            )
+        };
+        // 間引いたら前はどのみち変わるので、今の設定で固定し直す。
+        let frozen = frozen.filter(|_| !trim.trimmed);
+        let notify = frozen
+            .as_ref()
+            .is_some_and(|f| f.settings_system_digest != digest(&current.system));
+        let front = frozen.unwrap_or_else(|| current.clone());
+        let keep_from = trim.keep_from;
         // 間引きは最後のユーザー発言より前でしか切らないが、入力が複数の発言にわたると一部が
         // 落ちうる。残った分だけを入力とする。
         let input_from = history.input_from.max(keep_from);
@@ -105,19 +132,23 @@ impl TurnRequest {
                 prefix_digest: s.prefix_digest,
             })
             .collect();
-        let mut opening = Vec::with_capacity(1 + kept);
-        opening.push(system);
+        let mut opening = Vec::with_capacity(1 + history.messages.len() - keep_from);
+        opening.push(ChatMessage::System(front.system.clone()));
         opening.extend(history.messages.into_iter().skip(keep_from));
-        let tools_body = tools_body(&exposed_tools);
-        settle_replays(&mut opening, &segments, &tools_body, adapter);
+        settle_replays(&mut opening, &segments, &front.tools_body, adapter);
+        let input_from = at(input_from);
+        if notify {
+            notify_system_update(&mut opening, input_from, &current.system);
+        }
 
         Ok(Self {
             opening,
-            input_from: at(input_from),
+            input_from,
             input_rows,
             history_start,
-            exposed_tools,
-            tools_body,
+            settings_system: current.system,
+            exposed_tools: front.tools,
+            tools_body: front.tools_body,
             tools_available,
         })
     }
@@ -149,8 +180,7 @@ impl TurnRequest {
         let rounds = StoredMessage::all_of(rounds)?;
         Some(SavedTurn {
             system: system.clone(),
-            // TODO(#280): システムプロンプトの変更を後ろに足して伝える形にしたら、先頭と分かれる。
-            settings_system: system.clone(),
+            settings_system: self.settings_system.clone(),
             tools: self.tools_body.clone(),
             prefix_digest: prefix.as_str().to_string(),
             history_start: self.history_start,
@@ -191,6 +221,72 @@ impl TurnRequest {
             callable: !final_call,
         };
         (messages, offer)
+    }
+}
+
+/// 送る先頭(システムプロンプトとツール定義)。
+#[derive(Clone)]
+struct Head {
+    system: String,
+    tools: Vec<ToolSchema>,
+    /// `tools`の本文(指紋と保存に使う)。
+    tools_body: String,
+    /// 最後に伝えた、設定から作ったシステムプロンプトの指紋。
+    settings_system_digest: String,
+}
+
+impl Head {
+    /// 今の設定で作った先頭。
+    fn current(system: String, tools: Vec<ToolSchema>) -> Self {
+        Self {
+            tools_body: tools_body(&tools),
+            settings_system_digest: digest(&system),
+            system,
+            tools,
+        }
+    }
+
+    /// 使っている直前の保存の先頭を、今回も使えるなら返す。ツール定義が今と同じか、違いが
+    /// 繋がらない外部サーバーのツールが欠けていることだけなら使う(呼ばれたら今は使えないと
+    /// いう失敗を返す)。ほかの違い(ツールの有効化・無効化、サーバーが返す定義の変化)は、
+    /// 方言によらずに定義を後から足す形が無いので作り直す(`None`)。
+    fn frozen(front: Front, current: &Self, external: &ExternalToolset) -> Option<Self> {
+        let tools = if front.tools == current.tools_body {
+            current.tools.clone()
+        } else {
+            let frozen = tools_from_body(&front.tools)?;
+            let entries: Vec<_> = frozen.iter().map(tool_entry).collect();
+            let current_entries: Vec<_> = current.tools.iter().map(tool_entry).collect();
+            let only_unavailable_missing = current_entries.iter().all(|e| entries.contains(e))
+                && frozen.iter().zip(&entries).all(|(tool, entry)| {
+                    current_entries.contains(entry) || external.is_unavailable(tool.name())
+                });
+            if !only_unavailable_missing {
+                return None;
+            }
+            frozen
+        };
+        Some(Self {
+            system: front.system,
+            tools,
+            tools_body: front.tools,
+            settings_system_digest: front.settings_system_digest,
+        })
+    }
+}
+
+/// 設定から作ったシステムプロンプトの新しい全文を、新しい入力の最初のユーザー発言の囲みの前に
+/// 置く(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。新しい入力にユーザー
+/// 発言が無ければ(応答すべき発言の無い会話の送信内容のプレビュー)、通知だけのユーザー発言にする。
+fn notify_system_update(opening: &mut Vec<ChatMessage>, input_from: usize, system: &str) {
+    let notice = PromptText::system_update(system);
+    let first_user = opening[input_from..].iter_mut().find_map(|m| match m {
+        ChatMessage::User { text, .. } => Some(text),
+        _ => None,
+    });
+    match first_user {
+        Some(text) => *text = notice.followed_by(text),
+        None => opening.push(ChatMessage::user(notice)),
     }
 }
 
@@ -457,5 +553,99 @@ mod tests {
             &Accepting(ApiFormat::Anthropic),
         );
         assert_eq!(kept(&messages), [false, false]);
+    }
+
+    fn front(system: &str, tools: &[ToolSchema]) -> Front {
+        Front {
+            system: system.to_string(),
+            settings_system_digest: digest(system),
+            tools: tools_body(tools),
+            history_start: None,
+        }
+    }
+
+    fn external_tool(name: &str) -> ToolSchema {
+        ToolSchema::external(
+            name.to_string(),
+            "d",
+            &serde_json::json!({"type": "object"}),
+        )
+        .unwrap()
+    }
+
+    /// `down`がサーバー`down`の`search`を有効にしたまま繋がらなかった外部ツールの集まり。
+    fn with_down_server() -> ExternalToolset {
+        let server = crate::config::McpServerConfig {
+            id: "id".to_string(),
+            name: "down".to_string(),
+            enabled: true,
+            endpoint: crate::config::McpEndpoint::Stdio {
+                command: "true".to_string(),
+                args: Vec::new(),
+                env_refs: Vec::new(),
+            },
+            enabled_tools: ["search".to_string()].into(),
+        };
+        ExternalToolset::default().with_unavailable([&server])
+    }
+
+    /// 固定したツール定義は、今と同じか、繋がらないサーバーのツールが欠けているだけなら残す。
+    #[test]
+    fn keeps_the_frozen_tools_unless_they_really_changed() {
+        let internal = ToolSchema::internal("get_task", "d", serde_json::json!({"type": "object"}));
+        let down = external_tool("down__search");
+        let other = external_tool("up__search");
+        let current = Head::current("now".to_string(), vec![internal.clone()]);
+        let external = with_down_server();
+
+        let same = Head::frozen(
+            front("then", std::slice::from_ref(&internal)),
+            &current,
+            &external,
+        )
+        .unwrap();
+        assert_eq!(same.system, "then");
+        assert_eq!(same.tools_body, current.tools_body);
+
+        let frozen = [internal.clone(), down.clone()];
+        let kept = Head::frozen(front("then", &frozen), &current, &external).unwrap();
+        assert_eq!(kept.tools_body, tools_body(&frozen));
+        let names: Vec<_> = kept.tools.iter().map(ToolSchema::name).collect();
+        assert_eq!(names, ["get_task", "down__search"]);
+
+        // 繋がっているのに欠けたツール(無効化)・増えたツール・読めない本文は、作り直す。
+        let disabled = [internal.clone(), other];
+        assert!(Head::frozen(front("then", &disabled), &current, &external).is_none());
+        let added = Head::current("now".to_string(), vec![internal.clone(), down]);
+        assert!(Head::frozen(
+            front("then", &[internal]),
+            &added,
+            &ExternalToolset::default()
+        )
+        .is_none());
+        let mut unreadable = front("then", &[]);
+        unreadable.tools = "{".to_string();
+        assert!(Head::frozen(unreadable, &current, &external).is_none());
+    }
+
+    /// 変更の通知は、新しい入力の最初のユーザー発言の囲みの前に置く。無ければ通知だけの発言にする。
+    #[test]
+    fn puts_the_system_update_before_the_first_new_user_message() {
+        let mut messages = opening();
+        notify_system_update(&mut messages, 3, "new");
+        let ChatMessage::User { text, .. } = &messages[3] else {
+            panic!("expected a user message");
+        };
+        assert!(text
+            .as_str()
+            .starts_with("<scitl:system-update>\nnew\n</scitl:system-update>"));
+        assert!(text.as_str().contains("u2"));
+        assert_eq!(messages.len(), 6);
+
+        let mut messages = opening()[..5].to_vec();
+        notify_system_update(&mut messages, 5, "new");
+        assert_eq!(messages.len(), 6);
+        assert!(matches!(&messages[5], ChatMessage::User { text, .. }
+            if text.as_str().starts_with("<scitl:system-update>")));
     }
 }

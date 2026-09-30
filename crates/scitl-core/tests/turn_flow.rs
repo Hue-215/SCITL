@@ -1911,19 +1911,36 @@ async fn thinking_is_not_sent_back_to_a_provider_that_cannot_read_it() {
     );
 }
 
-/// 前が変わると(ここではシステムプロンプト)、それより前に送った思考は外れ、変わったあとに
-/// 送った思考からまた送り返す。
+fn system_of(messages: &[ChatMessage]) -> &str {
+    match &messages[0] {
+        ChatMessage::System(text) => text,
+        other => panic!("expected the system prompt first, got {other:?}"),
+    }
+}
+
+fn user_texts(messages: &[ChatMessage]) -> Vec<&str> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 設定でシステムプロンプトを変えても先頭は変えず、新しい全文を次の入力で1度だけ伝える。
+/// 前が変わらないので、変える前に受け取った思考も送り返す。
 #[tokio::test]
-async fn after_a_change_only_the_thinking_sent_since_is_sent_back() {
+async fn a_changed_system_prompt_is_told_without_changing_the_front() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db: SharedConnection = Arc::new(Mutex::new(conn));
     let before = SystemPrompts {
-        base: Some("before"),
+        base: Some("BEFORE"),
         task_chat: None,
     };
     let after = SystemPrompts {
-        base: Some("after"),
+        base: Some("AFTER"),
         task_chat: None,
     };
     let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
@@ -1933,14 +1950,84 @@ async fn after_a_change_only_the_thinking_sent_since_is_sent_back() {
     let third = ScriptedAdapter::texts(&["返信3"]);
     turn_with(&db, &third, after, task_id, "3回目").await;
 
-    assert_eq!(
-        replay_of(&second.sent_messages()[0], "返信1"),
-        Replay::default()
-    );
+    let thinking_1: Replay = serde_json::from_str(THINKING_1).unwrap();
+    let sent = &second.sent_messages()[0];
+    assert!(system_of(sent).contains("BEFORE"));
+    let input = *user_texts(sent).last().unwrap();
+    assert!(input.starts_with("<scitl:system-update>"));
+    assert!(input.contains("AFTER") && input.contains("2回目"));
+    assert_eq!(replay_of(sent, "返信1"), thinking_1);
+
     let sent = &third.sent_messages()[0];
-    assert_eq!(replay_of(sent, "返信1"), Replay::default());
-    let expected: Replay = serde_json::from_str(THINKING_2).unwrap();
-    assert_eq!(replay_of(sent, "返信2"), expected);
+    assert!(system_of(sent).contains("BEFORE"));
+    let notices = user_texts(sent)
+        .iter()
+        .filter(|t| t.contains("<scitl:system-update>"))
+        .count();
+    assert_eq!(notices, 1);
+    assert_eq!(replay_of(sent, "返信1"), thinking_1);
+    let thinking_2: Replay = serde_json::from_str(THINKING_2).unwrap();
+    assert_eq!(replay_of(sent, "返信2"), thinking_2);
+}
+
+/// 間引きの位置はターンをまたいで保ち、予算を超えたときだけ予算の半分までまとめて動かす。
+/// 位置が動かないターンでは前が変わらないので、前のターンの思考も送り返す。
+#[tokio::test]
+async fn the_trimming_position_holds_across_turns() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 20_000;
+    let padding = "あ".repeat(2_500);
+
+    // ターンごとに、最初に並べたユーザー発言と、前のターンの思考を送り返したか。
+    let mut turns = Vec::new();
+    for i in 1..=10 {
+        let reply = format!("返信{i}");
+        let adapter = ScriptedAdapter::texts(&[reply.as_str()]).with_replay(THINKING_1);
+        let ctx = TurnContext {
+            capabilities,
+            ..context(&adapter)
+        };
+        run_turn(
+            db.clone(),
+            &ctx,
+            Chat::Task(task_id),
+            format!("{i}回目{padding}"),
+        )
+        .await
+        .unwrap();
+        let sent = &adapter.sent_messages()[0];
+        let first = user_texts(sent)[0]
+            .split("回目")
+            .next()
+            .unwrap()
+            .to_string();
+        let previous = format!("返信{}", i - 1);
+        let replayed = sent.iter().any(|m| {
+            matches!(m, ChatMessage::Assistant { content: Some(c), replay, .. }
+                if *c == previous && *replay != Replay::default())
+        });
+        turns.push((first, replayed));
+    }
+
+    let moves: Vec<usize> = (1..turns.len())
+        .filter(|&i| turns[i].0 != turns[i - 1].0)
+        .collect();
+    assert!(
+        !moves.is_empty() && moves.len() <= 3,
+        "the start should move rarely: {turns:?}"
+    );
+    for i in 1..turns.len() {
+        if !moves.contains(&i) {
+            assert!(
+                turns[i].1,
+                "turn {} kept its start but dropped thinking: {turns:?}",
+                i + 1
+            );
+        }
+    }
 }
 
 /// 再試行で捨てた試行の中で実行したツール(DBの変更は残る)は、新しい試行に操作の記録として
