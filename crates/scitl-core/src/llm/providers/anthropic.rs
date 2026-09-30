@@ -366,7 +366,9 @@ fn image_block(image: &crate::llm::InlineImage) -> Value {
     })
 }
 
-/// プレビューの本文で縮める値。画像の実体と、送り返す思考の署名。
+/// プレビューの本文で縮める値。画像の実体と、送り返す思考の署名。ブロックは発言の`content`と、
+/// ツール結果の`content`に並ぶ。
+const NESTED: &[&str] = &["content"];
 const ABBREVIATED: &[(&str, &[&str])] = &[
     ("image", &["source", "data"]),
     ("thinking", &["signature"]),
@@ -468,7 +470,7 @@ impl LlmAdapter for AnthropicAdapter {
             Thinking::from_effort(reasoning_effort),
         );
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
-        super::abbreviate(&mut body, ABBREVIATED);
+        super::abbreviate(&mut body["messages"], NESTED, ABBREVIATED);
         Some(RequestPreview { body })
     }
 
@@ -797,6 +799,53 @@ mod tests {
         let block = &preview.body["messages"][1]["content"][0];
         assert_eq!(block["signature"], "… (10 bytes)");
         assert_eq!(block["thinking"], "plan");
+    }
+
+    /// ツール結果の画像も縮める。ツールの引数の中は、同じ形の値でも縮めない(モデルに渡る値を
+    /// 隠さない)。
+    #[test]
+    fn preview_shortens_the_result_image_but_not_the_arguments() {
+        let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![ToolCallRequest {
+                    id: Some("toolu_1".to_string()),
+                    name: "look".to_string(),
+                    arguments: json!({"type": "image", "source": {"data": "kept"}}).into(),
+                }],
+                replay: Replay::default(),
+            },
+            ChatMessage::Tool {
+                tool_call_id: Some("toolu_1".to_string()),
+                content: PromptText::untrusted("{}"),
+                images: vec![image],
+            },
+        ];
+        let preview = adapter("http://127.0.0.1:9", "")
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap()
+            .body;
+        let call = &preview["messages"][1]["content"][0];
+        assert_eq!(call["input"]["source"]["data"], "kept");
+        let result = &preview["messages"][2]["content"][0]["content"][1];
+        assert!(result["source"]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("… ("));
+    }
+
+    /// 同じ方言なら、別のモデルの思考も送り返す(読めないブロックはAPIが捨てる)。
+    #[test]
+    fn accepts_replays_from_any_model_of_the_same_format() {
+        let adapter = adapter("http://127.0.0.1:9", "");
+        let origin = |api_format, model: &str| AdapterIdentity {
+            api_format,
+            model: model.to_string(),
+        };
+        assert!(adapter.accepts_replay(&origin(ApiFormat::Anthropic, "claude-other")));
+        assert!(!adapter.accepts_replay(&origin(ApiFormat::Gemini, "claude-test")));
     }
 
     #[test]

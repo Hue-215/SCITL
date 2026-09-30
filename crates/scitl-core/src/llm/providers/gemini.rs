@@ -332,7 +332,9 @@ fn content(text: &str, images: &[InlineImage]) -> Vec<Value> {
     parts
 }
 
-/// プレビューの本文で縮める値。画像の実体と、送り返す思考の署名。
+/// プレビューの本文で縮める値。画像の実体と、送り返す思考の署名。画像はステップの`content`と、
+/// ツール結果の`result`に並ぶ。
+const NESTED: &[&str] = &["content", "result"];
 const ABBREVIATED: &[(&str, &[&str])] = &[("image", &["data"]), ("thought", &["signature"])];
 
 // ---- 応答 ----
@@ -451,7 +453,7 @@ impl LlmAdapter for GeminiAdapter {
             thinking_level(reasoning_effort),
         );
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
-        super::abbreviate(&mut body, ABBREVIATED);
+        super::abbreviate(&mut body["input"], NESTED, ABBREVIATED);
         Some(RequestPreview { body })
     }
 
@@ -753,6 +755,51 @@ mod tests {
         let image = &preview["input"][0]["content"][1];
         assert_eq!(image["mime_type"], "image/png");
         assert!(image["data"].as_str().unwrap().starts_with("… ("));
+    }
+
+    /// プレビューでは、送り返す思考の署名とツール結果の画像も縮める。ツールの引数の中は、
+    /// 同じ形の値でも縮めない(モデルに渡る値を隠さない)。
+    #[test]
+    fn preview_shortens_the_signature_and_the_result_image_but_not_the_arguments() {
+        let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: Vec::new(),
+                replay: Replay::from_json(
+                    r#"[{"type":"thought","signature":"0123456789"},{"type":"function_call","id":"call_1","name":"look","arguments":{"type":"image","data":"kept"}}]"#,
+                ),
+            },
+            ChatMessage::Tool {
+                tool_call_id: Some("call_1".to_string()),
+                content: PromptText::untrusted("{}"),
+                images: vec![image],
+            },
+        ];
+        let preview = adapter("http://127.0.0.1:1", "")
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap()
+            .body;
+        assert_eq!(preview["input"][1]["signature"], "… (10 bytes)");
+        assert_eq!(preview["input"][2]["arguments"]["data"], "kept");
+        assert!(preview["input"][3]["result"][1]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("… ("));
+    }
+
+    /// 思考を送り返すのは、同じ方言の同じモデルに対してだけ。
+    #[test]
+    fn accepts_replays_only_from_the_same_model() {
+        let adapter = adapter("http://127.0.0.1:1", "");
+        let origin = |api_format, model: &str| AdapterIdentity {
+            api_format,
+            model: model.to_string(),
+        };
+        assert!(adapter.accepts_replay(&origin(ApiFormat::Gemini, "gemini-test")));
+        assert!(!adapter.accepts_replay(&origin(ApiFormat::Gemini, "gemini-other")));
+        assert!(!adapter.accepts_replay(&origin(ApiFormat::Anthropic, "gemini-test")));
     }
 
     const THOUGHT_AND_CALL: &str = r#"{"id":"v1_x","status":"requires_action","steps":[

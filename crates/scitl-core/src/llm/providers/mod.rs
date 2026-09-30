@@ -93,27 +93,28 @@ fn received(replay: &crate::llm::Replay) -> Vec<RequestPart> {
 }
 
 /// プレビューの本文で、読めない大きな値(画像の実体・思考の署名)だけを長さに縮める
-/// (`LlmAdapter::request_preview`)。`targets`は、`type`がその値のオブジェクトで縮める欄の
-/// 位置の組。
-fn abbreviate(value: &mut serde_json::Value, targets: &[(&str, &[&str])]) {
-    match value {
-        serde_json::Value::Object(map) => {
-            let kind = map.get("type").and_then(serde_json::Value::as_str);
-            if let Some((_, path)) = targets.iter().find(|(t, _)| Some(*t) == kind) {
-                let mut field = map.get_mut(path[0]);
-                for key in &path[1..] {
-                    field = field.and_then(|f| f.get_mut(*key));
-                }
-                if let Some(serde_json::Value::String(text)) = field {
-                    *text = format!("… ({} bytes)", text.len());
-                }
+/// (`LlmAdapter::request_preview`)。`blocks`は方言の発言列で、その要素と、要素の`nested`の欄に
+/// ある列の要素だけを見る(ツールの引数・定義の中は見ない)。`targets`は、`type`がその値の要素で
+/// 縮める欄の位置の組。
+fn abbreviate(blocks: &mut serde_json::Value, nested: &[&str], targets: &[(&str, &[&str])]) {
+    let Some(blocks) = blocks.as_array_mut() else {
+        return;
+    };
+    for block in blocks {
+        let target = targets
+            .iter()
+            .find(|(t, _)| block.get("type").and_then(serde_json::Value::as_str) == Some(*t));
+        if let Some((_, path)) = target {
+            let field = path.iter().try_fold(&mut *block, |v, key| v.get_mut(*key));
+            if let Some(serde_json::Value::String(text)) = field {
+                *text = format!("… ({} bytes)", text.len());
             }
-            map.values_mut().for_each(|v| abbreviate(v, targets));
         }
-        serde_json::Value::Array(items) => {
-            items.iter_mut().for_each(|v| abbreviate(v, targets));
+        for key in nested {
+            if let Some(list) = block.get_mut(*key) {
+                abbreviate(list, nested, targets);
+            }
         }
-        _ => {}
     }
 }
 
