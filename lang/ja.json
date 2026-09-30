@@ -10,6 +10,8 @@
   "attachment.too_large": "大きすぎるため添付できません（上限 {limit}）",
   "attachment.too_many": "1つの発言に添付できるのは{count}件までです",
   "chat.command_failed": "操作に失敗しました: {error}",
+  "chat.delete_dialog_message": "この発言と、それより後ろの発言をすべて削除します。",
+  "chat.delete_dialog_title": "この発言以降を削除しますか?",
   "chat.edit_button": "編集",
   "chat.error_detail_summary": "詳細を表示",
   "chat.general_title": "総合チャット",
