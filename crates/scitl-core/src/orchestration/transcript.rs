@@ -12,6 +12,11 @@ use crate::llm::{
     ToolSchema,
 };
 
+/// 保存の形の版。保存する発言の形([`StoredMessage`])か、保存した本文が通った無害化の規則
+/// (`llm::PromptText`)を変えたら上げる。保存した本文には無害化を掛け直せないので、版の違う
+/// 保存は使わず、実行記録から組み立て直す(組み立ては今の規則で無害化する)。
+const FORM_VERSION: u32 = 1;
+
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
 ///
@@ -173,9 +178,9 @@ pub(super) struct Replayable {
 }
 
 impl Replayable {
-    /// 保存を読み戻す。形を読めない保存、画像の実体を読めない保存と、今のモデルが受け付けない
-    /// 形(ツールに対応しないモデルでのツールの往復・画像に対応しないモデルでの画像)を含む
-    /// 保存は使わない(`None`)。使わない試行は実行記録から組み立てる。
+    /// 保存を読み戻す。形を読めない保存、形の版が違う保存、画像の実体を読めない保存と、今の
+    /// モデルが受け付けない形(ツールに対応しないモデルでのツールの往復・画像に対応しないモデル
+    /// での画像)を含む保存は使わない(`None`)。使わない試行は実行記録から組み立てる。
     pub(super) fn load(
         transcript: &Transcript,
         tools_available: bool,
@@ -186,6 +191,9 @@ impl Replayable {
             serde_json::from_value(serde_json::Value::String(transcript.api_format.clone()))
                 .ok()?;
         let input: StoredInput = serde_json::from_str(&transcript.input).ok()?;
+        if input.version != FORM_VERSION {
+            return None;
+        }
         let rounds: Vec<StoredMessage> = serde_json::from_str(&transcript.rounds).ok()?;
         let stored: Vec<StoredMessage> = input.messages.into_iter().chain(rounds).collect();
         let unsupported = stored
@@ -209,11 +217,23 @@ impl Replayable {
     }
 }
 
-/// 試行の入力。入力に含めた行(ユーザー発言と、それに置いた操作の記録)のidを添える。
+/// 試行の入力。入力に含めた行(ユーザー発言と、それに置いた操作の記録)のidと、この保存
+/// (`rounds`を含む)の形の版を添える。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct StoredInput {
-    pub(super) rows: Vec<i64>,
-    pub(super) messages: Vec<StoredMessage>,
+    version: u32,
+    rows: Vec<i64>,
+    messages: Vec<StoredMessage>,
+}
+
+impl StoredInput {
+    pub(super) fn new(rows: Vec<i64>, messages: Vec<StoredMessage>) -> Self {
+        Self {
+            version: FORM_VERSION,
+            rows,
+            messages,
+        }
+    }
 }
 
 /// 1ターンで送った形のうち、試行によらない部分(`db::transcripts::NewTranscript`に渡す)。
@@ -274,6 +294,106 @@ mod tests {
 
     fn user(text: &str) -> ChatMessage {
         ChatMessage::user(PromptText::user_message(text, None))
+    }
+
+    fn stored(message: ChatMessage) -> StoredMessage {
+        StoredMessage::of(&message).unwrap()
+    }
+
+    fn reply(text: &str) -> StoredMessage {
+        stored(ChatMessage::Assistant {
+            content: Some(text.to_string()),
+            tool_calls: Vec::new(),
+            replay: Replay::default(),
+        })
+    }
+
+    fn saved(api_format: &str, input: &StoredInput, rounds: &[StoredMessage]) -> Transcript {
+        Transcript {
+            turn_id: "t1".to_string(),
+            attempt_no: 1,
+            api_format: api_format.to_string(),
+            model: "m".to_string(),
+            system_digest: String::new(),
+            settings_system_digest: String::new(),
+            tools_digest: String::new(),
+            prefix_digest: "p".to_string(),
+            history_start: None,
+            input: serde_json::to_string(input).unwrap(),
+            rounds: serde_json::to_string(rounds).unwrap(),
+        }
+    }
+
+    /// 実体の無い置き場所。画像を読もうとすると失敗する。
+    fn empty_store() -> (tempfile::TempDir, AttachmentStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path().join("blobs"), dir.path().join("revealed"));
+        (dir, store)
+    }
+
+    #[test]
+    fn loads_a_saved_attempt() {
+        let (_dir, store) = empty_store();
+        let input = StoredInput::new(vec![1, 2], vec![stored(user("u"))]);
+        let loaded = Replayable::load(
+            &saved("anthropic", &input, &[reply("a")]),
+            true,
+            true,
+            &store,
+        )
+        .unwrap();
+        assert_eq!(loaded.origin.api_format, ApiFormat::Anthropic);
+        assert_eq!(loaded.origin.model, "m");
+        assert_eq!(loaded.input_rows, [1, 2]);
+        assert_eq!(loaded.messages.len(), 2);
+    }
+
+    /// 読めない保存・形の版が違う保存・今のモデルが受け付けない形を含む保存は使わない。
+    #[test]
+    fn does_not_load_what_it_cannot_read_or_the_model_cannot_take() {
+        let (_dir, store) = empty_store();
+        let load = |t: &Transcript, tools: bool, images: bool| {
+            Replayable::load(t, tools, images, &store).is_some()
+        };
+        let input = StoredInput::new(vec![1], vec![stored(user("u"))]);
+        let plain = saved("anthropic", &input, &[reply("a")]);
+        assert!(load(&plain, false, false));
+
+        assert!(!load(&saved("unknown", &input, &[reply("a")]), true, true));
+        let mut other_version = plain.clone();
+        other_version.input = other_version
+            .input
+            .replace(&format!(r#""version":{FORM_VERSION}"#), r#""version":0"#);
+        assert!(!load(&other_version, true, true));
+        let mut unversioned = plain.clone();
+        unversioned.input = r#"{"rows":[1],"messages":[]}"#.to_string();
+        assert!(!load(&unversioned, true, true));
+
+        let call = stored(ChatMessage::Assistant {
+            content: None,
+            tool_calls: vec![ToolCallRequest {
+                id: Some("call_1".to_string()),
+                name: "search".to_string(),
+                arguments: ToolArguments::parse("{}".to_string()),
+            }],
+            replay: Replay::default(),
+        });
+        let with_call = saved("anthropic", &input, &[call, reply("a")]);
+        assert!(load(&with_call, true, false));
+        assert!(!load(&with_call, false, false));
+
+        // 画像に対応しないモデルでは使わず、対応していても実体を読めなければ使わない。
+        let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
+        let with_image = StoredInput::new(
+            vec![1],
+            vec![stored(ChatMessage::User {
+                text: PromptText::user_message("u", None),
+                images: vec![image.with_source("missing")],
+            })],
+        );
+        let with_image = saved("anthropic", &with_image, &[reply("a")]);
+        assert!(!load(&with_image, true, false));
+        assert!(!load(&with_image, true, true));
     }
 
     #[test]

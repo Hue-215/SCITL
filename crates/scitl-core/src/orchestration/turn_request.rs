@@ -140,10 +140,10 @@ impl TurnRequest {
         for message in StoredMessage::all_of(&self.opening[1..self.input_from])? {
             prefix.push(&message);
         }
-        let input = StoredInput {
-            rows: self.input_rows.clone(),
-            messages: StoredMessage::all_of(&self.opening[self.input_from..])?,
-        };
+        let input = StoredInput::new(
+            self.input_rows.clone(),
+            StoredMessage::all_of(&self.opening[self.input_from..])?,
+        );
         let rounds = StoredMessage::all_of(rounds)?;
         Some(SavedTurn {
             system: system.clone(),

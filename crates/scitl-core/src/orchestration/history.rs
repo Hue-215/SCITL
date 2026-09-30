@@ -674,16 +674,16 @@ mod tests {
 
         /// 試行の送った形を保存する(指紋は使わないので固定の値)。
         fn save(&self, turn: &str, attempt: i64, rows: Vec<i64>, input: &[&str], reply: &str) {
-            let stored_input = StoredInput {
+            let stored_input = StoredInput::new(
                 rows,
-                messages: input
+                input
                     .iter()
                     .map(|text| {
                         StoredMessage::of(&ChatMessage::user(PromptText::user_message(text, None)))
                             .unwrap()
                     })
                     .collect(),
-            };
+            );
             let rounds = vec![StoredMessage::of(&ChatMessage::Assistant {
                 content: Some(reply.to_string()),
                 tool_calls: Vec::new(),

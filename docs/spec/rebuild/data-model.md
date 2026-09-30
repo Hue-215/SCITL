@@ -308,7 +308,7 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 | tools_digest | TEXT | NOT NULL。渡したツール定義の一覧(`transcript_blobs`) |
 | prefix_digest | TEXT | NOT NULL。入力より前(system・ツール定義・それまでの発言列)の指紋 |
 | history_start | INTEGER | NULL可。最初に並べたユーザー発言の`messages.id`(間引きの位置。その発言に置いた操作の記録も一緒に並ぶ)。NULL=会話の最初から |
-| input | TEXT | NOT NULL, `CHECK (json_valid(input))`。末尾に足した入力の発言と、含めた行(ユーザー発言・操作の記録)のid |
+| input | TEXT | NOT NULL, `CHECK (json_valid(input))`。末尾に足した入力の発言と、含めた行(ユーザー発言・操作の記録)のidと、この行(`rounds`を含む)の形の版(`architecture.md` 3節「前が変わる場面の扱い」) |
 | rounds | TEXT | NOT NULL, `CHECK (json_valid(rounds))`。各ラウンドで足したassistant・tool結果と、最後の応答。`Replay`は受け取った生のJSONの文字列のまま持つ |
 | created_at | TEXT | ISO8601。NOT NULL |
 
