@@ -20,3 +20,4 @@ crates/scitl-tauri/gen/
 
 # Claude Code のローカル作業領域(サブエージェント用worktreeなど)
 .claude/
+.mcp.json
