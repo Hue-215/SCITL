@@ -1,5 +1,7 @@
 //! 会話履歴の間引き。どこまで送るかの判断はここに閉じる。
 
+use std::ops::Range;
+
 use crate::llm::{estimate_message, estimate_tools, ChatMessage, ToolSchema};
 
 /// コンテキスト長のうち、応答(思考を含む)のために空けておく割合の逆数。出力の上限を
@@ -13,11 +15,16 @@ const RESPONSE_SHARE_DIVISOR: usize = 4;
 /// (`tool_calls`を持つassistantと続くtool)を途中で切らず、間引いた履歴はユーザー発言から
 /// 始まるので、アダプタが先頭にユーザー発言を補うことも無い。
 ///
+/// `unbroken`(送った形の保存から並べた区間)は途中で切らない。区間の中のユーザー発言は単位の
+/// 始まりにしない。区間は入力に含めた行を発言ごとには持たず、途中から並べると間引きの位置を
+/// 行で表せないため(途中から並べた区間の思考は、どのみち送り返せない)。
+///
 /// 最後の単位(このターンのユーザー発言)は、収まらなくても残す。見積もりは多めなので
 /// 実際には収まることがあり、収まらなければコンテキスト超過のエラー発言が上限の設定を促す。
 /// ここで送らずに止めると、その両方の道を塞ぐ。
 pub(super) fn trim_history<'a, 'b>(
     history: &'a [ChatMessage],
+    unbroken: &[Range<usize>],
     context_length: u32,
     others: impl IntoIterator<Item = &'b ChatMessage>,
     tools: &[ToolSchema],
@@ -32,7 +39,9 @@ pub(super) fn trim_history<'a, 'b>(
     for (i, message) in history.iter().enumerate().rev() {
         used += estimate_message(message);
         // 先頭は、ユーザー発言でなくても単位の始まりとして扱う(全体が収まるなら全部送る)。
-        let starts_unit = i == 0 || matches!(message, ChatMessage::User { .. });
+        let starts_unit = i == 0
+            || (matches!(message, ChatMessage::User { .. })
+                && !unbroken.iter().any(|r| r.start < i && i < r.end));
         if !starts_unit {
             continue;
         }
@@ -92,7 +101,7 @@ mod tests {
     fn keeps_everything_when_it_fits() {
         let history = vec![assistant("a0"), user("u1"), assistant("a1"), user("u2")];
         let length = context_length_fitting(&history, 0);
-        assert_eq!(trim_history(&history, length, &[], &[]), &history[..]);
+        assert_eq!(trim_history(&history, &[], length, &[], &[]), &history[..]);
     }
 
     #[test]
@@ -109,7 +118,7 @@ mod tests {
         ];
         // 途中のassistantから始めれば収まる長さでも、ユーザー発言の境目まで落とす。
         let length = context_length_fitting(&history, 3);
-        assert_eq!(trim_history(&history, length, &[], &[]), &history[4..]);
+        assert_eq!(trim_history(&history, &[], length, &[], &[]), &history[4..]);
     }
 
     #[test]
@@ -117,12 +126,45 @@ mod tests {
         let history = vec![user("u1"), assistant("a1"), user("u2")];
         let length = context_length_fitting(&history, 0);
         let system = [ChatMessage::System("system prompt".to_string())];
-        assert_eq!(trim_history(&history, length, &system, &[]), &history[2..]);
+        assert_eq!(
+            trim_history(&history, &[], length, &system, &[]),
+            &history[2..]
+        );
     }
 
     #[test]
     fn keeps_the_latest_user_message_even_when_it_does_not_fit() {
         let history = vec![user("u1"), assistant("a1"), user("u2")];
-        assert_eq!(trim_history(&history, 1, &[], &[]), &history[2..]);
+        assert_eq!(trim_history(&history, &[], 1, &[], &[]), &history[2..]);
+    }
+
+    #[test]
+    fn does_not_cut_inside_an_unbroken_range() {
+        let history = vec![
+            user("u1"),
+            assistant("a1"),
+            user("u2"),
+            user("u3"),
+            assistant("a3"),
+            user("u4"),
+        ];
+        let saved = [Range { start: 2, end: 5 }];
+        // 区間の途中のユーザー発言から始めれば収まる長さでも、区間の前まで戻らず、後ろまで落とす。
+        let length = context_length_fitting(&history, 3);
+        assert_eq!(
+            trim_history(&history, &saved, length, &[], &[]),
+            &history[5..]
+        );
+        // 区間の始まりからなら切れる。
+        let length = context_length_fitting(&history, 2);
+        assert_eq!(
+            trim_history(&history, &saved, length, &[], &[]),
+            &history[2..]
+        );
+        // 最後のユーザー発言が区間の中にあれば、収まらなくても区間の始まりから残す。
+        assert_eq!(
+            trim_history(&history[..5], &saved, 1, &[], &[]),
+            &history[2..5]
+        );
     }
 }

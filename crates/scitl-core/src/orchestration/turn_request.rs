@@ -72,8 +72,10 @@ impl TurnRequest {
             exposed_tools.extend(external.schemas());
         }
         let system = ChatMessage::System(build_system_prompt(chat, &ctx.prompts, tools_available));
+        let saved: Vec<_> = history.segments.iter().map(|s| s.start..s.end).collect();
         let kept = trim_history(
             &history.messages,
+            &saved,
             ctx.capabilities.context_length,
             [&system],
             &exposed_tools,
@@ -89,16 +91,16 @@ impl TurnRequest {
             history.first_row(keep_from)
         };
         let input_rows = history.rows_from(input_from);
-        // 発言の位置を、先頭にシステムプロンプトを置いた`opening`の位置に直す。
+        // 発言の位置を、先頭にシステムプロンプトを置いた`opening`の位置に直す。保存から並べた
+        // 区間は途中で切らないので、残った区間はすべて丸ごと残っている。
         let at = |i: usize| 1 + i.saturating_sub(keep_from);
         let segments: Vec<_> = history
             .segments
             .into_iter()
-            .filter(|s| s.end > keep_from)
+            .filter(|s| s.start >= keep_from)
             .map(|s| OpeningSegment {
                 start: at(s.start),
                 end: at(s.end),
-                whole: s.start >= keep_from,
                 origin: s.origin,
                 prefix_digest: s.prefix_digest,
             })
@@ -196,8 +198,6 @@ impl TurnRequest {
 struct OpeningSegment {
     start: usize,
     end: usize,
-    /// 区間がすべて残っているか(間引きで前の一部が落ちていないか)。
-    whole: bool,
     origin: AdapterIdentity,
     prefix_digest: String,
 }
@@ -217,14 +217,13 @@ fn settle_replays(
     };
     // 保存できない形の発言があれば、それより後ろの指紋は取れず、どの区間とも一致しない。
     let mut digest = Some(PrefixDigest::start(system, tools));
-    let mut segments = segments.iter().peekable();
     let mut keep_until = 0;
     for (i, message) in opening.iter_mut().enumerate().skip(1) {
-        if let Some(segment) = segments.next_if(|s| s.start == i) {
+        if let Some(segment) = segments.iter().find(|s| s.start == i) {
             let matches = digest
                 .as_ref()
                 .is_some_and(|d| d.as_str() == segment.prefix_digest);
-            keep_until = if segment.whole && matches && adapter.accepts_replay(&segment.origin) {
+            keep_until = if matches && adapter.accepts_replay(&segment.origin) {
                 segment.end
             } else {
                 0
@@ -239,5 +238,193 @@ fn settle_replays(
             d.push(&StoredMessage::of(message)?);
             Some(d)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ApiFormat, ReasoningEffort};
+    use crate::error::CoreError;
+    use crate::llm::{Readiness, ResponseEvent};
+
+    /// 決まった方言の思考だけを受け付ける送り先。送りはしない。
+    struct Accepting(ApiFormat);
+
+    #[async_trait::async_trait]
+    impl LlmAdapter for Accepting {
+        fn readiness(&self) -> Readiness {
+            Readiness::Ready
+        }
+
+        fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
+            origin.api_format == self.0
+        }
+
+        async fn send(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: ToolOffer<'_>,
+            _reasoning_effort: Option<ReasoningEffort>,
+            _on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+        ) -> std::result::Result<Replay, CoreError> {
+            unreachable!("settling replays sends nothing")
+        }
+    }
+
+    const TOOLS: &str = "[]";
+
+    fn user(text: &str) -> ChatMessage {
+        ChatMessage::user(PromptText::user_message(text, None))
+    }
+
+    fn thinking(signature: &str) -> ChatMessage {
+        ChatMessage::Assistant {
+            content: Some("a".to_string()),
+            tool_calls: Vec::new(),
+            replay: serde_json::from_str(&format!(
+                r#"[{{"type":"thinking","thinking":"","signature":"{signature}"}}]"#
+            ))
+            .unwrap(),
+        }
+    }
+
+    /// `[system, u1, a1(思考), u2, a2(思考), u3]`。
+    fn opening() -> Vec<ChatMessage> {
+        vec![
+            ChatMessage::System("s".to_string()),
+            user("u1"),
+            thinking("sig1"),
+            user("u2"),
+            thinking("sig2"),
+            user("u3"),
+        ]
+    }
+
+    /// `messages[1..end]`をこの形で並べたときの指紋。
+    fn digest_before(messages: &[ChatMessage], end: usize) -> String {
+        let mut digest = PrefixDigest::start("s", TOOLS);
+        for message in &messages[1..end] {
+            digest.push(&StoredMessage::of(message).unwrap());
+        }
+        digest.as_str().to_string()
+    }
+
+    fn segment(start: usize, api_format: ApiFormat, prefix_digest: String) -> OpeningSegment {
+        OpeningSegment {
+            start,
+            end: start + 2,
+            origin: AdapterIdentity {
+                api_format,
+                model: "m".to_string(),
+            },
+            prefix_digest,
+        }
+    }
+
+    fn kept(opening: &[ChatMessage]) -> Vec<bool> {
+        opening
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Assistant { replay, .. } => Some(*replay != Replay::default()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn keeps_the_thinking_of_segments_whose_prefix_is_unchanged() {
+        let sent = opening();
+        let segments = [
+            segment(1, ApiFormat::Anthropic, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [true, true]);
+    }
+
+    /// 前の区間の思考が外れると、それより後ろの区間の指紋も合わなくなる。
+    #[test]
+    fn dropping_earlier_thinking_drops_everything_after() {
+        let sent = opening();
+        let segments = [
+            segment(1, ApiFormat::Anthropic, "changed".to_string()),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
+
+        // 今の送り先が受け付けない思考も、外せば同じく後ろが合わなくなる。
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
+    }
+
+    /// 前が変わったあとに送った区間は、変わった形で指紋を取っているので、また一致する。
+    #[test]
+    fn matches_again_from_the_segment_sent_after_the_change() {
+        // 1つ目の区間は別の方言に送ったもので、2つ目はその思考を含めずに送った。
+        let mut sent = opening();
+        if let ChatMessage::Assistant { replay, .. } = &mut sent[2] {
+            *replay = Replay::default();
+        }
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Anthropic, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, true]);
+
+        // 元の方言に戻ると、1つ目の思考が返り、2つ目は前が変わるので外れる。
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Gemini),
+        );
+        assert_eq!(kept(&messages), [true, false]);
+    }
+
+    /// 保存から並べた区間の外にある思考は送らない。
+    #[test]
+    fn drops_thinking_outside_saved_segments() {
+        let sent = opening();
+        let segments = [segment(3, ApiFormat::Anthropic, digest_before(&sent, 3))];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Anthropic),
+        );
+        assert_eq!(kept(&messages), [false, false]);
     }
 }
