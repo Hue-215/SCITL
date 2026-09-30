@@ -63,7 +63,8 @@ impl AttachmentStore {
     /// 実体を画像として読む。形式は保存した値ではなく実体の先頭バイトから決め直す
     /// ([`InlineImage::from_bytes`])ので、画像として扱う形式でなければ失敗にする。
     pub fn read_image(&self, hash: &str) -> Result<InlineImage> {
-        InlineImage::from_bytes(&self.read(hash)?).ok_or_else(|| {
+        let image = InlineImage::from_bytes(&self.read(hash)?).map(|image| image.with_source(hash));
+        image.ok_or_else(|| {
             CoreError::Attachment("stored file is not an image of a supported format".to_string())
         })
     }

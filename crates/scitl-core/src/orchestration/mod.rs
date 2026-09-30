@@ -8,6 +8,7 @@ mod prompt_defaults;
 mod system_prompt;
 mod tool_limits;
 mod tool_record;
+mod transcript;
 pub mod turn;
 mod turn_context;
 pub mod turn_error;

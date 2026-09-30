@@ -11,6 +11,9 @@ use crate::llm::{ChatMessage, PromptText, ToolOffer, ToolSchema};
 use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
 use crate::orchestration::system_prompt::build_system_prompt;
+use crate::orchestration::transcript::{
+    tools_body, PrefixDigest, SavedTurn, StoredInput, StoredMessage,
+};
 use crate::orchestration::TurnContext;
 use crate::tools::{self, external::ExternalToolset};
 
@@ -23,6 +26,12 @@ const ROUND_LIMIT_NOTE: &str = "The tool call limit for this turn has been reach
 pub(super) struct TurnRequest {
     /// システムプロンプトと間引いた履歴。ターンの間は変えない。
     opening: Vec<ChatMessage>,
+    /// `opening`のうち、このターンの新しい入力が始まる位置。
+    input_from: usize,
+    /// 新しい入力に含めた行(ユーザー発言と、それに置いた操作の記録)。
+    input_rows: Vec<i64>,
+    /// 最初に並べた行(間引きの位置)。会話の最初から並べたなら`None`。
+    history_start: Option<i64>,
     exposed_tools: Vec<ToolSchema>,
     tools_available: bool,
 }
@@ -59,17 +68,31 @@ impl TurnRequest {
         }
         let system = ChatMessage::System(build_system_prompt(chat, &ctx.prompts, tools_available));
         let kept = trim_history(
-            &history,
+            &history.messages,
             ctx.capabilities.context_length,
             [&system],
             &exposed_tools,
-        );
-        let mut opening = Vec::with_capacity(1 + kept.len());
+        )
+        .len();
+        let keep_from = history.messages.len() - kept;
+        // 間引きは最後のユーザー発言より前でしか切らないが、入力が複数の発言にわたると一部が
+        // 落ちうる。残った分だけを入力とする。
+        let input_from = history.input_from.max(keep_from);
+        let history_start = if keep_from == 0 {
+            None
+        } else {
+            history.first_row(keep_from)
+        };
+        let input_rows = history.rows_from(input_from);
+        let mut opening = Vec::with_capacity(1 + kept);
         opening.push(system);
-        opening.extend(kept.iter().cloned());
+        opening.extend(history.messages.into_iter().skip(keep_from));
 
         Ok(Self {
             opening,
+            input_from: 1 + input_from - keep_from,
+            input_rows,
+            history_start,
             exposed_tools,
             tools_available,
         })
@@ -77,6 +100,40 @@ impl TurnRequest {
 
     pub(super) fn tools_available(&self) -> bool {
         self.tools_available
+    }
+
+    /// ラウンドで送った発言列(`round`の結果)のうち、最初のリクエストの後ろに足した分。
+    pub(super) fn appended<'a>(&self, sent: &'a [ChatMessage]) -> &'a [ChatMessage] {
+        &sent[self.opening.len()..]
+    }
+
+    /// このターンで送った形の保存(`docs/spec/rebuild/architecture.md`「送った形のまま積む」)。
+    /// `rounds`は最後の呼び出しで最初のリクエストの後ろに足した往復([`Self::appended`])と、
+    /// 最後の応答。保存できない発言(添付から読み出したものでない画像)があれば`None`。
+    pub(super) fn transcript(&self, rounds: &[ChatMessage]) -> Option<SavedTurn> {
+        let ChatMessage::System(system) = &self.opening[0] else {
+            unreachable!("the opening starts with the system prompt");
+        };
+        let tools = tools_body(&self.exposed_tools);
+        let mut prefix = PrefixDigest::start(system, &tools);
+        for message in StoredMessage::all_of(&self.opening[1..self.input_from])? {
+            prefix.push(&message);
+        }
+        let input = StoredInput {
+            rows: self.input_rows.clone(),
+            messages: StoredMessage::all_of(&self.opening[self.input_from..])?,
+        };
+        let rounds = StoredMessage::all_of(rounds)?;
+        Some(SavedTurn {
+            system: system.clone(),
+            // TODO(#280): システムプロンプトの変更を後ろに足して伝える形にしたら、先頭と分かれる。
+            settings_system: system.clone(),
+            tools,
+            prefix_digest: prefix.as_str().to_string(),
+            history_start: self.history_start,
+            input: serde_json::to_string(&input).expect("a stored input serializes"),
+            rounds: serde_json::to_string(&rounds).expect("stored rounds serialize"),
+        })
     }
 
     /// ツールを渡すラウンドの数。上限のラウンドまでツールを実行したら、ツールを呼べないように
