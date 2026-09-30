@@ -92,6 +92,31 @@ fn received(replay: &crate::llm::Replay) -> Vec<RequestPart> {
         .collect()
 }
 
+/// プレビューの本文で、読めない大きな値(画像の実体・思考の署名)だけを長さに縮める
+/// (`LlmAdapter::request_preview`)。`targets`は、`type`がその値のオブジェクトで縮める欄の
+/// 位置の組。
+fn abbreviate(value: &mut serde_json::Value, targets: &[(&str, &[&str])]) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let kind = map.get("type").and_then(serde_json::Value::as_str);
+            if let Some((_, path)) = targets.iter().find(|(t, _)| Some(*t) == kind) {
+                let mut field = map.get_mut(path[0]);
+                for key in &path[1..] {
+                    field = field.and_then(|f| f.get_mut(*key));
+                }
+                if let Some(serde_json::Value::String(text)) = field {
+                    *text = format!("… ({} bytes)", text.len());
+                }
+            }
+            map.values_mut().for_each(|v| abbreviate(v, targets));
+        }
+        serde_json::Value::Array(items) => {
+            items.iter_mut().for_each(|v| abbreviate(v, targets));
+        }
+        _ => {}
+    }
+}
+
 /// 受け取った応答の要素を読む。生のJSONとして正しくても`Value`に読めない要素(範囲を超える
 /// 数値等)があれば、応答の解釈の失敗にする。
 fn read_elements(

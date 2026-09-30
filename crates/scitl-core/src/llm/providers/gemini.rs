@@ -332,21 +332,8 @@ fn content(text: &str, images: &[InlineImage]) -> Vec<Value> {
     parts
 }
 
-/// プレビューの本文で、画像の本体(`data`)だけを長さに縮める(`LlmAdapter::request_preview`)。
-fn abbreviate_images(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            if map.get("type").and_then(Value::as_str) == Some("image") {
-                if let Some(Value::String(data)) = map.get_mut("data") {
-                    *data = format!("… ({} bytes)", data.len());
-                }
-            }
-            map.values_mut().for_each(abbreviate_images);
-        }
-        Value::Array(items) => items.iter_mut().for_each(abbreviate_images),
-        _ => {}
-    }
-}
+/// プレビューの本文で縮める値。画像の実体と、送り返す思考の署名。
+const ABBREVIATED: &[(&str, &[&str])] = &[("image", &["data"]), ("thought", &["signature"])];
 
 // ---- 応答 ----
 
@@ -445,6 +432,12 @@ impl LlmAdapter for GeminiAdapter {
         })
     }
 
+    /// 別のモデルが出した`thought`を送ってよいかは確かめていないので、同じモデルのものだけ
+    /// 送り返す。
+    fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
+        origin.api_format == ApiFormat::Gemini && origin.model == self.model
+    }
+
     fn request_preview(
         &self,
         messages: &[ChatMessage],
@@ -458,7 +451,7 @@ impl LlmAdapter for GeminiAdapter {
             thinking_level(reasoning_effort),
         );
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
-        abbreviate_images(&mut body);
+        super::abbreviate(&mut body, ABBREVIATED);
         Some(RequestPreview { body })
     }
 

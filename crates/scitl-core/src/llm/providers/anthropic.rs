@@ -366,25 +366,12 @@ fn image_block(image: &crate::llm::InlineImage) -> Value {
     })
 }
 
-/// プレビューの本文で、画像の本体(`source.data`)だけを長さに縮める
-/// (`LlmAdapter::request_preview`)。
-fn abbreviate_images(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            let is_image = map.get("type").and_then(Value::as_str) == Some("image");
-            if is_image {
-                if let Some(Value::String(data)) =
-                    map.get_mut("source").and_then(|s| s.get_mut("data"))
-                {
-                    *data = format!("… ({} bytes)", data.len());
-                }
-            }
-            map.values_mut().for_each(abbreviate_images);
-        }
-        Value::Array(items) => items.iter_mut().for_each(abbreviate_images),
-        _ => {}
-    }
-}
+/// プレビューの本文で縮める値。画像の実体と、送り返す思考の署名。
+const ABBREVIATED: &[(&str, &[&str])] = &[
+    ("image", &["source", "data"]),
+    ("thinking", &["signature"]),
+    ("redacted_thinking", &["data"]),
+];
 
 // ---- 応答 ----
 
@@ -462,6 +449,12 @@ impl LlmAdapter for AnthropicAdapter {
         })
     }
 
+    /// 別のモデルが出したブロックも送り返す。読めないモデルのブロックはAPIが黙って捨て、元の
+    /// モデルに戻ったときにまた読まれる。
+    fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
+        origin.api_format == ApiFormat::Anthropic
+    }
+
     fn request_preview(
         &self,
         messages: &[ChatMessage],
@@ -475,7 +468,7 @@ impl LlmAdapter for AnthropicAdapter {
             Thinking::from_effort(reasoning_effort),
         );
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
-        abbreviate_images(&mut body);
+        super::abbreviate(&mut body, ABBREVIATED);
         Some(RequestPreview { body })
     }
 
@@ -782,6 +775,28 @@ mod tests {
             .map(|m| m["role"].as_str().unwrap())
             .collect();
         assert_eq!(roles, ["user", "assistant", "user"]);
+    }
+
+    /// プレビューでは、送り返す思考の署名も縮める(読めないので)。思考の要約は縮めない。
+    #[test]
+    fn preview_shortens_the_signature_of_replayed_thinking() {
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: Vec::new(),
+                replay: Replay::from_json(
+                    r#"[{"type":"thinking","thinking":"plan","signature":"0123456789"}]"#,
+                ),
+            },
+            user("next"),
+        ];
+        let preview = adapter("http://127.0.0.1:9", "")
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap();
+        let block = &preview.body["messages"][1]["content"][0];
+        assert_eq!(block["signature"], "… (10 bytes)");
+        assert_eq!(block["thinking"], "plan");
     }
 
     #[test]
