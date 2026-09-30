@@ -336,16 +336,13 @@ impl History {
     }
 }
 
-/// 表示される返信のある試行のうち、送った形の保存を読み戻せるもの(`turn_id`ごと)。ツールに
-/// 対応しないモデルでは使わない(保存したツールの往復を送ることになるため)。
+/// 表示される返信のある試行のうち、送った形の保存を読み戻せるもの(`turn_id`ごと)。今のモデルが
+/// 受け付けない形を含む保存は使わない(`Replayable::load`)。
 fn used_transcripts(
     stored: &StoredChat,
     options: &HistoryOptions,
     store: &AttachmentStore,
 ) -> HashMap<String, Replayable> {
-    if !options.tools_available {
-        return HashMap::new();
-    }
     let replied: HashSet<(&str, i64)> = stored
         .messages
         .iter()
@@ -1236,7 +1233,8 @@ mod tests {
         assert!(history.rows_from(history.input_from).contains(&op));
     }
 
-    /// 捨てた試行の保存と、ツールに対応しないモデルでは、保存を使わず記録から組み立てる。
+    /// 捨てた試行の保存は使わず、記録から組み立てる。今のモデルが受け付けない形を含む保存も
+    /// 使わない(`Replayable::load`)が、ツールの往復を含まない保存はツールに対応しないモデルでも使う。
     #[test]
     fn uses_only_the_saved_form_of_a_replied_attempt_the_model_can_take() {
         let f = Fixture::new();
@@ -1256,10 +1254,12 @@ mod tests {
                 .len(),
             1
         );
-        assert!(f
-            .build_full(Chat::Task(f.task_id), false, false)
-            .segments
-            .is_empty());
+        assert_eq!(
+            f.build_full(Chat::Task(f.task_id), false, false)
+                .segments
+                .len(),
+            1
+        );
     }
 
     fn opening_message() -> ChatMessage {
