@@ -133,10 +133,9 @@ fn group_in_chat<T>(
 
 /// 1つの発言の添付。付けた順。
 pub fn views_for_message(conn: &Connection, message_id: i64) -> Result<Vec<AttachmentView>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, original_name, mime_type, kind, size_bytes
-         FROM attachments WHERE message_id = ?1 ORDER BY id",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {VIEW_COLUMNS} FROM attachments a WHERE a.message_id = ?1 ORDER BY a.id"
+    ))?;
     let rows = stmt
         .query_map([message_id], |row| view_from_row(row, 0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -145,8 +144,7 @@ pub fn views_for_message(conn: &Connection, message_id: i64) -> Result<Vec<Attac
 
 pub fn get(conn: &Connection, id: i64) -> Result<Attachment> {
     conn.query_row(
-        "SELECT id, original_name, mime_type, kind, size_bytes, content_text, file_hash
-         FROM attachments WHERE id = ?1",
+        &format!("SELECT {CONTENT_COLUMNS} FROM attachments a WHERE a.id = ?1"),
         [id],
         |row| attachment_from_row(row, 0),
     )

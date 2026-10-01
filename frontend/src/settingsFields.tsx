@@ -40,6 +40,3 @@ export function CollapseToggle({ showLabel, expanded, onToggle }: CollapseToggle
     </button>
   )
 }
-
-// この件数以上の一覧は既定で畳む。モデル表とMCPのツール一覧で揃える。
-export const LIST_COLLAPSE_THRESHOLD = 5

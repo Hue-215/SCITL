@@ -7,7 +7,7 @@ use scitl_core::attachments::{PickingLimits, StageOutcome, LIMITS};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::State;
 
-use super::with_db;
+use super::{with_db, CommandResult};
 use crate::AppState;
 
 /// ファイル名を運ぶヘッダー。本文を生のバイト列で送るとJSONの引数を併せて持てないため、
@@ -21,9 +21,9 @@ const FILE_NAME_HEADER: &str = "x-scitl-file-name";
 pub async fn stage_attachment(
     state: State<'_, AppState>,
     request: Request<'_>,
-) -> Result<StageOutcome, String> {
+) -> CommandResult<StageOutcome> {
     let InvokeBody::Raw(bytes) = request.body() else {
-        return Err("attachment body must be raw bytes".to_string());
+        return Err("attachment body must be raw bytes".into());
     };
     let name = request
         .headers()
@@ -34,9 +34,7 @@ pub async fn stage_attachment(
     // 借りている本文を、ブロッキング処理のスレッドへ渡せるよう複製する(大きさは上限まで)。
     let bytes = bytes.clone();
     let attachments = Arc::clone(&state.attachments);
-    scitl_core::blocking::run(move || attachments.stage(name, bytes))
-        .await
-        .map_err(|e| e.to_string())
+    Ok(scitl_core::blocking::run(move || attachments.stage(name, bytes)).await?)
 }
 
 /// 預けた添付を取り消す。知らないトークンは何もしない。
@@ -55,7 +53,7 @@ pub fn get_attachment_limits() -> PickingLimits {
 pub async fn read_text_attachment(
     state: State<'_, AppState>,
     attachment_id: i64,
-) -> Result<String, String> {
+) -> CommandResult<String> {
     let attachments = Arc::clone(&state.attachments);
     with_db(&state, move |conn| {
         attachments.read_text(conn, attachment_id)
@@ -68,12 +66,11 @@ pub async fn read_text_attachment(
 pub async fn read_image_attachment(
     state: State<'_, AppState>,
     attachment_id: i64,
-) -> Result<String, String> {
-    state
+) -> CommandResult<String> {
+    Ok(state
         .attachments
         .image_data_url(state.db.clone(), attachment_id)
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 /// 添付を元の名前で書き出し、入っているフォルダを開く。
@@ -81,12 +78,11 @@ pub async fn read_image_attachment(
 pub async fn reveal_attachment(
     state: State<'_, AppState>,
     attachment_id: i64,
-) -> Result<(), String> {
-    state
+) -> CommandResult<()> {
+    Ok(state
         .attachments
         .reveal(state.db.clone(), attachment_id)
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 /// `encodeURIComponent`の逆。UTF-8として読めなければ`None`。`%`の後に16進2桁が続かない並びは

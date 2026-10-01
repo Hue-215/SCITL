@@ -1,3 +1,31 @@
+/// 内部ツール1つの、名前(`NAME`)・公開する定義(`schema`)・登録(`TOOL`)。定義は最初に
+/// 使うときに1度だけ組み立てる。`run`は実行の形([`Run`])で、あとに説明と引数スキーマを並べる。
+macro_rules! internal_tool {
+    (
+        $(#[$doc:meta])*
+        name: $name:literal,
+        run: $run:expr,
+        $description:expr,
+        $parameters:expr $(,)?
+    ) => {
+        pub const NAME: &str = $name;
+
+        pub(super) const TOOL: $crate::tools::InternalTool = $crate::tools::InternalTool {
+            schema,
+            run: $run,
+        };
+
+        $(#[$doc])*
+        pub fn schema() -> &'static $crate::llm::ToolSchema {
+            static SCHEMA: std::sync::LazyLock<$crate::llm::ToolSchema> =
+                std::sync::LazyLock::new(|| {
+                    $crate::llm::ToolSchema::internal(NAME, $description, $parameters)
+                });
+            &SCHEMA
+        }
+    };
+}
+
 pub mod add_steps;
 mod args;
 pub mod delete_step;
@@ -49,7 +77,7 @@ pub(crate) struct InternalTool {
     run: Run,
 }
 
-/// 実行の形。タスクを対象にする形は、タスクチャットの面([`TASK`])にだけ並べる。
+/// 実行の形。タスクを対象にする形は、タスクチャットの一覧([`TASK`])にだけ並べる。
 #[derive(Clone, Copy)]
 enum Run {
     /// 会話によらない読み取り。
@@ -63,31 +91,12 @@ enum Run {
     ReadAttachment,
 }
 
-/// 公開面。
-// TODO(#73): `Mcp`はまだ枠だけで、何も公開しない。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Surface {
-    General,
-    Task,
-    Mcp,
-}
-
-impl Surface {
-    /// 会話ごとの面。総合チャットは読み取り専用のツールだけを公開する。
-    fn of(chat: Chat) -> Self {
-        match chat {
-            Chat::General => Self::General,
-            Chat::Task(_) => Self::Task,
-        }
-    }
-
-    /// 面ごとの公開ツール。実装関数は1つのまま、公開するスキーマだけを面で分ける。
-    fn tools(self) -> &'static [InternalTool] {
-        match self {
-            Self::General => GENERAL,
-            Self::Task => TASK,
-            Self::Mcp => &[],
-        }
+/// 会話で公開する内部ツール。総合チャットは読み取り専用のツールだけを公開する。実装関数は
+/// 1つのまま、公開する集合だけを会話で分ける。
+fn tools_of(chat: Chat) -> &'static [InternalTool] {
+    match chat {
+        Chat::General => GENERAL,
+        Chat::Task(_) => TASK,
     }
 }
 
@@ -116,8 +125,7 @@ const TASK: &[InternalTool] = &[
 ];
 
 fn find(chat: Chat, name: &str) -> Option<&'static InternalTool> {
-    Surface::of(chat)
-        .tools()
+    tools_of(chat)
         .iter()
         .find(|tool| (tool.schema)().name() == name)
 }
@@ -125,8 +133,7 @@ fn find(chat: Chat, name: &str) -> Option<&'static InternalTool> {
 /// 会話で公開する内部ツールの一覧。タスクチャットの`task_id`はターン開始時に
 /// オーケストレーション層が束縛するため、引数として公開しない。
 pub fn schemas(chat: Chat) -> Vec<ToolSchema> {
-    Surface::of(chat)
-        .tools()
+    tools_of(chat)
         .iter()
         .map(|tool| (tool.schema)().clone())
         .collect()
@@ -135,8 +142,7 @@ pub fn schemas(chat: Chat) -> Vec<ToolSchema> {
 /// 会話で公開する内部ツールの名前。外部ツールの名前空間化で衝突を避けるために使う
 /// (`external::ExternalToolset::build`)。
 pub fn names(chat: Chat) -> Vec<String> {
-    Surface::of(chat)
-        .tools()
+    tools_of(chat)
         .iter()
         .map(|tool| (tool.schema)().name().to_string())
         .collect()
@@ -146,9 +152,9 @@ pub fn names(chat: Chat) -> Vec<String> {
 /// (添付の読み込みを含む)は残らない。外部ツールと知らない名前は、読むだけか判別できないので
 /// 残りうるものとする。捨てた試行の記録を伝えるか(`orchestration::history`)の判断に使う。
 pub fn has_lasting_effect(name: &str) -> bool {
-    [Surface::General, Surface::Task]
+    [GENERAL, TASK]
         .into_iter()
-        .flat_map(Surface::tools)
+        .flatten()
         .find(|tool| (tool.schema)().name() == name)
         .is_none_or(|tool| match tool.run {
             Run::UpdateTask(_) => true,
@@ -188,7 +194,7 @@ pub fn execute(
         (Run::UpdateTask(run), Chat::Task(task_id)) => {
             db::in_transaction(conn, |conn| run(conn, task_id, arguments))
         }
-        // タスクを対象にする形は総合チャットの面に並べていない。
+        // タスクを対象にする形は総合チャットの一覧に並べていない。
         (Run::ReadTask(_) | Run::UpdateTask(_), Chat::General) => Err(unknown()),
     };
     result.map(ToolOutput::from)
@@ -197,10 +203,7 @@ pub fn execute(
 /// 工程が会話の対象タスクに属するかを確かめる。`step_id`はモデルが渡す引数なので、別の
 /// タスクの工程を指されうる。工程の更新・削除ツールで共有する。
 fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result<()> {
-    let belongs = task_steps::list_for_task(conn, task_id)?
-        .iter()
-        .any(|step| step.id == step_id);
-    if belongs {
+    if task_steps::belongs_to_task(conn, task_id, step_id)? {
         Ok(())
     } else {
         Err(CoreError::TaskStepNotFound(step_id))
@@ -214,11 +217,9 @@ mod tests {
 
     #[test]
     fn every_internal_tool_schema_builds() {
-        // `ToolSchema::internal`は引数スキーマを読み直せないと止まる。どの面の定義も組み立てる。
-        for surface in [Surface::General, Surface::Task, Surface::Mcp] {
-            for tool in surface.tools() {
-                (tool.schema)();
-            }
+        // `ToolSchema::internal`は引数スキーマを読み直せないと止まる。どの会話の定義も組み立てる。
+        for tool in [GENERAL, TASK].into_iter().flatten() {
+            (tool.schema)();
         }
         assert!(!schemas(Chat::General).is_empty());
         assert!(!schemas(Chat::Task(1)).is_empty());
@@ -230,9 +231,9 @@ mod tests {
     fn each_chat_runs_exactly_the_tools_it_exposes() {
         let conn = db::open_in_memory().unwrap();
         let task_id = db::tasks::create_task(&conn).unwrap().id;
-        let all_names: Vec<String> = [Surface::General, Surface::Task]
+        let all_names: Vec<String> = [GENERAL, TASK]
             .into_iter()
-            .flat_map(Surface::tools)
+            .flatten()
             .map(|tool| (tool.schema)().name().to_string())
             .collect();
         for chat in [Chat::General, Chat::Task(task_id)] {

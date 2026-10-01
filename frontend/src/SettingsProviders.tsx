@@ -22,9 +22,10 @@ import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
-import { CollapseToggle, LIST_COLLAPSE_THRESHOLD } from './settingsFields'
+import { CollapseToggle } from './settingsFields'
 import { httpPlainTextHint, usePositiveIntegerInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
+import { useCollapse } from './useCollapse'
 
 const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
   open_ai_compat: 'https://api.openai.com/v1',
@@ -360,15 +361,14 @@ interface ModelTableProps {
 // 外す)はRust側が持つ。
 function ModelTable({ provider, onUpdate }: ModelTableProps) {
   const models = provider.models
-  const [expanded, setExpanded] = useState(false)
+  const { collapsible, collapsed, toggle } = useCollapse(models.length)
   const [query, setQuery] = useState('')
 
-  const collapsible = models.length >= LIST_COLLAPSE_THRESHOLD
   // 検索欄は畳める件数のときだけ出す。削除で件数が減って欄が消えたら、打った語は消せない
   // ので、欄が無いあいだは絞り込まない。
   const { matched, searching } = matchQuery(models, collapsible ? query : '', (m) => m.label)
   // 折りたたんでいても、検索したら当たった行は出す。
-  const shown = collapsible && !expanded && !searching ? [] : matched
+  const shown = collapsed && !searching ? [] : matched
 
   return (
     <>
@@ -376,8 +376,7 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
         <div className="model-table-toolbar">
           <CollapseToggle
             showLabel={t('settings.model.show_all', { count: models.length })}
-            expanded={expanded}
-            onToggle={() => setExpanded((v) => !v)}
+            {...toggle}
           />
           <input
             type="search"

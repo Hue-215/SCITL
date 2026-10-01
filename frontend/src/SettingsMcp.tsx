@@ -1,14 +1,14 @@
 // 設定画面の「ツール」タブ。
 import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { NewMcpEndpoint } from './api'
-import type { McpServerView, SettingsView } from './types'
+import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
-import { CollapseToggle, LIST_COLLAPSE_THRESHOLD, NumberField } from './settingsFields'
+import { CollapseToggle, NumberField } from './settingsFields'
 import { httpPlainTextHint } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
+import { useCollapse } from './useCollapse'
 
 type Transport = McpServerView['endpoint']['transport']
 
@@ -143,7 +143,7 @@ function McpServerCard({
   onFetchTools,
 }: McpServerCardProps) {
   const tools = server.tools
-  const [expanded, setExpanded] = useState(false)
+  const { collapsible, collapsed, toggle } = useCollapse(tools.length)
 
   const endpointSummary =
     server.endpoint.transport === 'stdio'
@@ -159,8 +159,7 @@ function McpServerCard({
       : t('settings.tools.header_names_label')
 
   const fetched = server.tools_fetched
-  const collapsible = tools.length >= LIST_COLLAPSE_THRESHOLD
-  const visibleTools = collapsible && !expanded ? [] : tools
+  const visibleTools = collapsed ? [] : tools
 
   return (
     <li className="provider-card">
@@ -206,8 +205,7 @@ function McpServerCard({
           {collapsible && (
             <CollapseToggle
               showLabel={t('settings.tools.show_all', { count: tools.length })}
-              expanded={expanded}
-              onToggle={() => setExpanded((v) => !v)}
+              {...toggle}
             />
           )}
           <ul className="model-list">

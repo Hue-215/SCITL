@@ -10,6 +10,7 @@ import type {
   Language,
   LinkInspection,
   MessageView,
+  NewMcpEndpoint,
   ReasoningEffort,
   SettingsView,
   StageOutcome,
@@ -274,10 +275,6 @@ export function setReasoningEffort(
 ): Promise<void> {
   return invoke('set_reasoning_effort', { providerId, model, effort })
 }
-
-export type NewMcpEndpoint =
-  | { transport: 'stdio'; command: string; args: string[]; env: [string, string][] }
-  | { transport: 'streamable_http'; url: string; headers: [string, string][] }
 
 export function addMcpServer(name: string, endpoint: NewMcpEndpoint): Promise<SettingsView> {
   return invoke('add_mcp_server', { name, endpoint })

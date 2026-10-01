@@ -7,7 +7,7 @@ use scitl_core::orchestration::{
     TurnEvent, UserInput,
 };
 
-use super::with_db;
+use super::{with_db, CommandResult};
 use crate::AppState;
 
 /// ターンの途中経過を`channel`へ送る受け口。送れなくても(画面が閉じた等)ターンは最後まで
@@ -27,18 +27,17 @@ pub async fn send_chat_message(
     text: String,
     attachments: Vec<String>,
     on_event: Channel<TurnEvent>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     // ロックは設定の複製を取るまでだけ持ち、ターンの`.await`へ持ち込まない。
     let snapshot = state.settings.snapshot_for_turn().await;
     let events = forward(&on_event);
-    run_turn(
+    Ok(run_turn(
         state.db.clone(),
         &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
         UserInput { text, attachments },
     )
-    .await
-    .map_err(|e| e.to_string())
+    .await?)
 }
 
 /// 作ったばかりのタスクで、ユーザーの発言なしにモデルの返信から聞き取りを始める。
@@ -47,16 +46,15 @@ pub async fn open_task_chat(
     state: State<'_, AppState>,
     task_id: i64,
     on_event: Channel<TurnEvent>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let snapshot = state.settings.snapshot_for_turn().await;
     let events = forward(&on_event);
-    orchestration::open_task_chat(
+    Ok(orchestration::open_task_chat(
         state.db.clone(),
         &snapshot.turn_context(&state.generating, &state.attachments, &events),
         task_id,
     )
-    .await
-    .map_err(|e| e.to_string())
+    .await?)
 }
 
 /// ユーザー発言を編集し、そこから応答を生成し直す([`edit_user_message`])。
@@ -67,18 +65,17 @@ pub async fn edit_chat_message(
     message_id: i64,
     text: String,
     on_event: Channel<TurnEvent>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let snapshot = state.settings.snapshot_for_turn().await;
     let events = forward(&on_event);
-    edit_user_message(
+    Ok(edit_user_message(
         state.db.clone(),
         &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
         message_id,
         text,
     )
-    .await
-    .map_err(|e| e.to_string())
+    .await?)
 }
 
 /// ターンの返信を作り直す([`retry_reply`])。
@@ -88,17 +85,16 @@ pub async fn retry_chat_message(
     chat: Chat,
     message_id: i64,
     on_event: Channel<TurnEvent>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let snapshot = state.settings.snapshot_for_turn().await;
     let events = forward(&on_event);
-    retry_reply(
+    Ok(retry_reply(
         state.db.clone(),
         &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
         message_id,
     )
-    .await
-    .map_err(|e| e.to_string())
+    .await?)
 }
 
 /// 返信の無いまま終わった会話に、応答を生成する([`orchestration::generate_reply`])。
@@ -107,16 +103,15 @@ pub async fn generate_chat_reply(
     state: State<'_, AppState>,
     chat: Chat,
     on_event: Channel<TurnEvent>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let snapshot = state.settings.snapshot_for_turn().await;
     let events = forward(&on_event);
-    orchestration::generate_reply(
+    Ok(orchestration::generate_reply(
         state.db.clone(),
         &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
     )
-    .await
-    .map_err(|e| e.to_string())
+    .await?)
 }
 
 /// 会話で生成中の応答を止める([`stop_response`])。
@@ -131,15 +126,13 @@ pub async fn delete_chat_message(
     state: State<'_, AppState>,
     chat: Chat,
     message_id: i64,
-) -> Result<(), String> {
-    delete_message(state.db.clone(), &state.generating, chat, message_id)
-        .await
-        .map_err(|e| e.to_string())
+) -> CommandResult<()> {
+    Ok(delete_message(state.db.clone(), &state.generating, chat, message_id).await?)
 }
 
 /// 会話が返信の無いまま終わっているか([`orchestration::lacks_reply`])。
 #[tauri::command]
-pub async fn chat_lacks_reply(state: State<'_, AppState>, chat: Chat) -> Result<bool, String> {
+pub async fn chat_lacks_reply(state: State<'_, AppState>, chat: Chat) -> CommandResult<bool> {
     with_db(&state, move |conn| orchestration::lacks_reply(conn, chat)).await
 }
 
@@ -148,6 +141,6 @@ pub async fn chat_lacks_reply(state: State<'_, AppState>, chat: Chat) -> Result<
 pub async fn list_chat_messages(
     state: State<'_, AppState>,
     chat: Chat,
-) -> Result<Vec<MessageView>, String> {
+) -> CommandResult<Vec<MessageView>> {
     with_db(&state, move |conn| orchestration::list_chat(conn, chat)).await
 }

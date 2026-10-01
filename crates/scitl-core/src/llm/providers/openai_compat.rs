@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::{ApiFormat, ReasoningEffort};
 use crate::error::CoreError;
 use crate::llm::{
-    AdapterIdentity, ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText,
-    Readiness, Replay, RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest, ToolOffer,
+    AdapterIdentity, ChatMessage, ErrorDetail, FinishReason, InlineImage, LlmAdapter, LlmError,
+    PromptText, Readiness, Replay, RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest,
+    ToolOffer,
 };
 use crate::net::ExternalUrl;
 
@@ -241,37 +242,46 @@ enum ContentPart {
     ImageUrl { image_url: ImageUrl },
 }
 
+/// 画像のdata URL。発言列の画像を持ち、直列化のときだけdata URLを読む。
 #[derive(Serialize)]
 struct ImageUrl {
-    url: String,
+    #[serde(serialize_with = "serialize_data_url")]
+    url: InlineImage,
+}
+
+fn serialize_data_url<S: serde::Serializer>(
+    image: &InlineImage,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(image.data_url())
 }
 
 impl UserContent {
     /// 本文を先に、画像をその後に並べる。
-    fn new(text: String, image_urls: Vec<String>) -> Self {
-        if image_urls.is_empty() {
+    fn new(text: String, images: Vec<InlineImage>) -> Self {
+        if images.is_empty() {
             return Self::Text(text);
         }
         let mut parts = vec![ContentPart::Text { text }];
-        parts.extend(image_urls.into_iter().map(|url| ContentPart::ImageUrl {
+        parts.extend(images.into_iter().map(|url| ContentPart::ImageUrl {
             image_url: ImageUrl { url },
         }));
         Self::Parts(parts)
     }
 
-    fn into_parts(self) -> (String, Vec<String>) {
+    fn into_parts(self) -> (String, Vec<InlineImage>) {
         match self {
             Self::Text(text) => (text, Vec::new()),
             Self::Parts(parts) => {
                 let mut text = String::new();
-                let mut urls = Vec::new();
+                let mut images = Vec::new();
                 for part in parts {
                     match part {
                         ContentPart::Text { text: t } => text.push_str(&t),
-                        ContentPart::ImageUrl { image_url } => urls.push(image_url.url),
+                        ContentPart::ImageUrl { image_url } => images.push(image_url.url),
                     }
                 }
-                (text, urls)
+                (text, images)
             }
         }
     }
@@ -281,11 +291,12 @@ impl UserContent {
     /// リクエスト末尾のツール結果の補いだけで互いにまとまらないので、画像と添付の情報の対応は
     /// 崩れない。複数の発言の画像を送るように変えるときは、ここで対応が失われる。
     fn append(&mut self, next: Self) {
-        let (mut text, mut urls) = std::mem::replace(self, Self::Text(String::new())).into_parts();
-        let (next_text, next_urls) = next.into_parts();
+        let (mut text, mut images) =
+            std::mem::replace(self, Self::Text(String::new())).into_parts();
+        let (next_text, next_images) = next.into_parts();
         append_paragraph(&mut text, &next_text);
-        urls.extend(next_urls);
-        *self = Self::new(text, urls);
+        images.extend(next_images);
+        *self = Self::new(text, images);
     }
 }
 
@@ -326,11 +337,11 @@ const TOOL_IMAGES_TEXT: &str = "(Images returned by the tool results above, in t
 /// ツールの往復(`tool_calls`を持つassistantに続くtool)には、上の画像のほかは手を加えない。
 fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
     let mut out: Vec<RequestMessage> = Vec::with_capacity(messages.len() + 1);
-    let mut tool_images: Vec<String> = Vec::new();
+    let mut tool_images: Vec<InlineImage> = Vec::new();
     for message in messages {
         match message {
             ChatMessage::Tool { images, .. } => {
-                tool_images.extend(images.iter().map(|image| image.data_url().to_string()));
+                tool_images.extend(images.iter().cloned());
             }
             _ => flush_tool_images(&mut out, &mut tool_images),
         }
@@ -340,7 +351,7 @@ fn to_request_messages(messages: &[ChatMessage]) -> Vec<RequestMessage> {
     out
 }
 
-fn flush_tool_images(out: &mut Vec<RequestMessage>, images: &mut Vec<String>) {
+fn flush_tool_images(out: &mut Vec<RequestMessage>, images: &mut Vec<InlineImage>) {
     if images.is_empty() {
         return;
     }
@@ -401,13 +412,7 @@ fn to_request_message(message: &ChatMessage) -> RequestMessage {
             content: content.clone(),
         },
         ChatMessage::User { text, images } => RequestMessage::User {
-            content: UserContent::new(
-                text.as_str().to_string(),
-                images
-                    .iter()
-                    .map(|image| image.data_url().to_string())
-                    .collect(),
-            ),
+            content: UserContent::new(text.as_str().to_string(), images.clone()),
         },
         ChatMessage::Assistant {
             content,

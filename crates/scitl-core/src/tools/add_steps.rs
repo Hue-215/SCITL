@@ -1,46 +1,32 @@
-use std::sync::LazyLock;
-
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::db::task_steps::{self, MAX_STEPS, MAX_STEP_DESCRIPTION_CHARS};
 use crate::error::Result;
-use crate::llm::ToolSchema;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
-use super::{InternalTool, Run};
+use super::Run;
 
-pub const NAME: &str = "add_steps";
-
-pub(super) const TOOL: InternalTool = InternalTool {
-    schema,
+internal_tool! {
+    /// タスクチャット版のスキーマ。`task_id`を引数に含めない。説明は常に配列で受ける。
+    name: "add_steps",
     run: Run::UpdateTask(execute),
-};
-
-/// タスクチャット版のスキーマ。`task_id`を引数に含めない。説明は常に配列で受ける。
-pub fn schema() -> &'static ToolSchema {
-    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
-        ToolSchema::internal(
-            NAME,
-            "Add steps to the currently open task.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "descriptions": {
-                        "type": "array",
-                        "items": { "type": "string", "maxLength": MAX_STEP_DESCRIPTION_CHARS },
-                        "minItems": 1,
-                        // 上限は追加する件数ではなくタスクが持つ件数なので、maxItemsでは書けない。
-                        "description": format!("A task can have at most {MAX_STEPS} steps.")
-                    }
-                },
-                "required": ["descriptions"],
-                "additionalProperties": false
-            }),
-        )
-    });
-    &SCHEMA
+    "Add steps to the currently open task.",
+    json!({
+        "type": "object",
+        "properties": {
+            "descriptions": {
+                "type": "array",
+                "items": { "type": "string", "maxLength": MAX_STEP_DESCRIPTION_CHARS },
+                "minItems": 1,
+                // 上限は追加する件数ではなくタスクが持つ件数なので、maxItemsでは書けない。
+                "description": format!("A task can have at most {MAX_STEPS} steps.")
+            }
+        },
+        "required": ["descriptions"],
+        "additionalProperties": false
+    }),
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {

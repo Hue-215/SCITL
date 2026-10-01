@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -7,44 +5,33 @@ use crate::attachments::{self, Delivery};
 use crate::db::attachments::{self as db_attachments, AttachmentContent, AttachmentKind};
 use crate::db::messages::Chat;
 use crate::error::{CoreError, Result};
-use crate::llm::{AttachmentNote, ToolSchema};
+use crate::llm::AttachmentNote;
 
 use super::args::Args;
-use super::{InternalTool, Run, ToolOutput};
+use super::{Run, ToolOutput};
 
-pub const NAME: &str = "read_attachment";
-
-pub(super) const TOOL: InternalTool = InternalTool {
-    schema,
+internal_tool! {
+    /// 総合チャット・タスクチャットで同じ形。対象の会話は文脈から固定するので引数に取らず、添付
+    /// IDだけを選ばせる。
+    ///
+    /// 説明はモデルの能力で変えない(`docs/spec/rebuild/tools.md`「添付の読み込み」)。
+    name: "read_attachment",
     run: Run::ReadAttachment,
-};
-
-/// 総合チャット・タスクチャットで同じ形。対象の会話は文脈から固定するので引数に取らず、添付
-/// IDだけを選ばせる。
-///
-/// 説明はモデルの能力で変えない(`docs/spec/rebuild/tools.md`「添付の読み込み」)。
-pub fn schema() -> &'static ToolSchema {
-    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
-        ToolSchema::internal(
-            NAME,
-            "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
-             scitl:attachments block. The result has the same fields as that block. A text \
-             attachment returns its text in \"content\". An image is shown to you with the \
-             result if the current model accepts image input; if it does not, reading an image \
-             fails and the image cannot be seen. Use this to look at an image whose \
-             \"delivered\" is \"name_only\", or at an attachment whose content is no longer in \
-             the conversation. Other kinds of files cannot be read.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "attachment_id": { "type": "integer" }
-                },
-                "required": ["attachment_id"],
-                "additionalProperties": false
-            }),
-        )
-    });
-    &SCHEMA
+    "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
+     scitl:attachments block. The result has the same fields as that block. A text \
+     attachment returns its text in \"content\". An image is shown to you with the \
+     result if the current model accepts image input; if it does not, reading an image \
+     fails and the image cannot be seen. Use this to look at an image whose \
+     \"delivered\" is \"name_only\", or at an attachment whose content is no longer in \
+     the conversation. Other kinds of files cannot be read.",
+    json!({
+        "type": "object",
+        "properties": {
+            "attachment_id": { "type": "integer" }
+        },
+        "required": ["attachment_id"],
+        "additionalProperties": false
+    }),
 }
 
 /// 渡し方は発言に付いた添付と同じく`attachments::delivery`で決める。読み込んだ中身は

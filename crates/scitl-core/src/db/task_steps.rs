@@ -16,14 +16,16 @@ pub struct TaskStep {
     pub created_at: String,
 }
 
+/// [`row_to_step`]の並び。
+const STEP_COLUMNS: &str = "id, task_id, description, done_at, order_index, created_at";
+
 /// 削除済み(deleted_at)を除く工程を`order_index`順で返す。
 pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<TaskStep>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, task_id, description, done_at, order_index, created_at
-         FROM task_steps
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {STEP_COLUMNS} FROM task_steps
          WHERE task_id = ?1 AND deleted_at IS NULL
-         ORDER BY order_index ASC",
-    )?;
+         ORDER BY order_index ASC"
+    ))?;
     let rows = stmt
         .query_map([task_id], row_to_step)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -158,10 +160,19 @@ pub fn delete_step(conn: &Connection, step_id: i64) -> Result<()> {
     })
 }
 
+/// 削除済みを除いて、工程`step_id`がタスク`task_id`に属するか。
+pub fn belongs_to_task(conn: &Connection, task_id: i64, step_id: i64) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM task_steps
+                        WHERE id = ?1 AND task_id = ?2 AND deleted_at IS NULL)",
+        [step_id, task_id],
+        |row| row.get(0),
+    )?)
+}
+
 fn get_step(conn: &Connection, step_id: i64) -> Result<TaskStep> {
     conn.query_row(
-        "SELECT id, task_id, description, done_at, order_index, created_at
-         FROM task_steps WHERE id = ?1 AND deleted_at IS NULL",
+        &format!("SELECT {STEP_COLUMNS} FROM task_steps WHERE id = ?1 AND deleted_at IS NULL"),
         [step_id],
         row_to_step,
     )
@@ -370,5 +381,21 @@ mod tests {
             delete_step(&conn, step.id).unwrap_err(),
             CoreError::TaskStepNotFound(_)
         ));
+    }
+
+    #[test]
+    fn a_step_belongs_only_to_its_own_task_and_only_while_it_exists() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let other_task = seed_task(&conn);
+        let step = add_steps(&conn, task_id, &["買い出し".to_string()])
+            .unwrap()
+            .remove(0);
+
+        assert!(belongs_to_task(&conn, task_id, step.id).unwrap());
+        assert!(!belongs_to_task(&conn, other_task, step.id).unwrap());
+        assert!(!belongs_to_task(&conn, task_id, 999).unwrap());
+        delete_step(&conn, step.id).unwrap();
+        assert!(!belongs_to_task(&conn, task_id, step.id).unwrap());
     }
 }
