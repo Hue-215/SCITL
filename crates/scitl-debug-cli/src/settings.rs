@@ -90,10 +90,12 @@ pub enum McpCommand {
     AddStdio {
         /// Environment variable NAME to give the server, taking its value from this process's
         /// variable VAR. The value goes to the OS credential store. Can be repeated.
-        #[arg(long, value_name = "NAME=VAR", value_parser = parse_binding)]
-        env: Vec<Binding>,
+        #[arg(long, value_name = "NAME=VAR")]
+        env: Vec<String>,
         name: String,
         command: String,
+        /// Arguments of the server. Put `--` before them when one could be read as an option
+        /// of this program.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -101,8 +103,8 @@ pub enum McpCommand {
     AddHttp {
         /// Request header NAME, taking its value from this process's variable VAR. The value
         /// goes to the OS credential store. Can be repeated.
-        #[arg(long, value_name = "NAME=VAR", value_parser = parse_binding)]
-        header: Vec<Binding>,
+        #[arg(long, value_name = "NAME=VAR")]
+        header: Vec<String>,
         name: String,
         url: String,
     },
@@ -120,40 +122,45 @@ pub enum McpCommand {
     FetchTools { server_id: String },
 }
 
-/// 秘密情報の渡し方。`name`はサーバーへ渡す名前、`var`は値を持つこのプロセスの環境変数。
-#[derive(Clone)]
-pub struct Binding {
-    name: String,
-    var: String,
-}
-
-fn parse_binding(arg: &str) -> Result<Binding, String> {
-    match arg.split_once('=') {
-        Some((name, var)) if !name.is_empty() && !var.is_empty() => Ok(Binding {
-            name: name.to_string(),
-            var: var.to_string(),
-        }),
-        _ => Err("expected NAME=VAR".to_string()),
-    }
-}
-
 /// 設定ファイルと同じ綴りで値を読む。綴りをここに写さず、設定の型の読み方に任せる。
 fn parse_config_value<T: DeserializeOwned>(arg: &str) -> Result<T, String> {
     serde_json::from_value(serde_json::Value::String(arg.to_string())).map_err(|e| e.to_string())
 }
 
-/// 秘密情報を、このプロセスの環境変数から読む。引数で受け取ると、値がシェルの履歴と
-/// プロセスの一覧に残る。
-pub fn secret_from_env(var: &str) -> Result<SecretString, DebugError> {
-    std::env::var(var)
-        .map(SecretString::from)
-        .map_err(|_| DebugError::MissingEnv(var.to_string()))
+/// 秘密情報を、名前で指されたこのプロセスの環境変数から読む。値を引数で受け取ると
+/// プロセスの一覧に残るので、引数には名前だけを書かせる。`option`は名前を受け取った引数。
+///
+/// 名前の形をしていない引数は、値そのものを書いた取り違えとみなし、引数の中身を出さずに断る
+/// (clapに検査させると、エラー文が引数をそのまま端末へ書く)。空の値も断る。名前まで指して
+/// 空なのは変数の入れ忘れで、coreは空の鍵を鍵なしとして通してしまう。
+fn secret_from_env(option: &'static str, var: &str) -> Result<SecretString, DebugError> {
+    let mut chars = var.chars();
+    let named = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !named {
+        return Err(DebugError::NotAVariableName(option));
+    }
+    match std::env::var(var) {
+        Ok(value) if !value.is_empty() => Ok(SecretString::from(value)),
+        _ => Err(DebugError::MissingEnv(var.to_string())),
+    }
 }
 
-fn secrets_from_env(bindings: Vec<Binding>) -> Result<Vec<(String, SecretString)>, DebugError> {
+/// `NAME=VAR`の並びを、サーバーへ渡す名前と、環境変数`VAR`から読んだ値の組にする。
+fn secrets_from_env(
+    option: &'static str,
+    bindings: Vec<String>,
+) -> Result<Vec<(String, SecretString)>, DebugError> {
     bindings
         .into_iter()
-        .map(|binding| Ok((binding.name, secret_from_env(&binding.var)?)))
+        .map(|binding| match binding.split_once('=') {
+            Some((name, var)) if !name.is_empty() => {
+                Ok((name.to_string(), secret_from_env(option, var)?))
+            }
+            _ => Err(DebugError::NotAVariableName(option)),
+        })
         .collect()
 }
 
@@ -216,7 +223,10 @@ pub async fn run_provider(session: &Session, command: ProviderCommand) -> Result
                 name,
                 api_format,
                 base_url,
-                api_key: api_key_env.as_deref().map(secret_from_env).transpose()?,
+                api_key: api_key_env
+                    .as_deref()
+                    .map(|var| secret_from_env("--api-key-env", var))
+                    .transpose()?,
             };
             change(settings, move |s| s.add_provider(new)).await
         }
@@ -262,14 +272,14 @@ pub async fn run_mcp(session: &Session, command: McpCommand) -> Result<(), Debug
             let endpoint = NewMcpEndpoint::Stdio {
                 command,
                 args,
-                env: secrets_from_env(env)?,
+                env: secrets_from_env("--env", env)?,
             };
             change(settings, move |s| s.add_mcp_server(&name, endpoint)).await
         }
         McpCommand::AddHttp { header, name, url } => {
             let endpoint = NewMcpEndpoint::StreamableHttp {
                 url,
-                headers: secrets_from_env(header)?,
+                headers: secrets_from_env("--header", header)?,
             };
             change(settings, move |s| s.add_mcp_server(&name, endpoint)).await
         }

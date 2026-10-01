@@ -1,9 +1,9 @@
 //! SCITLのデバッグ用CLI。GUIを開かずに、応答生成・設定・登録まで含めて動作を確かめる。
 //! scitl-cliのコマンドをそのまま持ち、その上に足す。
 //!
-//! 端末へは`scitl_cli::terminal`だけから書く。秘密情報(APIキー、MCPサーバーの環境変数・
-//! ヘッダーの値)は引数では受け取らず、このプロセスの環境変数から読んでcoreへ渡す
-//! ([`settings::secret_from_env`])。
+//! このクレートは端末へ`scitl_cli::terminal`だけから書く。秘密情報(APIキー、MCPサーバーの
+//! 環境変数・ヘッダーの値)は引数では受け取らず、このプロセスの環境変数から読んでcoreへ渡す
+//! (`settings`)。
 
 mod chat;
 mod settings;
@@ -159,8 +159,12 @@ enum DebugError {
     /// ターンならエラー発言になる理由(プロバイダー・モデルの未選択等)。
     #[error("chat is unavailable: {0}")]
     ChatUnavailable(String),
-    #[error("environment variable {0} is not set or is not valid Unicode")]
+    #[error("environment variable {0} is not set, is empty or is not valid Unicode")]
     MissingEnv(String),
+    /// 秘密情報の引数に、環境変数の名前でないものが書かれた。値そのものかもしれないので、
+    /// 書かれたものは持たない。
+    #[error("{0} takes the name of an environment variable that holds the value, not the value")]
+    NotAVariableName(&'static str),
     #[error("failed to read {}: {kind:?}", .path.display())]
     ReadFile {
         path: PathBuf,

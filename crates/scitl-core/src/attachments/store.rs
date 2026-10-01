@@ -112,8 +112,14 @@ impl AttachmentStore {
     }
 
     /// 実体を消す。消してよいかは呼び出し側が確かめる(同じハッシュを指す行が無いこと)。
+    /// 既に無ければ何もしない(一覧を取ってから消すまでの間に、ほかで消されたもの)。
     pub(super) fn remove(&self, hash: &str) -> Result<()> {
-        fs::remove_file(self.blob_path(hash)?).map_err(io_error("remove an attachment"))
+        match fs::remove_file(self.blob_path(hash)?) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(io_error("remove an attachment")(e))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// DBから読んだハッシュをパスに繋ぐ前に形を確かめる。DBが書き換えられていても、置き場所の

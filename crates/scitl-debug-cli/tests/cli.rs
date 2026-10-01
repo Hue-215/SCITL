@@ -304,3 +304,78 @@ fn a_secret_whose_variable_is_unset_registers_nothing() {
     let shown = stdout_json(&data.run(&["settings", "show"]));
     assert_eq!(shown["mcp_servers"], serde_json::json!([]));
 }
+
+/// 値そのものを名前の位置に書いても、端末へ書き戻さない。
+#[test]
+fn a_secret_written_in_place_of_a_variable_name_is_not_echoed() {
+    let data = DataDir::new();
+
+    for args in [
+        &[
+            "mcp",
+            "add-http",
+            "--header",
+            "Authorization: Bearer s3cr3t-value",
+            "web",
+            "https://example.com/mcp",
+        ][..],
+        &[
+            "mcp",
+            "add-stdio",
+            "--env",
+            "TOKEN=s3cr3t-value",
+            "files",
+            "npx",
+        ],
+        &[
+            "provider",
+            "add",
+            "--name",
+            "p",
+            "--api-format",
+            "open_ai_compat",
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+            "--api-key-env",
+            "s3cr3t-value",
+        ],
+    ] {
+        let output = data.run(args);
+        assert!(!output.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("s3cr3t"), "{stderr}");
+    }
+    let shown = stdout_json(&data.run(&["settings", "show"]));
+    assert_eq!(shown["mcp_servers"], serde_json::json!([]));
+    assert_eq!(shown["providers"], serde_json::json!([]));
+}
+
+#[test]
+fn an_empty_secret_is_refused() {
+    let data = DataDir::new();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_scitl-debug-cli"))
+        .arg("--data-dir")
+        .arg(data.path())
+        .args([
+            "provider",
+            "add",
+            "--name",
+            "p",
+            "--api-format",
+            "open_ai_compat",
+        ])
+        .args([
+            "--base-url",
+            "http://127.0.0.1:1/v1",
+            "--api-key-env",
+            "SCITL_TEST_EMPTY",
+        ])
+        .env("SCITL_TEST_EMPTY", "")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let shown = stdout_json(&data.run(&["settings", "show"]));
+    assert_eq!(shown["providers"], serde_json::json!([]));
+}
