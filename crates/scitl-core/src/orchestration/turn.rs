@@ -235,6 +235,9 @@ pub async fn retry_reply(
 /// 後ろを消す。`docs/spec/rebuild/data-model.md`「ターン境界」)。対象はユーザー発言とターンの
 /// 返信(アシスタント発言・エラー発言)。生成中の会話では断る(生成中のターンが読んだ履歴と、
 /// DBの発言が食い違うため)。
+///
+/// 消した範囲のターンのツール実行記録も論理削除する。編集・再試行と違い、捨てた試行の記録として
+/// モデルに伝えない(削除は会話の整理にも使う。タスクの現状はモデルがツールで読み直せる)。
 pub async fn delete_message(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,
@@ -246,7 +249,8 @@ pub async fn delete_message(
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
             expect_normal(&target, &[Role::User, Role::Assistant, Role::Error])?;
-            messages::soft_delete_normal_from(conn, chat, target.id)
+            messages::soft_delete_normal_from(conn, chat, target.id)?;
+            messages::soft_delete_trailing_turn_records(conn, chat)
         })
     })
     .await
