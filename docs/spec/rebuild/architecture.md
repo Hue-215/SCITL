@@ -260,10 +260,21 @@ function calling・api-errors・models)。
 (ISO8601 UTC)から、発言列を作るときに `llm::PromptText::user_message` が次の形に組み立てる。
 
 ```
-<scitl:user-message sent_at="2026-09-22T04:12:00Z">
+<scitl:user-message sent_at="2026-09-22T13:12:00+09:00" weekday="Tuesday">
 本文
 </scitl:user-message>
 ```
+
+- **日時は利用者の地域の時差付きで、曜日を添えて渡す**(Issue #113。`llm::SentAt`)。締切は日付だけで
+  持つので(`data-model.md` 1節)、モデルは「明日」「今週中」を日付に落とす。UTCで渡すと、日本時間の
+  9時より前の発言ではUTCの日付がまだ前日で、締切が1日早くなる。曜日は、日付から曜日を正しく
+  計算できない小さいモデルが「来週の金曜」を取り違えるので添える。保存はUTCのまま変えず、変えるのは
+  モデルへ渡す表現だけ
+- 時差はOSのタイムゾーンから取る。設定として持たせると、移動や夏時間のたびに利用者が直す必要がある。
+  時差は今のものではなく、その日時に効いていたもの(夏時間を含む)で表すので、OSのタイムゾーンを
+  変えない限り、同じ発言は毎回同じ表現になる
+- 時差はシステムプロンプトに書かない。移動や夏時間で変わるたびに伝え直すことになるため(下記
+  「前に送った部分を変えない」)。発言ごとの`sent_at`なら、末尾に足すだけで済む
 
 - 日時を地の文に連結しない。旧実装は連結しており、モデルが日時を応答本文に混入させる
   不具合を起こしていた(`../legacy/backend.md` 4節手順2)
@@ -312,7 +323,7 @@ function calling・api-errors・models)。
 `<scitl:attachments>` で包んだJSONとして情報を置き、画像はリクエストの画像入力として一緒に送る。
 
 ```
-<scitl:user-message sent_at="2026-09-22T04:12:00Z">
+<scitl:user-message sent_at="2026-09-22T13:12:00+09:00" weekday="Tuesday">
 本文
 </scitl:user-message>
 <scitl:attachments>[{"id":3,"name":"memo.txt","kind":"text","mime_type":"text/plain","size_bytes":12,"delivered":"content","content":"…"}]</scitl:attachments>
@@ -352,7 +363,7 @@ function calling・api-errors・models)。
 タスクの状態は、リクエストに毎回添えない。毎回変わるものを直近の発言に添えると、次のターンでは
 それを外すか古いまま残すかになり、外せば前が変わる。
 
-- 日時は、ユーザー発言の囲みの`sent_at`で伝わる。聞き取りの開始(日時の無い発言に返す)と、
+- 日時は、ユーザー発言の囲みの`sent_at`(利用者の地域の時差付き)で伝わる。聞き取りの開始(日時の無い発言に返す)と、
   時間が経ってからの再試行では、モデルが知る日時が実際とずれるが、受け入れる
 - 状態は、モデルが読み取りのツール(タスクチャットは`get_current_task_detail`、総合チャットは
   `get_task_list`)で読む。結果は次のターン以降の履歴にも残り(`tools.md` 4節)、書き込み系の
@@ -380,7 +391,7 @@ function calling・api-errors・models)。
 
 ```
 <scitl:operations>[{"source":"ui","at":"2026-09-22T04:10:00Z","tool":"update_task","arguments":{"title":"…"},"result":{…}}]</scitl:operations>
-<scitl:user-message sent_at="2026-09-22T04:12:00Z">
+<scitl:user-message sent_at="2026-09-22T13:12:00+09:00" weekday="Tuesday">
 本文
 </scitl:user-message>
 ```
@@ -510,6 +521,7 @@ function calling・api-errors・models)。
 | アプリの更新 | 固定の文言が変わったシステムプロンプトは、設定の変更と同じく伝える。ツールの定義は上の行と同じ。アダプタの組み立て・保存の直列化・実行記録からの組み立ての規則が変わったときは、指紋が合わずに思考が一度外れるのを受け入れる |
 | 間引き | 下記「間引きの位置」 |
 | プロバイダー・モデルの切替 | 同じ保存をそのまま並べる(`Replay`の扱いは上記) |
+| OSのタイムゾーンの変更 | 保存のあるターンは送った表現のまま並ぶ。保存の無いターンは今のタイムゾーンで組み立て直すので表現が変わり、思考が一度外れるのを受け入れる(アプリの更新と同じ扱い)。送ったときの時差を発言ごとに持てば避けられるが、保存の無いターンはこの仕組みより前のデータと保存に失敗したターンに限られ、列を足すほどではない |
 
 - **システムプロンプトの変更の通知**: 設定から作ったシステムプロンプトが、使っている直前の保存に
   添えたもの(`settings_system_digest`)と違えば、新しい入力のユーザー発言の囲みの前に
