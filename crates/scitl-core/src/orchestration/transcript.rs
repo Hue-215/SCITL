@@ -1,6 +1,8 @@
 //! モデルに送った形の保存の形(`docs/spec/rebuild/architecture.md`「送った形のまま積む」)。
 //! 行の読み書きは`db::transcripts`。
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -15,7 +17,7 @@ use crate::llm::{
 /// 保存の形の版。保存する発言の形([`StoredMessage`])か、保存した本文が通った無害化の規則
 /// (`llm::PromptText`)を変えたら上げる。保存した本文には無害化を掛け直せないので、版の違う
 /// 保存は使わず、実行記録から組み立て直す(組み立ては今の規則で無害化する)。
-const FORM_VERSION: u32 = 1;
+const FORM_VERSION: u32 = 2;
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
@@ -166,6 +168,46 @@ fn read_images(hashes: &[String], store: &AttachmentStore) -> Option<Vec<InlineI
         .collect()
 }
 
+/// 保存に添えた、前を固定する材料(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」
+/// 「間引きの位置」)。使っている直前の保存のものを次のターンで使う。
+pub(super) struct Front {
+    /// 最初に並べたユーザー発言(間引きの位置)。`None`は会話の最初から。
+    pub(super) history_start: Option<i64>,
+    system_digest: String,
+    settings_system_digest: String,
+    tools_digest: String,
+}
+
+impl Front {
+    fn of(transcript: &Transcript) -> Self {
+        Self {
+            history_start: transcript.history_start,
+            system_digest: transcript.system_digest.clone(),
+            settings_system_digest: transcript.settings_system_digest.clone(),
+            tools_digest: transcript.tools_digest.clone(),
+        }
+    }
+
+    /// 本文を引いた先頭。`blobs`は本文の指紋から本文への対応で、本文が無ければ`None`。
+    pub(super) fn head(&self, blobs: &HashMap<String, String>) -> Option<SavedHead> {
+        Some(SavedHead {
+            system: blobs.get(&self.system_digest)?.clone(),
+            settings_system_digest: self.settings_system_digest.clone(),
+            tools: blobs.get(&self.tools_digest)?.clone(),
+        })
+    }
+}
+
+/// 保存に添えた先頭(システムプロンプトとツール定義)の本文。
+pub(super) struct SavedHead {
+    /// 先頭に置いたシステムプロンプト。
+    pub(super) system: String,
+    /// そのとき設定から作ったシステムプロンプトの指紋。変更の通知を置いたかを見分ける。
+    pub(super) settings_system_digest: String,
+    /// 渡したツール定義の一覧の本文([`tools_body`])。
+    pub(super) tools: String,
+}
+
 /// 次のターンに並べる、読み戻した1試行分。
 pub(super) struct Replayable {
     /// 送り先。`Replay`を今の送り先に送り返してよいかの判断に使う。
@@ -175,6 +217,8 @@ pub(super) struct Replayable {
     pub(super) input_rows: Vec<i64>,
     /// 入力と往復と最後の応答。
     pub(super) messages: Vec<ChatMessage>,
+    /// 前を固定する材料。
+    pub(super) front: Front,
 }
 
 impl Replayable {
@@ -215,6 +259,7 @@ impl Replayable {
                 .iter()
                 .map(|m| m.restore(store))
                 .collect::<Option<_>>()?,
+            front: Front::of(transcript),
         })
     }
 }
@@ -255,17 +300,34 @@ pub(super) struct SavedTurn {
 /// 渡したツール定義の一覧の本文。定義が変わったかを本文の指紋で見分けるため、毎回同じ形に
 /// 直列化する。
 pub(super) fn tools_body(tools: &[ToolSchema]) -> String {
-    let tools: Vec<_> = tools
-        .iter()
-        .map(|t| {
-            json!({
-                "name": t.name(),
-                "description": t.description(),
-                "parameters": t.parameters(),
-            })
-        })
-        .collect();
+    let tools: Vec<_> = tools.iter().map(tool_entry).collect();
     serde_json::to_string(&tools).expect("tool definitions serialize")
+}
+
+/// [`tools_body`]の要素1つ。
+pub(super) fn tool_entry(tool: &ToolSchema) -> serde_json::Value {
+    json!({
+        "name": tool.name(),
+        "description": tool.description(),
+        "parameters": tool.parameters(),
+    })
+}
+
+/// [`tools_body`]で保存した本文から、定義の一覧を読み戻す。読めなければ`None`。
+pub(super) fn tools_from_body(body: &str) -> Option<Vec<ToolSchema>> {
+    #[derive(Deserialize)]
+    struct Entry {
+        name: String,
+        description: String,
+        parameters: serde_json::Value,
+    }
+    let entries: Vec<Entry> = serde_json::from_str(body).ok()?;
+    Some(
+        entries
+            .into_iter()
+            .map(|e| ToolSchema::from_stored(e.name, e.description, e.parameters))
+            .collect(),
+    )
 }
 
 /// 並べた発言列の指紋の連鎖(`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。
@@ -370,14 +432,38 @@ mod tests {
             PromptText::untrusted(hostile).as_str().to_string(),
             PromptText::operations(&operations).as_str().to_string(),
             PromptText::note("note").as_str().to_string(),
+            PromptText::system_update(hostile).as_str().to_string(),
+            tools_body(&[ToolSchema::external(
+                "srv__tool".to_string(),
+                hostile,
+                &json!({ "k": hostile }),
+            )
+            .unwrap()]),
             user_message_format_note(),
         ];
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
-            (1, "16a0bdc56201114bd94e6eab1f6a30876faecffa6b5f722b09008110db4b9bf4"),
+            (2, "f1bad8598448473a20b17894b9c05ae10b46ee0868d225f68f8164caec8e273a"),
             "無害化の規則か囲みの形が変わった。前の規則で保存した本文を並べないよう、FORM_VERSIONを\
              上げてから期待値を今の出力に更新する"
         );
+    }
+
+    /// 保存したツール定義の本文から、同じ本文になる定義の一覧を読み戻せる。
+    #[test]
+    fn tool_definitions_read_back_to_the_same_body() {
+        let tools = [
+            ToolSchema::internal("get_task", "d", json!({"type": "object"})),
+            ToolSchema::external(
+                "srv__search".to_string(),
+                "<scitl:x>",
+                &json!({"type": "object"}),
+            )
+            .unwrap(),
+        ];
+        let body = tools_body(&tools);
+        assert_eq!(tools_body(&tools_from_body(&body).unwrap()), body);
+        assert!(tools_from_body("{").is_none());
     }
 
     #[test]

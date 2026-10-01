@@ -292,6 +292,21 @@ impl ToolSchema {
         })
     }
 
+    /// 送った形の保存に置いた定義(`orchestration::transcript`)から読み戻す。保存したのは
+    /// [`Self::internal`]か[`Self::external`]を通った定義だけなので、そのまま信じる
+    /// (`PromptText::from_stored`と同じ)。
+    pub(crate) fn from_stored(
+        name: String,
+        description: String,
+        parameters: serde_json::Value,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            parameters,
+        }
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }

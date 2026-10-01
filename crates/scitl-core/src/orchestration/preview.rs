@@ -16,7 +16,7 @@ use crate::orchestration::turn::{
 };
 use crate::orchestration::turn_request::TurnRequest;
 use crate::orchestration::{TurnContext, TurnFailure};
-use crate::tools::external::ExternalToolset;
+use crate::tools::{self, external::ExternalToolset};
 
 #[derive(Debug, Default)]
 pub struct PreviewOptions {
@@ -30,7 +30,8 @@ pub struct PreviewOptions {
 
 #[derive(Debug, Serialize)]
 pub struct Preview {
-    /// 外部ツールの定義を含めたか。含めなければ、ターンでは外部ツールの分だけ増える。
+    /// 外部ツールの定義を含めたか。含めなければ、ターンでは外部ツールの分だけ増える(前に
+    /// 固定した定義に残っている分は、含めなくても見せる)。
     pub external_tools: bool,
     #[serde(flatten)]
     pub request: RequestPreview,
@@ -74,6 +75,16 @@ pub async fn preview_request(
         let external = prepare_external_tools(&ctx.mcp, chat, &mut sessions).await;
         sessions.close().await;
         external
+    } else if ctx.capabilities.tools {
+        // 繋がないサーバーは繋がらなかったものとして扱い、前に固定した定義にあればそのまま
+        // 見せる(繋がって定義が変わっていなければ、ターンでも同じものを渡す)。
+        ExternalToolset::default().with_unavailable(
+            ctx.mcp
+                .servers
+                .iter()
+                .filter(|s| s.enabled && !s.enabled_tools.is_empty()),
+            &tools::names(chat),
+        )
     } else {
         ExternalToolset::default()
     };
