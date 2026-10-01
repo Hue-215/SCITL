@@ -12,6 +12,7 @@
 //! 動かし、削除・切り替えで直せるようにする。どちらも理由を設定画面に出し、チャットでは
 //! 理由に応じたエラー発言にする。
 
+mod input;
 pub mod view;
 
 use std::path::PathBuf;
@@ -414,10 +415,11 @@ impl Settings {
     /// (`orchestration::stored_prompt`)。表示言語は[`Self::update_language`]が別に持つので、
     /// ここでは変えない。
     pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
-        // `0`は画面側でも弾くが、UIの入力チェックはセキュリティ境界ではない。
-        if update.response_timeout_secs == Some(0) {
-            return Err(invalid("response timeout must be 1 second or greater"));
-        }
+        let response_timeout_secs = input::bounded(
+            update.response_timeout_secs,
+            "response timeout (seconds)",
+            input::MAX_TIMEOUT_SECS,
+        )?;
         let mut draft = self.edit();
         let general = &mut draft.config.general;
         general.system_prompt = stored_prompt(update.system_prompt, None);
@@ -430,7 +432,7 @@ impl Settings {
             update.task_opening_message,
             Some(default_opening_message(language)),
         );
-        general.response_timeout_secs = update.response_timeout_secs;
+        general.response_timeout_secs = response_timeout_secs;
         draft.commit()
     }
 
@@ -441,7 +443,7 @@ impl Settings {
 
     pub fn update_language(&self, language: Language) -> Result<SettingsView> {
         let mut draft = self.edit();
-        draft.config.general.language = Some(language);
+        draft.config.general.language = Some(language.code().to_string());
         draft.commit()
     }
 
@@ -451,12 +453,16 @@ impl Settings {
         max_rounds_per_turn: Option<u32>,
         total_timeout_secs: Option<u64>,
     ) -> Result<SettingsView> {
-        if max_rounds_per_turn == Some(0) {
-            return Err(invalid("max rounds per turn must be 1 or greater"));
-        }
-        if total_timeout_secs == Some(0) {
-            return Err(invalid("tool timeout must be 1 second or greater"));
-        }
+        let max_rounds_per_turn = input::bounded(
+            max_rounds_per_turn,
+            "max rounds per turn",
+            input::MAX_ROUNDS_PER_TURN,
+        )?;
+        let total_timeout_secs = input::bounded(
+            total_timeout_secs,
+            "tool timeout (seconds)",
+            input::MAX_TIMEOUT_SECS,
+        )?;
         let mut draft = self.edit();
         draft.config.tools = ToolConfig {
             max_rounds_per_turn,
@@ -465,15 +471,18 @@ impl Settings {
         draft.commit()
     }
 
-    /// 最初に登録したプロバイダーをアクティブにする。鍵の保存に失敗したらプロバイダー自体の
+    /// 最初に登録したプロバイダーをアクティブにする
+    /// ([`Config::reselect_active_provider`])。同じ名前のプロバイダーは登録できない
+    /// (チャットのモデル選択で見分けられなくなる)。鍵の保存に失敗したらプロバイダー自体の
     /// 登録も中断し、登録に失敗したら保存した鍵を消す。どちらでも`key_ref`と鍵の片方だけが
     /// 残る状態を作らない。
     pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
-        let name = new.name.trim().to_string();
-        if name.is_empty() {
-            return Err(invalid("provider name must not be empty"));
-        }
-        providers::validate_base_url(new.api_format, &new.base_url)?;
+        let name = input::name(&new.name, "provider name", input::PROVIDER_NAME_MAX_CHARS)?;
+        let base_url = new.base_url.trim().to_string();
+        providers::validate_base_url(new.api_format, &base_url)?;
+        // 鍵を保存する前にも確かめ、登録できないと分かっている名前のために資格情報ストアへ
+        // 書かない。
+        refuse_registered_provider_name(&self.current().config, &name)?;
 
         let key_ref = match new.api_key {
             Some(key) if !key.expose_secret().is_empty() => {
@@ -485,29 +494,33 @@ impl Settings {
             _ => None,
         };
 
-        let mut draft = self.edit();
-        let id = ulid::Ulid::new().to_string();
-        if draft.config.active_provider_id.is_none() {
-            draft.config.active_provider_id = Some(id.clone());
-        }
-        draft.config.providers.push(ProviderConfig {
-            id,
+        self.register_provider(ProviderConfig {
+            id: ulid::Ulid::new().to_string(),
             name,
             api_format: new.api_format,
-            base_url: new.base_url,
+            base_url,
             models: Vec::new(),
             active_model: None,
             key_ref: key_ref.clone(),
-        });
-        draft.commit().inspect_err(|_| {
+        })
+        .inspect_err(|_| {
             if let Some(key_ref) = &key_ref {
                 delete_secret(key_ref, "provider API key");
             }
         })
     }
 
-    /// アクティブなプロバイダーを消したら先頭をアクティブにする。保存済みAPIキーも消す。
-    /// 鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに設定が消えた鍵を
+    /// 名前の重複確認から登録までを書き込みロックの中で行う。
+    fn register_provider(&self, provider: ProviderConfig) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        refuse_registered_provider_name(&draft.config, &provider.name)?;
+        draft.config.providers.push(provider);
+        draft.config.reselect_active_provider();
+        draft.commit()
+    }
+
+    /// アクティブなプロバイダーを消したら、選択を移す([`Config::reselect_active_provider`])。
+    /// 保存済みAPIキーも消す。鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに設定が消えた鍵を
     /// 指して残る)。
     pub fn delete_provider(&self, provider_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
@@ -518,9 +531,7 @@ impl Settings {
             .position(|p| p.id == provider_id)
             .ok_or_else(|| provider_not_found(provider_id))?;
         let removed = config.providers.remove(index);
-        if config.active_provider_id.as_deref() == Some(provider_id) {
-            config.active_provider_id = config.providers.first().map(|p| p.id.clone());
-        }
+        config.reselect_active_provider();
 
         let view = draft.commit()?;
         self.detected.forget_provider(provider_id);
@@ -532,7 +543,8 @@ impl Settings {
 
     /// 手動追加(1件)と、取得した一覧から選んだ分(複数件)の両方が通る。1件でも登録できない
     /// 名前があれば何も登録しない。モデルが無かったプロバイダーでは、最初の1件を
-    /// アクティブにする。
+    /// アクティブにする。アクティブなプロバイダーにモデルが無ければ、選択をこのプロバイダーへ
+    /// 移す([`Config::reselect_active_provider`])。
     pub fn add_models<S: AsRef<str>>(
         &self,
         provider_id: &str,
@@ -541,22 +553,21 @@ impl Settings {
         let mut draft = self.edit();
         let provider = find_provider_mut(&mut draft.config, provider_id)?;
         for model in models {
-            let model = model.as_ref().trim();
-            if model.is_empty() {
-                return Err(invalid("model name must not be empty"));
-            }
-            if provider.model(model).is_some() {
+            let model = input::name(model.as_ref(), "model name", input::MODEL_NAME_MAX_CHARS)?;
+            if provider.model(&model).is_some() {
                 return Err(invalid(format!("model already registered: {model}")));
             }
-            provider.models.push(ModelConfig::new(model.to_string()));
+            provider.models.push(ModelConfig::new(model));
         }
         if provider.active_model.is_none() {
             provider.active_model = provider.models.first().map(|m| m.name.clone());
         }
+        draft.config.reselect_active_provider();
         draft.commit()
     }
 
-    /// アクティブなモデルを消したら先頭をアクティブにする。
+    /// アクティブなモデルを消したら先頭をアクティブにする。プロバイダーの最後のモデルを
+    /// 消したら、選択を移す([`Config::reselect_active_provider`])。
     pub fn remove_model(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let provider = find_provider_mut(&mut draft.config, provider_id)?;
@@ -564,6 +575,7 @@ impl Settings {
         if provider.active_model.as_deref() == Some(model) {
             provider.active_model = provider.models.first().map(|m| m.name.clone());
         }
+        draft.config.reselect_active_provider();
         let view = draft.commit()?;
         self.detected.forget(provider_id, model);
         Ok(view)
@@ -839,14 +851,20 @@ fn validate_endpoint(endpoint: NewMcpEndpoint) -> Result<NewMcpEndpoint> {
             if command.is_empty() {
                 return Err(invalid("command must not be empty"));
             }
+            for (name, _) in &env {
+                mcp::validate_env_name(name)?;
+            }
+            input::unique_names(&env, "environment variable", str::to_string)?;
             Ok(NewMcpEndpoint::Stdio { command, args, env })
         }
         NewMcpEndpoint::StreamableHttp { url, headers } => {
+            let url = url.trim().to_string();
             mcp::validate_streamable_http_url(&url)?;
             for (name, value) in &headers {
                 mcp::validate_header_name(name)?;
                 mcp::validate_header_value(value.expose_secret())?;
             }
+            input::unique_names(&headers, "header", str::to_ascii_lowercase)?;
             Ok(NewMcpEndpoint::StreamableHttp { url, headers })
         }
     }
@@ -901,6 +919,13 @@ fn endpoint_secret_refs(endpoint: &McpEndpoint) -> &[SecretRef] {
         McpEndpoint::Stdio { env_refs, .. } => env_refs,
         McpEndpoint::StreamableHttp { header_refs, .. } => header_refs,
     }
+}
+
+fn refuse_registered_provider_name(config: &Config, name: &str) -> Result<()> {
+    if config.providers.iter().any(|p| p.name == name) {
+        return Err(invalid(format!("provider name already registered: {name}")));
+    }
+    Ok(())
 }
 
 fn find_provider_mut<'a>(
@@ -1236,6 +1261,45 @@ name = "m"
         ));
     }
 
+    /// 選択中のプロバイダーやその最後のモデルを消しても、モデルのあるプロバイダーが
+    /// 残っていればチャットを続けられる。
+    #[test]
+    fn selection_moves_to_a_provider_that_has_a_model() {
+        let (settings, _, _dir) = temp_settings();
+        let ids: Vec<String> = ["A", "B", "C"]
+            .iter()
+            .map(|name| {
+                let view = add_local_provider(&settings, name);
+                view.providers.last().unwrap().id.clone()
+            })
+            .collect();
+        let active = || settings.current().config.active_provider_id.clone();
+        assert_eq!(active().as_deref(), Some(ids[0].as_str()));
+
+        // モデルの無いプロバイダーを選択中に、別のプロバイダーへモデルを登録する。
+        settings.add_models(&ids[2], &["c1"]).unwrap();
+        assert_eq!(active().as_deref(), Some(ids[2].as_str()));
+
+        // 最後のモデルを消す。ほかにモデルが無ければ、選択は動かさない。
+        settings.remove_model(&ids[2], "c1").unwrap();
+        assert_eq!(active().as_deref(), Some(ids[2].as_str()));
+
+        // 選択中のプロバイダーを消す。先頭のAにはモデルが無いので、Bへ移る。
+        settings.add_models(&ids[1], &["b1"]).unwrap();
+        settings.select_chat_model(&ids[1], "b1").unwrap();
+        settings.add_models(&ids[2], &["c1"]).unwrap();
+        settings.select_chat_model(&ids[2], "c1").unwrap();
+        let view = settings.delete_provider(&ids[2]).unwrap();
+        assert_eq!(view.active_provider_id.as_deref(), Some(ids[1].as_str()));
+
+        // 選択中でないプロバイダーを消しても、選択は動かさない。
+        let view = settings.delete_provider(&ids[0]).unwrap();
+        assert_eq!(view.active_provider_id.as_deref(), Some(ids[1].as_str()));
+
+        let view = settings.remove_model(&ids[1], "b1").unwrap();
+        assert_eq!(view.active_provider_id.as_deref(), Some(ids[1].as_str()));
+    }
+
     #[test]
     fn removing_active_model_falls_back_to_first() {
         let (settings, _, _dir) = temp_settings();
@@ -1249,13 +1313,90 @@ name = "m"
     }
 
     #[test]
-    fn rejects_zero_limits_and_timeout() {
+    fn rejects_limits_and_timeouts_out_of_range() {
         let (settings, _, _dir) = temp_settings();
-        assert!(settings
-            .update_general(general_update(None, Some(0)))
-            .is_err());
-        assert!(settings.update_tools(Some(0), None).is_err());
-        assert!(settings.update_tools(None, Some(0)).is_err());
+        for secs in [0, input::MAX_TIMEOUT_SECS + 1, u64::MAX] {
+            assert!(settings
+                .update_general(general_update(None, Some(secs)))
+                .is_err());
+            assert!(settings.update_tools(None, Some(secs)).is_err());
+        }
+        for rounds in [0, input::MAX_ROUNDS_PER_TURN + 1] {
+            assert!(settings.update_tools(Some(rounds), None).is_err());
+        }
+        settings
+            .update_general(general_update(None, Some(input::MAX_TIMEOUT_SECS)))
+            .unwrap();
+        settings
+            .update_tools(
+                Some(input::MAX_ROUNDS_PER_TURN),
+                Some(input::MAX_TIMEOUT_SECS),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn provider_name_must_be_visible_and_unique_and_the_url_is_trimmed() {
+        let (settings, _, _dir) = temp_settings();
+        let add = |name: &str, base_url: &str| {
+            settings.add_provider(NewProvider {
+                name: name.to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: base_url.to_string(),
+                api_key: None,
+            })
+        };
+        let view = add(" Local ", " http://localhost:1234/v1 \n").unwrap();
+        assert_eq!(view.providers[0].name, "Local");
+        assert_eq!(view.providers[0].base_url, "http://localhost:1234/v1");
+
+        let long = "a".repeat(input::PROVIDER_NAME_MAX_CHARS + 1);
+        for refused in ["Local", "Local ", "\u{200B}", "a\u{202E}b", long.as_str()] {
+            let err = add(refused, "http://localhost:1234/v1").unwrap_err();
+            assert!(matches!(err, CoreError::InvalidSettings(_)), "{refused:?}");
+        }
+        assert_eq!(settings.view().providers.len(), 1);
+    }
+
+    #[test]
+    fn model_name_must_be_visible() {
+        let (settings, _, _dir) = temp_settings();
+        let id = add_local_provider(&settings, "Local").providers[0]
+            .id
+            .clone();
+        let long = "a".repeat(input::MODEL_NAME_MAX_CHARS + 1);
+        for refused in ["\u{FEFF}", "m\u{1}", long.as_str()] {
+            assert!(settings.add_models(&id, &[refused]).is_err(), "{refused:?}");
+        }
+        assert!(settings.view().providers[0].models.is_empty());
+    }
+
+    #[test]
+    fn mcp_endpoint_refuses_repeated_or_malformed_secret_names() {
+        let (settings, _, _dir) = temp_settings();
+        let pairs = |names: &[&str]| -> Vec<(String, SecretString)> {
+            names
+                .iter()
+                .map(|n| (n.to_string(), SecretString::from("v")))
+                .collect()
+        };
+        for env in [&["A", "A"][..], &["A B"], &[""], &["A=B"]] {
+            let endpoint = NewMcpEndpoint::Stdio {
+                command: "npx".to_string(),
+                args: Vec::new(),
+                env: pairs(env),
+            };
+            assert!(
+                settings.add_mcp_server("tools", endpoint).is_err(),
+                "{env:?}"
+            );
+        }
+        let endpoint = NewMcpEndpoint::StreamableHttp {
+            url: "https://example.com/mcp".to_string(),
+            headers: pairs(&["X-Api-Key", "x-api-key"]),
+        };
+        assert!(settings.add_mcp_server("tools", endpoint).is_err());
+        assert!(settings.view().mcp_servers.is_empty());
     }
 
     fn general_update(
@@ -1312,6 +1453,23 @@ name = "m"
             .unwrap();
         assert_eq!(view.general.language, Language::En);
         assert_eq!(Settings::load(path).display_language(), Language::En);
+    }
+
+    /// 設定ファイルの知らない表示言語は画面へ伝え、選び直すと消える。
+    #[test]
+    fn unknown_language_is_reported_until_a_language_is_chosen() {
+        let (_, path, _dir) = temp_settings();
+        std::fs::write(&path, "[general]\nlanguage = \"j\u{202E}p\"\n").unwrap();
+        let settings = Settings::load(path);
+
+        let view = settings.view();
+        assert_eq!(view.config_error, None);
+        assert_eq!(view.general.language, Language::DEFAULT);
+        assert_eq!(view.general.unknown_language.as_deref(), Some("jp"));
+
+        let view = settings.update_language(Language::En).unwrap();
+        assert_eq!(view.general.language, Language::En);
+        assert_eq!(view.general.unknown_language, None);
     }
 
     #[test]

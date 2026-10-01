@@ -81,6 +81,13 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
         {general.language !== currentLanguage() && (
           <p className="settings-hint">{t('settings.general.language_restart_note')}</p>
         )}
+        {general.unknown_language !== null && (
+          <p className="settings-hint">
+            {t('settings.general.language_unknown_note', {
+              value: isolated(general.unknown_language),
+            })}
+          </p>
+        )}
       </div>
 
       <PromptField

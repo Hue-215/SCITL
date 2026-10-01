@@ -80,6 +80,7 @@
   "settings.general.exporting": "書き出し中…",
   "settings.general.language_label": "表示言語",
   "settings.general.language_restart_note": "再起動後に反映されます",
+  "settings.general.language_unknown_note": "設定ファイルの表示言語「{value}」は使えないため、既定の言語で表示しています。言語を選び直すと、この値は置き換わります。",
   "settings.general.open_export_folder": "フォルダを開く",
   "settings.general.open_export_folder_failed": "フォルダを開けませんでした: {error}",
   "settings.general.system_prompt_label": "システムプロンプト",
