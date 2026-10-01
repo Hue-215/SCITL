@@ -90,6 +90,57 @@ fn a_missing_data_directory_is_not_created() {
 }
 
 #[test]
+fn a_file_given_as_the_data_directory_is_reported_as_not_a_directory() {
+    let data = DataDir::new();
+    let file = data.path().join("file");
+    std::fs::write(&file, b"").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_scitl-cli"))
+        .arg("--data-dir")
+        .arg(&file)
+        .args(["task", "list"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not a directory"));
+}
+
+/// 上位とサブコマンドの両方に書けると、どちらを使うかが黙って決まる。
+#[test]
+fn the_data_directory_is_accepted_only_before_the_command() {
+    let data = DataDir::new();
+    let other = DataDir::new();
+
+    let output = data.run(&["task", "--data-dir", other.path().to_str().unwrap(), "list"]);
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--data-dir"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_read_only_data_directory_is_refused_with_the_reason() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let data = DataDir::new();
+    assert!(data.run(&["task", "list"]).status.success());
+    let writable = std::fs::metadata(data.path()).unwrap().permissions();
+    std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let output = data.run(&["task", "list"]);
+    std::fs::set_permissions(data.path(), writable).unwrap();
+
+    // 権限を無視できる利用者(root)で走らせると、書き込めてしまう。
+    if output.status.success() {
+        return;
+    }
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not writable"));
+}
+
+#[test]
 fn a_failed_operation_exits_with_failure_and_writes_to_stderr() {
     let data = DataDir::new();
 

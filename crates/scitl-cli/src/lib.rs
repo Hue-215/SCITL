@@ -23,7 +23,7 @@ use terminal::print_json;
 #[derive(Args)]
 pub struct DataDirArg {
     /// Data directory to open. Defaults to the one the desktop app uses.
-    #[arg(long, global = true, value_name = "DIR")]
+    #[arg(long, value_name = "DIR")]
     pub data_dir: Option<PathBuf>,
 }
 
@@ -80,15 +80,30 @@ impl Session {
     /// 無い場所を開くと空のDBを作ってしまう。打ち間違えた`--data-dir`で黙って空の一覧を
     /// 返さないよう、ディレクトリが無ければ断る。既定の場所もGUIを一度起動するまでは無いが、
     /// その間はタスクも無いので断って困らない。
+    ///
+    /// 書き込めないディレクトリも断る。読むだけのコマンドでも、DBを開くときにログ先行書き込みの
+    /// ファイルを作る。
     pub fn open(arg: DataDirArg) -> Result<Self, CliError> {
         let data = DataLayout::new(match arg.data_dir {
             Some(dir) => dir,
             None => paths::default_data_dir()?,
         });
-        if !data.root().is_dir() {
-            return Err(CliError::MissingDataDir(data.root().to_path_buf()));
+        let root = data.root();
+        if !root.is_dir() {
+            return Err(if root.exists() {
+                CliError::DataDirNotADirectory(root.to_path_buf())
+            } else {
+                CliError::MissingDataDir(root.to_path_buf())
+            });
         }
-        let db = Arc::new(Mutex::new(db::open(data.database())?));
+        let conn = db::open(data.database()).map_err(|e| {
+            if db::is_read_only_error(&e) {
+                CliError::ReadOnlyDataDir(root.to_path_buf())
+            } else {
+                CliError::Core(e)
+            }
+        })?;
+        let db = Arc::new(Mutex::new(conn));
         Ok(Self {
             data,
             db,
@@ -143,6 +158,13 @@ pub enum CliError {
     NoDataDir(#[from] paths::NoAppDir),
     #[error("data directory {} does not exist", .0.display())]
     MissingDataDir(PathBuf),
+    #[error("data directory {} is not a directory", .0.display())]
+    DataDirNotADirectory(PathBuf),
+    #[error(
+        "data directory {} is not writable; even commands that only read need to write there",
+        .0.display()
+    )]
+    ReadOnlyDataDir(PathBuf),
     #[error(transparent)]
     Core(#[from] CoreError),
 }
