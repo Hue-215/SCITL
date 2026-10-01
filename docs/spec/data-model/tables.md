@@ -25,6 +25,8 @@
 
 ## 2. テーブル
 
+`messages`・`turn_transcripts`・`transcript_blobs`は`messages.md`にある。索引(3節)はすべてのテーブルの分をここに置く。
+
 ### tasks
 
 | カラム | 型 | 制約・備考 |
@@ -170,7 +172,7 @@ DBのロックが守るのは1回の書き込みの整合性まで。応答生�
 
 **CHECK制約はCREATE TABLE時点で入れる**: SQLiteは `ALTER TABLE ADD CONSTRAINT` を
 持たず、後から制約を追加するにはテーブル再構築(新テーブル作成→全行コピー→差し替え)が
-必要になる。上記の制約はすべて `migrations/0001_init.sql` の `CREATE TABLE` に含める。
+必要になる。各テーブルの制約(`messages.md`の分を含む)はすべて `migrations/0001_init.sql` の `CREATE TABLE` に含める。
 0001より後に加わった不変条件は、再構築の代わりに `BEFORE INSERT`/`BEFORE UPDATE` の
 トリガーで同じ条件を表す(例: `0002_tool_execution_role.sql`)。再構築は外部キーの一時
 無効化を伴い、マイグレーションのトランザクション内では行えないため。

@@ -4,7 +4,8 @@ SCITLの確定方針を書いた文書の案内。実装を始める前にこの
 文書とコードが食い違う場合は、どちらが正しいかを確かめてから直す。
 
 使っている技術: Tauri 2(Rust + WebView)、React + TypeScript + Vite、SQLite(`rusqlite`、WAL)、
-`reqwest` + `rustls`、`keyring-core`、設定はTOML・言語ファイルはJSON(理由は`architecture/tech-stack.md`)。
+`reqwest` + `rustls`、`keyring-core`、設定はTOML・言語ファイルはJSON(理由は`architecture/tech-stack.md`、
+HTTPクライアントの設定は`architecture/network-secrets.md`)。
 
 ## 文書ごとの読む場面
 
@@ -12,7 +13,7 @@ SCITLの確定方針を書いた文書の案内。実装を始める前にこの
 
 | 文書 | 読む場面 | Opus |
 |---|---|---|
-| `principles.md` | 設計判断をするとき。該当する節だけを読む | 節による |
+| `principles.md` | 設計判断をするとき(該当する節だけ)。コード・コメント・コミットを書くとき(5節・8節) | 節による |
 | `architecture/tech-stack.md` | 依存の追加・技術の置き換え、ライセンスの判断 | 実行時依存の追加は当たる |
 | `architecture/cli.md` | `scitl-cli`・`scitl-debug-cli`のコマンドを触る | 秘密情報の受け取り方を変えるなら当たる |
 | `architecture/llm-adapter.md` | プロバイダーのアダプタ、モデルの能力、イベント列、失敗の種類 | 通信先・通信方式を変えるなら当たる |
@@ -23,7 +24,7 @@ SCITLの確定方針を書いた文書の案内。実装を始める前にこの
 | `architecture/webview-boundary.md` | IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる |
 | `architecture/sanitize.md` | 外部から来た文字列・自由入力を、モデル・画面・端末・ファイルへ出す | 当たる |
 | `architecture/i18n.md` | 画面の文言、言語ファイル、表示言語 | 当たらない |
-| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 当たらない |
+| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
 | `architecture/export.md` | Markdownエクスポート | 当たらない |
 | `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`、索引、PRAGMAと排他、マイグレーション | 当たる |
 | `data-model/messages.md` | `messages`、ターン境界、操作の記録、`turn_transcripts`。`architecture/transcript.md`と対で読む | 当たる |
@@ -38,7 +39,8 @@ SCITLの確定方針を書いた文書の案内。実装を始める前にこの
   添えない。`architecture/transcript.md`・`architecture/prompt-shape.md`・`architecture/llm-adapter.md`
   (Anthropic形式の思考ブロック)
 - **ユーザー発言の囲みの中には、利用者が書いたものだけを置く**: 添付・操作の記録・通知は囲みの外に置く。
-  `architecture/prompt-shape.md`・`architecture/attachments.md`
+  `architecture/prompt-shape.md`・`architecture/attachments.md`・`architecture/transcript.md`(システムプロンプトの
+  変更の通知)
 - **保存するデータは書き換えず、無害化は出力先へ出す直前に出力先ごとに掛ける**: 送った形の保存は
   無害化済みのまま持つので、無害化の規則を変えたら保存の形の版を上げる。`architecture/sanitize.md`・
   `architecture/transcript.md`

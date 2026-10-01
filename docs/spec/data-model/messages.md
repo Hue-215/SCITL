@@ -218,7 +218,7 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 ### 応答生成以外の経路での操作の記録(Issue #75)
 
 タスクの状態の列(`title`・`archived_at`・`deleted_at`等)は現在の状態だけを持ち、いつ誰が
-変えたかはこの記録が持つ(`../principles.md` 2節「操作の記録は既存の会話ログに混在させる」)。
+変えたかはこの記録が持つ(`../principles.md` 2節「監査ログ用の別テーブルを作らない」)。
 モデルの操作がターンのツール実行記録として残るのと対になる。
 
 - 行の形は上の表の3つ目(`role='tool'`、`kind='tool_execution'`、`turn_id`なし、`source`あり)。

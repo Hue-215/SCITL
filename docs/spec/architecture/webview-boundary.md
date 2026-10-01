@@ -50,8 +50,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   権限の検査の対象外で、capabilitiesを足さずに届く(Tauri 2.11で確認)。Tauriを更新して
   これが通らなくなると、8KBを超える通知から先の途中経過がそのターンの間止まる(完了後の
   読み直しでは出る)
-- Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「独自の判断で
-  通信先を増やさない」)
+- Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「ローカル完結」)
 - 多重起動の防止(`tauri-plugin-single-instance`)はJSのAPIを持たず、capabilitiesに権限を
   足さない。`deep-link`のfeatureは有効にしない(`concurrency.md`「多重起動の防止」)
 
