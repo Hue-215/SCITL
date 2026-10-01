@@ -471,7 +471,8 @@ impl Settings {
         draft.commit()
     }
 
-    /// 最初に登録したプロバイダーをアクティブにする。同じ名前のプロバイダーは登録できない
+    /// 最初に登録したプロバイダーをアクティブにする
+    /// ([`Config::reselect_active_provider`])。同じ名前のプロバイダーは登録できない
     /// (チャットのモデル選択で見分けられなくなる)。鍵の保存に失敗したらプロバイダー自体の
     /// 登録も中断し、登録に失敗したら保存した鍵を消す。どちらでも`key_ref`と鍵の片方だけが
     /// 残る状態を作らない。
@@ -520,15 +521,13 @@ impl Settings {
                 provider.name
             )));
         }
-        if draft.config.active_provider_id.is_none() {
-            draft.config.active_provider_id = Some(provider.id.clone());
-        }
         draft.config.providers.push(provider);
+        draft.config.reselect_active_provider();
         draft.commit()
     }
 
-    /// アクティブなプロバイダーを消したら先頭をアクティブにする。保存済みAPIキーも消す。
-    /// 鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに設定が消えた鍵を
+    /// アクティブなプロバイダーを消したら、選択を移す([`Config::reselect_active_provider`])。
+    /// 保存済みAPIキーも消す。鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに設定が消えた鍵を
     /// 指して残る)。
     pub fn delete_provider(&self, provider_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
@@ -539,9 +538,7 @@ impl Settings {
             .position(|p| p.id == provider_id)
             .ok_or_else(|| provider_not_found(provider_id))?;
         let removed = config.providers.remove(index);
-        if config.active_provider_id.as_deref() == Some(provider_id) {
-            config.active_provider_id = config.providers.first().map(|p| p.id.clone());
-        }
+        config.reselect_active_provider();
 
         let view = draft.commit()?;
         self.detected.forget_provider(provider_id);
@@ -553,7 +550,8 @@ impl Settings {
 
     /// 手動追加(1件)と、取得した一覧から選んだ分(複数件)の両方が通る。1件でも登録できない
     /// 名前があれば何も登録しない。モデルが無かったプロバイダーでは、最初の1件を
-    /// アクティブにする。
+    /// アクティブにする。アクティブなプロバイダーにモデルが無ければ、選択をこのプロバイダーへ
+    /// 移す([`Config::reselect_active_provider`])。
     pub fn add_models<S: AsRef<str>>(
         &self,
         provider_id: &str,
@@ -571,10 +569,12 @@ impl Settings {
         if provider.active_model.is_none() {
             provider.active_model = provider.models.first().map(|m| m.name.clone());
         }
+        draft.config.reselect_active_provider();
         draft.commit()
     }
 
-    /// アクティブなモデルを消したら先頭をアクティブにする。
+    /// アクティブなモデルを消したら先頭をアクティブにする。プロバイダーの最後のモデルを
+    /// 消したら、選択を移す([`Config::reselect_active_provider`])。
     pub fn remove_model(&self, provider_id: &str, model: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let provider = find_provider_mut(&mut draft.config, provider_id)?;
@@ -582,6 +582,7 @@ impl Settings {
         if provider.active_model.as_deref() == Some(model) {
             provider.active_model = provider.models.first().map(|m| m.name.clone());
         }
+        draft.config.reselect_active_provider();
         let view = draft.commit()?;
         self.detected.forget(provider_id, model);
         Ok(view)
@@ -1258,6 +1259,45 @@ name = "m"
             settings.snapshot().adapter,
             Err(TurnFailure::NoProvider)
         ));
+    }
+
+    /// 選択中のプロバイダーやその最後のモデルを消しても、モデルのあるプロバイダーが
+    /// 残っていればチャットを続けられる。
+    #[test]
+    fn selection_moves_to_a_provider_that_has_a_model() {
+        let (settings, _, _dir) = temp_settings();
+        let ids: Vec<String> = ["A", "B", "C"]
+            .iter()
+            .map(|name| {
+                let view = add_local_provider(&settings, name);
+                view.providers.last().unwrap().id.clone()
+            })
+            .collect();
+        let active = || settings.current().config.active_provider_id.clone();
+        assert_eq!(active().as_deref(), Some(ids[0].as_str()));
+
+        // モデルの無いプロバイダーを選択中に、別のプロバイダーへモデルを登録する。
+        settings.add_models(&ids[2], &["c1"]).unwrap();
+        assert_eq!(active().as_deref(), Some(ids[2].as_str()));
+
+        // 最後のモデルを消す。ほかにモデルが無ければ、選択は動かさない。
+        settings.remove_model(&ids[2], "c1").unwrap();
+        assert_eq!(active().as_deref(), Some(ids[2].as_str()));
+
+        // 選択中のプロバイダーを消す。先頭のAにはモデルが無いので、Bへ移る。
+        settings.add_models(&ids[1], &["b1"]).unwrap();
+        settings.select_chat_model(&ids[1], "b1").unwrap();
+        settings.add_models(&ids[2], &["c1"]).unwrap();
+        settings.select_chat_model(&ids[2], "c1").unwrap();
+        let view = settings.delete_provider(&ids[2]).unwrap();
+        assert_eq!(view.active_provider_id.as_deref(), Some(ids[1].as_str()));
+
+        // 選択中でないプロバイダーを消しても、選択は動かさない。
+        let view = settings.delete_provider(&ids[0]).unwrap();
+        assert_eq!(view.active_provider_id.as_deref(), Some(ids[1].as_str()));
+
+        let view = settings.remove_model(&ids[1], "b1").unwrap();
+        assert_eq!(view.active_provider_id.as_deref(), Some(ids[1].as_str()));
     }
 
     #[test]

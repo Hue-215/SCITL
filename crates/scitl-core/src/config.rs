@@ -260,6 +260,23 @@ impl Config {
         let provider = self.active_provider()?;
         Some((provider, provider.model(provider.resolved_model()?)?))
     }
+
+    /// アクティブなプロバイダーで使えるモデルが無ければ、モデルのある先頭のプロバイダーを
+    /// アクティブにする(登録・削除のたびに呼ぶ)。どのプロバイダーにもモデルが無ければ、
+    /// 今のプロバイダーのままにし、それも無ければ先頭のプロバイダーにする。
+    pub fn reselect_active_provider(&mut self) {
+        if self.active_model().is_some() {
+            return;
+        }
+        let next = self
+            .providers
+            .iter()
+            .find(|p| p.resolved_model().is_some())
+            .or(self.active_provider())
+            .or(self.providers.first())
+            .map(|p| p.id.clone());
+        self.active_provider_id = next;
+    }
 }
 
 /// 設定ファイルを読み込む。ファイルが存在しない場合は初回起動として空の設定を返す
