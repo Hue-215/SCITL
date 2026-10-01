@@ -6,20 +6,22 @@
 //! cargo run -p scitl-core --example relay_session -- <DATA_DIR> <BASE_URL> <STEP>...
 //! ```
 //!
-//! STEPは`@new`(タスクを作って聞き取りを始める)・`@general`(総合チャットへ移る)・
-//! `@base <文>`(以降のターンの基本のシステムプロンプトを差し替える)・それ以外(今の会話への
-//! ユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
+//! STEPは`@new`(タスクを作って聞き取りを始める)・`@task <id>`(既にあるタスクの会話へ移る)・
+//! `@general`(総合チャットへ移る)・`@base <文>`(以降のターンの基本のシステムプロンプトを
+//! 差し替える)・`@tools on`/`@tools off`(以降のターンで外部ツールを1つ有効・無効にする。
+//! ツール定義が変わる場面を起こすためで、サーバーの実体は無く、呼ばれたら失敗を返す)・
+//! それ以外(今の会話へのユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
 //!
 //! 方言は環境変数`RELAY_DIALECT`(`openai`・`anthropic`・`gemini`)で選ぶ。BASE_URLとモデルは
-//! `docs/llm-relay.md`。`RELAY_CONTEXT_LENGTH`でモデルのコンテキスト長を変えられる(間引きを
-//! 起こすため)。
+//! `docs/llm-relay.md`。`RELAY_MODEL`でモデル名を変えられる(本物のサーバーを相手にするとき)。
+//! `RELAY_CONTEXT_LENGTH`でモデルのコンテキスト長を変えられる(間引きを起こすため)。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use scitl_core::attachments::{AttachmentStore, Attachments};
-use scitl_core::config::{GeneralConfig, ReasoningEffort};
+use scitl_core::config::{GeneralConfig, McpEndpoint, McpServerConfig, ReasoningEffort};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::in_flight::InFlightSet;
@@ -27,6 +29,7 @@ use scitl_core::llm::providers::anthropic::AnthropicAdapter;
 use scitl_core::llm::providers::gemini::GeminiAdapter;
 use scitl_core::llm::providers::openai_compat::OpenAiCompatAdapter;
 use scitl_core::llm::{LlmAdapter, ResponseEvent, DEFAULT_CAPABILITIES};
+use scitl_core::mcp::{McpToolInfo, ToolCatalog};
 use scitl_core::orchestration::{
     self, create_task, open_task_chat, run_turn, McpAccess, SystemPrompts, TaskCreation,
     ToolLimits, TurnContext, TurnEvent,
@@ -47,10 +50,16 @@ async fn main() {
     // LLM役は人間並みに遅いので長めに待つ。
     let timeout = Duration::from_secs(900);
     let dialect = std::env::var("RELAY_DIALECT").unwrap_or_else(|_| "openai".to_string());
+    let model = std::env::var("RELAY_MODEL").ok();
+    let model = |default: &'static str| model.as_deref().unwrap_or(default);
     let adapter: Box<dyn LlmAdapter> = match dialect.as_str() {
-        "openai" => Box::new(OpenAiCompatAdapter::new(base_url, key, "dummy-o", timeout).unwrap()),
-        "anthropic" => Box::new(AnthropicAdapter::new(base_url, key, "dummy-a", timeout).unwrap()),
-        "gemini" => Box::new(GeminiAdapter::new(base_url, key, "dummy-g", timeout).unwrap()),
+        "openai" => {
+            Box::new(OpenAiCompatAdapter::new(base_url, key, model("dummy-o"), timeout).unwrap())
+        }
+        "anthropic" => {
+            Box::new(AnthropicAdapter::new(base_url, key, model("dummy-a"), timeout).unwrap())
+        }
+        "gemini" => Box::new(GeminiAdapter::new(base_url, key, model("dummy-g"), timeout).unwrap()),
         other => panic!("unknown RELAY_DIALECT: {other}"),
     };
     let general = GeneralConfig::default();
@@ -78,12 +87,51 @@ async fn main() {
     }
     let defaults = SystemPrompts::from_config(&general);
     let mut base: Option<String> = None;
+    // 一覧は取得済みとして置くので、ツールが呼ばれるまでサーバーへは繋ぎに行かない。
+    let catalog = ToolCatalog::new();
+    catalog.store(
+        "relay",
+        vec![McpToolInfo {
+            name: "lookup".to_string(),
+            description: Some("Looks up a word in the dictionary.".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"word": {"type": "string"}},
+                "required": ["word"],
+            }),
+        }],
+    );
+    let mut servers = [McpServerConfig {
+        id: "relay".to_string(),
+        name: "relay".to_string(),
+        enabled: false,
+        endpoint: McpEndpoint::Stdio {
+            command: "relay-session-no-such-server".to_string(),
+            args: Vec::new(),
+            env_refs: Vec::new(),
+        },
+        enabled_tools: ["lookup".to_string()].into(),
+    }];
 
     let mut chat = Chat::General;
     for step in steps {
         if let Some(text) = step.strip_prefix("@base ") {
             println!("> @base {text}");
             base = Some(text.to_string());
+            continue;
+        }
+        if let Some(id) = step.strip_prefix("@task ") {
+            println!("> @task {id}");
+            chat = Chat::Task(id.parse().expect("@task <id>"));
+            continue;
+        }
+        if let Some(switch) = step.strip_prefix("@tools ") {
+            println!("> @tools {switch}");
+            servers[0].enabled = match switch {
+                "on" => true,
+                "off" => false,
+                other => panic!("unknown @tools switch: {other}"),
+            };
             continue;
         }
         let ctx = TurnContext {
@@ -95,7 +143,7 @@ async fn main() {
             opening_message: orchestration::opening_message(&general),
             capabilities,
             reasoning_effort: (dialect != "openai").then_some(ReasoningEffort::Medium),
-            mcp: McpAccess::none(),
+            mcp: McpAccess::new(&servers, &catalog),
             limits: ToolLimits::default(),
             generating: &generating,
             attachments: &attachments,
