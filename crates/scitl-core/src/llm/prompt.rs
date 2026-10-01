@@ -35,6 +35,11 @@ const SYSTEM_UPDATE_TAG: &str = "scitl:system-update";
 /// 表す[`OperationNote::source`]の値。
 pub const DISCARDED_ATTEMPT_SOURCE: &str = "discarded_attempt";
 
+/// 操作の記録1件に載せる結果の長さの上限(直列化したJSONの文字数)。超えた結果は省略の注記に
+/// 置き換える。記録は送るたびに履歴に積もるので、1件の巨大な結果が会話を文脈長に収まらなく
+/// しないようにする。
+const MAX_OPERATION_RESULT_CHARS: usize = 2_000;
+
 /// 添付1件についてモデルに伝える情報。JSONに直列化してから予約タグを無害化する
 /// ので、ファイル名・本文の改行や引用符はJSONのエスケープに閉じ込められる。
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +82,22 @@ pub struct OperationNote<'a> {
     pub tool: &'a str,
     pub arguments: &'a Value,
     pub result: &'a Value,
+}
+
+impl OperationNote<'_> {
+    /// 送る形。結果が上限を超えていれば、結果を省略の注記に置き換える。何をしたかは`tool`と
+    /// `arguments`で伝わり、今の状態はモデルがツールで読み直せる。
+    fn capped(&self) -> Value {
+        let mut value = serde_json::to_value(self).expect("an operation note serializes");
+        let chars = self.result.to_string().chars().count();
+        if chars > MAX_OPERATION_RESULT_CHARS {
+            value["result"] = Value::String(format!(
+                "omitted: the result was {chars} characters long. Read the current state \
+                 with a tool if you need it."
+            ));
+        }
+        value
+    }
 }
 
 /// ユーザー発言の送信日時を、モデルへ渡す形にしたもの。利用者の地域の時差付きの日時
@@ -180,9 +201,9 @@ impl PromptText {
     }
 
     /// 操作の記録の囲み。記録にはタイトル等の自由入力と外部ツールの出力が載るので、JSONに
-    /// 直列化した全体に掛ける。
+    /// 直列化した全体に掛ける。上限を超える結果は省略する([`MAX_OPERATION_RESULT_CHARS`])。
     pub fn operations(notes: &[OperationNote]) -> Self {
-        let json = serde_json::to_value(notes).expect("operation notes serialize");
+        let json = Value::Array(notes.iter().map(OperationNote::capped).collect());
         Self(format!(
             "<{OPERATIONS_TAG}>{}</{OPERATIONS_TAG}>",
             Self::json(&json).as_str()
@@ -301,6 +322,34 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// 上限を超える結果だけを省略の注記に置き換え、何をしたか(`tool`・`arguments`)は残す。
+    #[test]
+    fn operations_omit_only_results_over_the_limit() {
+        let arguments = json!({ "title": "t" });
+        let small = json!({ "title": "t" });
+        let large = json!({ "description": "あ".repeat(MAX_OPERATION_RESULT_CHARS) });
+        let note = |result| OperationNote {
+            source: "ui",
+            at: "2026-10-01T00:00:00Z",
+            tool: "update_task",
+            arguments: &arguments,
+            result,
+        };
+        let text = PromptText::operations(&[note(&small), note(&large)]);
+        let json = text
+            .as_str()
+            .strip_prefix("<scitl:operations>")
+            .and_then(|t| t.strip_suffix("</scitl:operations>"))
+            .unwrap();
+        let notes: Vec<Value> = serde_json::from_str(json).unwrap();
+        assert_eq!(notes[0]["result"], small);
+        let omitted = notes[1]["result"].as_str().unwrap();
+        assert!(omitted.starts_with("omitted:"));
+        assert!(omitted.contains(&large.to_string().chars().count().to_string()));
+        assert_eq!(notes[1]["tool"], "update_task");
+        assert_eq!(notes[1]["arguments"], arguments);
+    }
 
     /// 日本時間で表した送信日時。
     fn jst(utc: &str) -> SentAt {

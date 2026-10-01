@@ -142,6 +142,20 @@ pub fn names(chat: Chat) -> Vec<String> {
         .collect()
 }
 
+/// その名前のツールを実行すると、効果が後に残りうるか。内部ツールは更新系だけが残り、読み取り
+/// (添付の読み込みを含む)は残らない。外部ツールと知らない名前は、読むだけか判別できないので
+/// 残りうるものとする。捨てた試行の記録を伝えるか(`orchestration::history`)の判断に使う。
+pub fn has_lasting_effect(name: &str) -> bool {
+    [Surface::General, Surface::Task]
+        .into_iter()
+        .flat_map(Surface::tools)
+        .find(|tool| (tool.schema)().name() == name)
+        .is_none_or(|tool| match tool.run {
+            Run::UpdateTask(_) => true,
+            Run::Read(_) | Run::ReadTask(_) | Run::ReadAttachment => false,
+        })
+}
+
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]にする。
 /// 総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離をモデルの自己制御に
 /// 頼らない)。タスクチャットの`task_id`は呼び出し元(orchestration)が文脈から渡す(モデルには
@@ -223,6 +237,27 @@ mod tests {
             }
         }
         assert!(!names(Chat::General).contains(&update_task::NAME.to_string()));
+    }
+
+    #[test]
+    fn only_updates_and_unknown_tools_have_lasting_effects() {
+        for name in [
+            update_task::NAME,
+            add_steps::NAME,
+            update_step::NAME,
+            delete_step::NAME,
+            "server__tool",
+        ] {
+            assert!(has_lasting_effect(name), "{name}");
+        }
+        for name in [
+            get_task_list::NAME,
+            get_task_detail::NAME,
+            get_current_task_detail::NAME,
+            read_attachment::NAME,
+        ] {
+            assert!(!has_lasting_effect(name), "{name}");
+        }
     }
 
     #[test]

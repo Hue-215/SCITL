@@ -2234,6 +2234,97 @@ async fn a_retry_is_told_what_the_discarded_attempt_did() {
         .any(|m| matches!(m, ChatMessage::Tool { .. })));
 }
 
+/// 最後のユーザー発言が入った送信の、操作の記録の囲み。無ければ空。
+fn operations_sent(sent: &[ChatMessage]) -> String {
+    sent.iter()
+        .rev()
+        .find_map(|m| match m {
+            ChatMessage::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .and_then(|text| text.split_once("<scitl:operations>"))
+        .map(|(_, operations)| operations.to_string())
+        .unwrap_or_default()
+}
+
+/// 1つ目のターンで工程を足し、2つ目のターンでタイトルを変えた会話。2つのターンの
+/// (ユーザー発言, 返信)のidを返す。
+async fn two_turns_with_tools(db: &SharedConnection, task_id: i64) -> [(i64, i64); 2] {
+    for (adapter, text) in [
+        (adds_a_step(), "工程を足して"),
+        (sets_the_title(), "名前を付けて"),
+    ] {
+        run_turn(
+            db.clone(),
+            &context(&adapter),
+            Chat::Task(task_id),
+            text.to_string(),
+        )
+        .await
+        .unwrap();
+    }
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    let ids = |role| {
+        messages
+            .iter()
+            .filter(|m| m.role == role)
+            .map(|m| m.id)
+            .collect::<Vec<_>>()
+    };
+    let (users, replies) = (ids(Role::User), ids(Role::Assistant));
+    [(users[0], replies[0]), (users[1], replies[1])]
+}
+
+/// 前のターンの返信を作り直すと、後ろのターンは消え、そこで実行したことは伝えない。作り直す
+/// ターン自身の前の試行で実行したことは伝える。
+#[tokio::test]
+async fn retrying_an_earlier_reply_drops_the_records_of_later_turns() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let [(_, first_reply), _] = two_turns_with_tools(&db, task_id).await;
+
+    let retry = ScriptedAdapter::texts(&["作り直しました"]);
+    retry_reply(
+        db.clone(),
+        &context(&retry),
+        Chat::Task(task_id),
+        first_reply,
+    )
+    .await
+    .unwrap();
+
+    let operations = operations_sent(&retry.sent_messages()[0]);
+    assert!(operations.contains(r#""tool":"add_steps""#));
+    assert!(!operations.contains("update_task"));
+}
+
+/// 前のユーザー発言を編集すると、その発言に答えたターンで実行したことは伝え、後ろのターンで
+/// 実行したことは伝えない。
+#[tokio::test]
+async fn editing_an_earlier_message_drops_the_records_of_later_turns() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let [(first_user, _), _] = two_turns_with_tools(&db, task_id).await;
+
+    let edited = ScriptedAdapter::texts(&["編集を受けました"]);
+    edit_user_message(
+        db.clone(),
+        &context(&edited),
+        Chat::Task(task_id),
+        first_user,
+        "工程をひとつ足して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let operations = operations_sent(&edited.sent_messages()[0]);
+    assert!(operations.contains(r#""tool":"add_steps""#));
+    assert!(!operations.contains("update_task"));
+}
+
 /// 再試行の対象はターンの返信のみ。ユーザー発言を再試行しようとするとエラーになる。
 #[tokio::test]
 async fn retry_reply_rejects_user_target() {

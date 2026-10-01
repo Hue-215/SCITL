@@ -16,6 +16,7 @@ use crate::llm::{
 };
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
 use crate::orchestration::transcript::{Front, Replayable, SavedHead};
+use crate::tools;
 
 /// 履歴の組み立てに要るDBの行。DBのロックを持つ間に引き終え、添付画像の読み出し
 /// ([`build_history`])はロックの外で行う。
@@ -434,7 +435,9 @@ struct Operation<'a> {
 }
 
 impl<'a> Operation<'a> {
-    /// 失敗した結果と読めない記録は`None`。`shown`は表示される行か。
+    /// 失敗した結果と読めない記録は`None`。モデル自身が捨てた試行で実行した記録のうち、効果の
+    /// 残らないもの(読み取り)も`None`。伝える理由は効果が残ることで、読み取りを伝えても古い
+    /// 結果が混ざるだけになる。`shown`は表示される行か。
     fn of(m: &'a Message, shown: bool) -> Option<Self> {
         let record: ToolExecutionRecord = serde_json::from_str(&m.content).ok()?;
         if is_error_result(&record.result) {
@@ -444,6 +447,7 @@ impl<'a> Operation<'a> {
         // 表示されない捨てた試行)はモデル自身が実行したもの。
         let source = match (&m.source, shown) {
             (Some(source), true) => source.as_str(),
+            _ if !tools::has_lasting_effect(&record.tool) => return None,
             _ => DISCARDED_ATTEMPT_SOURCE,
         };
         Some(Self {
@@ -933,6 +937,37 @@ mod tests {
         assert_eq!(operations[0]["source"], DISCARDED_ATTEMPT_SOURCE);
         assert_eq!(operations[0]["tool"], "web__search");
         assert_eq!(operations[0]["result"], json!({ "text": "x" }));
+    }
+
+    /// 失敗したターンの記録のうち、読み取りの内部ツールは効果が残らないので伝えない。更新系と
+    /// 外部ツールは伝える。
+    #[test]
+    fn leaves_out_reads_from_a_failed_turn() {
+        let f = Fixture::new();
+        f.user("u1");
+        for tool in [
+            "read_attachment",
+            "get_task_list",
+            "add_steps",
+            "web__search",
+        ] {
+            let content = serde_json::to_string(&ToolExecutionRecord {
+                tool: tool.to_string(),
+                arguments: json!({}),
+                result: json!({ "ok": true }),
+                call_id: None,
+            })
+            .unwrap();
+            f.insert(Role::Tool, Kind::ToolExecution, &content, Some("t1"));
+        }
+        f.insert(Role::Error, Kind::Normal, "失敗しました", Some("t1"));
+        f.user("u2");
+
+        let tools: Vec<Value> = operations_in(user_texts(&f.history())[1])
+            .iter()
+            .map(|o| o["tool"].clone())
+            .collect();
+        assert_eq!(tools, vec![json!("add_steps"), json!("web__search")]);
     }
 
     #[test]
