@@ -133,10 +133,6 @@ impl ExternalToolset {
         self.unavailable.contains(exposed_name)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.entries.iter().map(|e| e.schema.clone()).collect()
     }
@@ -293,7 +289,7 @@ mod tests {
         let s = server("id1", "files", &["read file", &"x".repeat(80)]);
         let toolset =
             ExternalToolset::build([(&s, vec![tool("read file"), tool(&"x".repeat(80))])], &[]);
-        assert!(toolset.is_empty());
+        assert!(toolset.exposed_names().is_empty());
     }
 
     /// 繋がらなかったサーバーの有効なツールを記録する。公開しているツールや内部ツールと同じ
@@ -327,7 +323,7 @@ mod tests {
         let s = server("id1", "files", &["read"]);
         let toolset =
             ExternalToolset::build([(&s, vec![tool("read")])], &["files__read".to_string()]);
-        assert!(toolset.is_empty());
+        assert!(toolset.exposed_names().is_empty());
     }
 
     #[test]
@@ -341,7 +337,9 @@ mod tests {
         assert_eq!(exposed_name("files", ""), None);
 
         let s = server("id1", "files", &[""]);
-        assert!(ExternalToolset::build([(&s, vec![tool("")])], &[]).is_empty());
+        assert!(ExternalToolset::build([(&s, vec![tool("")])], &[])
+            .exposed_names()
+            .is_empty());
     }
 
     #[test]
