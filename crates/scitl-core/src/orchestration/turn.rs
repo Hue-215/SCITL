@@ -581,7 +581,8 @@ async fn run_tool_rounds(
                 tool_calls: Vec::new(),
                 replay,
             });
-            if !text.is_empty() {
+            // 空白だけの本文は、中身の無い吹き出しになるので返信に含めない。
+            if !text.trim().is_empty() {
                 reply_parts.push(text);
             }
             let reply = reply_parts.join("\n\n");
@@ -668,7 +669,7 @@ async fn run_tool_rounds(
 
         // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
         // OpenAI互換プロトコルの標準的な表現に合わせる。
-        if !text.is_empty() {
+        if !text.trim().is_empty() {
             reply_parts.push(text.clone());
         }
         round_trip.push(ChatMessage::Assistant {

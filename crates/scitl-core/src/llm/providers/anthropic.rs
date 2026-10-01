@@ -379,11 +379,41 @@ const ABBREVIATED: &[(&str, &[&str])] = &[
 
 #[derive(Deserialize)]
 struct MessageResponse {
+    /// 返信なら`message`。省く互換サーバーがあるので、無いことは許す。
+    #[serde(rename = "type")]
+    kind: Option<String>,
     /// 受け取ったまま送り返すため、生のJSONで持つ([`Replay`])。
     #[serde(default)]
     content: Vec<Box<RawValue>>,
     stop_reason: Option<String>,
     stop_details: Option<Value>,
+    /// HTTP 200で返ったエラー(互換サーバー・中継が返すことがある)。
+    error: Option<Value>,
+}
+
+impl MessageResponse {
+    /// HTTP 200で返ったが返信ではない本文を断る。項目がすべて省略可能なので、断らないと
+    /// エラー本文も`{}`も「ブロックが0個の返信」として読め、中身の残らない空の応答になる。
+    fn reject_non_message(&self, api_key: &str) -> Result<(), LlmError> {
+        if let Some(error) = &self.error {
+            return Err(LlmError::Http(ErrorDetail::http(
+                StatusCode::OK,
+                &error.to_string(),
+                api_key,
+            )));
+        }
+        match self.kind.as_deref() {
+            Some("message") => Ok(()),
+            Some(_) => Err(LlmError::InvalidResponse(ErrorDetail::internal(
+                "the response is not a message",
+            ))),
+            // `type`を省く互換サーバーでも、返信なら停止理由か本文のどちらかはある。
+            None if self.stop_reason.is_none() && self.content.is_empty() => Err(
+                LlmError::InvalidResponse(ErrorDetail::internal("the response has no content")),
+            ),
+            None => Ok(()),
+        }
+    }
 }
 
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
@@ -430,7 +460,9 @@ impl AnthropicAdapter {
             http_error(status, body, key, thinking)
         })
         .await?;
-        super::read_json(response, &self.api_key).await
+        let response: MessageResponse = super::read_json(response, &self.api_key).await?;
+        response.reject_non_message(key)?;
+        Ok(response)
     }
 }
 
@@ -561,7 +593,7 @@ impl LlmAdapter for AnthropicAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_server::spawn_server;
+    use super::super::test_server::{spawn_server, spawn_server_with_headers};
     use super::*;
     use crate::llm::{InlineImage, ToolCallRequest, ToolSchema};
 
@@ -945,6 +977,55 @@ mod tests {
                 finish_reason: FinishReason::Length
             })
         );
+    }
+
+    /// レート制限の`Retry-After`の秒数を詳細に添える(待つ秒数を利用者に見せるため)。
+    #[tokio::test]
+    async fn a_rate_limit_carries_the_retry_after_seconds() {
+        let (base_url, handle) = spawn_server_with_headers(vec![(
+            429,
+            "Retry-After: 30\r\n",
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#,
+        )]);
+        let result = adapter(&base_url, "")
+            .send(&[user("hi")], ToolOffer::NONE, None, &mut |_| {})
+            .await;
+        handle.join().unwrap();
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::RateLimit(detail)))
+                if detail.as_str().ends_with("(retry after 30s)")),
+            "{result:?}"
+        );
+    }
+
+    /// HTTP 200で返ったエラー本文と、返信の形をしていない本文は、空の応答にしない。
+    #[tokio::test]
+    async fn a_body_that_is_not_a_message_is_not_an_empty_reply() {
+        for (body, expected) in [
+            (
+                r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+                "http",
+            ),
+            (
+                r#"{"error":{"message":"model overloaded","type":"server_error","code":503}}"#,
+                "http",
+            ),
+            ("{}", "invalid"),
+            (r#"{"type":"completion","content":[]}"#, "invalid"),
+        ] {
+            let (base_url, handle) = spawn_server(vec![(200, body)]);
+            let result = adapter(&base_url, "")
+                .send(&[user("hi")], ToolOffer::NONE, None, &mut |_| {})
+                .await;
+            handle.join().unwrap();
+            match (expected, &result) {
+                ("http", Err(CoreError::Llm(LlmError::Http(detail)))) => {
+                    assert!(detail.as_str().contains("overloaded"), "{body}: {detail:?}")
+                }
+                ("invalid", Err(CoreError::Llm(LlmError::InvalidResponse(_)))) => {}
+                _ => panic!("{body}: {result:?}"),
+            }
+        }
     }
 
     #[tokio::test]

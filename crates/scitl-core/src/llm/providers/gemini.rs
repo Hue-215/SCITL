@@ -73,8 +73,9 @@ pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<S
         if let Some(token) = &page_token {
             url.query_pairs_mut().append_pair("pageToken", token);
         }
+        let response = send(client.get(url), api_key).await?;
         let page: ModelPage =
-            super::read_success_json(send(client.get(url), api_key).await?, api_key).await?;
+            super::read_success_json_with(response, api_key, metadata_error).await?;
         names.extend(
             page.models
                 .into_iter()
@@ -120,7 +121,8 @@ pub async fn detect(
         if response.status() == StatusCode::NOT_FOUND {
             continue;
         }
-        let info: ListedModel = super::read_success_json(response, api_key).await?;
+        let info: ListedModel =
+            super::read_success_json_with(response, api_key, metadata_error).await?;
         found.insert(model.clone(), info.detected());
     }
     Ok(found)
@@ -369,6 +371,33 @@ fn error_code(error: &Value) -> Option<&str> {
     error.get("code").and_then(Value::as_str)
 }
 
+/// APIキーが無効なことを表す`ErrorInfo`の`reason`。キーの検証はAPIの手前の共通の入口で行われ、
+/// 状態コードは401ではなく400で返る(`{"error":{"status":"INVALID_ARGUMENT","details":[{"reason":
+/// "API_KEY_INVALID",…}]}}`)。文面は変わりうるので見ない。
+const INVALID_KEY_REASON: &str = "API_KEY_INVALID";
+
+/// 本文の`error.details`に、キーが無効なことを表す項目があるか。
+fn rejects_key(body: &str) -> bool {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .as_ref()
+        .and_then(|v| v.pointer("/error/details"))
+        .and_then(Value::as_array)
+        .is_some_and(|details| {
+            details
+                .iter()
+                .any(|d| d.get("reason").and_then(Value::as_str) == Some(INVALID_KEY_REASON))
+        })
+}
+
+/// 一覧・能力の問い合わせの失敗の分類。キーが無効なことは本文でしか分からない。
+fn metadata_error(status: StatusCode, body: &str, api_key: &str) -> LlmError {
+    if rejects_key(body) {
+        return LlmError::Auth(ErrorDetail::http(status, body, api_key));
+    }
+    LlmError::from_status(status, body, api_key)
+}
+
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
 /// ここで判定し、残りは状態コードによる共通の分類に任せる。
 fn http_error(status: StatusCode, body: &str, api_key: &str, thinking_sent: bool) -> LlmError {
@@ -383,6 +412,9 @@ fn http_error(status: StatusCode, body: &str, api_key: &str, thinking_sent: bool
         .unwrap_or_default();
     if BLOCKED_CODES.contains(&code) {
         return LlmError::Refused(detail());
+    }
+    if rejects_key(body) {
+        return LlmError::Auth(detail());
     }
     if status == StatusCode::BAD_REQUEST {
         // 入力が長すぎる専用のコードは無く、文面でしか分からない。
@@ -979,6 +1011,27 @@ mod tests {
                 true
             ),
             LlmError::Auth(_)
+        ));
+    }
+
+    /// 無効なキーは400で返るが、`details`の`reason`で見分けて認証の失敗にする。
+    #[test]
+    fn classifies_an_invalid_key_reported_with_400_as_auth() {
+        let body = r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}"#;
+        assert!(matches!(
+            http_error(StatusCode::BAD_REQUEST, body, "", false),
+            LlmError::Auth(_)
+        ));
+        assert!(matches!(
+            metadata_error(StatusCode::BAD_REQUEST, body, ""),
+            LlmError::Auth(_)
+        ));
+        // ほかの400は今まで通り。
+        let other =
+            r#"{"error":{"code":400,"status":"INVALID_ARGUMENT","details":[{"reason":"OTHER"}]}}"#;
+        assert!(matches!(
+            metadata_error(StatusCode::BAD_REQUEST, other, ""),
+            LlmError::Http(_)
         ));
     }
 

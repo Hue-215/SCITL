@@ -770,6 +770,24 @@ mod tests {
         assert!(headers.contains("authorization: bearer sk-test"));
     }
 
+    /// ヘッダーに載せられない鍵は、送る前に方言と同じ文言で断る(鍵は文言に載せない)。
+    #[tokio::test]
+    async fn a_key_that_cannot_be_sent_in_a_header_is_refused_before_sending() {
+        let adapter = OpenAiCompatAdapter::new(
+            "http://127.0.0.1:1/v1",
+            SecretString::from("sk-a\nb"),
+            "model",
+            TEST_TIMEOUT,
+        )
+        .unwrap();
+        let result = adapter.send(&[], ToolOffer::NONE, None, &mut |_| {}).await;
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::InvalidRequest(detail)))
+                if detail.as_str() == "the API key contains characters that cannot be sent in a header"),
+            "{result:?}"
+        );
+    }
+
     #[tokio::test]
     async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
         let (base_url, handle) = spawn_capturing(

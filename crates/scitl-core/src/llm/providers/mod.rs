@@ -67,11 +67,17 @@ async fn read_success_json<T: DeserializeOwned>(
     response: reqwest::Response,
     api_key: &SecretString,
 ) -> Result<T, CoreError> {
+    read_success_json_with(response, api_key, LlmError::from_status).await
+}
+
+/// [`read_success_json`]の、失敗を`classify`(状態コード・本文・伏せる鍵から分類する)で分類する形。
+async fn read_success_json_with<T: DeserializeOwned>(
+    response: reqwest::Response,
+    api_key: &SecretString,
+    classify: fn(StatusCode, &str, &str) -> LlmError,
+) -> Result<T, CoreError> {
     let key = api_key.expose_secret();
-    let response = reject_failure(response, |status, body| {
-        LlmError::from_status(status, body, key)
-    })
-    .await?;
+    let response = reject_failure(response, |status, body| classify(status, body, key)).await?;
     Ok(read_json(response, api_key).await?)
 }
 
@@ -297,15 +303,22 @@ async fn send_with_key(
     let key = api_key.expose_secret();
     // 認証不要のローカル推論サーバー向けに、鍵が空なら鍵のヘッダーごと付けない
     // (`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
+    if key.is_empty() {
+        return request
+            .send()
+            .await
+            .map_err(|e| LlmError::from_transport(e, key));
+    }
+    // ヘッダーに載せられない鍵は、方言によらず送る前に同じ文言で断る(`bearer_auth`に任せると、
+    // reqwestの組み立ての失敗として内部の文言のまま出る)。
+    let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
+        LlmError::InvalidRequest(ErrorDetail::internal(
+            "the API key contains characters that cannot be sent in a header",
+        ))
+    })?;
     let request = match header {
-        _ if key.is_empty() => request,
         KeyHeader::Bearer => request.bearer_auth(key),
         KeyHeader::Named(name) => {
-            let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
-                LlmError::InvalidRequest(ErrorDetail::internal(
-                    "the API key contains characters that cannot be sent in a header",
-                ))
-            })?;
             value.set_sensitive(true);
             request.header(name, value)
         }
@@ -326,8 +339,30 @@ async fn reject_failure(
     if status.is_success() {
         return Ok(response);
     }
+    let retry_after = retry_after_secs(&response);
     let body = response.text().await.unwrap_or_default();
-    Err(classify(status, &body))
+    Err(match (classify(status, &body), retry_after) {
+        (LlmError::RateLimit(detail), Some(secs)) => {
+            LlmError::RateLimit(detail.with_retry_after(secs))
+        }
+        (error, _) => error,
+    })
+}
+
+/// レート制限の応答が示す、送り直してよくなるまでの秒数(`Retry-After`)。日時の形は扱わない
+/// (LLMのAPIは秒数で返す)。
+fn retry_after_secs(response: &reqwest::Response) -> Option<u64> {
+    if response.status() != StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// 成功の応答の本文をJSONとして読む。読めなければ鍵を伏せた[`LlmError`]にする。

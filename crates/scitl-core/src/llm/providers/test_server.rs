@@ -17,11 +17,18 @@ pub(super) struct Received {
 pub(super) fn spawn_server(
     responses: Vec<(u16, &'static str)>,
 ) -> (String, JoinHandle<Vec<Received>>) {
+    spawn_server_with_headers(responses.into_iter().map(|(s, b)| (s, "", b)).collect())
+}
+
+/// [`spawn_server`]の、応答にヘッダーを足す形。2つ目は`Name: value\r\n`を並べたもの。
+pub(super) fn spawn_server_with_headers(
+    responses: Vec<(u16, &'static str, &'static str)>,
+) -> (String, JoinHandle<Vec<Received>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
         let mut received = Vec::new();
-        for (status, body) in responses {
+        for (status, extra_headers, body) in responses {
             let (mut stream, _) = listener.accept().unwrap();
             let mut raw = Vec::new();
             let mut buf = [0u8; 8192];
@@ -44,7 +51,7 @@ pub(super) fn spawn_server(
             let request_body = serde_json::from_slice(&raw[header_end..header_end + length])
                 .unwrap_or(Value::Null);
             let response = format!(
-                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             let _ = stream.write_all(response.as_bytes());
