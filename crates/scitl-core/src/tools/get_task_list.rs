@@ -1,36 +1,22 @@
-use std::sync::LazyLock;
-
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::db::tasks;
 use crate::error::Result;
-use crate::llm::ToolSchema;
 
 use super::args::Args;
-use super::{InternalTool, Run};
+use super::Run;
 
-pub const NAME: &str = "get_task_list";
-
-pub(super) const TOOL: InternalTool = InternalTool {
-    schema,
+internal_tool! {
+    /// 引数なし。文脈から決まる情報を持たないため会話によらず同一のスキーマ。
+    name: "get_task_list",
     run: Run::Read(execute),
-};
-
-/// 引数なし。文脈から決まる情報を持たないため会話によらず同一のスキーマ。
-pub fn schema() -> &'static ToolSchema {
-    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
-        ToolSchema::internal(
-            NAME,
-            "List the tasks that are not archived.",
-            json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        )
-    });
-    &SCHEMA
+    "List the tasks that are not archived.",
+    json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    }),
 }
 
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {

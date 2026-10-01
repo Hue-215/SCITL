@@ -1,3 +1,31 @@
+/// 内部ツール1つの、名前(`NAME`)・公開する定義(`schema`)・登録(`TOOL`)。定義は最初に
+/// 使うときに1度だけ組み立てる。`run`は実行の形([`Run`])で、あとに説明と引数スキーマを並べる。
+macro_rules! internal_tool {
+    (
+        $(#[$doc:meta])*
+        name: $name:literal,
+        run: $run:expr,
+        $description:expr,
+        $parameters:expr $(,)?
+    ) => {
+        pub const NAME: &str = $name;
+
+        pub(super) const TOOL: $crate::tools::InternalTool = $crate::tools::InternalTool {
+            schema,
+            run: $run,
+        };
+
+        $(#[$doc])*
+        pub fn schema() -> &'static $crate::llm::ToolSchema {
+            static SCHEMA: std::sync::LazyLock<$crate::llm::ToolSchema> =
+                std::sync::LazyLock::new(|| {
+                    $crate::llm::ToolSchema::internal(NAME, $description, $parameters)
+                });
+            &SCHEMA
+        }
+    };
+}
+
 pub mod add_steps;
 mod args;
 pub mod delete_step;

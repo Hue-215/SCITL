@@ -1,40 +1,26 @@
-use std::sync::LazyLock;
-
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::db::task_steps;
 use crate::error::Result;
-use crate::llm::ToolSchema;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
-use super::{InternalTool, Run};
+use super::Run;
 
-pub const NAME: &str = "delete_step";
-
-pub(super) const TOOL: InternalTool = InternalTool {
-    schema,
+internal_tool! {
+    /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
+    name: "delete_step",
     run: Run::UpdateTask(execute),
-};
-
-/// タスクチャット版のスキーマ。`task_id`を引数に含めない。
-pub fn schema() -> &'static ToolSchema {
-    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
-        ToolSchema::internal(
-            NAME,
-            "Delete a step of the currently open task.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "step_id": { "type": "integer" }
-                },
-                "required": ["step_id"],
-                "additionalProperties": false
-            }),
-        )
-    });
-    &SCHEMA
+    "Delete a step of the currently open task.",
+    json!({
+        "type": "object",
+        "properties": {
+            "step_id": { "type": "integer" }
+        },
+        "required": ["step_id"],
+        "additionalProperties": false
+    }),
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {

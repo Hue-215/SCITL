@@ -1,36 +1,22 @@
-use std::sync::LazyLock;
-
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::db::{task_steps, tasks};
 use crate::error::Result;
-use crate::llm::ToolSchema;
 
 use super::args::Args;
-use super::{InternalTool, Run};
+use super::Run;
 
-pub const NAME: &str = "get_current_task_detail";
-
-pub(super) const TOOL: InternalTool = InternalTool {
-    schema,
+internal_tool! {
+    /// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない。
+    name: "get_current_task_detail",
     run: Run::ReadTask(execute),
-};
-
-/// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない。
-pub fn schema() -> &'static ToolSchema {
-    static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
-        ToolSchema::internal(
-            NAME,
-            "Get the details of the currently open task, including its description and steps.",
-            json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        )
-    });
-    &SCHEMA
+    "Get the details of the currently open task, including its description and steps.",
+    json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    }),
 }
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
