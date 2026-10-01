@@ -170,16 +170,16 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// 接続を開き、PRAGMAとマイグレーションを適用する。
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let conn = Connection::open(path)?;
-    conn.busy_timeout(BUSY_TIMEOUT)?;
+    // `enable_wal`の待ちを自前の再試行だけにするため、`busy_timeout`はその後に設定する。
     enable_wal(&conn)?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     migrate_to(&conn, MIGRATIONS.len())?;
     Ok(conn)
 }
 
-/// WALへ切り替える。切り替えは読み取りロックを持ったまま排他ロックへ上げるので、作成直後の
-/// DBを別プロセスが同時に開いていると、SQLiteはデッドロックを避けてビジーハンドラを呼ばずに
-/// `SQLITE_BUSY`を返す(`busy_timeout`が効かない)。そのため自前で間を置いて送り直す。
+/// WALへ切り替える。作成直後のDBを別プロセスが同時に開いていると、この文は`busy_timeout`を
+/// 待たずに`SQLITE_BUSY`を返すので、[`BUSY_TIMEOUT`]まで間を置いて送り直す。
 fn enable_wal(conn: &Connection) -> Result<()> {
     const RETRY_INTERVAL: Duration = Duration::from_millis(10);
     let started = std::time::Instant::now();
@@ -300,6 +300,7 @@ mod tests {
         assert!(opened.is_ok(), "{opened:?}");
     }
 
+    /// 開く処理が重なるかは実行のたびに違うので、そろえて開く8本を10回繰り返す。
     #[test]
     fn many_connections_can_create_the_same_database_at_once() {
         for _ in 0..10 {

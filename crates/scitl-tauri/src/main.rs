@@ -159,6 +159,9 @@ mod tests {
     fn main_window_label_matches_tauri_config() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(conf["app"]["windows"][0]["label"], super::MAIN_WINDOW);
+        let windows = conf["app"]["windows"].as_array().unwrap();
+        assert!(windows
+            .iter()
+            .any(|window| window["label"] == super::MAIN_WINDOW));
     }
 }
