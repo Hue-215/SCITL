@@ -2639,6 +2639,47 @@ async fn a_stop_that_arrives_with_tool_calls_runs_none_of_them() {
     assert_eq!(db::tasks::get_task(&conn, task_id).unwrap().title, None);
 }
 
+/// 1応答に載った呼び出しの途中で止めると、実行し終えた呼び出しの記録は残し、残りは実行しない。
+#[tokio::test]
+async fn a_stop_between_tool_calls_keeps_the_finished_call_and_skips_the_rest() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let generating = InFlightSet::new();
+    let adapter = calls_two_tools();
+    // 1件目(工程の追加)の実行記録が保存された時点で止める。
+    let stop_after_first_call = |event: TurnEvent| {
+        if matches!(event, TurnEvent::ToolExecuted { .. }) {
+            stop_response(&generating, chat);
+        }
+    };
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            events: &stop_after_first_call,
+            ..context(&adapter)
+        },
+        chat,
+        "工程とタイトルを".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    let roles: Vec<_> = messages.iter().map(|m| m.role).collect();
+    assert_eq!(roles, vec![Role::User, Role::Tool, Role::Error]);
+    stopped_reply(&messages);
+    assert_eq!(
+        db::task_steps::list_for_task(&conn, task_id).unwrap().len(),
+        1
+    );
+    assert_eq!(db::tasks::get_task(&conn, task_id).unwrap().title, None);
+}
+
 /// 生成中でない会話には、止める指示を出しても何も起きない。
 #[test]
 fn stopping_a_chat_that_is_not_generating_does_nothing() {

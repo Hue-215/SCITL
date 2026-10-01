@@ -39,8 +39,9 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
         })
     }
 
-    /// 処理中の`key`に止める指示を出す。処理中でなければ何もせず`false`。指示は今の処理
-    /// だけに効き、次に`try_begin`した処理には持ち越さない。
+    /// 処理中の`key`に止める指示を出す。処理中でなければ何もせず`false`。`true`は指示を
+    /// 出したことを表すだけで、止まったことは表さない。指示は今の処理だけに効き、次に
+    /// `try_begin`した処理には持ち越さない。
     pub fn request_stop(&self, key: &K) -> bool {
         match self.lock().get(key) {
             Some(sender) => {
@@ -145,6 +146,20 @@ mod tests {
         };
         let (result, ()) = tokio::join!(waiting, stop);
         assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn a_stop_already_requested_keeps_the_future_from_starting() {
+        let set = InFlightSet::new();
+        let guard = set.try_begin(1).unwrap();
+        set.request_stop(&1);
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let result = guard
+            .stop_signal()
+            .unless_requested(async { started.store(true, std::sync::atomic::Ordering::SeqCst) })
+            .await;
+        assert_eq!(result, None);
+        assert!(!started.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[tokio::test]
