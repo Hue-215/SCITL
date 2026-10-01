@@ -162,8 +162,8 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// 1つの会話の発言を取得する。ターンを持つ行は`turn_id`ごとの最新試行に絞り、通常発言が
 /// 1行も残っていないターン(編集・再試行・削除で破棄されたターン)は丸ごと除く。
 /// 応答生成以外の経路での操作の記録は`turn_id`を持たないので、常に残る。
-/// 破棄されたターンのツール実行記録はDBに残すが([`soft_delete_normal_from`])、会話に
-/// 並べると直後の編集後の発言が新規送信と見分けられなくなるため、ここで外す。
+/// 編集・再試行で破棄されたターンのツール実行記録はDBに残すが([`soft_delete_normal_from`])、
+/// 会話に並べると直後の編集後の発言が新規送信と見分けられなくなるため、ここで外す。
 pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
     let mut rows = list_rows_for_chat(conn, chat)?;
     let mut attached = attachments::views_for_chat(conn, chat)?;
@@ -289,12 +289,38 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
 /// 作り直す前に使う)。
 ///
 /// ツール実行記録は消さない。残った記録は[`list_for_chat`]が会話から外す。実行記録の保全を
-/// 優先しているので、表示を合わせるために記録の側を消してはならない。
+/// 優先しているので、表示を合わせるために記録の側を消してはならない。発言の削除だけは、
+/// 続けて[`soft_delete_trailing_turn_records`]で記録も消す。
 pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
          WHERE task_id IS ?2 AND id >= ?3 AND kind = 'normal' AND deleted_at IS NULL",
         rusqlite::params![now_iso8601(), chat.task_id(), from_id],
+    )?;
+    Ok(())
+}
+
+/// 生き残っている最後の通常発言より後ろの、ターンのツール実行記録を論理削除する(通常発言が
+/// 1つも残っていなければ、会話のターンの記録すべて)。発言の削除で、
+/// [`soft_delete_normal_from`]のあとに使う。消した範囲のターンの記録を、以後モデルに送らない
+/// ため(`docs/spec/rebuild/data-model.md`「ターン境界」)。
+///
+/// 消した発言のターンの記録は、再試行で捨てた試行の分も含め、すべてこの範囲に入る。編集で
+/// 置き換える前の発言のターンの記録も、置き換えたあとの発言より前にあるので、その発言を消せば
+/// 入る。応答生成以外の経路での操作の記録(`turn_id`が無い)は会話に並ぶ行なので消さない。
+pub fn soft_delete_trailing_turn_records(conn: &Connection, chat: Chat) -> Result<()> {
+    conn.execute(
+        "UPDATE messages SET deleted_at = ?1
+         WHERE task_id IS ?2
+           AND kind = 'tool_execution'
+           AND turn_id IS NOT NULL
+           AND deleted_at IS NULL
+           AND id > COALESCE(
+             (SELECT MAX(id) FROM messages
+              WHERE task_id IS ?2 AND kind = 'normal' AND deleted_at IS NULL),
+             0
+           )",
+        rusqlite::params![now_iso8601(), chat.task_id()],
     )?;
     Ok(())
 }
@@ -877,6 +903,151 @@ mod tests {
             )
             .unwrap();
         assert!(assistant_deleted_at.is_some());
+    }
+
+    /// 生き残っている最後の通常発言より後ろのターンの記録だけを消す。それより前のターンの記録、
+    /// 応答生成以外の経路での操作の記録、別の会話の記録は消さない。
+    #[test]
+    fn soft_delete_trailing_turn_records_removes_only_turn_records_after_the_last_message() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let insert = |chat, role, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if role == Role::Tool { "{}" } else { "本文" },
+                    kind: if role == Role::Tool {
+                        Kind::ToolExecution
+                    } else {
+                        Kind::Normal
+                    },
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let turn = |turn_id, attempt_no| Origin::Turn {
+            turn_id,
+            attempt_no,
+        };
+        let operation = Origin::Operation(OperationSource::Ui);
+
+        insert(chat, Role::User, Origin::User);
+        let kept = insert(chat, Role::Tool, turn("turn-1", 1));
+        insert(chat, Role::Assistant, turn("turn-1", 1));
+        let second = insert(chat, Role::User, Origin::User);
+        let retried = insert(chat, Role::Tool, turn("turn-2", 1));
+        insert(chat, Role::Assistant, turn("turn-2", 1));
+        let by_ui = insert(chat, Role::Tool, operation);
+        let latest = insert(chat, Role::Tool, turn("turn-2", 2));
+        insert(chat, Role::Assistant, turn("turn-2", 2));
+        let general = insert(Chat::General, Role::Tool, turn("turn-3", 1));
+
+        soft_delete_normal_from(&conn, chat, second).unwrap();
+        soft_delete_trailing_turn_records(&conn, chat).unwrap();
+
+        let alive = |id| find_message(&conn, id).unwrap().is_some();
+        assert!(alive(kept));
+        assert!(!alive(retried));
+        assert!(alive(by_ui));
+        assert!(!alive(latest));
+        assert!(alive(general));
+        assert!(list_tool_records_for_chat(&conn, chat)
+            .unwrap()
+            .iter()
+            .all(|m| m.id == kept || m.id == by_ui));
+    }
+
+    /// 生き残った発言より前にある記録は、返信を持たないターンのものでも消さない。失敗したターン
+    /// (エラー発言が残る)の記録と、編集で置き換える前の発言のターンの記録が当たる。
+    #[test]
+    fn soft_delete_trailing_turn_records_spares_records_before_a_surviving_message() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let insert = |role, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if role == Role::Tool { "{}" } else { "本文" },
+                    kind: if role == Role::Tool {
+                        Kind::ToolExecution
+                    } else {
+                        Kind::Normal
+                    },
+                    origin,
+                    error_kind: (role == Role::Error).then_some("provider"),
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let turn = |turn_id| Origin::Turn {
+            turn_id,
+            attempt_no: 1,
+        };
+
+        insert(Role::User, Origin::User);
+        let failed = insert(Role::Tool, turn("turn-1"));
+        insert(Role::Error, turn("turn-1"));
+        let original = insert(Role::User, Origin::User);
+        let before_edit = insert(Role::Tool, turn("turn-2"));
+        insert(Role::Assistant, turn("turn-2"));
+        soft_delete_normal_from(&conn, chat, original).unwrap();
+        insert(Role::User, Origin::User);
+        let after_edit = insert(Role::Tool, turn("turn-3"));
+        let reply = insert(Role::Assistant, turn("turn-3"));
+
+        soft_delete_normal_from(&conn, chat, reply).unwrap();
+        soft_delete_trailing_turn_records(&conn, chat).unwrap();
+
+        let alive = |id| find_message(&conn, id).unwrap().is_some();
+        assert!(alive(failed));
+        assert!(alive(before_edit));
+        assert!(!alive(after_edit));
+    }
+
+    /// 通常発言が1つも残っていなければ、会話のターンの記録すべてを消す。
+    #[test]
+    fn soft_delete_trailing_turn_records_removes_every_turn_record_of_an_emptied_chat() {
+        let conn = db::open_in_memory().unwrap();
+        let insert = |role, kind, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat: Chat::General,
+                    role,
+                    content: "{}",
+                    kind,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let turn = Origin::Turn {
+            turn_id: "turn-1",
+            attempt_no: 1,
+        };
+        // 以前に消した発言のターンの記録が残っている会話。
+        let stale = insert(Role::Tool, Kind::ToolExecution, turn);
+        let user = insert(Role::User, Kind::Normal, Origin::User);
+
+        soft_delete_normal_from(&conn, Chat::General, user).unwrap();
+        soft_delete_trailing_turn_records(&conn, Chat::General).unwrap();
+
+        assert!(find_message(&conn, stale).unwrap().is_none());
     }
 
     #[test]

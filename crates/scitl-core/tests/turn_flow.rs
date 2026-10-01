@@ -2253,10 +2253,10 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     assert_eq!(messages[1].attempt_no, Some(2));
 }
 
-/// ユーザー発言を消すと、そのターンの返信もまとめて消え、実行記録だけが残ったターンは会話から
-/// 外れる(記録の行はDBに残る)。実行記録は削除の対象にできず、別の会話の発言は巻き込まない。
+/// ユーザー発言を消すと、そのターンの返信と実行記録もまとめて消え、次のターンに操作の記録として
+/// 伝わらない。実行記録は削除の対象にできず、別の会話の発言は巻き込まない。
 #[tokio::test]
-async fn deleting_a_user_message_removes_its_turn_but_keeps_the_records() {
+async fn deleting_a_user_message_removes_its_turn_and_the_records() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
@@ -2298,19 +2298,85 @@ async fn deleting_a_user_message_removes_its_turn_but_keeps_the_records() {
         .await
         .unwrap();
 
-    let conn = db.lock().unwrap();
-    assert!(db::messages::list_for_chat(&conn, Chat::Task(task_id))
-        .unwrap()
-        .is_empty());
-    assert!(db::messages::find_message(&conn, record_id)
-        .unwrap()
-        .is_some());
-    assert_eq!(
-        db::messages::list_for_chat(&conn, Chat::General)
+    {
+        let conn = db.lock().unwrap();
+        assert!(db::messages::list_for_chat(&conn, Chat::Task(task_id))
             .unwrap()
-            .len(),
-        2
-    );
+            .is_empty());
+        assert!(db::messages::find_message(&conn, record_id)
+            .unwrap()
+            .is_none());
+        // 物理削除はしない。
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE id = ?1",
+                [record_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(
+            db::messages::list_for_chat(&conn, Chat::General)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    let next = ScriptedAdapter::texts(&["応答"]);
+    run_turn(
+        db.clone(),
+        &context(&next),
+        Chat::Task(task_id),
+        "改めて".to_string(),
+    )
+    .await
+    .unwrap();
+    let sent = next.sent_histories();
+    assert_eq!(sent[0].len(), 1);
+    assert!(!user_texts(&sent[0])[0].contains("scitl:operations"));
+}
+
+/// 返信だけを消しても、そのターンの実行記録は消える。再試行で捨てた試行の記録も一緒に消える。
+#[tokio::test]
+async fn deleting_a_reply_removes_the_records_of_every_attempt_of_its_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let chat = Chat::Task(task_id);
+    let reply_id = |db: &Arc<Mutex<Connection>>| {
+        let conn = db.lock().unwrap();
+        db::messages::list_for_chat(&conn, chat)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
+    };
+
+    run_turn(
+        db.clone(),
+        &context(&adds_a_step()),
+        chat,
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+    retry_reply(db.clone(), &context(&adds_a_step()), chat, reply_id(&db))
+        .await
+        .unwrap();
+    delete_message(db.clone(), &InFlightSet::new(), chat, reply_id(&db))
+        .await
+        .unwrap();
+
+    let next = ScriptedAdapter::texts(&["応答"]);
+    run_turn(db.clone(), &context(&next), chat, "続けて".to_string())
+        .await
+        .unwrap();
+    let sent = next.sent_histories();
+    let texts = user_texts(&sent[0]);
+    assert_eq!(texts.len(), 2);
+    assert!(texts.iter().all(|t| !t.contains("scitl:operations")));
 }
 
 /// エラー発言も削除できる。返信を失ったターンは会話から外れ、ユーザー発言だけが残る。
