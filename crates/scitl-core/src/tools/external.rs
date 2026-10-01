@@ -4,16 +4,18 @@
 //! だけで、接続そのものは`crate::mcp`が持つ。
 //!
 //! ツールの説明文と引数スキーマはサーバーが書いたもので、モデルのプロンプトに入る。内容の
-//! 検証はしない(信頼境界はユーザーが登録したこと自体に置く)が、アプリ自身の予約タグの
-//! 無害化だけは掛ける(`ToolSchema::external`)。
+//! 検証はしない(信頼境界はユーザーが登録したこと自体に置く)。見るのは、プロバイダーに
+//! 断られない形か(最上位がobject)と大きさだけで、ほかにはアプリ自身の予約タグの無害化だけを
+//! 掛ける(`ToolSchema::external`)。
 
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
-use crate::config::McpServerConfig;
+use crate::config::{validate_mcp_server_name, McpServerConfig};
 use crate::llm::ToolSchema;
 use crate::mcp::McpToolInfo;
+use crate::text::ellipsize;
 
 /// サーバー識別子とツール名の区切り。名前空間化の目的は、内部ツール・他サーバーの
 /// ツールとの衝突を避けることと、呼び出し先APIの命名規則に収めること。
@@ -22,6 +24,24 @@ const SEPARATOR: &str = "__";
 /// OpenAI互換APIのツール名に使える文字と長さ。ここに収まらない名前は公開しない
 /// (名前を機械的に丸めると、別のツールと同じ名前になり得るため)。
 const MAX_EXPOSED_NAME_LEN: usize = 64;
+
+/// 1回のリクエストに載せるツール(内部・外部の合計)の上限。OpenAIのAPIがツールを128件までしか
+/// 受け付けない。ツールの定義は毎ターン送るので、件数はそのままコンテキストの消費にもなる。
+const MAX_TOOLS: usize = 128;
+
+/// 有効にできる外部ツールの数の上限。内部ツールが一番多い会話でも、合計が[`MAX_TOOLS`]に収まる。
+/// 有効化の時点で断り(`settings`)、それより前の設定で超えている分は公開しない。
+pub const MAX_EXTERNAL_TOOLS: usize = MAX_TOOLS - super::MAX_INTERNAL_TOOLS;
+
+/// ツールの説明をモデルへ渡すときの上限文字数。設定画面の表示(`settings::view`)も同じ上限で
+/// 切り、画面で見える説明がそのままモデルへ渡るものになるようにする。説明はサーバーが書いた値で
+/// モデルにも利用者にも書き直せないので、断らずに切る。
+pub const MAX_TOOL_DESCRIPTION_CHARS: usize = 2000;
+
+/// 引数スキーマの上限文字数(直列化したJSONで数える)。スキーマは引数ごとの説明・列挙・入れ子を
+/// いくらでも持てるので、説明だけを切っても1件のツールが際限なく大きくなりうる。スキーマは
+/// 切ると壊れるので、超えるツールは公開しない。
+const MAX_INPUT_SCHEMA_CHARS: usize = 2000;
 
 struct Entry {
     server_id: String,
@@ -52,17 +72,25 @@ impl ExternalToolset {
                 if !server.enabled_tools.contains(&tool.name) {
                     continue;
                 }
+                if toolset.entries.len() >= MAX_EXTERNAL_TOOLS {
+                    break;
+                }
                 let Some(exposed_name) = exposed_name(&server.name, &tool.name) else {
                     continue;
                 };
                 if reserved.contains(&exposed_name) || toolset.routes.contains_key(&exposed_name) {
                     continue;
                 }
-                let Some(schema) = ToolSchema::external(
-                    exposed_name.clone(),
+                let Some(parameters) = parameters_of(&tool.input_schema) else {
+                    continue;
+                };
+                let description = ellipsize(
                     tool.description.as_deref().unwrap_or_default(),
-                    &parameters_of(tool.input_schema),
-                ) else {
+                    MAX_TOOL_DESCRIPTION_CHARS,
+                );
+                let Some(schema) =
+                    ToolSchema::external(exposed_name.clone(), &description, &parameters)
+                else {
                     continue;
                 };
                 let index = toolset.entries.len();
@@ -126,11 +154,25 @@ impl ExternalToolset {
     }
 }
 
+/// サーバーのツールをモデルへ公開できるか。名前([`exposed_name`])と引数スキーマの両方を見る。
+/// 公開できるかの判定はここと[`exposed_name`]に置き、設定画面の表示(`settings::view`)と
+/// 有効化(`settings`)もこれを呼ぶ。
+pub fn is_exposable(server_name: &str, tool: &McpToolInfo) -> bool {
+    exposed_name(server_name, &tool.name).is_some() && parameters_of(&tool.input_schema).is_some()
+}
+
 /// サーバーのツールをモデルへ公開するときの名前。呼び出し先APIの命名規則
 /// ([`MAX_EXPOSED_NAME_LEN`]の説明)に収まらなければ`None`を返し、そのツールは公開も
-/// 有効化もしない。公開できるかの判定はここ1箇所に置き、設定画面の表示(`settings::view`)と
-/// 有効化(`settings`)もこれを呼ぶ。
+/// 有効化もしない。引数スキーマが分からないとき(ツール一覧が未取得)は、これだけで判定する。
+///
+/// サーバー名は登録時の規則([`validate_mcp_server_name`])をここでも確かめる。規則が後から
+/// 厳しくなったときに、それより前に登録した名前を公開しないため。サーバー名が`_`で終わらず
+/// `__`を含まないので、公開名の最初の`__`が必ず区切りになり、別々のツールが同じ公開名に
+/// ならない。
 pub fn exposed_name(server_name: &str, tool_name: &str) -> Option<String> {
+    if validate_mcp_server_name(server_name).is_err() || tool_name.is_empty() {
+        return None;
+    }
     let name = format!("{server_name}{SEPARATOR}{tool_name}");
     let valid = name.len() <= MAX_EXPOSED_NAME_LEN
         && name
@@ -139,15 +181,31 @@ pub fn exposed_name(server_name: &str, tool_name: &str) -> Option<String> {
     valid.then_some(name)
 }
 
-/// サーバーが宣言した引数スキーマをそのまま使う。オブジェクトでない場合だけ、
-/// 引数なしのスキーマに置き換える(プロバイダー側が壊れたスキーマを拒否して
-/// ターン全体が失敗するのを避ける)。
-fn parameters_of(input_schema: Value) -> Value {
-    if input_schema.is_object() {
-        input_schema
-    } else {
-        json!({ "type": "object", "properties": {} })
+/// サーバーが宣言した引数スキーマを、公開できる形にする。最上位がobjectで、
+/// [`MAX_INPUT_SCHEMA_CHARS`]に収まるスキーマだけを公開し、`type`が無いだけのものには`object`を
+/// 補う。MCPの仕様は`inputSchema`をobjectと定めており、外れたスキーマ(`array`や最上位の
+/// `oneOf`等)はプロバイダーによってはリクエスト全体ごと断られる。引数なしのスキーマに置き換えて
+/// 公開することはしない。MCPのツール呼び出しの引数は必ずオブジェクトなので、置き換えてもその
+/// ツールは正しく呼べない。
+fn parameters_of(input_schema: &Value) -> Option<Value> {
+    if input_schema.to_string().chars().count() > MAX_INPUT_SCHEMA_CHARS {
+        return None;
     }
+    let mut schema = input_schema.as_object()?.clone();
+    if ["oneOf", "anyOf", "allOf"]
+        .iter()
+        .any(|key| schema.contains_key(*key))
+    {
+        return None;
+    }
+    match schema.get("type") {
+        None => {
+            schema.insert("type".to_string(), json!("object"));
+        }
+        Some(t) if t == "object" => {}
+        Some(_) => return None,
+    }
+    Some(Value::Object(schema))
 }
 
 #[cfg(test)]
@@ -242,13 +300,14 @@ mod tests {
     /// 名前は記録せず、呼ばれたらそちらを実行する。
     #[test]
     fn records_tools_of_unreachable_servers_unless_the_name_is_taken() {
-        let up = server("s1", "a__b", &["c"]);
-        let down = server("s2", "a", &["b__c", "search"]);
+        // 同じ名前のサーバーが2つある設定(手で書き換えた等)。
+        let up = server("s1", "a", &["c"]);
+        let down = server("s2", "a", &["c", "search"]);
         let reserved = vec!["a__search".to_string()];
         let toolset = ExternalToolset::build([(&up, vec![tool("c")])], &reserved)
             .with_unavailable([&down], &reserved);
-        assert!(!toolset.is_unavailable("a__b__c"));
-        assert!(toolset.route("a__b__c").is_some());
+        assert!(!toolset.is_unavailable("a__c"));
+        assert!(toolset.route("a__c").is_some());
         assert!(!toolset.is_unavailable("a__search"));
         let other = server("s3", "down", &["search", "disabled_later"]);
         let toolset = toolset.with_unavailable([&other], &reserved);
@@ -259,16 +318,98 @@ mod tests {
     #[test]
     fn skips_names_colliding_with_internal_or_earlier_tools() {
         // 名前が衝突した場合は公開しない(どちらが呼ばれたか判別できないため)。
-        let a = server("id1", "a__b", &["c"]);
-        let b = server("id2", "a", &["b__c"]);
-        let toolset =
-            ExternalToolset::build([(&a, vec![tool("c")]), (&b, vec![tool("b__c")])], &[]);
-        assert_eq!(toolset.exposed_names(), vec!["a__b__c"]);
-        assert_eq!(toolset.route("a__b__c"), Some(("id1", "c")));
+        let a = server("id1", "a", &["c"]);
+        let b = server("id2", "a", &["c"]);
+        let toolset = ExternalToolset::build([(&a, vec![tool("c")]), (&b, vec![tool("c")])], &[]);
+        assert_eq!(toolset.exposed_names(), vec!["a__c"]);
+        assert_eq!(toolset.route("a__c"), Some(("id1", "c")));
 
         let s = server("id1", "files", &["read"]);
         let toolset =
             ExternalToolset::build([(&s, vec![tool("read")])], &["files__read".to_string()]);
         assert!(toolset.is_empty());
+    }
+
+    #[test]
+    fn server_names_that_could_collide_and_empty_tool_names_are_not_exposed() {
+        // 規則が厳しくなる前に登録した名前。`a__b`のツール`c`と`a`のツール`b__c`が同じ公開名に
+        // なりうる。
+        for name in ["a__b", "a_", "_a"] {
+            assert_eq!(exposed_name(name, "c"), None, "{name}");
+        }
+        assert_eq!(exposed_name("a", "b__c").as_deref(), Some("a__b__c"));
+        assert_eq!(exposed_name("files", ""), None);
+
+        let s = server("id1", "files", &[""]);
+        assert!(ExternalToolset::build([(&s, vec![tool("")])], &[]).is_empty());
+    }
+
+    #[test]
+    fn exposes_only_object_schemas_and_fills_a_missing_type() {
+        let with_schema = |name: &str, input_schema: Value| McpToolInfo {
+            input_schema,
+            ..tool(name)
+        };
+        let names = ["array", "any_of", "one_of", "all_of", "untyped", "object"];
+        let s = server("id1", "s", &names);
+        let toolset = ExternalToolset::build(
+            [(
+                &s,
+                vec![
+                    with_schema("array", json!({ "type": "array", "items": {} })),
+                    with_schema("any_of", json!({ "anyOf": [{ "type": "object" }] })),
+                    with_schema(
+                        "one_of",
+                        json!({ "type": "object", "oneOf": [{ "required": ["a"] }] }),
+                    ),
+                    with_schema("all_of", json!({ "allOf": [{ "type": "object" }] })),
+                    with_schema(
+                        "untyped",
+                        json!({ "properties": { "q": { "type": "string" } } }),
+                    ),
+                    with_schema("object", json!({ "type": "object" })),
+                ],
+            )],
+            &[],
+        );
+        assert_eq!(toolset.exposed_names(), vec!["s__untyped", "s__object"]);
+        assert_eq!(
+            toolset.schemas()[0].parameters(),
+            &json!({ "type": "object", "properties": { "q": { "type": "string" } } })
+        );
+        assert!(!is_exposable(
+            "s",
+            &with_schema("array", json!({ "type": "array" }))
+        ));
+        assert!(is_exposable("s", &tool("object")));
+
+        let schema_of_length = |chars: usize| {
+            let base = json!({ "type": "object", "description": "" }).to_string();
+            let padding = "a".repeat(chars - base.chars().count());
+            json!({ "type": "object", "description": padding })
+        };
+        assert!(is_exposable(
+            "s",
+            &with_schema("long", schema_of_length(MAX_INPUT_SCHEMA_CHARS))
+        ));
+        assert!(!is_exposable(
+            "s",
+            &with_schema("long", schema_of_length(MAX_INPUT_SCHEMA_CHARS + 1))
+        ));
+    }
+
+    #[test]
+    fn caps_the_number_of_tools_and_the_length_of_descriptions() {
+        let names: Vec<String> = (0..=MAX_EXTERNAL_TOOLS).map(|i| format!("t{i}")).collect();
+        let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let s = server("id1", "s", &name_refs);
+        let mut tools: Vec<McpToolInfo> = names.iter().map(|n| tool(n)).collect();
+        tools[0].description = Some("あ".repeat(MAX_TOOL_DESCRIPTION_CHARS + 1));
+
+        let toolset = ExternalToolset::build([(&s, tools)], &[]);
+        assert_eq!(toolset.schemas().len(), MAX_EXTERNAL_TOOLS);
+        let description = toolset.schemas()[0].description().to_string();
+        assert_eq!(description.chars().count(), MAX_TOOL_DESCRIPTION_CHARS + 1);
+        assert!(description.ends_with("あ…"));
     }
 }

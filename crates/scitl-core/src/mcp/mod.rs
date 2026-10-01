@@ -16,7 +16,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock};
-use rmcp::service::RunningService;
+use rmcp::service::{ClientInitializeError, RunningService, ServiceError};
+use rmcp::transport::DynamicTransportError;
 use rmcp::RoleClient;
 use secrecy::SecretString;
 use serde_json::{json, Map, Value};
@@ -52,7 +53,8 @@ pub struct McpToolInfo {
     pub name: String,
     pub description: Option<String>,
     /// サーバーが宣言した引数スキーマ(JSON Schema)。モデルへツールを公開するときに渡す。
-    /// 中身は検証しない(信頼境界はユーザーが登録したこと自体に置く)。設定画面へは渡さない。
+    /// 中身は検証しない(信頼境界はユーザーが登録したこと自体に置く)。公開できる形かは
+    /// `tools::external`が見る。設定画面へは渡さない。
     pub input_schema: Value,
 }
 
@@ -358,13 +360,72 @@ async fn resolve_secrets(refs: &[SecretRef]) -> Result<Vec<(String, SecretString
 /// モデルへ返す結果のすべてに載るため、画面に出す診断文字列として整える。
 const MAX_SERVER_ERROR_CHARS: usize = 512;
 
-fn describe_server_error(e: &impl std::fmt::Display) -> String {
-    text::display_label(&e.to_string(), MAX_SERVER_ERROR_CHARS)
+fn describe_server_error(e: &impl ServerError) -> String {
+    let message = match e.transport_error() {
+        Some(transport) => transport.error.to_string(),
+        None => e.to_string(),
+    };
+    text::display_label(&message, MAX_SERVER_ERROR_CHARS)
+}
+
+/// rmcpのエラーのうち、通信路の失敗を包むもの。包みの表示には通信路の型名(約150文字)と
+/// rmcpの内部の段階名が入り、原因の部分を上限の外へ押し出すので、中身の`error`だけを使う。
+/// 段階は呼び出し側が「failed to connect」等で付ける。包みは`source()`でたどれない
+/// (rmcpが`#[source]`を付けていない)ので、列挙子を直接見る。
+trait ServerError: std::fmt::Display {
+    fn transport_error(&self) -> Option<&DynamicTransportError>;
+}
+
+impl ServerError for ServiceError {
+    fn transport_error(&self) -> Option<&DynamicTransportError> {
+        match self {
+            Self::TransportSend(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl ServerError for ClientInitializeError {
+    fn transport_error(&self) -> Option<&DynamicTransportError> {
+        match self {
+            Self::TransportError { error, .. } => Some(error),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_errors_leave_out_the_transport_type_name() {
+        let transport = || {
+            DynamicTransportError::from_parts(
+                "rmcp::transport::worker::WorkerTransport<…>",
+                std::any::TypeId::of::<()>(),
+                "unexpected server response: HTTP 401 Unauthorized".into(),
+            )
+        };
+        let expected = "unexpected server response: HTTP 401 Unauthorized";
+
+        assert_eq!(
+            describe_server_error(&ServiceError::TransportSend(transport())),
+            expected
+        );
+        assert_eq!(
+            describe_server_error(&ClientInitializeError::TransportError {
+                error: transport(),
+                context: "send initialize request".into(),
+            }),
+            expected
+        );
+        // 通信路を包まない失敗は、表示をそのまま使う。
+        assert_eq!(
+            describe_server_error(&ServiceError::TransportClosed),
+            "Transport closed"
+        );
+    }
 
     #[test]
     fn tool_result_carries_text_and_structure_and_marks_errors() {

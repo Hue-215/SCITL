@@ -41,9 +41,10 @@ function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: 
   return { pairs, errors }
 }
 
-// 使える文字だけを見る(長さの上限はRust側から受け取る)。登録の可否はRust側
-// (`config::validate_mcp_server_name`)が決め直す。ここで見るのは、表示言語の文言で理由を出すため。
-const MCP_NAME_CHARS = /^[A-Za-z0-9_]+$/
+// 使える文字と並びだけを見る(長さの上限はRust側から受け取る)。アンダーバーは英数字の間に
+// 1つずつだけ置ける。登録の可否はRust側(`config::validate_mcp_server_name`)が決め直す。
+// ここで見るのは、表示言語の文言で理由を出すため。
+const MCP_NAME_CHARS = /^[A-Za-z0-9]+(_[A-Za-z0-9]+)*$/
 
 interface McpTabProps {
   settings: SettingsView

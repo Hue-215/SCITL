@@ -83,7 +83,8 @@ pub struct McpToolView {
     /// 画面に出す名前と説明。サーバーが書いた文字列なので、見えない文字を除いた写しを渡す。
     pub label: String,
     pub description: Option<String>,
-    /// モデルへ公開できる名前か。公開できないツールは有効にできない。
+    /// モデルへ公開できるか(名前と引数スキーマ。`tools::external::is_exposable`)。公開できない
+    /// ツールは有効にできない。
     pub exposable: bool,
 }
 
@@ -336,13 +337,19 @@ fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView 
     let listed = fetched.as_deref().unwrap_or_default();
     let mut tools: Vec<McpToolView> = listed
         .iter()
-        .map(|t| mcp_tool_view(&s.name, &t.name, t.description.as_deref()))
+        .map(|t| {
+            mcp_tool_view(
+                &t.name,
+                t.description.as_deref(),
+                external::is_exposable(&s.name, t),
+            )
+        })
         .collect();
     tools.extend(
         s.enabled_tools
             .iter()
             .filter(|name| !listed.iter().any(|t| &t.name == *name))
-            .map(|name| mcp_tool_view(&s.name, name, None)),
+            .map(|name| mcp_tool_view(name, None, external::exposed_name(&s.name, name).is_some())),
     );
     let endpoint = match &s.endpoint {
         McpEndpoint::Stdio {
@@ -370,16 +377,19 @@ fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView 
     }
 }
 
-/// サーバーが書いた名前(ツール名・モデル名)と説明を画面に出すときの上限文字数。
+/// サーバーが書いた名前(ツール名・モデル名)を画面に出すときの上限文字数。
 const MAX_LABEL_CHARS: usize = 100;
-const MAX_TOOL_DESCRIPTION_CHARS: usize = 2000;
 
-fn mcp_tool_view(server_name: &str, name: &str, description: Option<&str>) -> McpToolView {
+/// `exposable`は公開できるかの判定(`tools::external`)の結果。一覧が未取得のツールは引数
+/// スキーマが分からないので、名前だけで判定した結果を渡す。
+fn mcp_tool_view(name: &str, description: Option<&str>, exposable: bool) -> McpToolView {
     McpToolView {
         name: name.to_string(),
         label: text::display_label(name, MAX_LABEL_CHARS),
-        description: description.map(|d| text::display_block(d, MAX_TOOL_DESCRIPTION_CHARS)),
-        exposable: external::exposed_name(server_name, name).is_some(),
+        // モデルへ渡す説明と同じ上限で切る。
+        description: description
+            .map(|d| text::display_block(d, external::MAX_TOOL_DESCRIPTION_CHARS)),
+        exposable,
     }
 }
 
