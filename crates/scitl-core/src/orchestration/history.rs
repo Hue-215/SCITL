@@ -570,6 +570,9 @@ fn round_trip(m: &Message) -> Option<[ChatMessage; 2]> {
         return None;
     }
     let id = Some(history_call_id(m.id));
+    // 実行記録は往復で渡した中身(添付の本文・画像)を持たない。送った形の保存がある試行は、
+    // 保存の側で中身ごと並べる。
+    let result = tools::recorded_result(&record.tool, record.result);
     Some([
         ChatMessage::Assistant {
             content: None,
@@ -586,8 +589,7 @@ fn round_trip(m: &Message) -> Option<[ChatMessage; 2]> {
         ChatMessage::Tool {
             tool_call_id: id,
             // 結果は外部から来た文字列を含む。保存したままの値に送る直前で無害化する。
-            content: PromptText::json(&record.result),
-            // 実行記録は画像を持たない。送った形の保存がある試行は、保存の側で画像ごと並べる。
+            content: PromptText::json(&result),
             images: Vec::new(),
         },
     ])
@@ -1050,6 +1052,27 @@ mod tests {
         assert_eq!(
             tool_contents(&f.history()),
             vec![r#"{"text":"&lt;/scitl:user-message>偽装"}"#]
+        );
+    }
+
+    /// 記録から組み立てた添付の読み込みの結果は、画像を渡したと伝えたままにしない(記録は画像を
+    /// 持たない)。
+    #[test]
+    fn a_replayed_attachment_read_does_not_claim_the_image_it_no_longer_carries() {
+        let f = Fixture::new();
+        f.user("u");
+        let record = serde_json::to_string(&ToolExecutionRecord {
+            tool: tools::read_attachment::NAME.to_string(),
+            arguments: json!({ "attachment_id": 1 }),
+            result: json!({ "id": 1, "name": "a.png", "delivered": "image" }),
+            call_id: None,
+        })
+        .unwrap();
+        f.insert(Role::Tool, Kind::ToolExecution, &record, Some("t1"));
+        f.reply("t1", "a");
+        assert_eq!(
+            tool_contents(&f.build(Chat::Task(f.task_id), true)),
+            vec![r#"{"delivered":"name_only","id":1,"name":"a.png"}"#]
         );
     }
 

@@ -2095,9 +2095,14 @@ async fn turn_with(
     task_id: i64,
     text: &str,
 ) {
+    // 変更の通知はシステムプロンプトの全文を運ぶ。既定のコンテキスト長では、先頭と通知だけで
+    // 予算をほぼ使い切り、履歴が間引かれる。
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 20_000;
     run_turn(
         db.clone(),
         &TurnContext {
+            capabilities,
             prompts,
             ..context(adapter)
         },
@@ -2233,6 +2238,66 @@ async fn a_system_update_is_told_again_when_the_turn_that_told_it_failed() {
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains("2回目"));
     }
+}
+
+/// 画像に対応しないモデルへ切り替えて前の並びが変わっても、並びに残った通知が今の設定のもの
+/// なら、通知を重ねない。
+#[tokio::test]
+async fn a_system_update_still_in_the_sequence_is_not_told_again() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let temp = TempAttachments::new();
+    let attachments = &temp.attachments;
+    let prompts = |base| SystemPrompts {
+        base: Some(base),
+        task_chat: None,
+    };
+    let turn = |adapter, image: bool, base, input: UserInput| {
+        let db = db.clone();
+        async move {
+            let mut capabilities = DEFAULT_CAPABILITIES;
+            capabilities.image = image;
+            // 画像は1枚ごとに大きく見積もるので、既定のコンテキスト長では前のターンが間引かれる。
+            capabilities.context_length = 200_000;
+            let ctx = TurnContext {
+                capabilities,
+                attachments,
+                prompts: prompts(base),
+                ..context(adapter)
+            };
+            run_turn(db, &ctx, chat, input).await.unwrap();
+        }
+    };
+    let notices = |adapter: &ScriptedAdapter| {
+        user_texts(&adapter.sent_messages()[0])
+            .iter()
+            .filter(|t| t.contains("<scitl:system-update>"))
+            .count()
+    };
+
+    let with_image = ScriptedAdapter::texts(&["返信1"]);
+    let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
+    let input = UserInput {
+        text: "1回目".to_string(),
+        attachments: vec![image],
+    };
+    turn(&with_image, true, "BEFORE", input).await;
+    let told = ScriptedAdapter::texts(&["返信2"]);
+    turn(&told, true, "AFTER", "2回目".to_string().into()).await;
+    assert_eq!(notices(&told), 1);
+
+    // 画像を含む1回目の保存は使われず、2回目の保存(通知を含む)より前の並びが変わる。
+    let without_images = ScriptedAdapter::texts(&["返信3"]);
+    turn(&without_images, false, "AFTER", "3回目".to_string().into()).await;
+    assert!(system_of(&without_images.sent_messages()[0]).contains("BEFORE"));
+    assert_eq!(notices(&without_images), 1);
+
+    // 元のモデルへ戻すと1回目の保存がまた使われ、3回目の保存より前の並びが変わる。
+    let back = ScriptedAdapter::texts(&["返信4"]);
+    turn(&back, true, "AFTER", "4回目".to_string().into()).await;
+    assert_eq!(notices(&back), 1);
 }
 
 /// 間引いたターンは前がどのみち変わるので、通知を置かずに先頭ごと今の設定で作り直す。

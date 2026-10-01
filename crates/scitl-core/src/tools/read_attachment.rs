@@ -21,16 +21,19 @@ pub(super) const TOOL: InternalTool = InternalTool {
 
 /// 総合チャット・タスクチャットで同じ形。対象の会話は文脈から固定するので引数に取らず、添付
 /// IDだけを選ばせる。
+///
+/// 説明はモデルの能力で変えない(`docs/spec/rebuild/tools.md`「添付の読み込み」)。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(
             NAME,
             "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
              scitl:attachments block. The result has the same fields as that block. A text \
-             attachment returns its text in \"content\", and an image is shown to you with the \
-             result. Use this to look at an image whose \"delivered\" is \"name_only\", or at an \
-             attachment whose content is no longer in the conversation. Other kinds of files \
-             cannot be read.",
+             attachment returns its text in \"content\". An image is shown to you with the \
+             result if the current model accepts image input; if it does not, reading an image \
+             fails and the image cannot be seen. Use this to look at an image whose \
+             \"delivered\" is \"name_only\", or at an attachment whose content is no longer in \
+             the conversation. Other kinds of files cannot be read.",
             json!({
                 "type": "object",
                 "properties": {
@@ -86,6 +89,15 @@ pub fn execute(
         turn_result: content.map(|text| note(Some(text))),
         image_hashes,
     })
+}
+
+/// 実行記録に残した結果([`ToolOutput::result`])を、中身を伴わずに並べる形にする。記録は本文も
+/// 画像も持たないので、渡し方を名前だけに直す。
+pub(super) fn without_content(mut result: Value) -> Value {
+    if let Some(delivered) = result.get_mut("delivered") {
+        *delivered = json!(Delivery::NameOnly);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -185,6 +197,21 @@ mod tests {
         assert_eq!(output.result["delivered"], "image");
         assert!(output.result.get("content").is_none());
         assert_eq!(output.image_hashes, ["a".repeat(64)]);
+    }
+
+    /// 記録に残した結果は、本文や画像を渡したと伝えたままにしない。
+    #[test]
+    fn a_recorded_result_placed_without_its_content_says_name_only() {
+        let f = Fixture::new();
+        let text = f.attach(
+            AttachmentKind::Text,
+            AttachmentContent::Text("本文".to_string()),
+        );
+        for (id, image_input) in [(text, false), (f.image(), true)] {
+            let placed = without_content(f.read(id, image_input).unwrap().result);
+            assert_eq!(placed["id"], id);
+            assert_eq!(placed["delivered"], "name_only");
+        }
     }
 
     #[test]
