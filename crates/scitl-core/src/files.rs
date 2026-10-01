@@ -44,7 +44,8 @@ fn sync_parent_dir(path: &Path) {
 fn sync_parent_dir(_path: &Path) {}
 
 /// I/Oの失敗を、画面に出すエラー文言にする。理由はOSのエラー文で書く。パスは載せない
-/// (利用者のホームディレクトリ等が画面とログに出るため。OSのエラー文にパスは入らない)。
+/// (利用者のホームディレクトリ等が画面とログに出るため)。OSが返したエラーの文にパスは
+/// 入らないので、パスを含む文で自前に組み立てた`io::Error`は渡さない。
 pub(crate) fn describe_io_error(action: &str, e: &io::Error) -> String {
     format!("failed to {action}: {e}")
 }

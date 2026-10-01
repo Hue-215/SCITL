@@ -161,7 +161,7 @@ pub enum CliError {
     #[error("data directory {} is not a directory", .0.display())]
     DataDirNotADirectory(PathBuf),
     #[error(
-        "data directory {} is not writable; even commands that only read need to write there",
+        "data directory {} or its database is not writable; even commands that only read need to write there",
         .0.display()
     )]
     ReadOnlyDataDir(PathBuf),
