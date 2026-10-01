@@ -8,12 +8,17 @@
 //!   受け取って分割するような実装はしない)
 //! - プロセスグループごとkillする(`npx`等が生む孫プロセスの取り残しを防ぐ。
 //!   `rmcp`の子プロセスtransport自体は直接の子しかkillしないため`process-wrap`の
-//!   `ProcessGroup`/`JobObject`を明示的に併用する)
+//!   `ProcessGroup`/`JobObject`を明示的に併用する)。子が標準入力の終了を受けて
+//!   自分で終了した場合も、残ったグループをkillする(`KillGroupAfterExit`)
 //! - stderrは継承させず、上限付きで捕捉してエラー診断にのみ使う(サーバーが書いた
 //!   文字列をアプリの標準エラーへ素通りさせない)
 
 use std::process::Stdio;
+#[cfg(unix)]
+use std::{future::Future, pin::Pin, process::ExitStatus};
 
+#[cfg(unix)]
+use process_wrap::tokio::ChildWrapper;
 use process_wrap::tokio::{CommandWrap, ProcessGroup};
 use rmcp::transport::TokioChildProcess;
 use rmcp::ServiceExt;
@@ -58,6 +63,9 @@ pub(super) async fn connect(
 
     let mut wrapped: CommandWrap = cmd.into();
     wrapped.wrap(ProcessGroup::leader());
+    // `ProcessGroup`より後に足し、その外側に被せる(`wrap_child`は足した順に適用される)。
+    #[cfg(unix)]
+    wrapped.wrap(KillGroupAfterExit);
     #[cfg(windows)]
     wrapped.wrap(process_wrap::tokio::JobObject);
 
@@ -83,6 +91,58 @@ pub(super) async fn connect(
                 format!("{reason} (stderr: {captured})")
             }))
         }
+    }
+}
+
+/// 子プロセスの終了を待ち終えたあとに、プロセスグループの残りをkillさせる。
+///
+/// `rmcp`の`graceful_shutdown`は標準入力を閉じて子の終了を待ち、時間内に終了しなかった
+/// ときだけ`kill()`(`ProcessGroup`経由でグループごとSIGKILL)を呼ぶ。子が自分で終了
+/// すると`kill()`は呼ばれず、`ProcessGroupChild::wait`は自分の子を回収するだけなので、
+/// 標準入力の終了に反応しない孫プロセスがそのまま残る。そこで`wait`の後に必ず
+/// グループへSIGKILLを送る(既に誰も居なければ失敗するだけなので結果は捨てる)。
+/// 子を回収した後でも、グループに成員が残っている間はそのグループIDが別のプロセスに
+/// 再利用されないので(POSIXの規定)、残りの成員だけに届く。
+#[cfg(unix)]
+#[derive(Debug)]
+struct KillGroupAfterExit;
+
+#[cfg(unix)]
+impl process_wrap::tokio::CommandWrapper for KillGroupAfterExit {
+    fn wrap_child(
+        &mut self,
+        inner: Box<dyn ChildWrapper>,
+        _core: &CommandWrap,
+    ) -> std::io::Result<Box<dyn ChildWrapper>> {
+        Ok(Box::new(KillGroupAfterExitChild(inner)))
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct KillGroupAfterExitChild(Box<dyn ChildWrapper>);
+
+#[cfg(unix)]
+impl ChildWrapper for KillGroupAfterExitChild {
+    fn inner(&self) -> &dyn ChildWrapper {
+        self.0.as_ref()
+    }
+
+    fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
+        self.0.as_mut()
+    }
+
+    fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
+        self.0
+    }
+
+    fn wait(&mut self) -> Pin<Box<dyn Future<Output = std::io::Result<ExitStatus>> + Send + '_>> {
+        Box::pin(async {
+            let status = self.0.wait().await?;
+            // 内側は`ProcessGroupChild`なので、`start_kill`はグループ全体へのSIGKILLになる。
+            let _ = self.0.start_kill();
+            Ok(status)
+        })
     }
 }
 
@@ -263,6 +323,22 @@ if [ "$2" = linger ]; then sleep 60; fi
     async fn closing_kills_the_grandchildren_of_a_server_that_does_not_exit() {
         let scratch = Scratch::new();
         let mut service = connect_fake(&scratch, "linger", &[]).await;
+        let grandchild = scratch.grandchild();
+        assert!(is_alive(&grandchild));
+
+        let _ = service.close_with_timeout(Duration::from_secs(5)).await;
+        assert!(
+            wait_until_gone(&grandchild).await,
+            "grandchild {grandchild} survived"
+        );
+    }
+
+    /// 子が標準入力の終了を受けて自分で終了すると`rmcp`は`kill()`を呼ばないので、
+    /// グループの残りを止めるのは`KillGroupAfterExit`だけになる。
+    #[tokio::test]
+    async fn closing_kills_the_grandchildren_of_a_server_that_exits_on_its_own() {
+        let scratch = Scratch::new();
+        let mut service = connect_fake(&scratch, "exit", &[]).await;
         let grandchild = scratch.grandchild();
         assert!(is_alive(&grandchild));
 
