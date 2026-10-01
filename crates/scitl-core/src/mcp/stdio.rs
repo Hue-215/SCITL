@@ -96,13 +96,10 @@ pub(super) async fn connect(
 
 /// 子プロセスの終了を待ち終えたあとに、プロセスグループの残りをkillさせる。
 ///
-/// `rmcp`の`graceful_shutdown`は標準入力を閉じて子の終了を待ち、時間内に終了しなかった
-/// ときだけ`kill()`(`ProcessGroup`経由でグループごとSIGKILL)を呼ぶ。子が自分で終了
-/// すると`kill()`は呼ばれず、`ProcessGroupChild::wait`は自分の子を回収するだけなので、
-/// 標準入力の終了に反応しない孫プロセスがそのまま残る。そこで`wait`の後に必ず
+/// 子が自分で終了した場合は他にkillを呼ぶ経路が無いので、`wait`の後に結果に関わらず
 /// グループへSIGKILLを送る(既に誰も居なければ失敗するだけなので結果は捨てる)。
-/// 子を回収した後でも、グループに成員が残っている間はそのグループIDが別のプロセスに
-/// 再利用されないので(POSIXの規定)、残りの成員だけに届く。
+/// 成員が残っている間はそのグループIDが別のプロセスに再利用されないので(POSIXの規定)、
+/// 届く先は残った成員になる。
 #[cfg(unix)]
 #[derive(Debug)]
 struct KillGroupAfterExit;
@@ -138,10 +135,10 @@ impl ChildWrapper for KillGroupAfterExitChild {
 
     fn wait(&mut self) -> Pin<Box<dyn Future<Output = std::io::Result<ExitStatus>> + Send + '_>> {
         Box::pin(async {
-            let status = self.0.wait().await?;
+            let status = self.0.wait().await;
             // 内側は`ProcessGroupChild`なので、`start_kill`はグループ全体へのSIGKILLになる。
             let _ = self.0.start_kill();
-            Ok(status)
+            status
         })
     }
 }
