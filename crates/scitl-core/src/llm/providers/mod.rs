@@ -483,6 +483,21 @@ mod tests {
         );
         assert_eq!(
             endpoint(
+                &parse_base_url("https://api.openai.com/v1///").unwrap(),
+                "chat/completions"
+            )
+            .unwrap()
+            .as_str(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            endpoint(&parse_base_url("http://localhost:1234").unwrap(), "models")
+                .unwrap()
+                .as_str(),
+            "http://localhost:1234/models"
+        );
+        assert_eq!(
+            endpoint(
                 &parse_base_url("https://api.openai.com/v1/").unwrap(),
                 "chat/completions"
             )

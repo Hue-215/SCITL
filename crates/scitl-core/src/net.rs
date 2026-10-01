@@ -86,14 +86,13 @@ impl ExternalUrl {
         &self.0
     }
 
-    /// このURLの下の`path`。末尾のスラッシュの有無によらず、このURLをディレクトリとして
+    /// このURLの下の`path`。末尾のスラッシュの有無と数によらず、このURLをディレクトリとして
     /// 連結する。文字列の連結は末尾スラッシュの有無で壊れやすく(`//chat/completions`等)、
     /// パスがクエリの置き場所にならないという検証の意図とも噛み合わないため`Url::join`を使う。
     pub fn join(&self, path: &str) -> Result<Url, String> {
         let mut url = self.0.clone();
-        if !url.path().ends_with('/') {
-            url.set_path(&format!("{}/", url.path()));
-        }
+        let directory = format!("{}/", url.path().trim_end_matches('/'));
+        url.set_path(&directory);
         url.join(path)
             .map_err(|e| format!("failed to build endpoint: {e}"))
     }

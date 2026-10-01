@@ -211,18 +211,18 @@ pub struct McpServerConfig {
 pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
 
 /// サーバー識別子を検証する([`MCP_SERVER_NAME_MAX_CHARS`]字以内、英数字とアンダースコア
-/// のみ)。画面の入力チェックはセキュリティ境界ではないので、ここでも検証する。英数字だけ
-/// なので、バイト数と文字数は同じ。
+/// のみ)。画面の入力チェックはセキュリティ境界ではないので、ここでも検証する。
 pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
-    if name.is_empty() || name.len() > MCP_SERVER_NAME_MAX_CHARS {
-        return Err(CoreError::InvalidSettings(format!(
-            "MCP server name must be 1-{MCP_SERVER_NAME_MAX_CHARS} characters"
-        )));
-    }
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(CoreError::InvalidSettings(
             "MCP server name must be alphanumeric or underscore".to_string(),
         ));
+    }
+    // 文字種を先に確かめてあるので、バイト数と文字数は同じ。
+    if name.is_empty() || name.len() > MCP_SERVER_NAME_MAX_CHARS {
+        return Err(CoreError::InvalidSettings(format!(
+            "MCP server name must be 1-{MCP_SERVER_NAME_MAX_CHARS} characters"
+        )));
     }
     // ツールの公開名は`<サーバー名>__<ツール名>`(`tools::external::exposed_name`)。サーバー名に
     // `__`や末尾の`_`があると、別々のツールが同じ公開名になる(サーバー`a`のツール`b__c`と、
@@ -414,6 +414,10 @@ mod tests {
         assert!(validate_mcp_server_name("a__b").is_err());
         assert!(validate_mcp_server_name("_a").is_err());
         assert!(validate_mcp_server_name("a_").is_err());
+
+        // 使えない文字は、バイト数が上限を超えていても文字種の理由で断る。
+        let err = validate_mcp_server_name("あいうえおか").unwrap_err();
+        assert!(err.to_string().contains("alphanumeric"), "{err}");
     }
 
     #[test]

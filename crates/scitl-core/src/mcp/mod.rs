@@ -336,6 +336,18 @@ pub fn validate_header_name(name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// 子プロセスへ渡す環境変数の名前を検証する(サーバー登録時)。空の名前と、`=`・空白・
+/// 制御文字・ASCII以外を含む名前を断る(`=`やNULを含む名前は起動に失敗する)。
+pub fn validate_env_name(name: &str) -> Result<(), CoreError> {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_graphic() && c != '=') {
+        return Err(CoreError::Mcp(format!(
+            "invalid environment variable name {name:?}: \
+             it must be visible ASCII characters without '='"
+        )));
+    }
+    Ok(())
+}
+
 /// ヘッダー値を検証する。載せられる値の規則は[`crate::net::secret_header_value`]が決める。
 pub fn validate_header_value(value: &str) -> Result<(), CoreError> {
     crate::net::secret_header_value(value)
@@ -471,6 +483,15 @@ mod tests {
         assert!(validate_header_name("X-Bad\r\nEvil: 1").is_err());
         assert!(validate_header_name("").is_err());
         assert!(validate_header_name("has space").is_err());
+    }
+
+    #[test]
+    fn validate_env_name_rejects_names_a_process_cannot_take() {
+        assert!(validate_env_name("API_TOKEN").is_ok());
+        assert!(validate_env_name("ProgramFiles(x86)").is_ok());
+        for refused in ["", "A B", "A=B", "A\0", "鍵"] {
+            assert!(validate_env_name(refused).is_err(), "{refused:?}");
+        }
     }
 
     #[test]
