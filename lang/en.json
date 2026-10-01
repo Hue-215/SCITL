@@ -91,8 +91,6 @@
   "settings.model.add_model_hint": "Enter a model name to add",
   "settings.model.cap_reasoning_checkbox_label": "{model} supports thinking",
   "settings.model.cap_reasoning_label": "Think",
-  "settings.model.cap_tools_checkbox_label": "{model} supports tool calls",
-  "settings.model.cap_tools_label": "Tool",
   "settings.model.cap_vision_checkbox_label": "{model} accepts images",
   "settings.model.cap_vision_label": "Img",
   "settings.model.col_actions": "Actions",
@@ -105,6 +103,7 @@
   "settings.model.detect_button": "Detect capabilities from the server",
   "settings.model.detecting": "Detecting…",
   "settings.model.fetch_models_button": "Fetch model list",
+  "settings.model.lacks_tools_warning": "The inference server reports that this model doesn't support tool calls. SCITL reads and updates tasks and steps through tools, so this model can neither see nor change them",
   "settings.model.no_match": "No models match \"{query}\".",
   "settings.model.none_registered": "No models registered (registered models can be chosen in the chat)",
   "settings.model.picker_add_selected": "Add selected ({count})",
@@ -117,7 +116,6 @@
   "settings.model.reset_caps_tooltip": "Reset capabilities to defaults",
   "settings.model.search_hint": "Search by model name",
   "settings.model.show_all": "Show models ({count})",
-  "settings.model.tools_warning_tooltip": "With a model that doesn't support tool calls, tasks and steps can no longer be updated",
   "settings.model.visible_checkbox_label": "Show {model} in the chat's model list",
   "settings.nav.general": "General",
   "settings.nav.provider": "API Providers",
@@ -218,6 +216,5 @@
   "turn_error.thinking_unsupported": "This model didn't accept a thinking effort. Please uncheck \"Think\" for this model in the model list under \"API Providers\" in Settings.",
   "turn_error.tool_round_limit": "Reached the maximum number of tool calls, so the reply was cut short. You can change it under \"Tools/MCP\" in Settings.",
   "turn_error.tool_timeout": "Tools ran out of time, so the reply was cut short. You can change the limit under \"Tools/MCP\" in Settings.",
-  "turn_error.tools_disabled": "The tool calls the model asked for were not run, because this model is treated as not supporting tools. If it does support tools, check \"Tool\" for this model in the model list under \"API Providers\" in Settings.",
   "turn_error.unexpected": "An unexpected error occurred."
 }

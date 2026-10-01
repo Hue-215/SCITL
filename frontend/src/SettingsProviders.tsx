@@ -340,11 +340,6 @@ const CAPABILITY_COLUMNS: CapabilityColumn[] = [
     checkboxLabel: 'settings.model.cap_vision_checkbox_label',
   },
   {
-    capability: 'tools',
-    label: 'settings.model.cap_tools_label',
-    checkboxLabel: 'settings.model.cap_tools_checkbox_label',
-  },
-  {
     capability: 'thinking',
     label: 'settings.model.cap_reasoning_label',
     checkboxLabel: 'settings.model.cap_reasoning_checkbox_label',
@@ -451,30 +446,30 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
           aria-label={t('settings.model.visible_checkbox_label', { model: isolated(shown) })}
         />
       </td>
-      <td className="model-name">{shown}</td>
+      <td className="model-name">
+        {shown}
+        {model.lacks_tools && (
+          <span
+            className="model-warning"
+            role="img"
+            aria-label={t('settings.model.lacks_tools_warning')}
+            title={t('settings.model.lacks_tools_warning')}
+          >
+            ⚠
+          </span>
+        )}
+      </td>
       {CAPABILITY_COLUMNS.map(({ capability, checkboxLabel }) => (
         <td key={capability} className="model-check-col">
-          <span className="model-capability">
-            <input
-              type="checkbox"
-              checked={model.capabilities[capability]}
-              onChange={(e) => {
-                const supported = e.target.checked
-                onUpdate(() => setModelCapability(providerId, name, capability, supported))
-              }}
-              aria-label={t(checkboxLabel, { model: isolated(shown) })}
-            />
-            {capability === 'tools' && !model.capabilities.tools && (
-              <span
-                className="model-warning"
-                role="img"
-                aria-label={t('settings.model.tools_warning_tooltip')}
-                title={t('settings.model.tools_warning_tooltip')}
-              >
-                ⚠
-              </span>
-            )}
-          </span>
+          <input
+            type="checkbox"
+            checked={model.capabilities[capability]}
+            onChange={(e) => {
+              const supported = e.target.checked
+              onUpdate(() => setModelCapability(providerId, name, capability, supported))
+            }}
+            aria-label={t(checkboxLabel, { model: isolated(shown) })}
+          />
         </td>
       ))}
       <td>

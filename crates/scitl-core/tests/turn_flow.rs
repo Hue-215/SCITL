@@ -206,13 +206,6 @@ impl ScriptedAdapter {
             .collect()
     }
 
-    fn system_prompts(&self) -> Vec<String> {
-        self.sent_messages()
-            .iter()
-            .map(|messages| system_prompt_content(&messages[0]).to_string())
-            .collect()
-    }
-
     /// 各呼び出しで送られた発言列から、システムプロンプトを除いたもの。
     fn sent_histories(&self) -> Vec<Vec<ChatMessage>> {
         self.sent_messages()
@@ -1102,35 +1095,6 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
     // 既定値の4ラウンドぶん実行してから打ち切られる(1ラウンドにつきツール実行記録が1件)。
     // 最後の呼び出しのツール呼び出しは実行しないので、5件目は無い。
     assert_eq!(tool_execution_count(&messages), 4);
-}
-
-/// ツールに対応しないモデルがツールを呼んできたら、上限到達ではなく、ツールを渡して
-/// いない理由のエラー発言にする(上限の設定を変えても直らないため)。
-#[tokio::test]
-async fn tool_calls_from_a_model_without_tool_support_are_not_a_round_limit() {
-    let conn = db::open_in_memory().unwrap();
-    let task_id = seed_task(&conn);
-    let db = Arc::new(Mutex::new(conn));
-    let mut capabilities = DEFAULT_CAPABILITIES;
-    capabilities.tools = false;
-
-    run_turn(
-        db.clone(),
-        &TurnContext {
-            capabilities,
-            ..context(&always_adds_a_step())
-        },
-        Chat::Task(task_id),
-        "工程を追加して".to_string(),
-    )
-    .await
-    .unwrap();
-
-    let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
-    assert_eq!(error_message.error_kind.as_deref(), Some("tools_disabled"));
-    assert_eq!(tool_execution_count(&messages), 0);
 }
 
 /// 設定したラウンド数の上限がそのまま効く。`turn.rs`が定数ではなく渡された値を
@@ -2634,54 +2598,6 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
         .as_str()
         .unwrap()
         .contains("tool call limit"));
-}
-
-/// ツールに対応しないモデルには、ツールを渡さずに1回だけ呼び、注意書きを添える。
-/// 上限到達の一節は添えない。
-#[tokio::test]
-async fn models_without_tool_support_are_called_once_without_tools() {
-    let conn = db::open_in_memory().unwrap();
-    let task_id = seed_task(&conn);
-    let db = Arc::new(Mutex::new(conn));
-    let adapter = adds_steps_while_tools_are_offered();
-    let mut capabilities = DEFAULT_CAPABILITIES;
-    capabilities.tools = false;
-
-    run_turn(
-        db.clone(),
-        &TurnContext {
-            capabilities,
-            ..context(&adapter)
-        },
-        Chat::Task(task_id),
-        "工程を追加して".to_string(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(adapter.offered(), vec![Vec::<String>::new()]);
-    assert_eq!(adapter.callable(), vec![false]);
-    assert!(adapter.system_prompts()[0].contains("Tools are not available"));
-    assert!(!adapter.sent_messages()[0].iter().any(mentions_round_limit));
-
-    let conn = db.lock().unwrap();
-    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    assert_eq!(tool_execution_count(&messages), 0);
-    let reply = messages.last().unwrap();
-    assert_eq!(reply.role, Role::Assistant);
-
-    // ツールを渡していないので、保存するツール定義は空で、往復も無い。
-    let saved = db::transcripts::find(&conn, reply.turn_id.as_deref().unwrap(), 1)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        db::transcripts::blob(&conn, &saved.tools_digest)
-            .unwrap()
-            .as_deref(),
-        Some("[]")
-    );
-    let saved_rounds: serde_json::Value = serde_json::from_str(&saved.rounds).unwrap();
-    assert_eq!(roles_of(&saved_rounds), ["assistant"]);
 }
 
 fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {

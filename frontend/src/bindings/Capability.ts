@@ -3,4 +3,4 @@
 /**
  * モデルの能力のうち、対応の有無で表すもの。
  */
-export type Capability = "image" | "tools" | "thinking";
+export type Capability = "image" | "thinking";

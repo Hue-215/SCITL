@@ -1155,23 +1155,6 @@ option {
   text-align: center;
 }
 
-/* 注記(⚠)の有無でチェックボックスの位置がずれないよう、チェックボックスを中央の列に
-   固定し、注記はその右の列に置く。左右の列を同じ幅にすることで中央が列の中央になる。 */
-.model-capability {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  column-gap: var(--space-1);
-}
-
-.model-capability > input {
-  grid-column: 2;
-}
-
-.model-capability > .model-warning {
-  justify-self: start;
-}
-
 .model-actions {
   display: flex;
   align-items: center;
@@ -1181,6 +1164,11 @@ option {
 .model-warning {
   color: var(--color-danger);
   cursor: help;
+}
+
+/* 名前の後ろに置く注記。 */
+.model-name > .model-warning {
+  margin-inline-start: var(--space-1);
 }
 
 /* 桁数の入る幅。ここでしか使わない値なのでトークン化しない。 */

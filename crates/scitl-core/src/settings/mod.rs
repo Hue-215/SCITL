@@ -1349,15 +1349,16 @@ name = "m"
         let fallback = llm::DEFAULT_CAPABILITIES;
 
         let view = settings
-            .set_model_capability(&id, "m", Capability::Tools, !fallback.tools)
+            .set_model_capability(&id, "m", Capability::Image, !fallback.image)
             .unwrap();
         let model = &view.providers[0].models[0];
-        assert_eq!(model.capabilities.tools, !fallback.tools);
+        assert_eq!(model.capabilities.image, !fallback.image);
         assert!(model.overridden);
+        assert!(!model.lacks_tools, "検出していないモデルは警告しない");
 
         // 初期値と同じ値に戻したら、手動設定は残らない。
         let view = settings
-            .set_model_capability(&id, "m", Capability::Tools, fallback.tools)
+            .set_model_capability(&id, "m", Capability::Image, fallback.image)
             .unwrap();
         assert!(!view.providers[0].models[0].overridden);
 
@@ -1399,6 +1400,7 @@ name = "m"
             &id,
             "m",
             llm::DetectedCapabilities {
+                image: Some(true),
                 tools: Some(false),
                 context_length: Some(16_384),
                 ..Default::default()
@@ -1408,10 +1410,11 @@ name = "m"
         let view = settings.view();
         assert!(view.providers[0].can_detect_capabilities);
         let model = &view.providers[0].models[0];
-        assert!(!model.capabilities.tools);
+        assert!(model.capabilities.image);
         assert_eq!(model.default_context_length, 16_384);
         assert!(!model.overridden);
-        assert!(!settings.snapshot().capabilities.tools);
+        assert!(model.lacks_tools);
+        assert!(settings.snapshot().capabilities.image);
 
         // 検出した値と同じにしたら手動設定は残らず、既定値と同じでも違えば残る。
         let view = settings
@@ -1419,10 +1422,10 @@ name = "m"
             .unwrap();
         assert!(!view.providers[0].models[0].overridden);
         let view = settings
-            .set_model_capability(&id, "m", Capability::Tools, true)
+            .set_model_capability(&id, "m", Capability::Image, false)
             .unwrap();
         assert!(view.providers[0].models[0].overridden);
-        assert!(settings.snapshot().capabilities.tools);
+        assert!(!settings.snapshot().capabilities.image);
 
         // モデルを消したら結果も捨てる。
         settings.remove_model(&id, "m").unwrap();
