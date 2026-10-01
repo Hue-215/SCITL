@@ -1,6 +1,5 @@
 # 仕様の索引
 
-SCITLの確定方針を書いた文書の案内。実装を始める前にこの文書を読み、触る領域の文書だけを読む。
 文書とコードが食い違う場合は、どちらが正しいかを確かめてから直す。
 
 使っている技術: Tauri 2(Rust + WebView)、React + TypeScript + Vite、SQLite(`rusqlite`、WAL)、
@@ -21,15 +20,15 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 | `architecture/transcript.md` | 履歴の組み立て、送った形の保存、思考の送り返し、間引き | 保存の形を変えるなら当たる |
 | `architecture/concurrency.md` | 多重起動の防止、同期と非同期の境界、応答生成の停止、途中経過の通知 | 2つ目の起動から届く引数を使うなら当たる |
 | `architecture/network-secrets.md` | HTTPクライアント、平文http、秘密情報、資格情報ストア | 当たる |
-| `architecture/webview-boundary.md` | IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる |
+| `architecture/webview-boundary.md` | IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる。IPCコマンドの引数でパス・URL等を受け取るものを足す・広げるなら当たる |
 | `architecture/sanitize.md` | 外部から来た文字列・自由入力を、モデル・画面・端末・ファイルへ出す | 当たる |
 | `architecture/i18n.md` | 画面の文言、言語ファイル、表示言語 | 当たらない |
-| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
-| `architecture/export.md` | Markdownエクスポート | 当たらない |
+| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方(外から受け取る入力)・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
+| `architecture/export.md` | Markdownエクスポート | 書き出し先の決め方(外から受け取る入力)を変えるなら当たる |
 | `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`、索引、PRAGMAと排他、マイグレーション | 当たる |
 | `data-model/messages.md` | `messages`、ターン境界、操作の記録、`turn_transcripts`。`architecture/transcript.md`と対で読む | 当たる |
 | `tools.md` | LLMに公開するツールのスキーマ、引数検証、履歴への載せ方、外部(MCP)ツールの公開 | 公開する操作・権限を変えるなら当たる |
-| `ui.md` | 画面を触るとき(必ず読む) | 当たらない |
+| `ui.md` | 画面を触るとき(必ず読む。`principles.md` 6節も) | 当たらない |
 
 ## ファイルを跨ぐ不変条件
 
@@ -49,10 +48,21 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 - **秘密情報に触れるのは`secrets.rs`だけ、HTTPは`net::hardened_client`だけを通る**:
   `architecture/network-secrets.md`・`architecture/cli.md`・`architecture/llm-adapter.md`
 
-## ワークスペース構成
+## 用語
 
-Tauri(Rust製のコア + WebView上のフロントエンド)で構築する。バックエンドの責務は
-すべてRust側に置く(`principles.md` 4節「UI層に秘密情報と外部通信を持たせない」)。
+- **総合チャット**・**タスクチャット**: 全体を見渡す会話と、個別のタスクに紐づく会話
+- **ターン**・**試行**・**ラウンド**: ターンは、ユーザー発言(または再試行・応答の生成の指示)に応える
+  応答生成の単位(`turn_id`)。試行は、同じターンを作り直したそれぞれ(`attempt_no`)。ラウンドは、
+  1つの試行の中のモデル呼び出し1回で、ツールを呼ぶたびに次のラウンドへ進む(ラウンドとツールの実行の組を「往復」と呼ぶ)
+- **方言**: プロバイダーのAPIの形式(OpenAI互換・Anthropic形式・Gemini形式)
+- **囲み**・**形式の説明**: 囲みは、ユーザー発言の本文を包む`<scitl:user-message>`。形式の説明は、
+  囲みや予約タグの読み方をモデルに伝える注記(`llm::user_message_format_note`)
+- **実行記録**・**操作の記録**: 実行記録は、ツールの実行1回分の`messages`の行。そのうち`turn_id`を
+  持たない、応答生成の外(画面・CLI)からの操作を記録したものが操作の記録
+- **送った形**・**前が変わる**: 送った形は、返信のある試行ごとに保存した、モデルへ送った発言列
+  (`turn_transcripts`)。前が変わるとは、次のリクエストの先頭が、前に送ったリクエストと一致しなくなること
+
+## ワークスペース構成
 
 ```
 SCITL-2.0/
@@ -69,7 +79,7 @@ SCITL-2.0/
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(architecture/network-secrets.md)
 │   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
-│   │       ├── config.rs           # 参照のみを持つ設定(TOML)
+│   │       ├── config.rs           # 設定(TOML)。秘密情報は参照(`key_ref`)だけを持つ
 │   │       ├── paths.rs            # データディレクトリの場所と中の並び(GUI・CLI共通)
 │   │       ├── files.rs            # 書きかけのファイルを完成した名前で残さない書き込み
 │   │       ├── settings/           # 設定・登録の操作(規則・検証・秘密情報の出し入れ・保存)
@@ -83,7 +93,7 @@ SCITL-2.0/
 │   ├── scitl-cli/                  # タスクの確認・操作と会話の表示。scitl-coreのみに依存
 │   ├── scitl-debug-cli/            # scitl-cliのコマンドに、応答生成・設定・登録を足す
 │   └── scitl-tauri/                # 薄いIPCシェル
-│       ├── tauri.conf.json         # CSP・devCsp(変更のたびにOpusレビュー対象)
+│       ├── tauri.conf.json         # CSP・devCsp
 │       └── src/commands/
 ├── frontend/                       # React + TypeScript + Vite
 ├── lang/                           # ja.json / en.json(core・frontend共有。architecture/i18n.md)
@@ -93,7 +103,5 @@ SCITL-2.0/
 - **コア** (`scitl-core`): `principles.md` 5節が「1箇所に閉じる」ことを求める判断
   (状態遷移、ツール引数検証、ターンのオーケストレーション、サニタイズ、秘密情報アクセス)を
   すべて置く
-- **GUI** (`scitl-tauri`): `commands/*.rs` はロジックを持たず、
-  「デシリアライズ→coreを1つ呼ぶ→シリアライズ」のみ。この薄さ自体が
-  「coreはUIなしで同じ検証経路を通って呼び出せる」ことの構造的な担保になる
+- **GUI** (`scitl-tauri`): コマンドはロジックを持たず、coreを1つ呼ぶだけ(`architecture/webview-boundary.md`)
 - **CLI** (`scitl-cli`・`scitl-debug-cli`): `architecture/cli.md`
