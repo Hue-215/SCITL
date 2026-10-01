@@ -21,16 +21,20 @@ pub(super) const TOOL: InternalTool = InternalTool {
 
 /// 総合チャット・タスクチャットで同じ形。対象の会話は文脈から固定するので引数に取らず、添付
 /// IDだけを選ばせる。
+///
+/// 説明はモデルの能力で変えず、画像を読めないモデルがあることを文で伝える。定義を変えると、
+/// モデルを切り替えるたびに固定した先頭を作り直すことになる。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(
             NAME,
             "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
              scitl:attachments block. The result has the same fields as that block. A text \
-             attachment returns its text in \"content\", and an image is shown to you with the \
-             result. Use this to look at an image whose \"delivered\" is \"name_only\", or at an \
-             attachment whose content is no longer in the conversation. Other kinds of files \
-             cannot be read.",
+             attachment returns its text in \"content\". An image is shown to you with the \
+             result if the current model accepts image input; if it does not, reading an image \
+             fails and the image cannot be seen. Use this to look at an image whose \
+             \"delivered\" is \"name_only\", or at an attachment whose content is no longer in \
+             the conversation. Other kinds of files cannot be read.",
             json!({
                 "type": "object",
                 "properties": {
