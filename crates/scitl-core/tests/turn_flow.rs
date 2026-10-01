@@ -1234,6 +1234,88 @@ async fn a_turn_that_fails_after_a_tool_round_keeps_the_text_it_received() {
     assert!(!format!("{:?}", next.sent_messages()[0]).contains("工程を足します"));
 }
 
+/// ツール呼び出しの区切りで止めても、受け取り終えたそのラウンドの本文は残る。
+#[tokio::test]
+async fn stopping_between_tool_calls_keeps_the_text_of_that_round() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let generating = InFlightSet::new();
+    let mut round = text("工程を足します");
+    round.pop();
+    round.extend(calls(vec![add_a_step(), add_a_step()]));
+    let adapter = StoppingAdapter::new(
+        ScriptedAdapter::new(vec![round]),
+        &generating,
+        chat,
+        0,
+        false,
+    );
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&adapter)
+        },
+        chat,
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    assert_eq!(
+        stopped_reply(&messages).partial_reply.as_deref(),
+        Some("工程を足します")
+    );
+}
+
+/// 本文を流している途中で失敗したラウンドの本文は、断片なので残さない。
+#[tokio::test]
+async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
+    struct FailsMidStream;
+
+    #[async_trait::async_trait]
+    impl LlmAdapter for FailsMidStream {
+        fn readiness(&self) -> Readiness {
+            Readiness::Ready
+        }
+
+        async fn send(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: ToolOffer<'_>,
+            _reasoning_effort: Option<ReasoningEffort>,
+            on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+        ) -> Result<Replay, CoreError> {
+            on_event(ResponseEvent::TextDelta {
+                text: "途中まで".to_string(),
+            });
+            Err(LlmError::from_status(reqwest::StatusCode::BAD_GATEWAY, "", "").into())
+        }
+    }
+
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&FailsMidStream),
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    let last = messages.last().unwrap();
+    assert_eq!(last.role, Role::Error);
+    assert_eq!(last.partial_reply, None);
+}
+
 /// 最初のラウンドで失敗したターンには、残す本文が無い。
 #[tokio::test]
 async fn a_turn_that_fails_at_once_keeps_no_text() {
@@ -2435,6 +2517,47 @@ async fn generating_a_reply_answers_a_conversation_left_without_one() {
     assert_eq!(messages[1].content, "お待たせしました");
     assert_ne!(messages[1].turn_id.as_deref(), Some(old_turn.as_str()));
     assert!(!lacks_reply(&conn, chat).unwrap());
+}
+
+/// 応答を生成し直したあとに発言を編集すると、その発言に答えたターン(途中で終わったものと
+/// 生成し直したもの)のどちらで実行したことも伝える。
+#[tokio::test]
+async fn editing_after_generating_a_reply_reports_every_turn_that_answered() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&adds_a_step()),
+        chat,
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+    let user = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        let reply = messages.iter().find(|m| m.role == Role::Assistant).unwrap();
+        db::messages::soft_delete_normal_from(&conn, chat, reply.id).unwrap();
+        messages[0].id
+    };
+    generate_reply(db.clone(), &context(&adds_a_step()), chat)
+        .await
+        .unwrap();
+
+    let edited = ScriptedAdapter::texts(&["はい"]);
+    edit_user_message(
+        db.clone(),
+        &context(&edited),
+        chat,
+        user,
+        "工程をもう一度".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let operations = operations_sent(&edited.sent_messages()[0]);
+    assert_eq!(operations.matches(r#""tool":"add_steps""#).count(), 2);
 }
 
 /// 返信(エラー発言を含む)で終わる会話には応答を生成しない。エラー発言は作り直しで生成し直す。

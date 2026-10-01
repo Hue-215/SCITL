@@ -106,8 +106,10 @@ fn push_entry(out: &mut String, entry: &Entry) {
         out.push_str(&fenced("json", &pretty));
         out.push('\n');
     } else if !message.content.trim().is_empty() {
-        // 失敗したターンで受け取り終えた本文。画面と同じく、エラーの文言より前に置く。
+        // 失敗したターンで受け取り終えた本文。画面と同じく、エラーの文言より前に置く。エラーの
+        // 見出しの下に並ぶので、モデルが書いたものだと分かるように一言添える。
         if let Some(partial) = &message.partial_reply {
+            out.push_str("Reply received before the failure:\n\n");
             out.push_str(&fenced("markdown", partial));
             out.push('\n');
         }

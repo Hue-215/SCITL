@@ -210,13 +210,6 @@ export default function ChatLog({
           </li>
         )
       })}
-      {onGenerateReply && pending.length === 0 && (
-        <li className="button-row">
-          <button type="button" disabled={disableActions} onClick={onGenerateReply}>
-            {t('chat.generate_reply_button')}
-          </button>
-        </li>
-      )}
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
           // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す。完了したら読み直した
@@ -238,6 +231,13 @@ export default function ChatLog({
       {failure && (
         <li className="entry entry-error">
           <span className="entry-content">{failure}</span>
+        </li>
+      )}
+      {onGenerateReply && pending.length === 0 && (
+        <li className="button-row">
+          <button type="button" disabled={disableActions} onClick={onGenerateReply}>
+            {t('chat.generate_reply_button')}
+          </button>
         </li>
       )}
     </ul>

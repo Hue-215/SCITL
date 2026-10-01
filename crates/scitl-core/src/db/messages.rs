@@ -307,53 +307,53 @@ pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> R
     Ok(())
 }
 
-/// ユーザー発言`user_message_id`に答えたターンの`turn_id`。発言の直後から次のユーザー発言の
-/// 手前までにある、最初のターンの行で決める。答えたターンの行が無ければ`None`。
+/// ユーザー発言`user_message_id`に答えたターンの`turn_id`(行の順)。発言の直後から次の
+/// ユーザー発言の手前までに行のあるターンが当たる。返信の無いまま終わったターンのあとに
+/// 応答を生成し直すと(`orchestration::generate_reply`)、1つの発言に複数のターンが答える。
 ///
 /// 論理削除した行も見る。答えたターンの行が削除で消えていても、その後ろの発言に答えたターンを
 /// 取り違えないため。同じ理由で、区切りの次のユーザー発言も削除したものを含める。
-pub fn turn_answering(
-    conn: &Connection,
-    chat: Chat,
-    user_message_id: i64,
-) -> Result<Option<String>> {
-    Ok(conn
-        .query_row(
-            "SELECT turn_id FROM messages
-             WHERE task_id IS ?1 AND id > ?2 AND turn_id IS NOT NULL
-               AND NOT EXISTS (
-                 SELECT 1 FROM messages u
-                 WHERE u.task_id IS ?1 AND u.role = 'user' AND u.id > ?2 AND u.id < messages.id
-               )
-             ORDER BY id ASC
-             LIMIT 1",
-            rusqlite::params![chat.task_id(), user_message_id],
-            |row| row.get(0),
-        )
-        .optional()?)
+pub fn turns_answering(conn: &Connection, chat: Chat, user_message_id: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT turn_id FROM messages
+         WHERE task_id IS ?1 AND id > ?2 AND turn_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM messages u
+             WHERE u.task_id IS ?1 AND u.role = 'user' AND u.id > ?2 AND u.id < messages.id
+           )
+         GROUP BY turn_id
+         ORDER BY MIN(id) ASC",
+    )?;
+    let turns = stmt
+        .query_map(rusqlite::params![chat.task_id(), user_message_id], |row| {
+            row.get(0)
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(turns)
 }
 
-/// 行`after_id`より後ろにある、`kept_turn`以外のターンのツール実行記録を論理削除する(`kept_turn`が
-/// `None`ならすべてのターン)。編集・再試行で、作り直す地点より後ろのターンの記録を以後モデルに
-/// 送らないため(`docs/spec/rebuild/data-model.md`「ターン境界」)。作り直すターン自身の記録は
-/// `kept_turn`で残し、捨てた試行の記録として伝える。
+/// 行`after_id`より後ろにある、`kept_turns`以外のターンのツール実行記録を論理削除する。
+/// 編集・再試行で、作り直す地点より後ろのターンの記録を以後モデルに送らないため
+/// (`docs/spec/rebuild/data-model.md`「ターン境界」)。作り直すターン自身の記録は`kept_turns`で
+/// 残し、捨てた試行の記録として伝える。
 ///
 /// 応答生成以外の経路での操作の記録(`turn_id`が無い)は会話に並ぶ行なので消さない。
 pub fn soft_delete_turn_records_after(
     conn: &Connection,
     chat: Chat,
     after_id: i64,
-    kept_turn: Option<&str>,
+    kept_turns: &[String],
 ) -> Result<()> {
+    let kept = serde_json::to_string(kept_turns).expect("turn ids serialize");
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
          WHERE task_id IS ?2
            AND kind = 'tool_execution'
            AND turn_id IS NOT NULL
-           AND turn_id IS NOT ?4
+           AND turn_id NOT IN (SELECT value FROM json_each(?4))
            AND deleted_at IS NULL
            AND id > ?3",
-        rusqlite::params![now_iso8601(), chat.task_id(), after_id, kept_turn],
+        rusqlite::params![now_iso8601(), chat.task_id(), after_id, kept],
     )?;
     Ok(())
 }
@@ -373,7 +373,7 @@ pub fn soft_delete_trailing_turn_records(conn: &Connection, chat: Chat) -> Resul
         [chat.task_id()],
         |row| row.get(0),
     )?;
-    soft_delete_turn_records_after(conn, chat, last_normal.unwrap_or(0), None)
+    soft_delete_turn_records_after(conn, chat, last_normal.unwrap_or(0), &[])
 }
 
 /// タスクの会話を始めた側。
@@ -1215,10 +1215,10 @@ mod tests {
         insert(Role::Assistant, turn("turn-3", 1));
 
         // `user`を編集する。答えたターン(`turn-2`)の記録は`user`より後ろにあっても残す。
-        let answered_by = turn_answering(&conn, chat, user).unwrap();
-        assert_eq!(answered_by.as_deref(), Some("turn-2"));
+        let answered_by = turns_answering(&conn, chat, user).unwrap();
+        assert_eq!(answered_by, vec!["turn-2".to_string()]);
         soft_delete_normal_from(&conn, chat, user).unwrap();
-        soft_delete_turn_records_after(&conn, chat, user, answered_by.as_deref()).unwrap();
+        soft_delete_turn_records_after(&conn, chat, user, &answered_by).unwrap();
 
         let alive = |id| find_message(&conn, id).unwrap().is_some();
         assert!(alive(earlier));
@@ -1229,15 +1229,15 @@ mod tests {
         assert!(find_message(&conn, reply).unwrap().is_none());
 
         // 残すターンが無ければ(答えのない発言の編集)、後ろのターンの記録はすべて消す。
-        soft_delete_turn_records_after(&conn, chat, user, None).unwrap();
+        soft_delete_turn_records_after(&conn, chat, user, &[]).unwrap();
         assert!(!alive(kept));
         assert!(alive(earlier));
     }
 
     /// 答えたターンの行が削除で消えていても、後ろの発言に答えたターンを返さない。答えたターンの
-    /// 行が1つも無ければ`None`。
+    /// 行が1つも無ければ空。
     #[test]
-    fn turn_answering_stops_at_the_next_user_message() {
+    fn turns_answering_stops_at_the_next_user_message() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
         let chat = Chat::Task(task_id);
@@ -1265,15 +1265,17 @@ mod tests {
         let first = insert(Role::User, Origin::User);
         let deleted = insert(Role::Assistant, turn("turn-1"));
         soft_delete_message(&conn, deleted).unwrap();
+        // 返信の無いまま終わったあとに生成し直したターンも、同じ発言に答えている。
+        insert(Role::Assistant, turn("turn-1b"));
         let unanswered = insert(Role::User, Origin::User);
         insert(Role::User, Origin::User);
         insert(Role::Assistant, turn("turn-2"));
         let last = insert(Role::User, Origin::User);
 
-        let answering = |id| turn_answering(&conn, chat, id).unwrap();
-        assert_eq!(answering(first).as_deref(), Some("turn-1"));
-        assert_eq!(answering(unanswered), None);
-        assert_eq!(answering(last), None);
+        let answering = |id| turns_answering(&conn, chat, id).unwrap();
+        assert_eq!(answering(first), vec!["turn-1", "turn-1b"]);
+        assert!(answering(unanswered).is_empty());
+        assert!(answering(last).is_empty());
     }
 
     #[test]

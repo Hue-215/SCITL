@@ -221,14 +221,9 @@ pub async fn edit_user_message(
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
             expect_normal(&target, &[Role::User])?;
-            let answered_by = messages::turn_answering(conn, chat, target.id)?;
+            let answered_by = messages::turns_answering(conn, chat, target.id)?;
             messages::soft_delete_normal_from(conn, chat, target.id)?;
-            messages::soft_delete_turn_records_after(
-                conn,
-                chat,
-                target.id,
-                answered_by.as_deref(),
-            )?;
+            messages::soft_delete_turn_records_after(conn, chat, target.id, &answered_by)?;
             let message_id = insert_user_message(conn, chat, &new_text)?;
             let carried = db_attachments::copy_to_message(conn, target.id, message_id)?;
             // 断るとトランザクションごと戻り、元の発言は消えない。
@@ -264,7 +259,12 @@ pub async fn retry_reply(
             })?;
             let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
             messages::soft_delete_normal_from(conn, chat, message_id)?;
-            messages::soft_delete_turn_records_after(conn, chat, message_id, Some(&turn_id))?;
+            messages::soft_delete_turn_records_after(
+                conn,
+                chat,
+                message_id,
+                std::slice::from_ref(&turn_id),
+            )?;
             // 断るとトランザクションごと戻り、返信は消えない。
             if !history::awaits_reply(conn, chat)? {
                 return Err(CoreError::InvalidMessageOperation(
@@ -657,6 +657,8 @@ async fn run_tool_rounds(
                 }
             }
             let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
+            // 受け取り終えたラウンドの本文。このあとどの経路で終わっても、返信かエラー発言に残る。
+            reply_parts.push(&text);
 
             if tool_calls.is_empty() {
                 // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
@@ -667,7 +669,6 @@ async fn run_tool_rounds(
                     tool_calls: Vec::new(),
                     replay,
                 });
-                reply_parts.push(&text);
                 let reply = reply_parts.joined();
                 if reply.is_empty() {
                     return fail_turn(db, attempt, TurnFailure::EmptyResponse, reply_parts).await;
@@ -710,7 +711,6 @@ async fn run_tool_rounds(
             }
             // 上限に達して呼べないようにしたのに呼んできた。実行はせずにエラーで終える。
             if final_call {
-                reply_parts.push(&text);
                 return fail_turn(db, attempt, TurnFailure::ToolRoundLimit, reply_parts).await;
             }
 
@@ -759,7 +759,6 @@ async fn run_tool_rounds(
 
             // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
             // OpenAI互換プロトコルの標準的な表現に合わせる。
-            reply_parts.push(&text);
             round_trip.push(ChatMessage::Assistant {
                 content: (!text.trim().is_empty()).then_some(text),
                 tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),

@@ -3,7 +3,7 @@
 ALTER TABLE messages ADD COLUMN partial_reply TEXT NULL;
 
 -- 持てるのはエラー発言だけで、未設定はNULLに寄せる。0001のCHECKに足せないためトリガーで表す
--- (data-model.md 5節)。
+-- (data-model.md「マイグレーション」)。
 CREATE TRIGGER messages_partial_reply_insert
 BEFORE INSERT ON messages
 WHEN NEW.partial_reply IS NOT NULL AND (NEW.role <> 'error' OR NEW.partial_reply = '')
