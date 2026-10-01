@@ -333,21 +333,27 @@ const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 /// 発言(添付だけを送った発言等)は名前にならないので飛ばす。その判定は[`fallback_label`]だけが
 /// 持つ(SQLの`TRIM`はUnicodeの空白を落とせず、写すと食い違う)。
 fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, String>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT m.task_id, m.content FROM messages m JOIN tasks t ON t.id = m.task_id
-         WHERE t.title IS NULL AND t.deleted_at IS NULL AND (?1 IS NULL OR t.id = ?1)
-           AND m.role = 'user' AND m.kind = 'normal' AND m.deleted_at IS NULL
-         ORDER BY m.task_id, m.created_at ASC, m.id ASC",
+    let mut untitled = conn.prepare_cached(
+        "SELECT id FROM tasks
+         WHERE title IS NULL AND deleted_at IS NULL AND (?1 IS NULL OR id = ?1)",
     )?;
-    let mut rows = stmt.query([only])?;
+    let task_ids = untitled
+        .query_map([only], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    // タスクごとに古い順に読み、呼び名を作れた発言で止める。行は読み進めた分しか引かれない。
+    let mut messages = conn.prepare_cached(
+        "SELECT content FROM messages
+         WHERE task_id = ?1 AND role = 'user' AND kind = 'normal' AND deleted_at IS NULL
+         ORDER BY created_at ASC, id ASC",
+    )?;
     let mut labels = HashMap::new();
-    while let Some(row) = rows.next()? {
-        let task_id: i64 = row.get(0)?;
-        if labels.contains_key(&task_id) {
-            continue;
-        }
-        if let Some(label) = fallback_label(&row.get::<_, String>(1)?) {
-            labels.insert(task_id, label);
+    for task_id in task_ids {
+        let mut rows = messages.query([task_id])?;
+        while let Some(row) = rows.next()? {
+            if let Some(label) = fallback_label(&row.get::<_, String>(0)?) {
+                labels.insert(task_id, label);
+                break;
+            }
         }
     }
     Ok(labels)
