@@ -106,6 +106,11 @@ fn push_entry(out: &mut String, entry: &Entry) {
         out.push_str(&fenced("json", &pretty));
         out.push('\n');
     } else if !message.content.trim().is_empty() {
+        // 失敗したターンで受け取り終えた本文。画面と同じく、エラーの文言より前に置く。
+        if let Some(partial) = &message.partial_reply {
+            out.push_str(&fenced("markdown", partial));
+            out.push('\n');
+        }
         let info = if message.role == Role::Error {
             "text"
         } else {
@@ -215,6 +220,7 @@ mod tests {
             reasoning: Some("secret thoughts".to_string()),
             error_kind: None,
             error_detail: Some("provider body".to_string()),
+            partial_reply: None,
             turn_id: None,
             attempt_no: None,
             created_at: "2026-09-28T12:00:00Z".to_string(),
@@ -371,6 +377,21 @@ mod tests {
         assert!(out.contains("```json\n{\n  \"arguments\": {},"), "{out}");
         assert!(!out.contains("secret thoughts"));
         assert!(!out.contains("provider body"));
+    }
+
+    /// 失敗したターンで受け取り終えた本文は、エラーの文言より前に出す。
+    #[test]
+    fn a_failed_reply_keeps_the_text_received_before_the_error() {
+        let mut error = message(Role::Error, Kind::Normal, "The request failed.", None);
+        error.partial_reply = Some("工程を足します".to_string());
+        let out = render_general_chat(&[Entry {
+            message: &error,
+            attachments: Vec::new(),
+        }]);
+
+        let partial = out.find("```markdown\n工程を足します\n```\n").unwrap();
+        let failure = out.find("```text\nThe request failed.\n```\n").unwrap();
+        assert!(partial < failure, "{out}");
     }
 
     #[test]

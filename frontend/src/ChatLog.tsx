@@ -174,6 +174,12 @@ export default function ChatLog({
         return (
           <li key={`turn-${item.turnId}`} className="turn-group">
             <ThinkingTools items={buildThoughtItems(item.entries)} />
+            {/* 失敗したターンで受け取り終えた本文。生成中に見えていたものを返信と同じ形で残す */}
+            {finalMessage.partial_reply && (
+              <div className="entry entry-assistant">
+                <EntryBody role="assistant" content={finalMessage.partial_reply} />
+              </div>
+            )}
             <div className={`entry entry-${finalMessage.role}`}>
               <EntryBody
                 role={finalMessage.role}

@@ -104,6 +104,7 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
             origin: Origin::User,
             error_kind: None,
             error_detail: None,
+            partial_reply: None,
             reasoning: None,
         },
     )
@@ -344,6 +345,7 @@ fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
 /// 失敗はどれもこの試行のエラー発言として保存して`Ok`で返す(何も書かずに抜けると、返信を
 /// 消した再試行ではターンごと会話から消える)。`Err`が返るのはエラー発言自体を書けないときだけ。
 /// `stop`で止めた場合も同じく、止めたことを表すエラー発言を書いて`Ok`で返す([`stop_response`])。
+/// 失敗までに受け取り終えたラウンドの本文は、エラー発言に添えて残す([`ReplyParts`])。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -352,7 +354,7 @@ async fn generate_turn_response(
 ) -> Result<()> {
     let adapter = match ready_adapter(ctx) {
         Ok(adapter) => adapter,
-        Err(failure) => return fail_turn(db, &attempt, failure).await,
+        Err(failure) => return fail_turn(db, &attempt, failure, &ReplyParts::default()).await,
     };
 
     let mut sessions = McpSessions::new();
@@ -368,10 +370,7 @@ async fn generate_turn_response(
     )
     .await;
     sessions.close().await;
-    match result {
-        Err(e) => fail_turn(db, &attempt, turn_error::classify(&e)).await,
-        done => done,
-    }
+    result
 }
 
 /// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
@@ -441,7 +440,7 @@ impl Attempt {
         role: Role,
         content: &str,
         kind: Kind,
-        error: Option<(&str, Option<&str>)>,
+        error: Option<ErrorColumns>,
         reasoning: Option<&str>,
     ) -> Result<i64> {
         messages::insert_message(
@@ -455,11 +454,40 @@ impl Attempt {
                     turn_id: &self.turn_id,
                     attempt_no: self.attempt_no,
                 },
-                error_kind: error.map(|(kind, _)| kind),
-                error_detail: error.and_then(|(_, detail)| detail),
+                error_kind: error.map(|e| e.kind),
+                error_detail: error.and_then(|e| e.detail),
+                partial_reply: error.and_then(|e| e.partial_reply),
                 reasoning,
             },
         )
+    }
+}
+
+/// エラー発言の行だけが持つ列。
+#[derive(Clone, Copy)]
+struct ErrorColumns<'a> {
+    kind: &'a str,
+    detail: Option<&'a str>,
+    partial_reply: Option<&'a str>,
+}
+
+/// 受け取り終えたラウンドでモデルが書いた本文。ツールを呼んだラウンドに添えた本文も含める。
+/// ターンが成功すれば返信の本文に、失敗すればエラー発言の`partial_reply`になる。受け取りの
+/// 途中で失敗したラウンドの本文は断片なので入れない。
+#[derive(Default)]
+struct ReplyParts(Vec<String>);
+
+impl ReplyParts {
+    /// 空白だけの本文は、中身の無い吹き出しになるので入れない。
+    fn push(&mut self, text: &str) {
+        if !text.trim().is_empty() {
+            self.0.push(text.to_string());
+        }
+    }
+
+    /// ラウンドの順に空行で区切ってつなぐ。何も無ければ空文字列。
+    fn joined(&self) -> String {
+        self.0.join("\n\n")
     }
 }
 
@@ -511,6 +539,9 @@ pub(super) async fn prepare_external_tools(
 /// 分けてあるだけで、1ターンの流れとしては地続き。
 ///
 /// 止める指示(`stop`)は、LLMの応答待ちの間と、ツール呼び出しの区切りで見る。
+///
+/// 失敗はここでエラー発言にする(受け取り終えたラウンドの本文を添えるため)。`Err`が返るのは
+/// エラー発言自体を書けないときだけ。
 async fn run_tool_rounds(
     db: SharedConnection,
     adapter: &dyn LlmAdapter,
@@ -520,190 +551,199 @@ async fn run_tool_rounds(
     sessions: &mut McpSessions,
     stop: &StopSignal,
 ) -> Result<()> {
-    let chat = attempt.chat;
-    let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
-    let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
-    // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
-    // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
-    let mut round_trip: Vec<ChatMessage> = Vec::new();
-    // ツール実行に使った時間の合計。LLMの応答待ちは数えない(アダプタのタイムアウトが見る)。
-    let mut tool_time_used = Duration::ZERO;
-    // ツールを呼んだラウンドにモデルが添えた本文も、このターンの返信の一部として最終行に
-    // まとめて保存する。
-    let mut reply_parts: Vec<String> = Vec::new();
+    let mut reply_parts = ReplyParts::default();
+    let result = async {
+        let db = db.clone();
+        let reply_parts = &mut reply_parts;
+        let chat = attempt.chat;
+        let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
+        let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
+        // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
+        // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
+        let mut round_trip: Vec<ChatMessage> = Vec::new();
+        // ツール実行に使った時間の合計。LLMの応答待ちは数えない(アダプタのタイムアウトが見る)。
+        let mut tool_time_used = Duration::ZERO;
 
-    let tool_rounds = request.tool_rounds(ctx);
-    for round in 1..=tool_rounds + 1 {
-        let final_call = round > tool_rounds;
-        let (messages_to_send, offered) = request.round(&round_trip, final_call);
+        let tool_rounds = request.tool_rounds(ctx);
+        for round in 1..=tool_rounds + 1 {
+            let final_call = round > tool_rounds;
+            let (messages_to_send, offered) = request.round(&round_trip, final_call);
 
-        // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
-        let mut events = Vec::new();
-        let notify = ctx.events;
-        let sent = stop
-            .unless_requested(adapter.send(
-                &messages_to_send,
-                offered,
-                ctx.reasoning_effort,
-                &mut |event| {
-                    notify(TurnEvent::Response {
-                        event: event.clone(),
-                    });
-                    events.push(event);
-                },
-            ))
-            .await;
-        let replay = match sent {
-            Some(Ok(replay)) => replay,
-            Some(Err(e)) => return fail_turn(db, attempt, turn_error::classify(&e)).await,
-            None => return fail_turn(db, attempt, TurnFailure::Stopped).await,
-        };
-
-        let mut text = String::new();
-        // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの
-        // 再送信用)には載せない。送り返しが要る方言の分は、アダプタが返す`replay`に
-        // 入っている。
-        let mut reasoning = String::new();
-        let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
-        for event in &events {
-            match event {
-                ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
-                ResponseEvent::ReasoningDelta { text: delta } => reasoning.push_str(delta),
-                ResponseEvent::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                } => {
-                    tool_calls.push(ToolCallRequest {
-                        id: id.clone(),
-                        name: name.clone(),
-                        arguments: arguments.clone(),
-                    });
+            // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
+            let mut events = Vec::new();
+            let notify = ctx.events;
+            let sent = stop
+                .unless_requested(adapter.send(
+                    &messages_to_send,
+                    offered,
+                    ctx.reasoning_effort,
+                    &mut |event| {
+                        notify(TurnEvent::Response {
+                            event: event.clone(),
+                        });
+                        events.push(event);
+                    },
+                ))
+                .await;
+            let replay = match sent {
+                Some(Ok(replay)) => replay,
+                Some(Err(e)) => {
+                    return fail_turn(db, attempt, turn_error::classify(&e), reply_parts).await
                 }
-                ResponseEvent::Done { .. } => {}
-            }
-        }
-        let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
+                None => return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await,
+            };
 
-        if tool_calls.is_empty() {
-            // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
-            let mut rounds = request.appended(&messages_to_send).to_vec();
-            // 空白だけの本文は送らない(空白だけのテキストのブロックを拒む方言がある)。
-            rounds.push(ChatMessage::Assistant {
-                content: (!text.trim().is_empty()).then(|| text.clone()),
-                tool_calls: Vec::new(),
+            let mut text = String::new();
+            // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの
+            // 再送信用)には載せない。送り返しが要る方言の分は、アダプタが返す`replay`に
+            // 入っている。
+            let mut reasoning = String::new();
+            let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
+            for event in &events {
+                match event {
+                    ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
+                    ResponseEvent::ReasoningDelta { text: delta } => reasoning.push_str(delta),
+                    ResponseEvent::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    } => {
+                        tool_calls.push(ToolCallRequest {
+                            id: id.clone(),
+                            name: name.clone(),
+                            arguments: arguments.clone(),
+                        });
+                    }
+                    ResponseEvent::Done { .. } => {}
+                }
+            }
+            let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
+
+            if tool_calls.is_empty() {
+                // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
+                let mut rounds = request.appended(&messages_to_send).to_vec();
+                // 空白だけの本文は送らない(空白だけのテキストのブロックを拒む方言がある)。
+                rounds.push(ChatMessage::Assistant {
+                    content: (!text.trim().is_empty()).then(|| text.clone()),
+                    tool_calls: Vec::new(),
+                    replay,
+                });
+                reply_parts.push(&text);
+                let reply = reply_parts.joined();
+                if reply.is_empty() {
+                    return fail_turn(db, attempt, TurnFailure::EmptyResponse, reply_parts).await;
+                }
+
+                let transcript = adapter.identity().and_then(|identity| {
+                    let saved = request.transcript(&rounds);
+                    if saved.is_none() {
+                        crate::diagnostics::report(
+                            "cannot save what was sent: an image was not read from an attachment",
+                        );
+                    }
+                    Some((identity, saved?))
+                });
+                let attempt = attempt.clone();
+                with_conn(db, move |conn| {
+                    in_transaction(conn, |conn| {
+                        attempt.insert(
+                            conn,
+                            Role::Assistant,
+                            &reply,
+                            Kind::Normal,
+                            None,
+                            reasoning_for_db.as_deref(),
+                        )?;
+                        // 保存は会話ログの補助なので、失敗しても返信は書く(保存の無いターンは
+                        // 実行記録から組み立てる)。
+                        if let Some((identity, saved)) = &transcript {
+                            if let Err(e) = attempt.save_transcript(conn, identity, saved) {
+                                crate::diagnostics::report(format_args!(
+                                    "failed to save what was sent: {e}"
+                                ));
+                            }
+                        }
+                        Ok(())
+                    })
+                })
+                .await?;
+                return Ok(());
+            }
+            // 上限に達して呼べないようにしたのに呼んできた。実行はせずにエラーで終える。
+            if final_call {
+                reply_parts.push(&text);
+                return fail_turn(db, attempt, TurnFailure::ToolRoundLimit, reply_parts).await;
+            }
+
+            // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。
+            let mut executed: Vec<(ToolCallRequest, CallOutcome)> =
+                Vec::with_capacity(tool_calls.len());
+            for (i, call) in tool_calls.into_iter().enumerate() {
+                // 止める指示と合計時間は呼び出しの区切りで判定し、ターンを打ち切る(ほかの失敗と
+                // 違い、モデルに返して続けても意味が無い)。実行中の呼び出しを外から打ち切らないのは、
+                // 内部ツールのDB書き込みは待つのをやめても完走し、書き込みだけが済んで
+                // 実行記録が残らない状態を作るため(1回の呼び出しは`mcp`のタイムアウトで有界)。
+                // 外部ツールも、相手の側で済んだ操作の記録を残すため同じく待つ。
+                if stop.is_requested() {
+                    return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await;
+                }
+                if tool_time_used >= ctx.limits.total_timeout {
+                    return fail_turn(db, attempt, TurnFailure::ToolTimeout, reply_parts).await;
+                }
+                let started = Instant::now();
+                let outcome =
+                    execute_call(db.clone(), chat, ctx, external, sessions, &call).await?;
+                tool_time_used = tool_time_used.saturating_add(started.elapsed());
+
+                // このラウンドの思考は、ラウンド内最初のツール実行記録にだけ紐付ける(全呼び出しに
+                // 複製すると、画面の「思考・ツール」の件数が水増しされる)。
+                let reasoning_for_row = if i == 0 {
+                    reasoning_for_db.clone()
+                } else {
+                    None
+                };
+                let record = ToolExecutionRecord {
+                    tool: call.name.clone(),
+                    arguments: match &call.arguments {
+                        ToolArguments::Valid { value } => value.clone(),
+                        ToolArguments::Malformed { raw, .. } => {
+                            serde_json::Value::String(raw.clone())
+                        }
+                    },
+                    result: outcome.result.clone(),
+                    call_id: call.id.clone(),
+                };
+                save_tool_execution(db.clone(), attempt, record, reasoning_for_row, ctx.events)
+                    .await?;
+                executed.push((call, outcome));
+            }
+
+            // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
+            // OpenAI互換プロトコルの標準的な表現に合わせる。
+            reply_parts.push(&text);
+            round_trip.push(ChatMessage::Assistant {
+                content: (!text.trim().is_empty()).then_some(text),
+                tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
                 replay,
             });
-            // 空白だけの本文は、中身の無い吹き出しになるので返信に含めない。
-            if !text.trim().is_empty() {
-                reply_parts.push(text);
+            // 結果には自由入力が載る。保存する実行記録(上)は受け取ったまま残し、モデルへ
+            // 送る側でだけ無害化する。
+            for (call, outcome) in executed {
+                round_trip.push(ChatMessage::Tool {
+                    tool_call_id: call.id,
+                    content: PromptText::json(outcome.turn_result()),
+                    images: outcome.images,
+                });
             }
-            let reply = reply_parts.join("\n\n");
-            if reply.is_empty() {
-                return fail_turn(db, attempt, TurnFailure::EmptyResponse).await;
-            }
-
-            let transcript = adapter.identity().and_then(|identity| {
-                let saved = request.transcript(&rounds);
-                if saved.is_none() {
-                    crate::diagnostics::report(
-                        "cannot save what was sent: an image was not read from an attachment",
-                    );
-                }
-                Some((identity, saved?))
-            });
-            let attempt = attempt.clone();
-            with_conn(db, move |conn| {
-                in_transaction(conn, |conn| {
-                    attempt.insert(
-                        conn,
-                        Role::Assistant,
-                        &reply,
-                        Kind::Normal,
-                        None,
-                        reasoning_for_db.as_deref(),
-                    )?;
-                    // 保存は会話ログの補助なので、失敗しても返信は書く(保存の無いターンは
-                    // 実行記録から組み立てる)。
-                    if let Some((identity, saved)) = &transcript {
-                        if let Err(e) = attempt.save_transcript(conn, identity, saved) {
-                            crate::diagnostics::report(format_args!(
-                                "failed to save what was sent: {e}"
-                            ));
-                        }
-                    }
-                    Ok(())
-                })
-            })
-            .await?;
-            return Ok(());
-        }
-        // 上限に達して呼べないようにしたのに呼んできた。実行はせずにエラーで終える。
-        if final_call {
-            return fail_turn(db, attempt, TurnFailure::ToolRoundLimit).await;
         }
 
-        // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。
-        let mut executed: Vec<(ToolCallRequest, CallOutcome)> =
-            Vec::with_capacity(tool_calls.len());
-        for (i, call) in tool_calls.into_iter().enumerate() {
-            // 止める指示と合計時間は呼び出しの区切りで判定し、ターンを打ち切る(ほかの失敗と
-            // 違い、モデルに返して続けても意味が無い)。実行中の呼び出しを外から打ち切らないのは、
-            // 内部ツールのDB書き込みは待つのをやめても完走し、書き込みだけが済んで
-            // 実行記録が残らない状態を作るため(1回の呼び出しは`mcp`のタイムアウトで有界)。
-            // 外部ツールも、相手の側で済んだ操作の記録を残すため同じく待つ。
-            if stop.is_requested() {
-                return fail_turn(db, attempt, TurnFailure::Stopped).await;
-            }
-            if tool_time_used >= ctx.limits.total_timeout {
-                return fail_turn(db, attempt, TurnFailure::ToolTimeout).await;
-            }
-            let started = Instant::now();
-            let outcome = execute_call(db.clone(), chat, ctx, external, sessions, &call).await?;
-            tool_time_used = tool_time_used.saturating_add(started.elapsed());
-
-            // このラウンドの思考は、ラウンド内最初のツール実行記録にだけ紐付ける(全呼び出しに
-            // 複製すると、画面の「思考・ツール」の件数が水増しされる)。
-            let reasoning_for_row = if i == 0 {
-                reasoning_for_db.clone()
-            } else {
-                None
-            };
-            let record = ToolExecutionRecord {
-                tool: call.name.clone(),
-                arguments: match &call.arguments {
-                    ToolArguments::Valid { value } => value.clone(),
-                    ToolArguments::Malformed { raw, .. } => serde_json::Value::String(raw.clone()),
-                },
-                result: outcome.result.clone(),
-                call_id: call.id.clone(),
-            };
-            save_tool_execution(db.clone(), attempt, record, reasoning_for_row, ctx.events).await?;
-            executed.push((call, outcome));
-        }
-
-        // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
-        // OpenAI互換プロトコルの標準的な表現に合わせる。
-        if !text.trim().is_empty() {
-            reply_parts.push(text.clone());
-        }
-        round_trip.push(ChatMessage::Assistant {
-            content: (!text.trim().is_empty()).then_some(text),
-            tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
-            replay,
-        });
-        // 結果には自由入力が載る。保存する実行記録(上)は受け取ったまま残し、モデルへ
-        // 送る側でだけ無害化する。
-        for (call, outcome) in executed {
-            round_trip.push(ChatMessage::Tool {
-                tool_call_id: call.id,
-                content: PromptText::json(outcome.turn_result()),
-                images: outcome.images,
-            });
-        }
+        unreachable!("the final call always returns")
     }
-
-    unreachable!("the final call always returns")
+    .await;
+    match result {
+        Err(e) => fail_turn(db, attempt, turn_error::classify(&e), &reply_parts).await,
+        done => done,
+    }
 }
 
 /// ツール1件の実行。名前が外部ツールとして公開したものなら対応するサーバーへ、
@@ -847,17 +887,27 @@ async fn save_tool_execution(
 }
 
 /// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
-/// の定型文言、`error_detail`は`failure.detail()`。
-async fn fail_turn(db: SharedConnection, attempt: &Attempt, failure: TurnFailure) -> Result<()> {
+/// の定型文言、`error_detail`は`failure.detail()`、`partial_reply`は受け取り終えたラウンドの本文。
+async fn fail_turn(
+    db: SharedConnection,
+    attempt: &Attempt,
+    failure: TurnFailure,
+    parts: &ReplyParts,
+) -> Result<()> {
     let attempt = attempt.clone();
     let content = failure.user_message();
+    let partial_reply = parts.joined();
     with_conn(db, move |conn| {
         attempt.insert(
             conn,
             Role::Error,
             &content,
             Kind::Normal,
-            Some((failure.kind(), failure.detail())),
+            Some(ErrorColumns {
+                kind: failure.kind(),
+                detail: failure.detail(),
+                partial_reply: (!partial_reply.is_empty()).then_some(partial_reply.as_str()),
+            }),
             None,
         )
     })

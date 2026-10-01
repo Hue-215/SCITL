@@ -709,6 +709,7 @@ mod tests {
                     },
                     error_kind: error,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -726,6 +727,7 @@ mod tests {
                     origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -1424,6 +1426,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )

@@ -1186,6 +1186,74 @@ async fn whitespace_beside_a_tool_call_is_not_sent_as_content() {
     assert!(matches!(call, ChatMessage::Assistant { content: None, .. }));
 }
 
+/// ツールを呼んだラウンドの本文は、次のラウンドで失敗してもエラー発言に添えて残る。モデルへは
+/// 送らない。
+#[tokio::test]
+async fn a_turn_that_fails_after_a_tool_round_keeps_the_text_it_received() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let mut first_round = text("工程を足します");
+    first_round.pop();
+    first_round.extend(calls(vec![add_a_step()]));
+    let fails_midway = ScriptedAdapter {
+        script: vec![Ok(first_round), fails_to_authenticate().script.remove(0)],
+        ..ScriptedAdapter::new(Vec::new())
+    };
+
+    run_turn(
+        db.clone(),
+        &context(&fails_midway),
+        Chat::Task(task_id),
+        "工程を追加して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let error_message = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        messages.into_iter().last().unwrap()
+    };
+    assert_eq!(error_message.role, Role::Error);
+    assert_eq!(
+        error_message.partial_reply.as_deref(),
+        Some("工程を足します")
+    );
+
+    let next = ScriptedAdapter::texts(&["はい"]);
+    run_turn(
+        db.clone(),
+        &context(&next),
+        Chat::Task(task_id),
+        "続けて".to_string(),
+    )
+    .await
+    .unwrap();
+    assert!(!format!("{:?}", next.sent_messages()[0]).contains("工程を足します"));
+}
+
+/// 最初のラウンドで失敗したターンには、残す本文が無い。
+#[tokio::test]
+async fn a_turn_that_fails_at_once_keeps_no_text() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&fails_to_authenticate()),
+        Chat::Task(task_id),
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    assert_eq!(messages.last().unwrap().partial_reply, None);
+}
+
 /// 上限のあとの最後の呼び出し(ツールを渡さない)でもツールを呼んできたら、実行せずに
 /// 上限到達のエラー発言として保存する。
 #[tokio::test]

@@ -106,6 +106,9 @@ pub struct NewMessage<'a> {
     /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
     /// モデル入力・エクスポートには使わない。
     pub error_detail: Option<&'a str>,
+    /// 失敗したターンで受け取り終えたラウンドの本文。エラー発言だけが持てる。表示・エクスポート
+    /// 専用で、APIへの入力には使わない。
+    pub partial_reply: Option<&'a str>,
     /// モデルの思考(reasoning)。表示・エクスポート専用で、APIへの入力には使わない。
     pub reasoning: Option<&'a str>,
 }
@@ -122,6 +125,7 @@ pub struct Message {
     pub reasoning: Option<String>,
     pub error_kind: Option<String>,
     pub error_detail: Option<String>,
+    pub partial_reply: Option<String>,
     pub turn_id: Option<String>,
     pub attempt_no: Option<i64>,
     pub created_at: String,
@@ -140,8 +144,8 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     };
     conn.execute(
         "INSERT INTO messages
-            (task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            (task_id, role, content, kind, source, reasoning, error_kind, error_detail, partial_reply, turn_id, attempt_no, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         rusqlite::params![
             msg.chat.task_id(),
             msg.role,
@@ -151,6 +155,7 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
             msg.reasoning,
             msg.error_kind,
             msg.error_detail,
+            msg.partial_reply,
             turn_id,
             attempt_no,
             now_iso8601(),
@@ -242,7 +247,7 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
 }
 
 /// [`message_from_row`]が読む列の並び。
-const MESSAGE_COLUMNS: &str = "id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, turn_id, attempt_no, created_at";
+const MESSAGE_COLUMNS: &str = "id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, partial_reply, turn_id, attempt_no, created_at";
 
 /// 添付は呼び出し側が埋める。
 fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
@@ -256,9 +261,10 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
         reasoning: row.get(6)?,
         error_kind: row.get(7)?,
         error_detail: row.get(8)?,
-        turn_id: row.get(9)?,
-        attempt_no: row.get(10)?,
-        created_at: row.get(11)?,
+        partial_reply: row.get(9)?,
+        turn_id: row.get(10)?,
+        attempt_no: row.get(11)?,
+        created_at: row.get(12)?,
         attachments: Vec::new(),
     })
 }
@@ -444,6 +450,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -462,6 +469,7 @@ mod tests {
                 },
                 error_kind: Some("empty_response"),
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -480,6 +488,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -505,6 +514,7 @@ mod tests {
                 origin: Origin::Operation(OperationSource::Ui),
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -530,6 +540,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -590,6 +601,7 @@ mod tests {
                     },
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -621,6 +633,7 @@ mod tests {
                 },
                 error_kind: Some("no_api_key"),
                 error_detail: Some("HTTP 401: invalid key"),
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -653,6 +666,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: Some("HTTP 500: boom"),
+                partial_reply: None,
                 reasoning: None,
             },
         );
@@ -668,6 +682,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some(""),
+                partial_reply: None,
                 reasoning: None,
             },
         );
@@ -683,10 +698,56 @@ mod tests {
                 origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some("HTTP 500: boom"),
+                partial_reply: None,
                 reasoning: None,
             },
         )
         .unwrap();
+        assert!(conn
+            .execute(
+                "UPDATE messages SET role = 'assistant', error_kind = NULL WHERE id = ?1",
+                [id]
+            )
+            .is_err());
+    }
+
+    /// 途中までの本文を持てるのはエラー発言だけで、空文字は持てない(`0007_partial_reply.sql`の
+    /// トリガー)。
+    #[test]
+    fn partial_reply_is_rejected_outside_error_messages_and_when_empty() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let insert = |role, error_kind, partial_reply| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat: Chat::Task(task_id),
+                    role,
+                    content: "本文",
+                    kind: Kind::Normal,
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no: 1,
+                    },
+                    error_kind,
+                    error_detail: None,
+                    partial_reply,
+                    reasoning: None,
+                },
+            )
+        };
+
+        assert!(insert(Role::Assistant, None, Some("途中")).is_err());
+        assert!(insert(Role::Error, Some("provider"), Some("")).is_err());
+        let id = insert(Role::Error, Some("provider"), Some("途中")).unwrap();
+        assert_eq!(
+            find_message(&conn, id)
+                .unwrap()
+                .unwrap()
+                .partial_reply
+                .as_deref(),
+            Some("途中")
+        );
         assert!(conn
             .execute(
                 "UPDATE messages SET role = 'assistant', error_kind = NULL WHERE id = ?1",
@@ -710,6 +771,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         );
@@ -733,6 +795,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -753,6 +816,7 @@ mod tests {
                     },
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -770,6 +834,7 @@ mod tests {
                     },
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -812,6 +877,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -848,6 +914,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -879,6 +946,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -897,6 +965,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -915,6 +984,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -972,6 +1042,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -1031,6 +1102,7 @@ mod tests {
                     origin,
                     error_kind: (role == Role::Error).then_some("provider"),
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -1076,6 +1148,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -1117,6 +1190,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -1178,6 +1252,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -1221,6 +1296,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -1246,6 +1322,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
+                partial_reply: None,
                 reasoning: None,
             },
         )
@@ -1274,6 +1351,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
@@ -1314,6 +1392,7 @@ mod tests {
                     origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
+                    partial_reply: None,
                     reasoning: None,
                 },
             )
