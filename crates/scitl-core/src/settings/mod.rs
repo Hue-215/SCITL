@@ -480,6 +480,9 @@ impl Settings {
         let name = input::name(&new.name, "provider name", input::PROVIDER_NAME_MAX_CHARS)?;
         let base_url = new.base_url.trim().to_string();
         providers::validate_base_url(new.api_format, &base_url)?;
+        // 鍵を保存する前にも確かめ、登録できないと分かっている名前のために資格情報ストアへ
+        // 書かない。
+        refuse_registered_provider_name(&self.current().config, &name)?;
 
         let key_ref = match new.api_key {
             Some(key) if !key.expose_secret().is_empty() => {
@@ -510,17 +513,7 @@ impl Settings {
     /// 名前の重複確認から登録までを書き込みロックの中で行う。
     fn register_provider(&self, provider: ProviderConfig) -> Result<SettingsView> {
         let mut draft = self.edit();
-        if draft
-            .config
-            .providers
-            .iter()
-            .any(|p| p.name == provider.name)
-        {
-            return Err(invalid(format!(
-                "provider name already registered: {}",
-                provider.name
-            )));
-        }
+        refuse_registered_provider_name(&draft.config, &provider.name)?;
         draft.config.providers.push(provider);
         draft.config.reselect_active_provider();
         draft.commit()
@@ -926,6 +919,13 @@ fn endpoint_secret_refs(endpoint: &McpEndpoint) -> &[SecretRef] {
         McpEndpoint::Stdio { env_refs, .. } => env_refs,
         McpEndpoint::StreamableHttp { header_refs, .. } => header_refs,
     }
+}
+
+fn refuse_registered_provider_name(config: &Config, name: &str) -> Result<()> {
+    if config.providers.iter().any(|p| p.name == name) {
+        return Err(invalid(format!("provider name already registered: {name}")));
+    }
+    Ok(())
 }
 
 fn find_provider_mut<'a>(
