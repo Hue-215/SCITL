@@ -17,7 +17,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "ti
 # `hardened_client`1箇所に集約する
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 thiserror = "2"
-secrecy = "0.10"
+secrecy = { version = "0.10", features = ["serde"] }
 url = "2"
 # URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、添付のファイル名の
 # ヘッダー)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる

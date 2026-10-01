@@ -69,12 +69,12 @@ pub enum NewMcpEndpoint {
         #[serde(default)]
         args: Vec<String>,
         #[serde(default)]
-        env: Vec<(String, String)>,
+        env: Vec<(String, SecretString)>,
     },
     StreamableHttp {
         url: String,
         #[serde(default)]
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, SecretString)>,
     },
 }
 
@@ -774,7 +774,7 @@ fn validate_endpoint(endpoint: NewMcpEndpoint) -> Result<NewMcpEndpoint> {
             mcp::validate_streamable_http_url(&url)?;
             for (name, value) in &headers {
                 mcp::validate_header_name(name)?;
-                mcp::validate_header_value(value)?;
+                mcp::validate_header_value(value.expose_secret())?;
             }
             Ok(NewMcpEndpoint::StreamableHttp { url, headers })
         }
@@ -797,11 +797,11 @@ fn store_endpoint_secrets(endpoint: NewMcpEndpoint) -> Result<McpEndpoint> {
 
 /// 秘密情報の値を保存し、`(name, key_ref)`の組に変換する。途中で失敗したら
 /// それまでに保存した分を削除してからエラーを返す(孤児を残さない)。
-fn store_secret_refs(pairs: Vec<(String, String)>) -> Result<Vec<SecretRef>> {
+fn store_secret_refs(pairs: Vec<(String, SecretString)>) -> Result<Vec<SecretRef>> {
     let mut refs = Vec::with_capacity(pairs.len());
     for (name, value) in pairs {
         let key_ref = format!("mcp:{}", ulid::Ulid::new());
-        if let Err(e) = secrets::store(&key_ref, &SecretString::from(value)) {
+        if let Err(e) = secrets::store(&key_ref, &value) {
             delete_secret_refs(&refs);
             return Err(e);
         }
@@ -1193,6 +1193,34 @@ name = "m"
             .update_general(general_update(Some("prompt"), None))
             .is_err());
         assert!(settings.current().config.general.system_prompt.is_none());
+    }
+
+    /// フォームが送る`[名前, 値]`の組のまま、値を`SecretString`として受け取れる。
+    #[test]
+    fn new_mcp_endpoint_reads_secret_values_from_ipc_pairs() {
+        let endpoint: NewMcpEndpoint = serde_json::from_value(serde_json::json!({
+            "transport": "streamable_http",
+            "url": "https://example.com/mcp",
+            "headers": [["Authorization", "Bearer token"]],
+        }))
+        .unwrap();
+        let NewMcpEndpoint::StreamableHttp { headers, .. } = endpoint else {
+            panic!("expected streamable_http");
+        };
+        assert_eq!(headers[0].0, "Authorization");
+        assert_eq!(headers[0].1.expose_secret(), "Bearer token");
+
+        let endpoint: NewMcpEndpoint = serde_json::from_value(serde_json::json!({
+            "transport": "stdio",
+            "command": "npx",
+            "env": [["API_KEY", "secret"]],
+        }))
+        .unwrap();
+        let NewMcpEndpoint::Stdio { env, .. } = endpoint else {
+            panic!("expected stdio");
+        };
+        assert_eq!(env[0].0, "API_KEY");
+        assert_eq!(env[0].1.expose_secret(), "secret");
     }
 
     #[test]

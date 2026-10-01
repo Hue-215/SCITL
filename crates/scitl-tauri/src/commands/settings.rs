@@ -68,13 +68,13 @@ pub async fn add_provider(
     name: String,
     api_format: ApiFormat,
     base_url: String,
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
 ) -> Result<SettingsView, String> {
     let new = NewProvider {
         name,
         api_format,
         base_url,
-        api_key: api_key.map(SecretString::from),
+        api_key,
     };
     with_settings(&state, move |s| s.add_provider(new)).await
 }
