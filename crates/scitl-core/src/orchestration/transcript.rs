@@ -17,7 +17,7 @@ use crate::llm::{
 /// 保存の形の版。保存する発言の形([`StoredMessage`])か、保存した本文が通った無害化の規則
 /// (`llm::PromptText`)を変えたら上げる。保存した本文には無害化を掛け直せないので、版の違う
 /// 保存は使わず、実行記録から組み立て直す(組み立ては今の規則で無害化する)。
-const FORM_VERSION: u32 = 2;
+const FORM_VERSION: u32 = 3;
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
@@ -443,7 +443,7 @@ mod tests {
         ];
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
-            (2, "f1bad8598448473a20b17894b9c05ae10b46ee0868d225f68f8164caec8e273a"),
+            (3, "3a5cdf5462ebb0218c0bdfa94497774eb201ec861cadd5de9d74ffb5e8239278"),
             "無害化の規則か囲みの形が変わった。前の規則で保存した本文を並べないよう、FORM_VERSIONを\
              上げてから期待値を今の出力に更新する"
         );
