@@ -128,9 +128,9 @@ impl PromptText {
     /// ユーザー発言を、APIに送る本文に組み立てる。プロバイダーごとに形が割れると
     /// 「どこまでが本文か」の判断が散らばるため、方言を吸収する層ではなくここに1箇所だけ
     /// 置く。日時の有無で形を変えないのは、囲まれていない発言があると、本文に予約タグを
-    /// 書いた発言が「日時付きの発言」に見せかけられるため。`sent_at`の生成元はこのアプリ自身
-    /// (`db::now_iso8601`)に限る。DBに無い発言(プロバイダーの都合で補うダミー発言等)は`None`に
-    /// し、日時を捏造しない。
+    /// 書いた発言が「日時付きの発言」に見せかけられるため。`sent_at`は保存した送信日時から
+    /// [`SentAt`]で作る。DBに無い発言(プロバイダーの都合で補うダミー発言等)は`None`にし、
+    /// 日時を捏造しない。
     pub fn user_message(text: &str, sent_at: Option<&SentAt>) -> Self {
         Self::user_message_with_attachments(text, sent_at, &[])
     }
@@ -237,8 +237,8 @@ pub fn user_message_format_note() -> String {
          part of what the user wrote. Use them to resolve relative dates such as \"tomorrow\" \
          or \"next Friday\", and read dates in the user's local time. When the user attached \
          files to a message, a {ATTACHMENTS_TAG} block follows that message and belongs to \
-         it; a message without that block has no attachments. The block lists the files as a JSON array, one object per file, with \
-         the fields \"id\", \"name\", \"kind\", \"mime_type\", \"size_bytes\" and \
+         it; a message without that block has no attachments. The block lists the files as a \
+         JSON array, one object per file, with the fields \"id\", \"name\", \"kind\", \"mime_type\", \"size_bytes\" and \
          \"delivered\", and \"content\" for a file whose text you received. \"delivered\" \
          tells what you received: \"content\" means the file's text is in \"content\", \
          \"image\" means the image is included with that message, and \"name_only\" means \
