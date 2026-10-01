@@ -54,6 +54,15 @@ function EntryActions({
   )
 }
 
+// 返信の無い会話の末尾に出す、応答を生成する操作。止めたターンが会話の最後にあるときも同じ形で出す。
+function GenerateReplyButton({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick}>
+      {t('chat.generate_reply_button')}
+    </button>
+  )
+}
+
 // 編集中のユーザー発言。編集できるのは1件ずつ。
 export interface EntryEditing {
   id: number | null
@@ -95,9 +104,16 @@ export default function ChatLog({
   onRemove,
   onGenerateReply,
 }: ChatLogProps) {
+  const items = groupMessages(messages)
+  // 会話の最後のやり取り(ユーザー発言かターン)の位置。後ろに並ぶ操作の記録は数えない。送信中は
+  // 楽観表示のユーザー発言が後ろに来るので、保存済みの項目はどれも最後ではない。
+  const lastExchange =
+    pending.length > 0
+      ? items.length
+      : items.findLastIndex((i) => i.kind === 'turn' || i.message.role === 'user')
   return (
     <ul className="chat-log" ref={logRef} onScroll={onScroll}>
-      {groupMessages(messages).map((item) => {
+      {items.map((item, index) => {
         if (item.kind === 'plain') {
           const message = item.message
           // 応答生成以外の経路(画面・MCP等)での操作の記録は「思考・ツール」の
@@ -174,6 +190,30 @@ export default function ChatLog({
         const canRetryOrDelete =
           finalMessage.kind === 'normal' &&
           (finalMessage.role === 'assistant' || finalMessage.role === 'error')
+        // ユーザーが止めたターンは失敗として見せない。会話の最後なら返信の無い会話と同じく
+        // 応答を生成する操作(中身は作り直し)を、続けて発言したあとなら止めたことだけを出す。
+        if (finalMessage.role === 'error' && finalMessage.error_kind === 'stopped') {
+          return (
+            <li key={`turn-${item.turnId}`} className="turn-group">
+              <ThinkingTools items={buildThoughtItems(item.entries)} />
+              {finalMessage.partial_reply && (
+                <div className="entry entry-assistant">
+                  <EntryBody role="assistant" content={finalMessage.partial_reply} />
+                </div>
+              )}
+              {index === lastExchange ? (
+                <div className="button-row">
+                  <GenerateReplyButton
+                    onClick={() => onRetry(finalMessage.id)}
+                    disabled={disableActions}
+                  />
+                </div>
+              ) : (
+                <p className="entry-stopped">{t('chat.stopped_note')}</p>
+              )}
+            </li>
+          )
+        }
         return (
           <li key={`turn-${item.turnId}`} className="turn-group">
             <ThinkingTools items={buildThoughtItems(item.entries)} />
@@ -235,9 +275,7 @@ export default function ChatLog({
       )}
       {onGenerateReply && pending.length === 0 && (
         <li className="button-row">
-          <button type="button" disabled={disableActions} onClick={onGenerateReply}>
-            {t('chat.generate_reply_button')}
-          </button>
+          <GenerateReplyButton onClick={onGenerateReply} disabled={disableActions} />
         </li>
       )}
     </ul>

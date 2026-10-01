@@ -25,6 +25,7 @@
   "chat.source_ui": "UI",
   "chat.source_unknown": "External",
   "chat.stop_button": "Stop",
+  "chat.stopped_note": "Response generation was stopped",
   "chat.stopping_reply": "Stopping…",
   "chat.thinking_tools_count": "Thinking · tools ({count})",
   "chat.thinking_tools_has_error": " · has errors",
