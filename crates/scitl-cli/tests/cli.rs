@@ -141,6 +141,32 @@ fn a_read_only_data_directory_is_refused_with_the_reason() {
 }
 
 #[test]
+fn showing_the_chat_of_a_missing_or_deleted_task_fails() {
+    let data = DataDir::new();
+    let task_id = {
+        let conn = db::open(DataLayout::new(data.path()).database()).unwrap();
+        db::tasks::create_task(&conn).unwrap().id
+    };
+    let task = task_id.to_string();
+    assert_eq!(
+        stdout_json(&data.run(&["chat", "show", "--task", &task])),
+        serde_json::json!([])
+    );
+    assert!(data.run(&["task", "delete", &task]).status.success());
+
+    for id in [task.as_str(), "999"] {
+        let output = data.run(&["chat", "show", "--task", id]);
+
+        assert!(!output.status.success(), "{id}");
+        assert!(output.stdout.is_empty(), "{id}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!("task {id} not found")),
+            "{id}"
+        );
+    }
+}
+
+#[test]
 fn a_failed_operation_exits_with_failure_and_writes_to_stderr() {
     let data = DataDir::new();
 

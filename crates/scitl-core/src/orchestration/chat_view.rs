@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::db::messages::{self, Chat, Kind, Message};
 use crate::error::Result;
 use crate::orchestration::tool_record::ToolExecutionView;
+use crate::orchestration::turn::require_chat;
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -17,8 +18,10 @@ pub struct MessageView {
     pub tool_execution: Option<ToolExecutionView>,
 }
 
-/// 1つの会話の行を、画面に出す形で返す。
+/// 1つの会話の行を、画面に出す形で返す。タスクが存在しない・削除済みなら`TaskNotFound`
+/// (行の無い会話と区別する)。
 pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
+    require_chat(conn, chat)?;
     Ok(messages::list_for_chat(conn, chat)?
         .into_iter()
         .map(|message| MessageView {

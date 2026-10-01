@@ -289,8 +289,8 @@ pub(super) fn begin_generating(
     generating.try_begin(chat).ok_or(CoreError::ChatBusy(chat))
 }
 
-/// 会話に行を書く前に、タスクが存在し削除されていないかを確かめる。削除と操作が
-/// 行き違うと、外部キーは通るので削除済みのタスクに行が書かれてしまう。
+/// 会話のタスクが存在し削除されていないかを確かめる。行を書く前に呼ぶ(削除と操作が
+/// 行き違うと、外部キーは通るので削除済みのタスクに行が書かれてしまう)。
 pub(super) fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
     if let Chat::Task(task_id) = chat {
         tasks::get_task(conn, task_id)?;
