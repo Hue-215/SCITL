@@ -57,6 +57,9 @@ Linuxでは `scitl-core` のビルドに `libdbus-1-dev`(`pkg-config` が `dbus-
 
 ## 3. GUIから使う
 
+GUIは1つしか起動しない。普段使いのGUIが動いていると、データディレクトリを変えて起動しても
+すぐに終わる(`spec/rebuild/architecture.md`「多重起動の防止」)ので、先に閉じておく。
+
 設定の「APIプロバイダー」で、1節の表の方言・URL・モデルで登録する。平文の `http` はIPリテラルの
 ループバックに限って通るので、`localhost` ではなく `127.0.0.1` と書く。
 

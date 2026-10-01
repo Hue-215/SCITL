@@ -145,6 +145,7 @@ SCITL-2.0/
 | LLMプロバイダ第一弾 | OpenAI互換チャットコンプリーションAPI | クラウド本家に加え、ローカル推論サーバー(llama.cpp/LM Studio/Ollama等)の多くが対応。「クラウド/ローカル同一UX」の原則(`../principles.md` 1節)を安く検証できる |
 | 設定ファイル形式 | TOML | 秘密情報は含まず参照のみを持つ(3節) |
 | 言語ファイル形式 | JSON | フロントエンド(Vite)が追加プラグイン無しに読み込める |
+| 多重起動の防止 | `tauri-plugin-single-instance` | 公式プラグインで、通信はローカルのIPCだけ。自前で持つとOSごとのIPCを2通り書くことになり、攻撃面も保守量も増える(下記「多重起動の防止」) |
 
 新たに自前で作る必要があり増分コストが大きいもの: 複数プロバイダーの方言吸収
 (OpenAI互換形式を内部の共通形とし、認証方式・リクエスト/レスポンス構造・
@@ -157,6 +158,37 @@ SCITL-2.0/
 どちらも実行時依存か通信の追加に当たるわりに、多めに見積もったときの損は古い発言が早めに
 落ちるだけなので、見合わない。見積もった値は履歴の間引き(`orchestration::history_trim`)が
 コンテキスト長(3節の能力)と比べて使う。
+
+### 多重起動の防止(Issue #343)
+
+GUIは1つしか起動しない。2つのGUIが同じデータを開くと、設定ファイルを互いに上書きし(プロバイダーや
+APIキーの参照が黙って消える)、同じ会話を同時に生成できてしまう。複数起動に利点は無い。
+
+- 2つ目の起動は、DBと設定を開く`setup`より前に終わり、既に開いているウィンドウを前に出す。
+  そのためプラグインは他のプラグインより先に登録する
+- 対象はGUIだけ。CLI(`scitl-cli`・`scitl-debug-cli`)とGUIが同時に開く場合は、従来どおり
+  SQLiteのロックで扱う(`data-model.md`「複数プロセスからの書き込みの排他」)。設定ファイルの
+  書き換えの競合もCLIとの間には残るので、この防止だけに頼らない
+- **外に開いている口**: Linuxはセッションバスの名前`dev.niigo.scitl.SingleInstance`と
+  メソッド`org.SingleInstance.DBus.ExecuteCallback(as, s)`(2つ目の起動の引数と作業ディレクトリを
+  受け取る)。Windowsは名前付きミューテックス`dev.niigo.scitl-sim`と、隠しウィンドウ
+  (`-sic`/`-siw`)へのWM_COPYDATA
+- 届く引数と作業ディレクトリは、同じセッションのどのプロセスからも送れる信用できない入力として
+  扱い、使わない(DB・設定・WebViewに渡さず、ログにも出さない)。将来「引数で渡したファイルを
+  開く」等に使う場合は新しい外部入力の口になるので、改めてOpusの判断を通す。プラグインの
+  `deep-link`・`semver`のfeatureも有効にしない(`deep-link`は引数をdeep-linkプラグインへ流す)
+- 受け取ったときの処理(`focus_main_window`)は待つ処理を置かない。Windowsでは隠しウィンドウの
+  ウィンドウプロシージャ、つまりメインスレッドで呼ばれる
+- **防止はベストエフォート**。Linuxでセッションバスに繋がらない・アドレスを解釈できない環境では
+  防止なしで起動する。プラグイン2.4系はアドレスを解釈できない(`autolaunch:`・`disabled:`等)と
+  起動ごとpanicするので、`scitl-tauri`が同じ解釈(`zbus::Address::session`)で先に確かめ、
+  だめならプラグインを登録しない
+- 鍵はデータディレクトリではなく識別子なので、データディレクトリを変えて動かす開発用のGUIも、
+  普段使いのGUIが動いているとすぐに終わる
+- **版は2.4系に留めている**。2.5系は`tauri ^2.12`を要求し、入れるとTauri本体まで上がるため。
+  Tauriを更新するときはこのプラグインも合わせて上げ、そのときにLinuxの実装がアドレスの解釈の
+  失敗でpanicするか(上の事前の確認がまだ要るか)を読み直す。対象を絞らずに`cargo update`を
+  走らせると、プラグインとTauriが一緒に上がる
 
 ## 3. LLMアダプタ層とイベント列
 
@@ -741,7 +773,7 @@ MCPサーバーの秘密情報(環境変数・ヘッダーの値)も同じ `secr
 
 | OS | 保存先 | クレート | 選んだ理由 |
 |---|---|---|---|
-| Linux | freedesktopのSecret Service(KWallet・GNOME Keyring) | `dbus-secret-service-keyring-store`(`crypto-rust`) | デスクトップの標準の窓口で、再起動しても残る。D-Bus(`dbus`/libdbus)はTauriが既に使っている。`crypto-rust` でD-Bus上のやり取りを暗号化し、OpenSSLに依存しない。カーネルのキーリング(keyutils)は再起動で消えるため使わない |
+| Linux | freedesktopのSecret Service(KWallet・GNOME Keyring) | `dbus-secret-service-keyring-store`(`crypto-rust`) | デスクトップの標準の窓口で、再起動しても残る。D-Bus(`dbus`/libdbus)はTauriが既に使っている(多重起動の防止は純Rustの`zbus`を使うので、D-Busの実装は2つ同居している。接続は別々で互いに干渉しない)。`crypto-rust` でD-Bus上のやり取りを暗号化し、OpenSSLに依存しない。カーネルのキーリング(keyutils)は再起動で消えるため使わない |
 | Windows | 資格情報マネージャー | `windows-native-keyring-store` | 標準の保存先。依存の `windows-sys` は既存の版と同じ |
 | macOS | なし | - | 対応しない。保存先が無いことをエラーとして返す |
 
@@ -798,6 +830,8 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   読み直しでは出る)
 - Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「独自の判断で
   通信先を増やさない」)
+- 多重起動の防止(`tauri-plugin-single-instance`)はJSのAPIを持たず、capabilitiesに権限を
+  足さない。`deep-link`のfeatureは有効にしない(2節「多重起動の防止」)
 
 ## 9. フロントエンド固有の注意点
 
