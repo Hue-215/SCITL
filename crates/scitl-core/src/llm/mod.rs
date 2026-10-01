@@ -15,7 +15,8 @@ pub use capabilities::{
 };
 pub use error::{ErrorDetail, LlmError};
 pub use prompt::{
-    user_message_format_note, AttachmentNote, OperationNote, PromptText, DISCARDED_ATTEMPT_SOURCE,
+    user_message_format_note, AttachmentNote, OperationNote, PromptText, SentAt,
+    DISCARDED_ATTEMPT_SOURCE,
 };
 pub use token_estimate::{estimate_message, estimate_tools};
 
