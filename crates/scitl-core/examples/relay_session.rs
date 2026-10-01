@@ -7,10 +7,12 @@
 //! ```
 //!
 //! STEPは`@new`(タスクを作って聞き取りを始める)・`@general`(総合チャットへ移る)・
-//! それ以外(今の会話へのユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
+//! `@base <文>`(以降のターンの基本のシステムプロンプトを差し替える)・それ以外(今の会話への
+//! ユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
 //!
 //! 方言は環境変数`RELAY_DIALECT`(`openai`・`anthropic`・`gemini`)で選ぶ。BASE_URLとモデルは
-//! `docs/llm-relay.md`。
+//! `docs/llm-relay.md`。`RELAY_CONTEXT_LENGTH`でモデルのコンテキスト長を変えられる(間引きを
+//! 起こすため)。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -70,21 +72,35 @@ async fn main() {
         TurnEvent::Response { .. } => {}
     };
     let adapter: &dyn LlmAdapter = adapter.as_ref();
-    let ctx = TurnContext {
-        adapter: Ok(adapter),
-        prompts: SystemPrompts::from_config(&general),
-        opening_message: orchestration::opening_message(&general),
-        capabilities: DEFAULT_CAPABILITIES,
-        reasoning_effort: (dialect != "openai").then_some(ReasoningEffort::Medium),
-        mcp: McpAccess::none(),
-        limits: ToolLimits::default(),
-        generating: &generating,
-        attachments: &attachments,
-        events: &events,
-    };
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    if let Ok(length) = std::env::var("RELAY_CONTEXT_LENGTH") {
+        capabilities.context_length = length.parse().expect("RELAY_CONTEXT_LENGTH");
+    }
+    let defaults = SystemPrompts::from_config(&general);
+    let mut base: Option<String> = None;
 
     let mut chat = Chat::General;
     for step in steps {
+        if let Some(text) = step.strip_prefix("@base ") {
+            println!("> @base {text}");
+            base = Some(text.to_string());
+            continue;
+        }
+        let ctx = TurnContext {
+            adapter: Ok(adapter),
+            prompts: SystemPrompts {
+                base: base.as_deref().or(defaults.base),
+                task_chat: defaults.task_chat,
+            },
+            opening_message: orchestration::opening_message(&general),
+            capabilities,
+            reasoning_effort: (dialect != "openai").then_some(ReasoningEffort::Medium),
+            mcp: McpAccess::none(),
+            limits: ToolLimits::default(),
+            generating: &generating,
+            attachments: &attachments,
+            events: &events,
+        };
         match step.as_str() {
             "@new" => {
                 let TaskCreation::Created { task } = create_task(db.clone(), &ctx).await.unwrap()
