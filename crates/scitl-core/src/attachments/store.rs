@@ -4,6 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, Result};
@@ -81,16 +82,68 @@ impl AttachmentStore {
         open::that_detached(&dir).map_err(io_error("open the folder"))
     }
 
+    /// 置き場所にある実体。置き場所がまだ無ければ空。実体の名前の形をしていないファイル
+    /// (書きかけの一時ファイル等)は数えない。
+    pub(super) fn list(&self) -> Result<Vec<StoredBlob>> {
+        let entries = match fs::read_dir(&self.blobs) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(io_error("list the attachment directory")(e)),
+        };
+        let mut blobs = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(io_error("list the attachment directory"))?;
+            let Some(hash) = entry
+                .file_name()
+                .to_str()
+                .filter(|n| is_hash(n))
+                .map(String::from)
+            else {
+                continue;
+            };
+            let size_bytes = entry
+                .metadata()
+                .map_err(io_error("inspect an attachment"))?
+                .len();
+            blobs.push(StoredBlob { hash, size_bytes });
+        }
+        blobs.sort_by(|a, b| a.hash.cmp(&b.hash));
+        Ok(blobs)
+    }
+
+    /// 実体を消す。消してよいかは呼び出し側が確かめる(同じハッシュを指す行が無いこと)。
+    /// 既に無ければ何もしない(一覧を取ってから消すまでの間に、ほかで消されたもの)。
+    pub(super) fn remove(&self, hash: &str) -> Result<()> {
+        match fs::remove_file(self.blob_path(hash)?) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(io_error("remove an attachment")(e))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// DBから読んだハッシュをパスに繋ぐ前に形を確かめる。DBが書き換えられていても、置き場所の
     /// 外を指せないようにするため。
     fn blob_path(&self, hash: &str) -> Result<PathBuf> {
-        if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        if !is_hash(hash) {
             return Err(CoreError::Attachment(
                 "stored hash is not a SHA-256 hex digest".to_string(),
             ));
         }
         Ok(self.blobs.join(hash))
     }
+}
+
+/// 置き場所にある実体1つ。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StoredBlob {
+    pub hash: String,
+    pub size_bytes: u64,
+}
+
+/// [`AttachmentStore::put`]が付ける名前の形(SHA-256の小文字16進)か。
+fn is_hash(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn io_error(action: &'static str) -> impl Fn(std::io::Error) -> CoreError {

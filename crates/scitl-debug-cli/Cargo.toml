@@ -1,0 +1,18 @@
+[package]
+name = "scitl-debug-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+scitl-core = { path = "../scitl-core" }
+scitl-cli = { path = "../scitl-cli" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+secrecy = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

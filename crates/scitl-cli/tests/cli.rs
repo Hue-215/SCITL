@@ -114,26 +114,18 @@ fn argument_errors_reach_the_terminal_escaped() {
     );
 }
 
+/// 応答生成・設定に触れるコマンドはscitl-debug-cliだけが持つ。
 #[test]
-fn preview_without_a_provider_reports_why_and_saves_nothing() {
+fn commands_beyond_tasks_and_showing_chats_are_not_offered() {
     let data = DataDir::new();
-    let task_id = {
-        let conn = db::open(DataLayout::new(data.path()).database()).unwrap();
-        db::tasks::create_task(&conn).unwrap().id
-    };
 
-    let output = data.run(&[
-        "chat",
-        "preview",
-        "--task",
-        &task_id.to_string(),
-        "--message",
-        "こんにちは",
-    ]);
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(!String::from_utf8_lossy(&output.stderr).is_empty());
-    let messages = stdout_json(&data.run(&["chat", "show", "--task", &task_id.to_string()]));
-    assert_eq!(messages, serde_json::json!([]));
+    for args in [
+        &["chat", "preview"][..],
+        &["chat", "send", "x"],
+        &["settings", "show"],
+    ] {
+        let output = data.run(args);
+        assert!(!output.status.success(), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+    }
 }

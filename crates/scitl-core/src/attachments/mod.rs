@@ -13,9 +13,9 @@ pub use classify::{classify, image_mime_type, Classified, Limits, PickingLimits,
 pub(crate) use staging::Taken;
 pub use staging::{Rejection, StageOutcome};
 pub(crate) use store::safe_file_name;
-pub use store::AttachmentStore;
 #[cfg(test)]
 pub(crate) use store::TempStore;
+pub use store::{AttachmentStore, StoredBlob};
 
 use crate::blocking;
 use crate::db::attachments::{self, AttachmentContent, AttachmentKind, NewAttachment};
@@ -114,6 +114,33 @@ impl Attachments {
         let store = self.store.clone();
         blocking::run(move || store.reveal(id, &attachment.view.original_name, &hash)).await
     }
+
+    /// どの添付の行からも指されていない実体(`docs/spec/rebuild/data-model.md` attachments)。
+    /// `delete`なら消し、消したものを返す。
+    ///
+    /// 実体の一覧を先に取り、行はその後に読む。逆にすると、行を読んだあとに送信された添付の
+    /// 実体まで孤立して見える。それでも送信は実体を置いてから行を書くので、その間に走ると
+    /// 送信中の添付の実体を消しうる。別のプロセスが添付を送信していないときに呼ぶこと。
+    pub async fn orphaned_blobs(
+        &self,
+        db: SharedConnection,
+        delete: bool,
+    ) -> Result<Vec<StoredBlob>> {
+        let store = self.store.clone();
+        let stored = blocking::run(move || store.list()).await?;
+        let referenced = with_conn(db, attachments::file_hashes).await?;
+        let orphans: Vec<StoredBlob> = stored
+            .into_iter()
+            .filter(|blob| !referenced.contains(&blob.hash))
+            .collect();
+        if delete {
+            let store = self.store.clone();
+            let targets = orphans.clone();
+            blocking::run(move || targets.iter().try_for_each(|blob| store.remove(&blob.hash)))
+                .await?;
+        }
+        Ok(orphans)
+    }
 }
 
 /// 実体を置き場所に持つ添付のハッシュ。行は先に引き終えておき、DBのロックを実体の読み書きへ
@@ -127,4 +154,78 @@ fn file_hash(content: AttachmentContent, id: i64, expected: AttachmentKind) -> R
 
 fn not_of_kind(id: i64, kind: AttachmentKind) -> CoreError {
     CoreError::Attachment(format!("attachment {id} is not a {kind:?} attachment"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::db;
+    use crate::db::messages::{self, Chat, Kind, NewMessage, Origin, Role};
+
+    /// 実体を置き、それを指す添付の行を書く。
+    fn attach(conn: &Connection, store: &AttachmentStore, bytes: &[u8]) -> String {
+        let hash = store.put(bytes).unwrap();
+        let message_id = messages::insert_message(
+            conn,
+            NewMessage {
+                chat: Chat::General,
+                role: Role::User,
+                content: "見て",
+                kind: Kind::Normal,
+                origin: Origin::User,
+                error_kind: None,
+                error_detail: None,
+                reasoning: None,
+            },
+        )
+        .unwrap();
+        let new = NewAttachment {
+            original_name: "file.bin".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            kind: AttachmentKind::Other,
+            size_bytes: bytes.len() as i64,
+            content: AttachmentContent::File { hash: hash.clone() },
+        };
+        attachments::insert(conn, message_id, &new).unwrap();
+        hash
+    }
+
+    #[tokio::test]
+    async fn only_blobs_no_row_points_at_are_orphans_and_only_they_are_deleted() {
+        let t = TempStore::new();
+        let conn = db::open_in_memory().unwrap();
+        let kept = attach(&conn, &t.store, b"kept");
+        let orphan = t.store.put(b"orphan").unwrap();
+        // 実体の名前の形をしていないファイルには触れない。
+        let stray = t.root().join("blobs").join("notes.txt");
+        std::fs::write(&stray, b"stray").unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        let attachments = Attachments::new(t.store.clone());
+
+        let expected = vec![StoredBlob {
+            hash: orphan.clone(),
+            size_bytes: 6,
+        }];
+        let listed = attachments.orphaned_blobs(db.clone(), false).await.unwrap();
+        assert_eq!(listed, expected);
+        assert!(t.store.read(&orphan).is_ok(), "一覧だけでは消さない");
+
+        let deleted = attachments.orphaned_blobs(db.clone(), true).await.unwrap();
+        assert_eq!(deleted, expected);
+        assert!(t.store.read(&orphan).is_err());
+        assert!(t.store.read(&kept).is_ok());
+        assert!(stray.exists());
+        assert_eq!(attachments.orphaned_blobs(db, true).await.unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn a_store_that_does_not_exist_yet_has_no_orphans() {
+        let t = TempStore::new();
+        let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+        let attachments = Attachments::new(t.store.clone());
+
+        assert_eq!(attachments.orphaned_blobs(db, true).await.unwrap(), vec![]);
+    }
 }
