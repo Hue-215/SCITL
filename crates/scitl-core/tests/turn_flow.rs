@@ -409,6 +409,11 @@ fn replies_nothing() -> ScriptedAdapter {
     ScriptedAdapter::repeating(vec![done(FinishReason::Stop)])
 }
 
+/// 空白と改行だけの本文を返す。
+fn replies_only_whitespace() -> ScriptedAdapter {
+    ScriptedAdapter::repeating(text("  \n "))
+}
+
 /// 毎回ツールを呼び続け、上限到達を起こす。
 fn always_adds_a_step() -> ScriptedAdapter {
     ScriptedAdapter::repeating(calls(vec![add_a_step()]))
@@ -1126,6 +1131,59 @@ async fn run_turn_persists_error_message_for_empty_response() {
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
     assert_eq!(error_message.error_kind.as_deref(), Some("empty_response"));
+}
+
+/// 空白だけの本文も、中身の無い吹き出しにせず空応答として扱う。
+#[tokio::test]
+async fn run_turn_treats_a_whitespace_only_reply_as_empty() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    run_turn(
+        db.clone(),
+        &context(&replies_only_whitespace()),
+        Chat::Task(task_id),
+        "こんにちは".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    assert!(!messages.iter().any(|m| m.role == Role::Assistant));
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("empty_response"));
+}
+
+/// ツール呼び出しに添えた空白だけの本文は、次のラウンドで本文として送らない(空白だけの
+/// テキストのブロックを拒む方言がある)。
+#[tokio::test]
+async fn whitespace_beside_a_tool_call_is_not_sent_as_content() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let mut first = vec![ResponseEvent::TextDelta {
+        text: "\n ".to_string(),
+    }];
+    first.extend(calls(vec![add_a_step()]));
+    let adapter = ScriptedAdapter::new(vec![first, text("工程を追加しました")]);
+
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        "工程を追加して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let rounds = adapter.sent_messages();
+    let call = rounds[1]
+        .iter()
+        .find(|m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()))
+        .unwrap();
+    assert!(matches!(call, ChatMessage::Assistant { content: None, .. }));
 }
 
 /// 上限のあとの最後の呼び出し(ツールを渡さない)でもツールを呼んできたら、実行せずに

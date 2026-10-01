@@ -147,6 +147,11 @@ impl ErrorDetail {
         Self(sanitize(&text, api_key))
     }
 
+    /// レート制限の応答が示した、送り直してよくなるまでの秒数を添える。
+    pub fn with_retry_after(self, secs: u64) -> Self {
+        Self(format!("{} (retry after {secs}s)", self.0))
+    }
+
     /// アプリ自身が書いた短い識別子(内部エラーの種類)。`&'static str`に限るのは、実行時の
     /// 文字列(秘密情報やパスを含みうる)がこの経路でサニタイズを通らずに入るのを防ぐため。
     pub fn internal(id: &'static str) -> Self {

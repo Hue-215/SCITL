@@ -576,12 +576,14 @@ async fn run_tool_rounds(
         if tool_calls.is_empty() {
             // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
             let mut rounds = request.appended(&messages_to_send).to_vec();
+            // 空白だけの本文は送らない(空白だけのテキストのブロックを拒む方言がある)。
             rounds.push(ChatMessage::Assistant {
-                content: (!text.is_empty()).then(|| text.clone()),
+                content: (!text.trim().is_empty()).then(|| text.clone()),
                 tool_calls: Vec::new(),
                 replay,
             });
-            if !text.is_empty() {
+            // 空白だけの本文は、中身の無い吹き出しになるので返信に含めない。
+            if !text.trim().is_empty() {
                 reply_parts.push(text);
             }
             let reply = reply_parts.join("\n\n");
@@ -668,11 +670,11 @@ async fn run_tool_rounds(
 
         // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
         // OpenAI互換プロトコルの標準的な表現に合わせる。
-        if !text.is_empty() {
+        if !text.trim().is_empty() {
             reply_parts.push(text.clone());
         }
         round_trip.push(ChatMessage::Assistant {
-            content: if text.is_empty() { None } else { Some(text) },
+            content: (!text.trim().is_empty()).then_some(text),
             tool_calls: executed.iter().map(|(call, _)| call.clone()).collect(),
             replay,
         });

@@ -28,6 +28,14 @@ const MAX_DECODE_BYTES: u64 = 512 * 1024 * 1024;
 
 const JPEG_QUALITY: u8 = 90;
 
+/// 正規化した画像1枚の大きさの上限(バイト)。Anthropicの1枚5MB(base64にした長さで数える)に
+/// 収まるよう、base64で4/3倍になる分を見込む。5MBは小さいほう(10進)で数える。長辺を縮めても圧縮の効かないPNG(写真やノイズの
+/// 多い画像)はこれを超えうるので、超えたらさらに縮める。
+const MAX_ENCODED_BYTES: usize = 5_000_000 / 4 * 3;
+
+/// 大きさの上限に収めるために縮めるときの、1回あたりの長辺の倍率(分子/分母)。
+const SHRINK_STEP: (u32, u32) = (3, 4);
+
 #[derive(Debug)]
 pub(super) struct Normalized {
     pub(super) bytes: Vec<u8>,
@@ -58,7 +66,17 @@ pub(super) fn normalize_image(bytes: &[u8]) -> Option<Normalized> {
     if image.width().max(image.height()) > MAX_LONG_EDGE {
         image = image.resize(MAX_LONG_EDGE, MAX_LONG_EDGE, FilterType::Lanczos3);
     }
-    encode(to_8bit(image), format == ImageFormat::Jpeg, icc_profile)
+    let mut image = to_8bit(image);
+    let as_jpeg = format == ImageFormat::Jpeg;
+    loop {
+        let normalized = encode(&image, as_jpeg, icc_profile.clone())?;
+        let long_edge = image.width().max(image.height());
+        if normalized.bytes.len() <= MAX_ENCODED_BYTES || long_edge <= 1 {
+            return Some(normalized);
+        }
+        let edge = (long_edge * SHRINK_STEP.0 / SHRINK_STEP.1).max(1);
+        image = image.resize(edge, edge, FilterType::Lanczos3);
+    }
 }
 
 /// 16ビットの画像を8ビットにする。モデルにも画面にも8ビットで足り、PNGが倍の大きさになるのを避ける。
@@ -73,7 +91,7 @@ fn to_8bit(image: DynamicImage) -> DynamicImage {
 
 /// 色の見え方を保つため、ICCプロファイルは引き継ぐ(撮影の情報は持たない)。書けなくても
 /// 画像としては使えるので、失敗は無視する。
-fn encode(image: DynamicImage, as_jpeg: bool, icc_profile: Option<Vec<u8>>) -> Option<Normalized> {
+fn encode(image: &DynamicImage, as_jpeg: bool, icc_profile: Option<Vec<u8>>) -> Option<Normalized> {
     let mut bytes = Vec::new();
     let mime_type = if as_jpeg {
         let mut encoder = JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY);
@@ -132,6 +150,31 @@ mod tests {
         let normalized = normalize_image(&png).unwrap();
         assert_eq!(normalized.mime_type, "image/png");
         assert_eq!(decoded(&normalized).dimensions(), (1568, 523));
+    }
+
+    /// 長辺を縮めても大きさの上限を超えるPNG(ノイズの多い画像)は、収まるまでさらに縮める。
+    #[test]
+    fn shrinks_further_until_the_encoded_size_fits() {
+        let mut state: u32 = 1;
+        let noise = RgbaImage::from_fn(MAX_LONG_EDGE, MAX_LONG_EDGE, |_, _| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            Rgba(state.to_le_bytes())
+        });
+        let mut png = Vec::new();
+        DynamicImage::from(noise)
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        assert!(
+            png.len() > MAX_ENCODED_BYTES,
+            "前提: 縮めないと上限を超える"
+        );
+
+        let normalized = normalize_image(&png).unwrap();
+        assert!(normalized.bytes.len() <= MAX_ENCODED_BYTES);
+        assert_eq!(normalized.mime_type, "image/png");
+        let (width, height) = decoded(&normalized).dimensions();
+        assert_eq!(width, height);
+        assert!(width < MAX_LONG_EDGE);
     }
 
     #[test]
