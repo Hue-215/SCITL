@@ -23,6 +23,8 @@
   "chat.source_mcp": "MCP",
   "chat.source_ui": "画面",
   "chat.source_unknown": "外部",
+  "chat.stop_button": "停止",
+  "chat.stopping_reply": "停止しています…",
   "chat.thinking_tools_count": "思考・ツール（{count}件）",
   "chat.thinking_tools_has_error": "・エラーあり",
   "chat.tool_detail_args": "引数",

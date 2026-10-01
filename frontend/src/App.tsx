@@ -13,6 +13,7 @@ import {
   retryChatMessage,
   sendChatMessage,
   setTaskArchived,
+  stopChatResponse,
 } from './api'
 import { StagedAttachmentChips } from './Attachments'
 import ChatLog from './ChatLog'
@@ -172,6 +173,8 @@ export default function App() {
   // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする。他の会話は応答待ちの
   // 間も操作できる。
   const disableActions = requests.isBusy(chat)
+  // 応答を生成中の会話では、送信ボタンの位置に停止ボタンを出す。
+  const generating = requests.isGenerating(chat)
 
   // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
   const canSend = !disableActions && !staged.busy && (draft.trim() !== '' || staged.ready)
@@ -234,6 +237,11 @@ export default function App() {
       (onEvent) => editChatMessage(target, messageId, text, onEvent),
       settle,
     )
+  }
+
+  const stop = () => {
+    const target = chat
+    void requests.stop(target, () => stopChatResponse(target))
   }
 
   const retry = async (messageId: number) => {
@@ -393,9 +401,27 @@ export default function App() {
               disabled={disableActions}
               placeholder={t('chat.input_hint')}
             />
-            <button type="submit" className="primary" disabled={!canSend}>
-              {t('chat.send_button')}
-            </button>
+            {generating ? (
+              // 送信ボタンとは別の要素にする(同じ要素だと、送信を押したフォーカスが残り、
+              // 応答待ちの間のEnterで止めてしまう)。
+              <button
+                key="stop"
+                type="button"
+                className="primary"
+                disabled={requests.isStopping(chat)}
+                onClick={(e) => {
+                  // 送信をダブルクリックした2回目が、入れ替わった停止ボタンに当たっても止めない。
+                  if (e.detail > 1) return
+                  stop()
+                }}
+              >
+                {t('chat.stop_button')}
+              </button>
+            ) : (
+              <button key="send" type="submit" className="primary" disabled={!canSend}>
+                {t('chat.send_button')}
+              </button>
+            )}
           </form>
 
           <ChatModelBar

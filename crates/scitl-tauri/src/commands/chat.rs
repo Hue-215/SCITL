@@ -103,8 +103,8 @@ pub async fn retry_chat_message(
 
 /// 会話で生成中の応答を止める([`stop_response`])。
 #[tauri::command]
-pub fn stop_chat_response(state: State<'_, AppState>, chat: Chat) {
-    stop_response(&state.generating, chat);
+pub fn stop_chat_response(state: State<'_, AppState>, chat: Chat) -> bool {
+    stop_response(&state.generating, chat)
 }
 
 /// 発言と、それより後ろの発言をまとめて削除する([`delete_message`])。
