@@ -34,6 +34,9 @@ jobs:
     # Ubuntuのバージョンで変わった実績があるため、明示的に固定する。
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # デバッグ情報を作らない。CIでは使わず、`target`とリンクの負荷の大半を占める。
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
 
@@ -55,24 +58,12 @@ jobs:
             libxdo-dev \
             libssl-dev
 
-      # ツールチェーンはランナーの既定(ピン留めしていない)ため、時間とともに上がる。
-      # rustcが変わると`target`の成果物は使えなくなるが、キーが同じだと
-      # 古いキャッシュを復元しては全部作り直すだけの状態で固定されてしまうので、
-      # バージョンをキーに混ぜる。
-      - name: ツールチェーンのバージョン
-        id: rust
-        run: echo "version=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
-
+      # 保存の前に、今のビルドで使わなかった成果物を`target`から捨てる。`target`を丸ごと
+      # 保存し直すと、古い版の依存の成果物が積み重なってランナーのディスクを使い切る。
+      # キーにはrustcの版・Cargo.lock・`CARGO`で始まる環境変数が入る(ツールチェーンは
+      # ピン留めしていないので、rustcが上がれば別のキャッシュになる)。
       - name: cargoのキャッシュ
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: cargo-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-${{ steps.rust.outputs.version }}-
+        uses: Swatinem/rust-cache@v2
 
       # 速い順に並べる。書式・lintで落ちるならテストの完走を待たせない。
       # `--locked`: Cargo.lock を更新しないと通らない変更が、lockの更新漏れのまま
