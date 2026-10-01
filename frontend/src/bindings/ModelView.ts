@@ -21,4 +21,9 @@ default_context_length: number,
 /**
  * 能力に手動設定がある(「初期値に戻す」を出す)。
  */
-overridden: boolean, };
+overridden: boolean, 
+/**
+ * 自動検出でツール呼び出しに対応しないと分かった。警告を出すだけで、使うことは止めない
+ * (サーバーがツール付きのリクエストを拒めば、そのターンのエラー発言になる)。
+ */
+lacks_tools: boolean, };

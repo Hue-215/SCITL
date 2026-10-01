@@ -3,7 +3,7 @@
 /**
  * 解決済みのモデル能力。
  */
-export type ModelCapabilities = { image: boolean, tools: boolean, thinking: boolean, 
+export type ModelCapabilities = { image: boolean, thinking: boolean, 
 /**
  * 1回の呼び出しに入るトークン数。どの層でも分からなければ保守的な値
  * ([`FALLBACK_CONTEXT_LENGTH`])になり、未定のまま返ることはない。

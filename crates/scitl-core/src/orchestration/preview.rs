@@ -68,14 +68,12 @@ pub async fn preview_request(
     })
     .await?;
 
-    // ターンと同じく、ツールに対応しないモデルには外部ツールも渡さないので繋がない。
-    let external_tools = options.external_tools && ctx.capabilities.tools;
-    let external = if external_tools {
+    let external = if options.external_tools {
         let mut sessions = McpSessions::new();
         let external = prepare_external_tools(&ctx.mcp, chat, &mut sessions).await;
         sessions.close().await;
         external
-    } else if ctx.capabilities.tools {
+    } else {
         // 繋がないサーバーは繋がらなかったものとして扱い、前に固定した定義にあればそのまま
         // 見せる(繋がって定義が変わっていなければ、ターンでも同じものを渡す)。
         ExternalToolset::default().with_unavailable(
@@ -85,8 +83,6 @@ pub async fn preview_request(
                 .filter(|s| s.enabled && !s.enabled_tools.is_empty()),
             &tools::names(chat),
         )
-    } else {
-        ExternalToolset::default()
     };
 
     let request = TurnRequest::prepare(ctx, adapter, chat, stored, &external).await?;
@@ -98,7 +94,7 @@ pub async fn preview_request(
             CoreError::Internal("this provider cannot preview its requests".to_string())
         })?;
     Ok(Ok(Preview {
-        external_tools,
+        external_tools: options.external_tools,
         request,
     }))
 }

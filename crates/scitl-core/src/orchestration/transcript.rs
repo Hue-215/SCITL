@@ -122,14 +122,6 @@ impl StoredMessage {
             Self::Assistant { .. } => false,
         }
     }
-
-    fn has_tool_calls(&self) -> bool {
-        match self {
-            Self::Assistant { tool_calls, .. } => !tool_calls.is_empty(),
-            Self::Tool { .. } => true,
-            Self::User { .. } => false,
-        }
-    }
 }
 
 impl StoredToolCall {
@@ -225,12 +217,10 @@ pub(super) struct Replayable {
 
 impl Replayable {
     /// 保存を読み戻す。形を読めない保存、形の版が違う保存、送り先の分からない保存、画像の実体を
-    /// 読めない保存と、今の
-    /// モデルが受け付けない形(ツールに対応しないモデルでのツールの往復・画像に対応しないモデル
-    /// での画像)を含む保存は使わない(`None`)。使わない試行は実行記録から組み立てる。
+    /// 読めない保存と、今のモデルが受け付けない形(画像に対応しないモデルでの画像)を含む保存は
+    /// 使わない(`None`)。使わない試行は実行記録から組み立てる。
     pub(super) fn load(
         transcript: &Transcript,
-        tools_available: bool,
         image_input: bool,
         store: &AttachmentStore,
     ) -> Option<Self> {
@@ -243,10 +233,7 @@ impl Replayable {
         }
         let rounds: Vec<StoredMessage> = serde_json::from_str(&transcript.rounds).ok()?;
         let stored: Vec<StoredMessage> = input.messages.into_iter().chain(rounds).collect();
-        let unsupported = stored
-            .iter()
-            .any(|m| (!tools_available && m.has_tool_calls()) || (!image_input && m.has_images()));
-        if unsupported {
+        if !image_input && stored.iter().any(StoredMessage::has_images) {
             return None;
         }
         Some(Self {
@@ -475,13 +462,8 @@ mod tests {
     fn loads_a_saved_attempt() {
         let (_dir, store) = empty_store();
         let input = StoredInput::new(vec![1, 2], vec![stored(user("u"))]);
-        let loaded = Replayable::load(
-            &saved("anthropic", &input, &[reply("a")]),
-            true,
-            true,
-            &store,
-        )
-        .unwrap();
+        let loaded =
+            Replayable::load(&saved("anthropic", &input, &[reply("a")]), true, &store).unwrap();
         assert_eq!(loaded.origin.api_format, ApiFormat::Anthropic);
         assert_eq!(loaded.origin.model, "m");
         assert_eq!(loaded.origin.server, "https://api.anthropic.com");
@@ -493,25 +475,23 @@ mod tests {
     #[test]
     fn does_not_load_what_it_cannot_read_or_the_model_cannot_take() {
         let (_dir, store) = empty_store();
-        let load = |t: &Transcript, tools: bool, images: bool| {
-            Replayable::load(t, tools, images, &store).is_some()
-        };
+        let load = |t: &Transcript, images: bool| Replayable::load(t, images, &store).is_some();
         let input = StoredInput::new(vec![1], vec![stored(user("u"))]);
         let plain = saved("anthropic", &input, &[reply("a")]);
-        assert!(load(&plain, false, false));
+        assert!(load(&plain, false));
 
-        assert!(!load(&saved("unknown", &input, &[reply("a")]), true, true));
+        assert!(!load(&saved("unknown", &input, &[reply("a")]), true));
         let mut no_server = plain.clone();
         no_server.server = None;
-        assert!(!load(&no_server, true, true));
+        assert!(!load(&no_server, true));
         let mut other_version = plain.clone();
         other_version.input = other_version
             .input
             .replace(&format!(r#""version":{FORM_VERSION}"#), r#""version":0"#);
-        assert!(!load(&other_version, true, true));
+        assert!(!load(&other_version, true));
         let mut unversioned = plain.clone();
         unversioned.input = r#"{"rows":[1],"messages":[]}"#.to_string();
-        assert!(!load(&unversioned, true, true));
+        assert!(!load(&unversioned, true));
 
         let call = stored(ChatMessage::Assistant {
             content: None,
@@ -523,8 +503,7 @@ mod tests {
             replay: Replay::default(),
         });
         let with_call = saved("anthropic", &input, &[call, reply("a")]);
-        assert!(load(&with_call, true, false));
-        assert!(!load(&with_call, false, false));
+        assert!(load(&with_call, false));
 
         // 画像に対応しないモデルでは使わず、対応していても実体を読めなければ使わない。
         let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
@@ -536,8 +515,8 @@ mod tests {
             })],
         );
         let with_image = saved("anthropic", &with_image, &[reply("a")]);
-        assert!(!load(&with_image, true, false));
-        assert!(!load(&with_image, true, true));
+        assert!(!load(&with_image, false));
+        assert!(!load(&with_image, true));
     }
 
     #[test]

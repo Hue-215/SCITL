@@ -49,9 +49,6 @@ pub enum TurnFailure {
         detail: ErrorDetail,
     },
     ToolRoundLimit,
-    /// ツールに対応しないモデルとして扱っている(ツールを渡していない)のに、モデルが
-    /// ツールを呼んできた。手動設定で対応を外したか、能力の判定がモデルの実物と違う。
-    ToolsDisabled,
     /// 1ターン内のツール実行に使える合計時間を使い切った。
     ToolTimeout,
     /// APIキーの未設定・不正。どちらも実際の呼び出しがHTTP 401/403を返してここに落ちる。
@@ -92,7 +89,6 @@ impl TurnFailure {
             TurnFailure::ThinkingUnsupported { .. } => "thinking_unsupported",
             TurnFailure::ThinkingEffortUnsupported { .. } => "thinking_effort_unsupported",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
-            TurnFailure::ToolsDisabled => "tools_disabled",
             TurnFailure::ToolTimeout => "tool_timeout",
             TurnFailure::Auth { .. } => "auth",
             TurnFailure::RateLimit { .. } => "rate_limit",
@@ -128,7 +124,6 @@ impl TurnFailure {
             | TurnFailure::NoModel
             | TurnFailure::EmptyResponse
             | TurnFailure::ToolRoundLimit
-            | TurnFailure::ToolsDisabled
             | TurnFailure::ToolTimeout
             | TurnFailure::ProviderConfig => None,
         }
@@ -308,7 +303,6 @@ mod tests {
             TurnFailure::ThinkingUnsupported { detail: detail() },
             TurnFailure::ThinkingEffortUnsupported { detail: detail() },
             TurnFailure::ToolRoundLimit,
-            TurnFailure::ToolsDisabled,
             TurnFailure::ToolTimeout,
             TurnFailure::Auth { detail: detail() },
             TurnFailure::RateLimit { detail: detail() },
@@ -330,7 +324,6 @@ mod tests {
                 | TurnFailure::ThinkingUnsupported { .. }
                 | TurnFailure::ThinkingEffortUnsupported { .. }
                 | TurnFailure::ToolRoundLimit
-                | TurnFailure::ToolsDisabled
                 | TurnFailure::ToolTimeout
                 | TurnFailure::Auth { .. }
                 | TurnFailure::RateLimit { .. }
@@ -381,10 +374,6 @@ mod tests {
                     "settings.nav.provider",
                     "settings.model.cap_reasoning_label",
                 ],
-            ),
-            (
-                TurnFailure::ToolsDisabled,
-                &["settings.nav.provider", "settings.model.cap_tools_label"],
             ),
             (TurnFailure::ToolRoundLimit, &["settings.nav.tools"]),
             (TurnFailure::ToolTimeout, &["settings.nav.tools"]),

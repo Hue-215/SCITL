@@ -91,8 +91,6 @@
   "settings.model.add_model_hint": "モデル名を入力して追加",
   "settings.model.cap_reasoning_checkbox_label": "{model}の思考対応",
   "settings.model.cap_reasoning_label": "思考",
-  "settings.model.cap_tools_checkbox_label": "{model}のツール対応",
-  "settings.model.cap_tools_label": "ツール",
   "settings.model.cap_vision_checkbox_label": "{model}の画像対応",
   "settings.model.cap_vision_label": "画像",
   "settings.model.col_actions": "操作",
@@ -105,6 +103,7 @@
   "settings.model.detect_button": "能力をサーバーから検出",
   "settings.model.detecting": "検出中…",
   "settings.model.fetch_models_button": "モデル一覧を取得",
+  "settings.model.lacks_tools_warning": "推論サーバーの報告では、このモデルはツール呼び出しに対応しません。SCITLはタスクや工程の読み書きをツールで行うため、このモデルではタスクの状態を見ることも更新することもできません",
   "settings.model.no_match": "「{query}」に一致するモデルはありません。",
   "settings.model.none_registered": "モデル未登録（登録するとチャットで選べます）",
   "settings.model.picker_add_selected": "選択した{count}件を追加",
@@ -117,7 +116,6 @@
   "settings.model.reset_caps_tooltip": "能力を初期値に戻す",
   "settings.model.search_hint": "モデル名で検索",
   "settings.model.show_all": "{count}件のモデルを表示",
-  "settings.model.tools_warning_tooltip": "ツール呼び出しに対応しないモデルでは、タスクや工程の更新ができなくなります",
   "settings.model.visible_checkbox_label": "{model}をチャットのモデル一覧に表示",
   "settings.nav.general": "一般",
   "settings.nav.provider": "APIプロバイダー",
@@ -218,6 +216,5 @@
   "turn_error.thinking_unsupported": "このモデルは思考の強さの指定を受け付けませんでした。設定画面「APIプロバイダー」のモデル一覧で、このモデルの「思考」のチェックを外してください。",
   "turn_error.tool_round_limit": "ツール呼び出しの最大回数に到達したため、応答の生成を打ち切りました。設定画面「ツール/MCP」から変更できます。",
   "turn_error.tool_timeout": "ツールの実行時間が上限に達したため、応答の生成を打ち切りました。設定画面「ツール/MCP」から変更できます。",
-  "turn_error.tools_disabled": "このモデルはツールに対応しないものとして扱っているため、モデルが求めたツールの呼び出しを実行しませんでした。このモデルがツールに対応するなら、設定画面「APIプロバイダー」のモデル一覧で「ツール」にチェックを入れてください。",
   "turn_error.unexpected": "予期しないエラーが発生しました。"
 }

@@ -93,7 +93,6 @@ fn visible_by_default() -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Image,
-    Tools,
     Thinking,
 }
 
@@ -448,11 +447,14 @@ context_length = 8192
         assert_eq!(models[0], ModelConfig::new("plain".to_string()));
         assert!(!models[1].visible);
         assert_eq!(models[1].reasoning_effort, ReasoningEffort::High);
-        assert_eq!(models[1].overrides.tools, Some(false));
         assert_eq!(models[1].overrides.image, None);
         assert_eq!(models[1].overrides.context_length, Some(8192));
 
+        // 手動設定に書かれた`tools`は読み飛ばし、次の保存で消える。
         let saved = toml::to_string_pretty(&config).unwrap();
+        let saved_overrides = &toml::from_str::<toml::Value>(&saved).unwrap()["providers"][0]
+            ["models"][1]["overrides"];
+        assert!(saved_overrides.get("tools").is_none());
         let reloaded: Config = toml::from_str(&saved).unwrap();
         assert_eq!(reloaded.providers[0].models, *models);
     }

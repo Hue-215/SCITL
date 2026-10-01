@@ -324,12 +324,7 @@ async fn generate_turn_response(
     };
 
     let mut sessions = McpSessions::new();
-    // ツールに対応しないモデルには外部ツールも渡さないので、外部サーバーにも繋がない。
-    let external = if ctx.capabilities.tools {
-        prepare_external_tools(&ctx.mcp, attempt.chat, &mut sessions).await
-    } else {
-        ExternalToolset::default()
-    };
+    let external = prepare_external_tools(&ctx.mcp, attempt.chat, &mut sessions).await;
     let result =
         run_tool_rounds(db.clone(), adapter, ctx, &attempt, &external, &mut sessions).await;
     sessions.close().await;
@@ -485,7 +480,6 @@ async fn run_tool_rounds(
     let chat = attempt.chat;
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
     let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
-    let tools_available = request.tools_available();
     // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
     // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
     let mut round_trip: Vec<ChatMessage> = Vec::new();
@@ -596,15 +590,9 @@ async fn run_tool_rounds(
             .await?;
             return Ok(());
         }
-        // 呼べないようにしたのに呼んできた。実行はせず、呼べなかった理由
-        // (上限に達した・ツールに対応しないモデル)のエラーで終える。
+        // 上限に達して呼べないようにしたのに呼んできた。実行はせずにエラーで終える。
         if final_call {
-            let failure = if tools_available {
-                TurnFailure::ToolRoundLimit
-            } else {
-                TurnFailure::ToolsDisabled
-            };
-            return fail_turn(db, attempt, failure).await;
+            return fail_turn(db, attempt, TurnFailure::ToolRoundLimit).await;
         }
 
         // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。

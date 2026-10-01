@@ -9,16 +9,8 @@ pub struct SystemPrompts<'a> {
     pub task_chat: Option<&'a str>,
 }
 
-/// ツールに対応しないモデルに添える注意書き。伝えないと、モデルはタスクを更新したつもりの
-/// 返事をする。
-const TOOLS_UNAVAILABLE_NOTE: &str = "Tools are not available with the current model, so you \
-     cannot create, update, or delete tasks or steps. If the user asks for such a change, do \
-     not say that you made it; tell them that the current model cannot apply it.";
-
 /// 総合チャットであることの注記。総合チャットには読み取り専用のツールしか渡さない
 /// ので、伝えないとモデルは変更を頼まれたときに、できたつもりの返事をする。
-/// ツールに対応しないモデルでも、変更についてはこれだけを伝える(上の注意書きと並べると、
-/// 頼まれた変更をどう案内するかの指示が2つになる)。
 const GENERAL_CHAT_NOTE: &str = "This conversation is not tied to a single task; it is for \
      looking across all tasks. Tasks cannot be changed from this conversation. If the user \
      asks for a change, do not say that you made it; tell them to ask for it in that task's \
@@ -54,13 +46,12 @@ fn state_note(chat: Chat) -> String {
 }
 
 /// 基本システムプロンプト + タスクチャット用システムプロンプト(総合チャットなら代わりに
-/// 総合チャットの注記) + ツール結果と状態の読み方(ツールに対応しないモデルなら、タスク
-/// チャットでは代わりに注意書き) + 予約タグの読み方。会話と設定だけで決まり、リクエストごとには
-/// 変わらない。現在日時と状態は添えず、モデルがユーザー発言の送信日時とツールで知る
-/// (`docs/spec/rebuild/architecture.md`「状態と日時の伝え方」)。
+/// 総合チャットの注記) + ツール結果と状態の読み方 + 予約タグの読み方。会話と設定だけで決まり、
+/// リクエストごとには変わらない。現在日時と状態は添えず、モデルがユーザー発言の送信日時と
+/// ツールで知る(`docs/spec/rebuild/architecture.md`「状態と日時の伝え方」)。
 ///
 /// 自由入力は載せない。
-pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts, tools_available: bool) -> String {
+pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts) -> String {
     let mut sections = Vec::new();
     if let Some(prompt) = prompts.base.filter(|p| !p.is_empty()) {
         sections.push(prompt.to_string());
@@ -73,14 +64,8 @@ pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts, tools_available:
         }
         Chat::General => sections.push(GENERAL_CHAT_NOTE.to_string()),
     }
-    match (chat, tools_available) {
-        (_, true) => {
-            sections.push(TOOL_RESULTS_NOTE.to_string());
-            sections.push(state_note(chat));
-        }
-        (Chat::Task(_), false) => sections.push(TOOLS_UNAVAILABLE_NOTE.to_string()),
-        (Chat::General, false) => {}
-    }
+    sections.push(TOOL_RESULTS_NOTE.to_string());
+    sections.push(state_note(chat));
 
     // ユーザー発言を包む予約タグの読み方。囲みと`sent_at`の意味を伝えないと、
     // モデルはタグを本文の一部と受け取り、応答にそのまま書き写す。文面は組み立て側
@@ -100,7 +85,7 @@ mod tests {
             base: Some("base prompt"),
             task_chat: Some("task chat prompt"),
         };
-        let prompt = build_system_prompt(Chat::Task(1), &prompts, true);
+        let prompt = build_system_prompt(Chat::Task(1), &prompts);
 
         let base_pos = prompt.find("base prompt").unwrap();
         let task_chat_pos = prompt.find("task chat prompt").unwrap();
@@ -113,35 +98,18 @@ mod tests {
             base: None,
             task_chat: Some("task chat prompt"),
         };
-        let prompt = build_system_prompt(Chat::Task(1), &prompts, true);
+        let prompt = build_system_prompt(Chat::Task(1), &prompts);
 
         assert!(prompt.contains("task chat prompt"));
     }
 
+    /// 状態は添えないので、読み方を伝える。
     #[test]
-    fn adds_the_note_only_when_tools_are_unavailable() {
-        let prompts = SystemPrompts {
-            base: Some("base prompt"),
-            task_chat: Some("task chat prompt"),
-        };
-
-        let with_tools = build_system_prompt(Chat::Task(1), &prompts, true);
-        assert!(!with_tools.contains(TOOLS_UNAVAILABLE_NOTE));
-
-        let without_tools = build_system_prompt(Chat::Task(1), &prompts, false);
-        let note_pos = without_tools.find(TOOLS_UNAVAILABLE_NOTE).unwrap();
-        assert!(without_tools.find("task chat prompt").unwrap() < note_pos);
-        assert!(note_pos < without_tools.find("user messages are wrapped").unwrap());
-    }
-
-    /// 状態は添えないので、読み方を伝える。読むツールが無いモデルには伝えない。
-    #[test]
-    fn tells_how_to_read_the_state_only_when_tools_are_available() {
+    fn tells_how_to_read_the_state() {
         for chat in [Chat::Task(1), Chat::General] {
-            let note = state_note(chat);
-            let prompts = SystemPrompts::default();
-            assert!(build_system_prompt(chat, &prompts, true).contains(&note));
-            assert!(!build_system_prompt(chat, &prompts, false).contains(&note));
+            let prompt = build_system_prompt(chat, &SystemPrompts::default());
+            assert!(prompt.contains(&state_note(chat)));
+            assert!(prompt.contains(TOOL_RESULTS_NOTE));
         }
         assert!(state_note(Chat::Task(1)).contains(get_current_task_detail::NAME));
         assert!(state_note(Chat::General).contains(get_task_list::NAME));
@@ -149,7 +117,7 @@ mod tests {
 
     #[test]
     fn works_with_no_prompts_at_all() {
-        let prompt = build_system_prompt(Chat::Task(1), &SystemPrompts::default(), true);
+        let prompt = build_system_prompt(Chat::Task(1), &SystemPrompts::default());
 
         assert!(prompt.contains("user messages are wrapped"));
     }
@@ -161,14 +129,10 @@ mod tests {
             task_chat: Some("task chat prompt"),
         };
 
-        let prompt = build_system_prompt(Chat::General, &prompts, true);
+        let prompt = build_system_prompt(Chat::General, &prompts);
 
         assert!(prompt.contains("base prompt"));
         assert!(!prompt.contains("task chat prompt"));
         assert!(prompt.contains(GENERAL_CHAT_NOTE));
-
-        let without_tools = build_system_prompt(Chat::General, &prompts, false);
-        assert!(without_tools.contains(GENERAL_CHAT_NOTE));
-        assert!(!without_tools.contains(TOOLS_UNAVAILABLE_NOTE));
     }
 }

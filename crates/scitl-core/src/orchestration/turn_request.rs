@@ -41,7 +41,6 @@ pub(super) struct TurnRequest {
     exposed_tools: Vec<ToolSchema>,
     /// `exposed_tools`の本文(指紋と保存に使う)。
     tools_body: String,
-    tools_available: bool,
 }
 
 impl TurnRequest {
@@ -62,12 +61,7 @@ impl TurnRequest {
         stored: StoredChat,
         external: &ExternalToolset,
     ) -> Result<Self> {
-        // 内部ツールと外部ツールを1つの一覧にして公開する。名前空間化と衝突の排除は
-        // `ExternalToolset`が済ませてある。ツールに対応しないモデルには何も渡さない
-        // (対応しないモデルにツールを渡すと、リクエストごと拒否するサーバーがある)。
-        let tools_available = ctx.capabilities.tools;
         let options = HistoryOptions {
-            tools_available,
             image_input: ctx.capabilities.image,
             opening: ctx.opening_message.to_string(),
         };
@@ -75,15 +69,11 @@ impl TurnRequest {
         let store = ctx.attachments.store();
         let mut history =
             blocking::run(move || Ok(history::build_history(stored, &options, &store))).await?;
-        let mut current_tools = Vec::new();
-        if tools_available {
-            current_tools.extend(tools::schemas(chat));
-            current_tools.extend(external.schemas());
-        }
-        let current = Head::current(
-            build_system_prompt(chat, &ctx.prompts, tools_available),
-            current_tools,
-        );
+        // 内部ツールと外部ツールを1つの一覧にして公開する。名前空間化と衝突の排除は
+        // `ExternalToolset`が済ませてある。
+        let mut current_tools = tools::schemas(chat);
+        current_tools.extend(external.schemas());
+        let current = Head::current(build_system_prompt(chat, &ctx.prompts), current_tools);
         let starts = history.unit_starts();
         let from = match history.front.as_ref().and_then(|f| f.history_start) {
             Some(row) => history.start_at(&starts, row),
@@ -173,12 +163,7 @@ impl TurnRequest {
             settings_system: current.system,
             exposed_tools: front.tools,
             tools_body: front.tools_body,
-            tools_available,
         })
-    }
-
-    pub(super) fn tools_available(&self) -> bool {
-        self.tools_available
     }
 
     /// ラウンドで送った発言列(`round`の結果)のうち、最初のリクエストの後ろに足した分。
@@ -214,14 +199,10 @@ impl TurnRequest {
     }
 
     /// ツールを渡すラウンドの数。上限のラウンドまでツールを実行したら、ツールを呼べないように
-    /// してもう一度だけ呼ぶ(ツールに対応しないモデルは最初の呼び出しがそれにあたる)。`u64`で
-    /// 数えるのは、上限が`u32::MAX`でも最後の1回を数えられるようにするため。
+    /// してもう一度だけ呼ぶ。`u64`で数えるのは、上限が`u32::MAX`でも最後の1回を数えられる
+    /// ようにするため。
     pub(super) fn tool_rounds(&self, ctx: &TurnContext<'_>) -> u64 {
-        if self.tools_available {
-            u64::from(ctx.limits.max_rounds_per_turn)
-        } else {
-            0
-        }
+        u64::from(ctx.limits.max_rounds_per_turn)
     }
 
     /// 1ラウンドで送る発言列と、渡すツール。`round_trip`はこのターンでここまでに行った
@@ -237,7 +218,7 @@ impl TurnRequest {
         let mut messages = Vec::with_capacity(self.opening.len() + round_trip.len() + 1);
         messages.extend(self.opening.iter().cloned());
         messages.extend(round_trip.iter().cloned());
-        if final_call && self.tools_available {
+        if final_call {
             messages.push(ChatMessage::user(PromptText::note(ROUND_LIMIT_NOTE)));
         }
         let offer = ToolOffer {

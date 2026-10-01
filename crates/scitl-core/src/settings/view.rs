@@ -53,6 +53,9 @@ pub struct ModelView {
     pub default_context_length: u32,
     /// 能力に手動設定がある(「初期値に戻す」を出す)。
     pub overridden: bool,
+    /// 自動検出でツール呼び出しに対応しないと分かった。警告を出すだけで、使うことは止めない
+    /// (サーバーがツール付きのリクエストを拒めば、そのターンのエラー発言になる)。
+    pub lacks_tools: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -324,6 +327,7 @@ fn model_view(m: &ModelConfig, detected: Option<&DetectedCapabilities>) -> Model
         capabilities: llm::resolve_capabilities(m, detected),
         default_context_length: llm::fallback_capabilities(detected).context_length,
         overridden: !m.overrides.is_empty(),
+        lacks_tools: detected.is_some_and(DetectedCapabilities::lacks_tools),
     }
 }
 

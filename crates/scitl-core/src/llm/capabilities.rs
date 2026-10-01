@@ -2,8 +2,12 @@
 //!
 //! 3層は上から、手動設定(`config::ModelOverrides`)→ 自動検出([`DetectedCapabilities`]。
 //! 推論サーバーへの問い合わせは`providers`が行う)→ 既定値([`DEFAULT_CAPABILITIES`])。
-//! 項目ごとに、値を持つ一番上の層が決める。上の2層は同じ形([`CapabilityLayer`])で、
-//! 重ね方も[`CapabilityLayer::over`]の1つだけにする。
+//! 項目ごとに、値を持つ一番上の層が決める。上の2層は同じ形([`CapabilityLayer`]。自動検出は
+//! [`DetectedCapabilities::layer`]で写す)で、重ね方も[`CapabilityLayer::over`]の1つだけにする。
+//!
+//! ツール呼び出しへの対応は能力に含めず、自動検出で非対応と分かったときの警告にだけ使う
+//! ([`DetectedCapabilities::tools`]。`docs/spec/rebuild/architecture.md`「LLMアダプタ層と
+//! イベント列」)。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -17,7 +21,6 @@ use crate::config::{Capability, ModelConfig};
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ModelCapabilities {
     pub image: bool,
-    pub tools: bool,
     pub thinking: bool,
     /// 1回の呼び出しに入るトークン数。どの層でも分からなければ保守的な値
     /// ([`FALLBACK_CONTEXT_LENGTH`])になり、未定のまま返ることはない。
@@ -28,7 +31,6 @@ impl ModelCapabilities {
     pub fn flag(&self, capability: Capability) -> bool {
         match capability {
             Capability::Image => self.image,
-            Capability::Tools => self.tools,
             Capability::Thinking => self.thinking,
         }
     }
@@ -36,10 +38,12 @@ impl ModelCapabilities {
 
 /// 能力の層のうち、項目ごとに値を持たないことがあるもの(手動設定・自動検出)。値を持たない
 /// 項目(`None`)は下の層に任せる。
+///
+/// 知らないキーは読み飛ばす(`deny_unknown_fields`を付けない)。手動設定に`tools`が書かれた
+/// `config.toml`も読めるようにするため。読み飛ばしたキーは次の保存で消える。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityLayer {
     pub image: Option<bool>,
-    pub tools: Option<bool>,
     pub thinking: Option<bool>,
     pub context_length: Option<u32>,
 }
@@ -52,7 +56,6 @@ impl CapabilityLayer {
     pub fn flag_mut(&mut self, capability: Capability) -> &mut Option<bool> {
         match capability {
             Capability::Image => &mut self.image,
-            Capability::Tools => &mut self.tools,
             Capability::Thinking => &mut self.thinking,
         }
     }
@@ -64,7 +67,6 @@ impl CapabilityLayer {
     pub fn over(&self, below: ModelCapabilities) -> ModelCapabilities {
         ModelCapabilities {
             image: self.image.unwrap_or(below.image),
-            tools: self.tools.unwrap_or(below.tools),
             thinking: self.thinking.unwrap_or(below.thinking),
             context_length: self
                 .context_length
@@ -75,7 +77,31 @@ impl CapabilityLayer {
 }
 
 /// 推論サーバーから分かった能力。サーバーが教えない項目は`None`で、下の層(既定値)に任せる。
-pub type DetectedCapabilities = CapabilityLayer;
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetectedCapabilities {
+    pub image: Option<bool>,
+    /// ツール呼び出しへの対応。能力の層には入らず([`Self::layer`])、`Some(false)`のときに
+    /// 設定画面で警告するのにだけ使う。
+    pub tools: Option<bool>,
+    pub thinking: Option<bool>,
+    pub context_length: Option<u32>,
+}
+
+impl DetectedCapabilities {
+    /// 能力の3層に入る分。
+    pub fn layer(&self) -> CapabilityLayer {
+        CapabilityLayer {
+            image: self.image,
+            thinking: self.thinking,
+            context_length: self.context_length,
+        }
+    }
+
+    /// ツール呼び出しに対応しないと分かった。
+    pub fn lacks_tools(&self) -> bool {
+        self.tools == Some(false)
+    }
+}
 
 /// どの層でもコンテキスト長が分からないときの値。ローカル推論サーバーが既定で確保する
 /// 長さの小さい側に合わせる。大きく見積もると履歴の間引きが足りずに超過で止まるが、
@@ -86,15 +112,12 @@ pub const FALLBACK_CONTEXT_LENGTH: u32 = 4096;
 /// 新しいモデルにも追従できないため持たない。実物との違いは手動設定(設定画面のモデル表)と
 /// 自動検出で埋める。
 ///
-/// - ツールはありとする。タスクの更新はツール経由でしか行えず、なしにすると
-///   登録しただけのモデルではアプリの中心の操作ができなくなるため
 /// - 思考はありとする。なしにすると、手動設定しない限り思考の強さを選べなくなるため。
 ///   思考の強さの指定を拒むAPIでは、その旨のエラー発言からモデル表での変更へ誘導する
 /// - 画像はなしとする。非対応のモデルに画像を送ると呼び出しごと失敗するが、送らない側に
 ///   倒しても画像を添えられないだけで会話は続くため
 pub const DEFAULT_CAPABILITIES: ModelCapabilities = ModelCapabilities {
     image: false,
-    tools: true,
     thinking: true,
     context_length: FALLBACK_CONTEXT_LENGTH,
 };
@@ -103,7 +126,7 @@ pub const DEFAULT_CAPABILITIES: ModelCapabilities = ModelCapabilities {
 /// 判定(`settings`)と、設定画面のプレースホルダはこれを見る。
 pub fn fallback_capabilities(detected: Option<&DetectedCapabilities>) -> ModelCapabilities {
     match detected {
-        Some(detected) => detected.over(DEFAULT_CAPABILITIES),
+        Some(detected) => detected.layer().over(DEFAULT_CAPABILITIES),
         None => DEFAULT_CAPABILITIES,
     }
 }
@@ -166,11 +189,9 @@ mod tests {
         assert_eq!(resolve_capabilities(&model, None), DEFAULT_CAPABILITIES);
 
         model.overrides.image = Some(true);
-        model.overrides.tools = Some(false);
         model.overrides.context_length = Some(4096);
         let resolved = resolve_capabilities(&model, None);
         assert!(resolved.image);
-        assert!(!resolved.tools);
         assert_eq!(resolved.thinking, DEFAULT_CAPABILITIES.thinking);
         assert_eq!(resolved.context_length, 4096);
 
@@ -186,22 +207,34 @@ mod tests {
         let mut model = ModelConfig::new("unknown-model".to_string());
         let detected = DetectedCapabilities {
             image: Some(true),
-            tools: None,
-            thinking: Some(true),
+            tools: Some(false),
+            thinking: None,
             context_length: Some(32_768),
         };
         let resolved = resolve_capabilities(&model, Some(&detected));
         assert!(resolved.image);
-        assert!(resolved.thinking);
         assert_eq!(resolved.context_length, 32_768);
         // サーバーが教えない項目は既定値。
-        assert_eq!(resolved.tools, DEFAULT_CAPABILITIES.tools);
+        assert_eq!(resolved.thinking, DEFAULT_CAPABILITIES.thinking);
+        assert!(detected.lacks_tools());
 
-        model.overrides.thinking = Some(false);
+        model.overrides.image = Some(false);
         model.overrides.context_length = Some(8192);
         let resolved = resolve_capabilities(&model, Some(&detected));
-        assert!(!resolved.thinking);
+        assert!(!resolved.image);
         assert_eq!(resolved.context_length, 8192);
+    }
+
+    /// 警告するのは非対応と報告されたときだけ。教えないサーバーのモデルは警告しない。
+    #[test]
+    fn only_reported_lack_of_tools_is_warned() {
+        let with = |tools| DetectedCapabilities {
+            tools,
+            ..Default::default()
+        };
+        assert!(with(Some(false)).lacks_tools());
+        assert!(!with(Some(true)).lacks_tools());
+        assert!(!with(None).lacks_tools());
     }
 
     #[test]
