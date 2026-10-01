@@ -1,4 +1,4 @@
--- docs/spec/rebuild/data-model.md が正。CHECK制約はテーブル作成時にすべて入れる
+-- docs/spec/data-model/ が正。CHECK制約はテーブル作成時にすべて入れる
 -- (SQLiteはALTER TABLE ADD CONSTRAINTを持たないため)。
 
 CREATE TABLE tasks (

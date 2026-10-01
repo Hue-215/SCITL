@@ -14,7 +14,7 @@ internal_tool! {
     /// 総合チャット・タスクチャットで同じ形。対象の会話は文脈から固定するので引数に取らず、添付
     /// IDだけを選ばせる。
     ///
-    /// 説明はモデルの能力で変えない(`docs/spec/rebuild/tools.md`「添付の読み込み」)。
+    /// 説明はモデルの能力で変えない(`docs/spec/tools.md`「添付の読み込み」)。
     name: "read_attachment",
     run: Run::ReadAttachment,
     "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \

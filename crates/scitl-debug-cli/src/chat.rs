@@ -1,7 +1,7 @@
 //! 会話のコマンド。scitl-cliの表示に、送信内容のプレビューと応答生成を足す。
 //!
 //! 応答生成は、別のプロセス(GUI等)が同じ会話で生成中でも断らない
-//! (`docs/spec/rebuild/data-model.md`「複数プロセスからの書き込みの排他」)。
+//! (`docs/spec/data-model/tables.md`「複数プロセスからの書き込みの排他」)。
 
 use std::path::PathBuf;
 

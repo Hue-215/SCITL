@@ -1,4 +1,4 @@
--- ツール実行記録の行は role='tool' に揃える(docs/spec/rebuild/data-model.md messages)。
+-- ツール実行記録の行は role='tool' に揃える(docs/spec/data-model/messages.md)。
 UPDATE messages SET role = 'tool' WHERE kind = 'tool_execution';
 
 -- (role = 'tool') = (kind = 'tool_execution') を強制する。SQLiteは既存テーブルへ

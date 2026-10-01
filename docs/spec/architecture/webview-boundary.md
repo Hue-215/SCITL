@@ -44,7 +44,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   (WebViewの検査結果を信用しない)。ただし「確認ダイアログを経たこと」自体はRust側では
   検証できない。WebView内でスクリプトを実行されると、許可リスト内のURLは確認なしで
   開かれうる。これを塞ぐには確認をRust側のネイティブダイアログで出す必要があり、採否は別途検討する
-- 応答の途中経過の通知は、コマンド引数の`ipc::Channel`で行い(3節)、グローバルなイベント
+- 応答の途中経過の通知は、コマンド引数の`ipc::Channel`で行い(`concurrency.md`「プロセス間の受け渡し」)、グローバルなイベント
   (`emit`/`listen`)は使わない。`listen`には`core:event`の権限を足す必要があり、WebViewが
   聞けるイベントの範囲も広がる。Channelの大きなペイロードの取得(`plugin:__TAURI_CHANNEL__|fetch`)は
   権限の検査の対象外で、capabilitiesを足さずに届く(Tauri 2.11で確認)。Tauriを更新して
@@ -53,7 +53,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 - Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「独自の判断で
   通信先を増やさない」)
 - 多重起動の防止(`tauri-plugin-single-instance`)はJSのAPIを持たず、capabilitiesに権限を
-  足さない。`deep-link`のfeatureは有効にしない(2節「多重起動の防止」)
+  足さない。`deep-link`のfeatureは有効にしない(`concurrency.md`「多重起動の防止」)
 
 ## フロントエンド固有の注意点
 

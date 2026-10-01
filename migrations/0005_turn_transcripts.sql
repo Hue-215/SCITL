@@ -1,4 +1,4 @@
--- モデルに送った形(docs/spec/rebuild/data-model.md turn_transcripts)。返信のある試行ごとに1行を
+-- モデルに送った形(docs/spec/data-model/messages.md turn_transcripts)。返信のある試行ごとに1行を
 -- 返信の行と同じトランザクションで書き、書き換えない。会話ログはmessagesが正で、ここはモデルへ
 -- 並べるときだけ読む。
 

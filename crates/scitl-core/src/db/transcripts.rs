@@ -36,7 +36,7 @@ pub struct NewTranscript<'a> {
 }
 
 /// 1試行分を書く。本文は`transcript_blobs`に無ければ足す。返信の行と同じトランザクションの
-/// 中で呼ぶ(`docs/spec/rebuild/data-model.md` turn_transcripts)。
+/// 中で呼ぶ(`docs/spec/data-model/messages.md` turn_transcripts)。
 pub fn insert(conn: &Connection, new: &NewTranscript) -> Result<()> {
     let system = put_blob(conn, new.system)?;
     let settings_system = put_blob(conn, new.settings_system)?;

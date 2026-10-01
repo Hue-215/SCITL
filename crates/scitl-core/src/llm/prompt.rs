@@ -105,7 +105,7 @@ impl OperationNote<'_> {
 
 /// ユーザー発言の送信日時を、モデルへ渡す形にしたもの。利用者の地域の時差付きの日時
 /// (ISO8601)と、その地域での曜日を持つ。保存はUTCのまま、モデルへ渡す表現だけを利用者の
-/// 地域に寄せる(`docs/spec/rebuild/architecture.md`「ユーザー発言の送信日時は本文と分けて運ぶ」)。
+/// 地域に寄せる(`docs/spec/architecture/prompt-shape.md`「ユーザー発言の送信日時は本文と分けて運ぶ」)。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentAt {
     at: String,
@@ -237,7 +237,7 @@ impl PromptText {
     /// 送った形の保存から読み戻す(`orchestration::transcript`)。保存したのは無害化を通った値
     /// だけなので、そのまま信じる。保存した本文からはこのアプリが置いた囲みと中身を分けられず、
     /// 無害化を掛け直せない。無害化の規則を変えたときは保存の形の版を上げ、前の規則で保存した
-    /// 本文をここに通さない(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。
+    /// 本文をここに通さない(`docs/spec/architecture/transcript.md`「前が変わる場面の扱い」)。
     pub(crate) fn from_stored(text: String) -> Self {
         Self(text)
     }

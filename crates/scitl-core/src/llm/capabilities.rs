@@ -6,8 +6,7 @@
 //! [`DetectedCapabilities::layer`]で写す)で、重ね方も[`CapabilityLayer::over`]の1つだけにする。
 //!
 //! ツール呼び出しへの対応は能力に含めず、自動検出で非対応と分かったときの警告にだけ使う
-//! ([`DetectedCapabilities::tools`]。`docs/spec/rebuild/architecture.md`「LLMアダプタ層と
-//! イベント列」)。
+//! ([`DetectedCapabilities::tools`]。`docs/spec/architecture/llm-adapter.md`)。
 
 use std::collections::HashMap;
 use std::sync::Mutex;

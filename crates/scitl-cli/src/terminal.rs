@@ -1,5 +1,5 @@
 //! 端末への出力。CLIはここの関数だけから端末へ書く。出力はJSONに揃え、見えない文字を
-//! JSONのエスケープの形にしてから書く(`docs/spec/rebuild/architecture.md`「無害化」の端末の行)。
+//! JSONのエスケープの形にしてから書く(`docs/spec/architecture/sanitize.md`「無害化」の端末の行)。
 
 use std::fmt::Display;
 use std::process::ExitCode;

@@ -1,4 +1,4 @@
-//! モデルに送った形の保存の形(`docs/spec/rebuild/architecture.md`「送った形のまま積む」)。
+//! モデルに送った形の保存の形(`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
 //! 行の読み書きは`db::transcripts`。
 
 use std::collections::HashMap;
@@ -164,7 +164,7 @@ fn read_images(hashes: &[String], store: &AttachmentStore) -> Option<Vec<InlineI
         .collect()
 }
 
-/// 保存に添えた、前を固定する材料(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」
+/// 保存に添えた、前を固定する材料(`docs/spec/architecture/transcript.md`「前が変わる場面の扱い」
 /// 「間引きの位置」)。使っている直前の保存のものを次のターンで使う。
 pub(super) struct Front {
     /// 最初に並べたユーザー発言(間引きの位置)。`None`は会話の最初から。
@@ -321,7 +321,7 @@ pub(super) fn tools_from_body(body: &str) -> Option<Vec<ToolSchema>> {
     )
 }
 
-/// 並べた発言列の指紋の連鎖(`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。
+/// 並べた発言列の指紋の連鎖(`docs/spec/architecture/transcript.md`「思考を送り返す範囲」)。
 /// システムプロンプトとツール定義から始め、発言を1つ並べるたびに、その発言の形と前の指紋を
 /// 合わせて取り直す。
 #[derive(Debug, Clone, PartialEq)]

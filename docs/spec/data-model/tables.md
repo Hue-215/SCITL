@@ -15,11 +15,11 @@
   「データを特定ソフトに依存させない」にも合う。生成は core の1つのヘルパに集約する
 - **`deadline` は日付のみ** (`TEXT`, `YYYY-MM-DD`)。タイムスタンプと意図的に別形式にする。
   日時型で持つとタイムゾーンによって締切が前後にずれる。モデルが「明日」等を日付に落とす基準は、
-  モデルへ渡す送信日時の時差で伝える(`architecture.md` 3節「ユーザー発言の送信日時は本文と分けて運ぶ」)
+  モデルへ渡す送信日時の時差で伝える(`../architecture/prompt-shape.md`「ユーザー発言の送信日時は本文と分けて運ぶ」)
 - **`title` は `TEXT NULL`**(`../principles.md` 2節「未設定はnullに統一」に従う。
   `../legacy/data-model.md` の「空文字が未設定」は旧実装の記録であり本スキーマでは採らない)。
   `title IS NULL` は「未設定」を意味するだけで、専用の自動命名処理の対象という意味は持たない
-  (タイトルはモデルが `update_task` ツールで設定する。`tools.md` 2節)。未設定のまま残った
+  (タイトルはモデルが `update_task` ツールで設定する。`../tools.md` 2節)。未設定のまま残った
   場合の画面表示(一覧・ヘッダー)は表示側のフォールバックで扱い、`title` には書き込まない
 - 主キーは `INTEGER PRIMARY KEY`(SQLiteのrowidエイリアス)
 
@@ -30,8 +30,8 @@
 | カラム | 型 | 制約・備考 |
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
-| title | TEXT | NULL可。NULL=未設定(表示側でフォールバック)。空文字列は書かない。長さの上限は`tools.md` 2節 |
-| description | TEXT | NULL可。NULL=未設定。空文字列は書かない。長さの上限は`tools.md` 2節 |
+| title | TEXT | NULL可。NULL=未設定(表示側でフォールバック)。空文字列は書かない。長さの上限は`../tools.md` 2節 |
+| description | TEXT | NULL可。NULL=未設定。空文字列は書かない。長さの上限は`../tools.md` 2節 |
 | deadline | TEXT | `YYYY-MM-DD`。NULL可 |
 | archived_at | TEXT | ISO8601。NULL=未アーカイブ。再度アーカイブしても上書きしない |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
@@ -50,7 +50,7 @@
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
 | task_id | INTEGER | NOT NULL, `REFERENCES tasks(id)` |
-| description | TEXT | NOT NULL。前後の空白を落として保存し、空は書かない。長さと件数の上限は`tools.md` 2節 |
+| description | TEXT | NOT NULL。前後の空白を落として保存し、空は書かない。長さと件数の上限は`../tools.md` 2節 |
 | done_at | TEXT | ISO8601。NULL=未完了 |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
 | order_index | INTEGER | NOT NULL |
@@ -61,7 +61,7 @@
 **論理削除の伝播について**: タスクを論理削除しても、配下の工程の `deleted_at` は
 書き換えない。表示時に親の `deleted_at` を見て絞り込む。伝播させると、タスク削除の
 取り消し時に「元から削除されていた工程」と「タスク削除に巻き込まれた工程」を区別できず、
-論理削除を選んだ最大の理由(取り消せること)が失われるため。削除の記録(下記「応答生成以外の
+論理削除を選んだ最大の理由(取り消せること)が失われるため。削除の記録(`messages.md`「応答生成以外の
 経路での操作の記録」)も削除したタスクの会話に置くので、取り消せばタスクと一緒に戻る。
 
 ### attachments(添付ファイル)
@@ -85,12 +85,12 @@
 (意図の記録+保険)。
 
 - `file_hash` は実体のSHA-256の小文字16進(64桁)。実体はアプリのデータディレクトリの
-  `attachments/<file_hash>` に置き、同じ内容の添付は実体を共有する(`architecture.md` 12節)。
+  `attachments/<file_hash>` に置き、同じ内容の添付は実体を共有する(`../architecture/attachments.md`)。
   実体を消してよいのは、同じ `file_hash` を指す行が1つも無くなったときだけ。送った形の保存
   (`turn_transcripts`)も同じハッシュで画像を指すが、指すのは添付の行が持つハッシュだけで、
   添付の行は消さないので、この条件は添付の行だけで判定できる
 - `mime_type` は中身の先頭バイトから決めた値(`attachments::classify`)。拡張子からは決めない
-- 画像は預かる時点で正規化する(`architecture.md` 12節)。`mime_type`・`size_bytes`・`file_hash` は
+- 画像は預かる時点で正規化する(`../architecture/attachments.md`)。`mime_type`・`size_bytes`・`file_hash` は
   正規化した後の実体のもので、元のファイルのものではない
 - 編集で新しい発言へ引き継ぐときは行を写し、実体は共有する(`db::attachments::copy_to_message`)
 
@@ -114,7 +114,7 @@
 ### 複数プロセスからの書き込みの排他
 
 GUI・CLI・MCPサーバーからの同時書き込みは、SQLite自身のロックで直列化する。ファイルロック等の
-別の仕組みは持たない。GUIは原則1つしか起動しない(`architecture.md`「多重起動の防止」)が、
+別の仕組みは持たない。GUIは原則1つしか起動しない(`../architecture/concurrency.md`「多重起動の防止」)が、
 防止はベストエフォートなので、GUI同士の同時書き込みもSQLiteのロックで扱える前提を崩さない。
 
 - **読んで判断してから書く操作は、判断に使う読み取りから書き込みまでを1つのトランザクション
@@ -144,11 +144,11 @@ DBのロックが守るのは1回の書き込みの整合性まで。応答生�
 関係は次の通り。
 
 - タスク・工程の操作(CLI #23、MCPサーバー #73)は、応答生成中の会話に操作の記録が挟まり
-  うる。2節「応答生成以外の経路での操作の記録」の通り。生成中のタスクが別プロセスから
+  うる。`messages.md`「応答生成以外の経路での操作の記録」の通り。生成中のタスクが別プロセスから
   削除されると、その応答は削除済みのタスクの会話に書かれる(画面には出ず、削除を
   取り消せば会話と一緒に戻る)
 - 応答生成はMCPサーバーには公開しない(`../legacy/backend.md` 9節)。`scitl-cli`も行わない。
-  行うのはGUIと`scitl-debug-cli`(`architecture.md` 1節)で、**この2つが同じ会話で同時に
+  行うのはGUIと`scitl-debug-cli`(`../architecture/cli.md`)で、**この2つが同じ会話で同時に
   生成することは断らない**(Issue #239)。断るにはDBに生成中の印を持つことになるが、印を立てた
   プロセスが落ちると印が残り、それを見分けて外す仕組みまで要る。`scitl-debug-cli`は開発者が
   手で動かすもので、同じ会話を画面と同時に動かさないことは使う側に任せられる。同時に生成した
@@ -179,4 +179,4 @@ DBのロックが守るのは1回の書き込みの整合性まで。応答生�
 
 `../legacy/data-model.md` 3節・4節の方針(システムプロンプト等はDBでなく設定ファイルに置く、
 秘密情報はOS資格情報ストアに置き設定ファイルには参照のみ)は変更なく維持する。
-実装は `architecture.md` 6節を参照。
+実装は `../architecture/network-secrets.md`を参照。

@@ -2,7 +2,7 @@
 //! 送信内容のプレビュー([`super::preview`])が同じ組み立てを通る。
 //!
 //! ラウンドをまたいで、前に送った部分は変えない。後ろにこのターンの往復を足すだけにする
-//! (`docs/spec/rebuild/architecture.md`「前に送った部分を変えない」)。
+//! (`docs/spec/architecture/transcript.md`「前に送った部分を変えない」)。
 
 use crate::blocking;
 use crate::db::messages::Chat;
@@ -47,7 +47,7 @@ impl TurnRequest {
     /// `stored`は、送る対象のユーザー発言の挿入・カスケード削除を済ませたあとの行。
     ///
     /// 先頭(システムプロンプトとツール定義)と間引きの位置は、使っている直前の保存のものを
-    /// 保つ(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」「間引きの位置」)。
+    /// 保つ(`docs/spec/architecture/transcript.md`「前が変わる場面の扱い」「間引きの位置」)。
     /// 設定から作ったシステムプロンプトが変わっていれば、新しい入力で伝える。ツール定義が
     /// 変わったときと間引いたときは、今の設定で作り直して固定し直す。
     ///
@@ -176,7 +176,7 @@ impl TurnRequest {
         &sent[self.opening.len()..]
     }
 
-    /// このターンで送った形の保存(`docs/spec/rebuild/architecture.md`「送った形のまま積む」)。
+    /// このターンで送った形の保存(`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
     /// `rounds`は最後の呼び出しで最初のリクエストの後ろに足した往復([`Self::appended`])と、
     /// 最後の応答。保存できない発言(添付から読み出したものでない画像)があれば`None`。
     pub(super) fn transcript(&self, rounds: &[ChatMessage]) -> Option<SavedTurn> {
@@ -286,7 +286,7 @@ impl Head {
 }
 
 /// 設定から作ったシステムプロンプトの新しい全文を、新しい入力の最初のユーザー発言の囲みの前に
-/// 置く(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。新しい入力にユーザー
+/// 置く(`docs/spec/architecture/transcript.md`「前が変わる場面の扱い」)。新しい入力にユーザー
 /// 発言が無ければ(応答すべき発言の無い会話の送信内容のプレビュー)、通知だけのユーザー発言にする。
 fn notify_system_update(opening: &mut Vec<ChatMessage>, input_from: usize, system: &str) {
     let notice = PromptText::system_update(system);
@@ -322,7 +322,7 @@ struct OpeningSegment {
 }
 
 /// 保存から並べた区間の思考(`Replay`)を、送り返せるものだけ残す
-/// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。先頭から順に、並べた形
+/// (`docs/spec/architecture/transcript.md`「思考を送り返す範囲」)。先頭から順に、並べた形
 /// (残した`Replay`ごと)で指紋を取り直し、区間の始まりで保存した指紋と一致し、要求URLの
 /// オリジンが今の送り先と同じで、今の送り先が受け付ける区間だけ残す。思考は別の送り先には
 /// 渡さない(`docs/spec/principles.md` 3節「思考は受け取ったまま送り返す」)。途中の`Replay`
