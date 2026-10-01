@@ -27,11 +27,33 @@ use openai_compat::OpenAiCompatAdapter;
 
 pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
 
-pub struct ActiveAdapter {
-    pub adapter: Option<SharedAdapter>,
-    /// 鍵を読めずに鍵無しで組み立てた。資格情報ストアのロック解除後などに読み直せるよう、
-    /// 呼び出し元は次の機会に組み立て直す。
-    pub key_unavailable: bool,
+/// [`build_active_adapter`]の結果。
+pub enum ActiveAdapter {
+    Ready(SharedAdapter),
+    /// アクティブなプロバイダーが無い。
+    NoProvider,
+    /// 鍵を登録したプロバイダーなのに、資格情報ストアから鍵を読めなかった。理由(画面に
+    /// 出してよい文)を持つ。資格情報ストアのロック解除後などに読み直せるよう、呼び出し元は
+    /// 次の機会に組み立て直す。
+    KeyUnavailable(String),
+}
+
+/// 登録前のAPIキーの検証。ASCIIの可視文字だけを受け付ける。空白・改行・全角文字の混入は、
+/// 方言やサーバーによって通ったり通らなかったりするので、登録の時点で断る(削らずに断るのは、
+/// 保存する値を入力どおりにするため)。値はエラー文に含めない。
+pub fn validate_api_key(api_key: &SecretString) -> Result<(), CoreError> {
+    if api_key
+        .expose_secret()
+        .bytes()
+        .all(|b| b.is_ascii_graphic())
+    {
+        Ok(())
+    } else {
+        Err(CoreError::ProviderConfig(
+            "the API key must contain only visible ASCII characters (no spaces or line breaks)"
+                .to_string(),
+        ))
+    }
 }
 
 /// 登録前の`base_url`の検証。平文の`http://`で鍵を送れる範囲(ループバックとプライベート
@@ -191,19 +213,23 @@ impl<'a> AdapterInputs<'a> {
 }
 
 /// 現在の`active_provider_id`からアダプタを組み立てる。アクティブなプロバイダーが無ければ
-/// `None`(チャット送信時にエラー発言になる)。
+/// [`ActiveAdapter::NoProvider`](チャット送信時にエラー発言になる)。
 ///
-/// 資格情報ストアを使えなくても、鍵無しで組み立てて起動を続ける(API呼び出し時に認証エラー
-/// として表に出る)。
+/// 資格情報ストアから鍵を読めなくても失敗にはせず、[`ActiveAdapter::KeyUnavailable`]を返す
+/// (起動や、鍵と無関係な設定の変更を止めないため)。読めなかった鍵の代わりに鍵無しで
+/// 送ることはしない。
 pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError> {
     let AdapterInputs { provider, timeout } = AdapterInputs::of(config);
     let Some(provider) = provider else {
-        return Ok(ActiveAdapter {
-            adapter: None,
-            key_unavailable: false,
-        });
+        return Ok(ActiveAdapter::NoProvider);
     };
-    let (api_key, key_unavailable) = load_api_key(provider.key_ref);
+    let api_key = match load_api_key(provider.key_ref) {
+        Ok(api_key) => api_key,
+        Err(e) => {
+            eprintln!("failed to read the API key from the secret store: {e}");
+            return Ok(ActiveAdapter::KeyUnavailable(e.to_string()));
+        }
+    };
 
     // 方言を足したらここがコンパイルエラーになり、黙ってOpenAI互換で組み立てることはない。
     let adapter: SharedAdapter = match provider.api_format {
@@ -226,10 +252,7 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
             timeout,
         )?),
     };
-    Ok(ActiveAdapter {
-        adapter: Some(adapter),
-        key_unavailable,
-    })
+    Ok(ActiveAdapter::Ready(adapter))
 }
 
 /// モデルの能力を推論サーバーに問い合わせられるプロバイダーか(能力解決の「自動検出」の層)。
@@ -273,12 +296,10 @@ pub async fn list_models(provider: &ProviderConfig) -> Result<Vec<String>, CoreE
 }
 
 /// 非同期の問い合わせの前に鍵を読む。資格情報ストアの呼び出しはブロックするため
-/// 別スレッドで行う。読めなければ鍵無しで進め、認証の失敗として表面化させる
-/// ([`build_active_adapter`]と同じ扱い)。
+/// 別スレッドで行う。読めなければ問い合わせずにエラーにする。
 async fn load_api_key_off_thread(provider: &ProviderConfig) -> Result<SecretString, CoreError> {
     let key_ref = provider.key_ref.clone();
-    let (api_key, _) = crate::blocking::run(move || Ok(load_api_key(key_ref.as_deref()))).await?;
-    Ok(api_key)
+    crate::blocking::run(move || load_api_key(key_ref.as_deref())).await
 }
 
 /// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
@@ -310,18 +331,16 @@ async fn send_with_key(
             .map_err(|e| LlmError::from_transport(e, key));
     }
     // ヘッダーに載せられない鍵は、方言によらず送る前に同じ文言で断る(`bearer_auth`に任せると、
-    // reqwestの組み立ての失敗として内部の文言のまま出る)。
-    let mut value = reqwest::header::HeaderValue::from_str(key).map_err(|_| {
+    // reqwestの組み立ての失敗として内部の文言のまま出る)。登録時の検証([`validate_api_key`])
+    // より前に保存された鍵のために残す。
+    let value = crate::net::secret_header_value(key).ok_or_else(|| {
         LlmError::InvalidRequest(ErrorDetail::internal(
             "the API key contains characters that cannot be sent in a header",
         ))
     })?;
     let request = match header {
         KeyHeader::Bearer => request.bearer_auth(key),
-        KeyHeader::Named(name) => {
-            value.set_sensitive(true);
-            request.header(name, value)
-        }
+        KeyHeader::Named(name) => request.header(name, value),
     };
     request
         .send()
@@ -376,23 +395,42 @@ async fn read_json<T: DeserializeOwned>(
         .map_err(|e| LlmError::from_transport(e, api_key.expose_secret()))
 }
 
-/// 2つ目は「鍵があるはずなのに読めなかった」。
-fn load_api_key(key_ref: Option<&str>) -> (SecretString, bool) {
-    let Some(key_ref) = key_ref else {
-        return (SecretString::from(String::new()), false);
-    };
-    match secrets::load(key_ref) {
-        Ok(key) => (key, false),
-        Err(e) => {
-            eprintln!("failed to read API key from secret store, continuing without it: {e}");
-            (SecretString::from(String::new()), true)
-        }
+/// 鍵を登録していないプロバイダー(`key_ref`が無い)は空の鍵で、鍵のヘッダーを付けずに送る
+/// (認証不要のローカル推論サーバー向け)。鍵を登録したのに読めなければエラーにする。
+/// 鍵無しで送るのは前者だけで、その分岐はここに閉じる。
+fn load_api_key(key_ref: Option<&str>) -> Result<SecretString, CoreError> {
+    match key_ref {
+        Some(key_ref) => secrets::load(key_ref),
+        None => Ok(SecretString::from(String::new())),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_key_must_be_visible_ascii() {
+        for key in ["sk-test_123", "AIza.x/y+z="] {
+            assert!(
+                validate_api_key(&SecretString::from(key)).is_ok(),
+                "{key:?}"
+            );
+        }
+        for key in [
+            " ",
+            "sk test",
+            " sk-test",
+            "sk-test\n",
+            "sk-test\u{3000}",
+            "ｓｋ-test",
+        ] {
+            assert!(
+                validate_api_key(&SecretString::from(key)).is_err(),
+                "{key:?}"
+            );
+        }
+    }
 
     #[test]
     fn accepts_https_base_url() {
