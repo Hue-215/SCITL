@@ -8,8 +8,7 @@ description: 疑似API(Sham_llm)とscitl-debug-cliで、APIキーを使わずに
 - **scitl-debug-cli**: SCITLをGUI無しで操作するコマンド
 - **Sham_llm**: LLMのAPIとして振る舞う疑似サーバー。応答の中身は、エージェント(または人)が
   「LLM役」として書く。本体は別リポジトリ[Hue-215/Sham_llm](https://github.com/Hue-215/Sham_llm)
-  (ローカルでは`~/Documents/Sham_llm`)にあり、受け口・検査の範囲・LLM役の窓口・起動方法は
-  そちらの文書を正とする
+  にあり、受け口・検査の範囲・LLM役の窓口・起動方法はそちらの文書を正とする
 
 LLM役は本物のモデルではない。言い回しやツールの選び方は本物と違いうるので、プロンプトの評価には
 使わない。アダプタが固まったら本物のAPIで一度確かめる。
@@ -25,10 +24,11 @@ LLM役は本物のモデルではない。言い回しやツールの選び方�
 curl -s http://127.0.0.1:18080/v1/models    # {"object":"list","data":[{"id":"dummy-o",...}]} が返ればよい
 ```
 
-返らなければ、Sham_llmのリポジトリ(`~/Documents/Sham_llm`)で`npm run dev`を実行して起動する
+返らなければ、手元に置いたSham_llmのリポジトリで`npm run dev`を実行して起動する
 (Node.js 22以降)。
 
-LLM役の窓口は、このプロジェクトに登録済みのMCPサーバー`sham-llm`のツールとして使える。
+LLM役の窓口は、MCPサーバー`sham-llm`(`http://127.0.0.1:18080/mcp`)として`.mcp.json`に登録すると、
+次のツールとして使える。
 
 | ツール | 用途 |
 |---|---|
