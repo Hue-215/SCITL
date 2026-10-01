@@ -210,6 +210,15 @@ fn enable_wal(conn: &Connection) -> Result<()> {
     }
 }
 
+/// DBのファイルか、それを置くディレクトリに書き込めないための失敗か。
+pub fn is_read_only_error(e: &CoreError) -> bool {
+    matches!(
+        e,
+        CoreError::Db(rusqlite::Error::SqliteFailure(failure, _))
+            if failure.code == rusqlite::ErrorCode::ReadOnly
+    )
+}
+
 pub fn open_in_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     conn.pragma_update(None, "foreign_keys", "ON")?;

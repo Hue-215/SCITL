@@ -34,7 +34,7 @@ pub(crate) fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
 fn sync_parent_dir(path: &Path) {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
-            eprintln!("failed to sync a data directory: {e}");
+            crate::diagnostics::report(format_args!("failed to sync a data directory: {e}"));
         }
     }
 }
@@ -43,10 +43,11 @@ fn sync_parent_dir(path: &Path) {
 #[cfg(not(unix))]
 fn sync_parent_dir(_path: &Path) {}
 
-/// I/Oの失敗を、画面に出すエラー文言にする。パスは載せない(利用者のホームディレクトリ等が
-/// 画面とログに出るため)。
+/// I/Oの失敗を、画面に出すエラー文言にする。理由はOSのエラー文で書く。パスは載せない
+/// (利用者のホームディレクトリ等が画面とログに出るため)。OSが返したエラーの文にパスは
+/// 入らないので、パスを含む文で自前に組み立てた`io::Error`は渡さない。
 pub(crate) fn describe_io_error(action: &str, e: &io::Error) -> String {
-    format!("failed to {action}: {:?}", e.kind())
+    format!("failed to {action}: {e}")
 }
 
 #[cfg(test)]
@@ -81,5 +82,20 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from("occupied")]);
+    }
+
+    #[test]
+    fn an_io_error_is_described_with_the_message_of_the_os() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = std::fs::read(dir.path().join("missing")).unwrap_err();
+
+        let described = describe_io_error("read the file", &e);
+
+        assert_eq!(described, format!("failed to read the file: {e}"));
+        assert!(!described.contains("NotFound"), "{described}");
+        assert!(
+            !described.contains(&dir.path().display().to_string()),
+            "{described}"
+        );
     }
 }

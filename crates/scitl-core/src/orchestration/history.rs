@@ -519,7 +519,10 @@ fn load_image(attachment: &Attachment, store: &AttachmentStore) -> Option<Inline
     match store.read_image(hash) {
         Ok(image) => Some(image),
         Err(e) => {
-            eprintln!("failed to read attachment {}: {e}", attachment.view.id);
+            crate::diagnostics::report(format_args!(
+                "failed to read attachment {}: {e}",
+                attachment.view.id
+            ));
             None
         }
     }

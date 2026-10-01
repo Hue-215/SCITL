@@ -195,13 +195,17 @@ impl Settings {
             Ok(config) => (config, None),
             Err(e) => {
                 let reason = format!("{}: {e}", path.display());
-                eprintln!("failed to read the config file, starting with empty settings: {reason}");
+                crate::diagnostics::report(format_args!(
+                    "failed to read the config file, starting with empty settings: {reason}"
+                ));
                 (Config::default(), Some(reason))
             }
         };
         let adapter = adapter_state(providers::build_active_adapter(&config));
         if let Some(reason) = adapter.broken_reason() {
-            eprintln!("the active provider cannot be used: {reason}");
+            crate::diagnostics::report(format_args!(
+                "the active provider cannot be used: {reason}"
+            ));
         }
         Self {
             path,
@@ -295,10 +299,10 @@ impl Settings {
         });
         if let Some((provider, model)) = target {
             if let Err(e) = self.detect(&provider, vec![model]).await {
-                eprintln!(
+                crate::diagnostics::report(format_args!(
                     "failed to detect model capabilities from '{}': {e}",
                     provider.name
-                );
+                ));
             }
         }
     }
@@ -910,7 +914,9 @@ fn delete_secret_refs(refs: &[SecretRef]) {
 /// 鍵だけ)。
 fn delete_secret(key_ref: &str, what: &str) {
     if let Err(e) = secrets::delete(key_ref) {
-        eprintln!("failed to delete {what} from secret store: {e}");
+        crate::diagnostics::report(format_args!(
+            "failed to delete {what} from secret store: {e}"
+        ));
     }
 }
 

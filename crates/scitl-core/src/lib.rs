@@ -1,7 +1,11 @@
+// 標準エラーへは`diagnostics`からだけ書く。
+#![deny(clippy::print_stderr)]
+
 pub mod attachments;
 pub mod blocking;
 pub mod config;
 pub mod db;
+pub mod diagnostics;
 pub mod error;
 pub mod export;
 mod files;

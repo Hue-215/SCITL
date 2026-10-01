@@ -155,7 +155,9 @@ fn read_images(hashes: &[String], store: &AttachmentStore) -> Option<Vec<InlineI
         .map(|hash| match store.read_image(hash) {
             Ok(image) => Some(image),
             Err(e) => {
-                eprintln!("failed to read a saved image {hash}: {e}");
+                crate::diagnostics::report(format_args!(
+                    "failed to read a saved image {hash}: {e}"
+                ));
                 None
             }
         })

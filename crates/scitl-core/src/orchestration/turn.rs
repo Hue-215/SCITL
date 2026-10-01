@@ -289,8 +289,8 @@ pub(super) fn begin_generating(
     generating.try_begin(chat).ok_or(CoreError::ChatBusy(chat))
 }
 
-/// 会話に行を書く前に、タスクが存在し削除されていないかを確かめる。削除と操作が
-/// 行き違うと、外部キーは通るので削除済みのタスクに行が書かれてしまう。
+/// 会話のタスクが存在し削除されていないかを確かめる。行を書く前に呼ぶ(削除と操作が
+/// 行き違うと、外部キーは通るので削除済みのタスクに行が書かれてしまう)。
 pub(super) fn require_chat(conn: &Connection, chat: Chat) -> Result<()> {
     if let Chat::Task(task_id) = chat {
         tasks::get_task(conn, task_id)?;
@@ -483,10 +483,10 @@ pub(super) async fn prepare_external_tools(
                 fetched.push((server, tools));
             }
             Err(e) => {
-                eprintln!(
+                crate::diagnostics::report(format_args!(
                     "failed to list tools from MCP server '{}': {e}",
                     server.name
-                );
+                ));
                 unavailable.push(server);
             }
         }
@@ -594,8 +594,8 @@ async fn run_tool_rounds(
             let transcript = adapter.identity().and_then(|identity| {
                 let saved = request.transcript(&rounds);
                 if saved.is_none() {
-                    eprintln!(
-                        "cannot save what was sent: an image was not read from an attachment"
+                    crate::diagnostics::report(
+                        "cannot save what was sent: an image was not read from an attachment",
                     );
                 }
                 Some((identity, saved?))
@@ -615,7 +615,9 @@ async fn run_tool_rounds(
                     // 実行記録から組み立てる)。
                     if let Some((identity, saved)) = &transcript {
                         if let Err(e) = attempt.save_transcript(conn, identity, saved) {
-                            eprintln!("failed to save what was sent: {e}");
+                            crate::diagnostics::report(format_args!(
+                                "failed to save what was sent: {e}"
+                            ));
                         }
                     }
                     Ok(())
