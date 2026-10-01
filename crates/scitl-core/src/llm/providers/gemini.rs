@@ -435,7 +435,7 @@ impl LlmAdapter for GeminiAdapter {
         })
     }
 
-    /// 別のモデルが出した`thought`も送り返す。署名は検証されるが、出したモデルには縛られない。
+    /// 別のモデルが出した`thought`も送り返す。
     fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
         origin.api_format == ApiFormat::Gemini
     }
