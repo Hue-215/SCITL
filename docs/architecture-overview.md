@@ -25,7 +25,8 @@ flowchart LR
     CONF["tauri.conf.json<br/>CSP: connect-srcはIPCの窓口のみ"]
   end
 
-  CLI["scitl-cli<br/>JSON出力 / 応答生成はしない / preview"]
+  CLI["scitl-cli<br/>JSON出力 / タスクの確認・操作と会話の表示"]
+  DBG["scitl-debug-cli<br/>scitl-cliのコマンド + 応答生成・preview・設定・登録"]
 
   subgraph CORE["scitl-core: UI非依存"]
     ORCH["orchestration/<br/>turn・operations・preview"]
@@ -55,6 +56,8 @@ flowchart LR
   CMD -. "TurnEvent (Channel)" .-> API
   CMD --> CORE
   CLI --> CORE
+  DBG --> CLI
+  DBG --> CORE
 
   ORCH --> LLM
   ORCH --> TOOLS

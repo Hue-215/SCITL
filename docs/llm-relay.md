@@ -21,8 +21,10 @@
 ## 2. ドライバーで動かす
 
 `crates/scitl-core/examples/relay_session.rs` は、GUIと同じ入口(`create_task`・`open_task_chat`・
-`run_turn`)を台本どおりに呼ぶ。CLIではなくexampleにしているのは、CLIは応答生成をしない
-(`scitl-cli` の方針)ため。
+`run_turn`)を台本どおりに呼ぶ。応答生成は `scitl-debug-cli` でもできるが(6節)、ドライバーは
+設定ファイルと資格情報ストアを使わずに、アダプタとターンの文脈を直に組み立てる。Secret Serviceの
+無い環境でも動き、設定からは起こしにくい場面(実体の無い外部ツールの定義を出し入れする、
+コンテキスト長を狭める)を作れる。
 
 リポジトリの最上位で:
 
@@ -96,3 +98,25 @@ RELAY_MODEL=<サーバー側のモデル名> RELAY_CONTEXT_LENGTH=16384 \
 `RELAY_CONTEXT_LENGTH` はサーバーのコンテキスト長(llama-serverなら `GET /props` の
 `default_generation_settings.n_ctx`)以下にする。
 
+## 6. scitl-debug-cliで動かす
+
+GUIと同じ設定の読み方(設定ファイル・資格情報ストア・能力の自動検出)まで含めて確かめるときは、
+`scitl-debug-cli` で登録して送る。鍵は引数ではなく環境変数の名前で渡す。資格情報ストア(Linuxでは
+Secret Service)が要る。
+
+```sh
+D=target/debug-data; mkdir -p $D
+cli() { cargo run -q -p scitl-debug-cli -- --data-dir $D "$@"; }
+
+RELAY_KEY=dummy cli provider add --name sham --api-format open_ai_compat \
+  --base-url http://127.0.0.1:18080/v1 --api-key-env RELAY_KEY   # 出力の providers[].id を控える
+cli model add <プロバイダーのID> dummy-o
+cli model select <プロバイダーのID> dummy-o
+cli settings general --response-timeout-secs 900                 # LLM役は遅いので延ばす
+cli task create                                                   # タスクを作り、聞き取りを始める
+cli chat send --task 1 --attach memo.txt "これを見て"
+```
+
+途中経過は1行に1つのJSONで標準出力に出て、最後の行が会話の最後の発言になる。失敗したターンは
+エラー発言として保存され、その行に `error_kind` が入る。確かめ終えたら `cli provider delete` で
+鍵ごと消す。
