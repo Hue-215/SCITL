@@ -141,6 +141,20 @@ export function retryChatMessage(
   return invoke('retry_chat_message', { chat, messageId, onEvent: new Channel(onEvent) })
 }
 
+// 返信の無いまま終わった会話に、応答を生成する。返信(エラー発言を含む)で終わる会話では
+// 断られる(エラー発言は`retryChatMessage`で作り直す)。
+export function generateChatReply(
+  chat: Chat,
+  onEvent: (event: TurnEvent) => void,
+): Promise<void> {
+  return invoke('generate_chat_reply', { chat, onEvent: new Channel(onEvent) })
+}
+
+// 会話が返信の無いまま終わっているか(`generateChatReply`を受け付けるか)。
+export function chatLacksReply(chat: Chat): Promise<boolean> {
+  return invoke('chat_lacks_reply', { chat })
+}
+
 // 生成中の応答を止める。生成中でなければ何もせず`false`。止めたターンは、生成を始めた
 // コマンドが終わったときには保存されている。
 export function stopChatResponse(chat: Chat): Promise<boolean> {

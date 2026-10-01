@@ -90,6 +90,22 @@ pub(super) fn awaits_reply(conn: &Connection, chat: Chat) -> Result<bool> {
     })
 }
 
+/// 会話が返信の行(アシスタント発言・エラー発言)の無いまま終わっているか。表示される発言の
+/// 最後がユーザー発言なら真。発言が1つも無ければ、開始の発言を補う会話(聞き取り)なら真。
+/// 生成の途中でプロセスが終わった会話や、作り直しの途中で落ちて元の返信が消えた会話が当たる。
+///
+/// 真なら[`awaits_reply`]も真になる。エラー発言で終わる会話は偽で、作り直しの対象になる。
+pub(super) fn lacks_reply(conn: &Connection, chat: Chat) -> Result<bool> {
+    let last = messages::list_rows_for_chat(conn, chat)?
+        .into_iter()
+        .rev()
+        .find(|m| m.kind == Kind::Normal);
+    Ok(match last {
+        Some(m) => m.role == Role::User,
+        None => starts_with_opening(conn, chat)?,
+    })
+}
+
 /// [`build_history`]の、モデルと設定から決まる部分。
 pub(super) struct HistoryOptions {
     /// モデルが画像入力に対応するか(`attachments::delivery`)。

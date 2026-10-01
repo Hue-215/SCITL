@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
+  chatLacksReply,
   createTask,
   deleteChatMessage,
   deleteTask,
   editChatMessage,
   failureText,
+  generateChatReply,
   getTaskDetail,
   listChatMessages,
   listTasks,
@@ -47,6 +49,8 @@ export default function App() {
   // 表示中のタスク。総合チャットと、タスクを読み込むまでの間はnull。
   const [task, setTask] = useState<TaskDetailView | null>(null)
   const [messages, setMessages] = useState<MessageView[]>([])
+  // 表示中の会話が返信の無いまま終わっているか。真なら応答を生成する操作を出す。
+  const [lacksReply, setLacksReply] = useState(false)
   const [draft, setDraft] = useState('')
   // 入力欄の送信前の添付。本文と同じく、会話を切り替えても残す。
   const staged = useStagedAttachments()
@@ -97,6 +101,7 @@ export default function App() {
       // 操作できてしまう。
       setTask(null)
       setMessages([])
+      setLacksReply(false)
     },
     [stick],
   )
@@ -112,14 +117,16 @@ export default function App() {
     async (target: Chat) => {
       const key = chatKey(target)
       try {
-        const [detail, history] = await Promise.all([
+        const [detail, history, lacking] = await Promise.all([
           target.kind === 'task' ? getTaskDetail(target.task_id) : null,
           listChatMessages(target),
+          chatLacksReply(target),
         ])
         // 読み込み中に別の会話へ移っていたら捨てる。追い越した結果で表示を上書きしない。
         if (selectedRef.current !== key) return
         setTask(detail)
         setMessages(history)
+        setLacksReply(lacking)
         setEditingId(null)
         reloaded(target)
       } catch (e) {
@@ -257,6 +264,20 @@ export default function App() {
     )
   }
 
+  // 返信の無いまま終わった会話に応答を生成する。何も消さないので、画面から外す行は無い。
+  const generateReply = async () => {
+    if (disableActions) return
+    const target = chat
+    stick()
+    setLacksReply(false)
+    await requests.run(
+      target,
+      [{ role: 'pending', content: t('chat.pending_reply') }],
+      (onEvent) => generateChatReply(target, onEvent),
+      settle,
+    )
+  }
+
   // 発言とそれより後ろをまとめて削除する(確認は発言の操作ボタンが挟む)。最初のユーザー発言を
   // 消すと一覧のフォールバック表示が変わるので、`requests`が一覧ごと引き直す。
   const remove = async (messageId: number) => {
@@ -358,6 +379,7 @@ export default function App() {
           }}
           onRetry={(messageId) => void retry(messageId)}
           onRemove={(messageId) => void remove(messageId)}
+          onGenerateReply={lacksReply ? () => void generateReply() : null}
         />
 
         <StagedAttachmentChips staged={staged} deliveries={deliveries} disabled={disableActions} />

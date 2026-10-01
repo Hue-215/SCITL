@@ -15,6 +15,7 @@
   "chat.edit_button": "Edit",
   "chat.error_detail_summary": "Show details",
   "chat.general_title": "General chat",
+  "chat.generate_reply_button": "Generate a reply",
   "chat.input_hint": "Type a message",
   "chat.pending_reply": "Waiting for a reply…",
   "chat.retry_button": "Retry",

@@ -147,16 +147,55 @@ pub async fn open_task_chat(
     ctx: &TurnContext<'_>,
     task_id: i64,
 ) -> Result<()> {
-    let chat = Chat::Task(task_id);
-    let generating = begin_generating(ctx.generating, chat)?;
-    with_conn(db.clone(), move |conn| {
-        require_chat(conn, chat)?;
+    generate_new_turn(db, ctx, Chat::Task(task_id), move |conn| {
         if messages::opener(conn, task_id)?.is_some() {
             return Err(CoreError::InvalidMessageOperation(
                 "the conversation has already started".to_string(),
             ));
         }
         Ok(())
+    })
+    .await
+}
+
+/// 返信の無いまま終わった会話に、応答を生成する。生成の途中でプロセスが終わった会話等から、
+/// 発言を送り直さずに応答を得るための入口。何も消さず、新しいターンとして生成する。返信の無い
+/// ユーザー発言はすべて、このターンがまとめて答える。途中で終わった試行で実行したことは、捨てた
+/// 試行の記録としてモデルに伝わる。
+///
+/// 会話が返信の行で終わっていれば断る(`history::lacks_reply`)。エラー発言で終わる会話は、
+/// そのエラー発言の作り直し([`retry_reply`])で生成し直す。
+pub async fn generate_reply(db: SharedConnection, ctx: &TurnContext<'_>, chat: Chat) -> Result<()> {
+    generate_new_turn(db, ctx, chat, move |conn| {
+        if !history::lacks_reply(conn, chat)? {
+            return Err(CoreError::InvalidMessageOperation(
+                "the conversation already ends with a reply".to_string(),
+            ));
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// 会話が返信の無いまま終わっているか([`generate_reply`]が受け付けるか)。画面が応答を生成する
+/// 操作を出すかの判断に使う。タスクが存在しない・削除済みなら`TaskNotFound`。
+pub fn lacks_reply(conn: &Connection, chat: Chat) -> Result<bool> {
+    require_chat(conn, chat)?;
+    history::lacks_reply(conn, chat)
+}
+
+/// 行を何も消さずに、新しいターンを生成する。`precondition`は会話の存在を確かめたあとに呼び、
+/// 断れば何も書かない。
+async fn generate_new_turn(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    chat: Chat,
+    precondition: impl FnOnce(&Connection) -> Result<()> + Send + 'static,
+) -> Result<()> {
+    let generating = begin_generating(ctx.generating, chat)?;
+    with_conn(db.clone(), move |conn| {
+        require_chat(conn, chat)?;
+        precondition(conn)
     })
     .await?;
 

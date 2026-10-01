@@ -99,8 +99,8 @@ SCITL-2.0/
   - タスクの操作は画面と同じ`orchestration::operations`を経路の印`cli`で呼ぶ。印はどちらの
     バイナリでも同じにする。印が表すのは「応答生成の外から操作された」ことで
     (`data-model.md`「ターン境界」)、どのバイナリかを分けてもモデルにも記録にも使い道が無い
-  - **応答生成**(`scitl-debug-cli`の`task create`・`chat send`・`chat retry`)は、GUIと同じ入口
-    (`create_task`と`open_task_chat`・`run_turn`・`retry_reply`)を、設定ファイルと資格情報ストアから
+  - **応答生成**(`scitl-debug-cli`の`task create`・`chat send`・`chat retry`・`chat reply`)は、
+    GUIと同じ入口(`create_task`と`open_task_chat`・`run_turn`・`retry_reply`・`generate_reply`)を、設定ファイルと資格情報ストアから
     GUIと同じく作った文脈で呼ぶ。途中経過(`TurnEvent`)を1行に1つのJSONで出し、最後に会話の
     最後の発言を出す。失敗したターンはエラー発言として保存されるので、コマンドは成功で終わる。
     **別プロセス(GUI)が同じ会話で生成中でも断らない**(`data-model.md` 4節)

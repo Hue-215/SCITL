@@ -15,6 +15,7 @@
   "chat.edit_button": "編集",
   "chat.error_detail_summary": "詳細を表示",
   "chat.general_title": "総合チャット",
+  "chat.generate_reply_button": "応答を生成",
   "chat.input_hint": "メッセージを入力",
   "chat.pending_reply": "応答を待っています…",
   "chat.retry_button": "再試行",

@@ -15,9 +15,10 @@ use scitl_core::llm::{
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
-    create_task, delete_message, discard_events, edit_user_message, open_task_chat,
-    preview_request, retry_reply, run_turn, stop_response, McpAccess, PreviewOptions,
-    SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure, UserInput,
+    create_task, delete_message, discard_events, edit_user_message, generate_reply, lacks_reply,
+    open_task_chat, preview_request, retry_reply, run_turn, stop_response, McpAccess,
+    PreviewOptions, SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure,
+    UserInput,
 };
 use serde_json::json;
 
@@ -2391,6 +2392,103 @@ async fn editing_an_earlier_message_drops_the_records_of_later_turns() {
     let operations = operations_sent(&edited.sent_messages()[0]);
     assert!(operations.contains(r#""tool":"add_steps""#));
     assert!(!operations.contains("update_task"));
+}
+
+/// 作り直しの途中でプロセスが終わった会話(元の返信だけが消えている)に、発言を送り直さずに
+/// 応答を生成できる。何も消さずに新しいターンとして答え、前のターンで実行したことは伝える。
+#[tokio::test]
+async fn generating_a_reply_answers_a_conversation_left_without_one() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&adds_a_step()),
+        chat,
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+    let old_turn = {
+        let conn = db.lock().unwrap();
+        let reply = db::messages::list_for_chat(&conn, chat)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap();
+        db::messages::soft_delete_normal_from(&conn, chat, reply.id).unwrap();
+        assert!(lacks_reply(&conn, chat).unwrap());
+        reply.turn_id.unwrap()
+    };
+
+    let adapter = ScriptedAdapter::texts(&["お待たせしました"]);
+    generate_reply(db.clone(), &context(&adapter), chat)
+        .await
+        .unwrap();
+
+    assert!(operations_sent(&adapter.sent_messages()[0]).contains(r#""tool":"add_steps""#));
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(roles, vec!["user", "assistant"]);
+    assert_eq!(messages[1].content, "お待たせしました");
+    assert_ne!(messages[1].turn_id.as_deref(), Some(old_turn.as_str()));
+    assert!(!lacks_reply(&conn, chat).unwrap());
+}
+
+/// 返信(エラー発言を含む)で終わる会話には応答を生成しない。エラー発言は作り直しで生成し直す。
+#[tokio::test]
+async fn generating_a_reply_is_refused_after_a_reply_or_an_error() {
+    let conn = db::open_in_memory().unwrap();
+    let replied = seed_task(&conn);
+    let failed = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    for (task_id, adapter) in [
+        (replied, ScriptedAdapter::texts(&["はい"])),
+        (failed, fails_to_authenticate()),
+    ] {
+        let chat = Chat::Task(task_id);
+        run_turn(db.clone(), &context(&adapter), chat, "質問".to_string())
+            .await
+            .unwrap();
+        assert!(!lacks_reply(&db.lock().unwrap(), chat).unwrap());
+        let result = generate_reply(db.clone(), &context(&adapter), chat).await;
+        assert!(
+            matches!(result, Err(CoreError::InvalidMessageOperation(_))),
+            "{result:?}"
+        );
+    }
+}
+
+/// 発言の無い会話は、聞き取りから始まる会話(まだ何も無いタスクを含む)なら応答を生成でき、
+/// ユーザーから始めた会話の発言を消したあとなら生成できない(答える発言が無い)。
+#[tokio::test]
+async fn an_empty_conversation_lacks_a_reply_only_when_it_opens_with_one() {
+    let conn = db::open_in_memory().unwrap();
+    let fresh = seed_task(&conn);
+    let emptied = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    assert!(lacks_reply(&db.lock().unwrap(), Chat::Task(fresh)).unwrap());
+    assert!(!lacks_reply(&db.lock().unwrap(), Chat::General).unwrap());
+
+    let chat = Chat::Task(emptied);
+    run_turn(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["はい"])),
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let user = {
+        let conn = db.lock().unwrap();
+        db::messages::list_for_chat(&conn, chat).unwrap()[0].id
+    };
+    delete_message(db.clone(), &InFlightSet::new(), chat, user)
+        .await
+        .unwrap();
+    assert!(!lacks_reply(&db.lock().unwrap(), chat).unwrap());
 }
 
 /// 再試行の対象はターンの返信のみ。ユーザー発言を再試行しようとするとエラーになる。

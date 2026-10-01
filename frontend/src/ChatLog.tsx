@@ -77,6 +77,8 @@ interface ChatLogProps {
   editing: EntryEditing
   onRetry: (messageId: number) => void
   onRemove: (messageId: number) => void
+  // 会話が返信の無いまま終わっているときだけ渡す。会話の末尾に応答を生成する操作を出す。
+  onGenerateReply: (() => void) | null
 }
 
 // 会話欄。保存済みの発言・応答待ちの表示・コマンドの失敗を並べる。
@@ -91,6 +93,7 @@ export default function ChatLog({
   editing,
   onRetry,
   onRemove,
+  onGenerateReply,
 }: ChatLogProps) {
   return (
     <ul className="chat-log" ref={logRef} onScroll={onScroll}>
@@ -207,6 +210,13 @@ export default function ChatLog({
           </li>
         )
       })}
+      {onGenerateReply && pending.length === 0 && (
+        <li className="button-row">
+          <button type="button" disabled={disableActions} onClick={onGenerateReply}>
+            {t('chat.generate_reply_button')}
+          </button>
+        </li>
+      )}
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
           // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す。完了したら読み直した
