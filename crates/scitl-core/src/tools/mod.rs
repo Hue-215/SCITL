@@ -175,10 +175,7 @@ pub fn execute(
 /// 工程が会話の対象タスクに属するかを確かめる。`step_id`はモデルが渡す引数なので、別の
 /// タスクの工程を指されうる。工程の更新・削除ツールで共有する。
 fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result<()> {
-    let belongs = task_steps::list_for_task(conn, task_id)?
-        .iter()
-        .any(|step| step.id == step_id);
-    if belongs {
+    if task_steps::belongs_to_task(conn, task_id, step_id)? {
         Ok(())
     } else {
         Err(CoreError::TaskStepNotFound(step_id))
