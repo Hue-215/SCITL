@@ -2095,9 +2095,14 @@ async fn turn_with(
     task_id: i64,
     text: &str,
 ) {
+    // 変更の通知はシステムプロンプトの全文を運ぶ。既定のコンテキスト長では、先頭と通知だけで
+    // 予算をほぼ使い切り、履歴が間引かれる。
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 20_000;
     run_turn(
         db.clone(),
         &TurnContext {
+            capabilities,
             prompts,
             ..context(adapter)
         },

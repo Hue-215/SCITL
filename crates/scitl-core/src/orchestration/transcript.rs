@@ -19,7 +19,7 @@ use crate::llm::{
 /// 保存は使わず、実行記録から組み立て直す(組み立ては今の規則で無害化する)。囲みの読み方の
 /// 説明(`llm::user_message_format_note`)を変えたときも上げる。固定した先頭に前の説明が残り、
 /// 保存した本文を前の説明のまま読ませ続けることになるため。
-const FORM_VERSION: u32 = 4;
+const FORM_VERSION: u32 = 5;
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
@@ -435,8 +435,8 @@ mod tests {
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
             (
-                4,
-                "b1dd94a2e608517ad195d84e1f1c742c3c363d09dd50109a0b5ad117458bd1bb"
+                5,
+                "a827abc79cf89285a061bd14b61cb0a996f1d4197b90b296847d02bb226ecc5c"
             ),
             "無害化の規則か、囲みの形か、その読み方の説明が変わった。前の規則で保存した本文を\
              並べないよう、FORM_VERSIONを上げてから期待値を今の出力に更新する"
