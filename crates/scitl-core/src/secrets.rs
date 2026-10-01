@@ -129,9 +129,13 @@ pub fn load(key_ref: &str) -> Result<SecretString, CoreError> {
     with_entry(key_ref, |entry| entry.get_password()).map(SecretString::from)
 }
 
-/// `key_ref`の指す秘密情報を削除する。プロバイダー設定を削除する際に呼ぶ。
+/// `key_ref`の指す秘密情報を削除する。プロバイダー設定を削除する際に呼ぶ。既に無ければ
+/// 成功にする(やり直したとき、1回目で消えていることがあるため)。
 pub fn delete(key_ref: &str) -> Result<(), CoreError> {
-    with_entry(key_ref, Entry::delete_credential)
+    with_entry(key_ref, |entry| match entry.delete_credential() {
+        Err(keyring_core::Error::NoEntry) => Ok(()),
+        result => result,
+    })
 }
 
 #[cfg(test)]
@@ -156,6 +160,15 @@ mod tests {
             panic!("expected CoreError::Secrets");
         };
         assert!(!message.contains(key_ref));
+    }
+
+    /// 登録し直すしかない失敗だと分かる文にする。
+    #[test]
+    fn no_entry_error_says_the_secret_is_missing() {
+        let CoreError::Secrets(message) = store_error(keyring_core::Error::NoEntry) else {
+            panic!("expected CoreError::Secrets");
+        };
+        assert!(message.contains("not in the secret store"));
     }
 
     fn platform_failure() -> keyring_core::Error {
