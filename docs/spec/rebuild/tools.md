@@ -15,12 +15,12 @@
 **確定方針**: 実装関数は1つのまま、公開するスキーマを面ごとに分ける。
 
 ```
-タスクチャット版:  update_task(title?, description?, deadline?, status?)
+タスクチャット版:  update_task(title?, description?, deadline?, status?, clear?)
                    add_steps(descriptions: string[])
                    update_step(step_id, description?, done?)
                    delete_step(step_id)
 
-MCP版:             update_task(task_id, title?, description?, deadline?, status?)
+MCP版:             update_task(task_id, title?, description?, deadline?, status?, clear?)
                    add_steps(task_id, descriptions: string[])
                    update_step(task_id, step_id, description?, done?)
                    delete_step(task_id, step_id)
@@ -195,7 +195,8 @@ MCP版:             update_task(task_id, title?, description?, deadline?, status
 - 画像の実体の読み出しはDBのロックの外で行う(`orchestration::turn::execute_call`)。読めなければ
   ツールの失敗として返す
 - ツール結果の画像をリクエストでどう表すかはアダプタが決める(`architecture.md` 3節)。
-  外部ツールが返す画像(Issue #107)も同じ形(`llm::ChatMessage::Tool`の`images`)に載せる
+  外部ツールが返す画像等の非テキストの結果は載せず、捨てた件数だけを結果に残す
+  (`mcp::to_result_value`の`omitted_non_text_blocks`)
 
 ## 4.5 外部(MCP)ツールの公開(Issue #44)
 
