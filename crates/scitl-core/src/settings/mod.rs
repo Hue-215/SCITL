@@ -63,6 +63,7 @@ pub struct GeneralUpdate {
 /// 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
 /// `Debug`は付けない(ログに出す経路を作らない)。
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum NewMcpEndpoint {
     Stdio {
@@ -70,11 +71,13 @@ pub enum NewMcpEndpoint {
         #[serde(default)]
         args: Vec<String>,
         #[serde(default)]
+        #[cfg_attr(test, ts(type = "Array<[string, string]>"))]
         env: Vec<(String, SecretString)>,
     },
     StreamableHttp {
         url: String,
         #[serde(default)]
+        #[cfg_attr(test, ts(type = "Array<[string, string]>"))]
         headers: Vec<(String, SecretString)>,
     },
 }

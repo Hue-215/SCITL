@@ -1,8 +1,7 @@
 // 設定画面の「ツール」タブ。
 import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { NewMcpEndpoint } from './api'
-import type { McpServerView, SettingsView } from './types'
+import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
