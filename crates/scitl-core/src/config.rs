@@ -224,6 +224,15 @@ pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
             "MCP server name must be alphanumeric or underscore".to_string(),
         ));
     }
+    // ツールの公開名は`<サーバー名>__<ツール名>`(`tools::external::exposed_name`)。サーバー名に
+    // `__`や末尾の`_`があると、別々のツールが同じ公開名になる(サーバー`a`のツール`b__c`と、
+    // サーバー`a__b`のツール`c`)。先頭の`_`は衝突しないが、案内を簡単にするため揃えて断る。
+    if name.contains("__") || name.starts_with('_') || name.ends_with('_') {
+        return Err(CoreError::InvalidSettings(
+            "MCP server name must not contain \"__\" or start or end with an underscore"
+                .to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -402,6 +411,9 @@ mod tests {
         assert!(validate_mcp_server_name("this_name_is_way_too_long").is_err());
         assert!(validate_mcp_server_name("has space").is_err());
         assert!(validate_mcp_server_name("has-dash").is_err());
+        assert!(validate_mcp_server_name("a__b").is_err());
+        assert!(validate_mcp_server_name("_a").is_err());
+        assert!(validate_mcp_server_name("a_").is_err());
     }
 
     #[test]

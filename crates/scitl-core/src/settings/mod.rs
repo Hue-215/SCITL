@@ -664,13 +664,35 @@ impl Settings {
         enabled: bool,
     ) -> Result<SettingsView> {
         let mut draft = self.edit();
+        let enabled_count: usize = draft
+            .config
+            .mcp_servers
+            .iter()
+            .map(|s| s.enabled_tools.len())
+            .sum();
         let server = find_mcp_server_mut(&mut draft.config, server_id)?;
-        if enabled {
-            // 画面でも有効にできないようにしているが、判定を画面に任せない。
-            if external::exposed_name(&server.name, tool_name).is_none() {
+        if enabled && !server.enabled_tools.contains(tool_name) {
+            // 画面でも有効にできないようにしているが、判定を画面に任せない。一覧が未取得なら
+            // 名前だけで判定する(引数スキーマはターンで公開するときにも見る)。
+            let listed = self
+                .mcp_tools
+                .get(server_id)
+                .and_then(|tools| tools.into_iter().find(|t| t.name == tool_name));
+            let exposable = match listed {
+                Some(tool) => external::is_exposable(&server.name, &tool),
+                None => external::exposed_name(&server.name, tool_name).is_some(),
+            };
+            if !exposable {
                 return Err(invalid(
-                    "this tool cannot be enabled because its name cannot be exposed to the model",
+                    "this tool cannot be enabled because its name or argument schema cannot be exposed to the model",
                 ));
+            }
+            // 無効なサーバーのツールも数える。サーバーを有効に戻したときに上限を超えないため。
+            if enabled_count >= external::MAX_EXTERNAL_TOOLS {
+                return Err(invalid(format!(
+                    "at most {} external tools can be enabled",
+                    external::MAX_EXTERNAL_TOOLS
+                )));
             }
             server.enabled_tools.insert(tool_name.to_string());
         } else {
@@ -1266,6 +1288,79 @@ name = "m"
         assert_eq!(server.tools.len(), 1);
         assert_eq!(server.tools[0].label, "read_file");
         assert!(server.tools[0].description.is_none());
+    }
+
+    #[test]
+    fn tools_whose_schema_cannot_be_exposed_cannot_be_enabled() {
+        let (settings, _, _dir) = temp_settings();
+        let view = settings
+            .add_mcp_server(
+                "tools",
+                NewMcpEndpoint::Stdio {
+                    command: "npx".to_string(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                },
+            )
+            .unwrap();
+        let id = view.mcp_servers[0].id.clone();
+        let tool = |name: &str, input_schema: serde_json::Value| mcp::McpToolInfo {
+            name: name.to_string(),
+            description: None,
+            input_schema,
+        };
+        settings.mcp_tools.store(
+            &id,
+            vec![
+                tool("list", serde_json::json!({ "type": "array" })),
+                tool("read", serde_json::json!({ "type": "object" })),
+            ],
+        );
+
+        let view = settings.view();
+        let exposable: Vec<_> = view.mcp_servers[0]
+            .tools
+            .iter()
+            .map(|t| (t.name.as_str(), t.exposable))
+            .collect();
+        assert_eq!(exposable, vec![("list", false), ("read", true)]);
+        let err = settings
+            .set_mcp_tool_enabled(&id, "list", true)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidSettings(_)));
+        settings.set_mcp_tool_enabled(&id, "read", true).unwrap();
+    }
+
+    #[test]
+    fn enabling_more_external_tools_than_the_limit_is_refused() {
+        let (settings, _, _dir) = temp_settings();
+        let view = settings
+            .add_mcp_server(
+                "tools",
+                NewMcpEndpoint::Stdio {
+                    command: "npx".to_string(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                },
+            )
+            .unwrap();
+        let id = view.mcp_servers[0].id.clone();
+        for i in 0..external::MAX_EXTERNAL_TOOLS {
+            settings
+                .set_mcp_tool_enabled(&id, &format!("t{i}"), true)
+                .unwrap();
+        }
+
+        let err = settings
+            .set_mcp_tool_enabled(&id, "one_more", true)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidSettings(_)));
+        // 有効化済みのツールをもう一度有効にする・無効にするのは断らない。
+        settings.set_mcp_tool_enabled(&id, "t0", true).unwrap();
+        settings.set_mcp_tool_enabled(&id, "t0", false).unwrap();
+        settings
+            .set_mcp_tool_enabled(&id, "one_more", true)
+            .unwrap();
     }
 
     /// 設定ファイルを読めなくても起動し、理由を画面とターンへ渡す。読めなかったファイルは

@@ -91,6 +91,14 @@ impl Surface {
     }
 }
 
+/// 1つの会話で公開する内部ツールの数の最大。外部ツールの数の上限を、内部ツールが一番多い
+/// 会話に合わせて決めるために使う(`external::MAX_EXTERNAL_TOOLS`)。
+pub(crate) const MAX_INTERNAL_TOOLS: usize = if GENERAL.len() > TASK.len() {
+    GENERAL.len()
+} else {
+    TASK.len()
+};
+
 const GENERAL: &[InternalTool] = &[
     get_task_list::TOOL,
     get_task_detail::TOOL,
