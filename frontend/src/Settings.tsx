@@ -24,9 +24,18 @@ interface SettingsProps {
   onClose: () => void
 }
 
+// 左のレールに並べるタブ(並び順のまま)。
+const TABS = [
+  { id: 'general', label: 'settings.nav.general' },
+  { id: 'providers', label: 'settings.nav.provider' },
+  { id: 'mcp', label: 'settings.nav.tools' },
+] as const
+
+type TabId = (typeof TABS)[number]['id']
+
 // 設定画面。
 export default function Settings({ onClose }: SettingsProps) {
-  const [tab, setTab] = useState<'general' | 'providers' | 'mcp'>('general')
+  const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,7 +54,7 @@ export default function Settings({ onClose }: SettingsProps) {
 
   // タブを切り替えたら、前のタブの操作で出たエラーは伏せる(残っていると、
   // 今見ているタブの内容に対する指摘のように見えるため)。
-  const selectTab = (next: typeof tab) => {
+  const selectTab = (next: TabId) => {
     setTab(next)
     setError(null)
   }
@@ -104,27 +113,16 @@ export default function Settings({ onClose }: SettingsProps) {
 
       <div className="settings-body">
         <nav className="settings-rail">
-          <button
-            type="button"
-            className={tab === 'general' ? 'settings-tab selected' : 'settings-tab'}
-            onClick={() => selectTab('general')}
-          >
-            {t('settings.nav.general')}
-          </button>
-          <button
-            type="button"
-            className={tab === 'providers' ? 'settings-tab selected' : 'settings-tab'}
-            onClick={() => selectTab('providers')}
-          >
-            {t('settings.nav.provider')}
-          </button>
-          <button
-            type="button"
-            className={tab === 'mcp' ? 'settings-tab selected' : 'settings-tab'}
-            onClick={() => selectTab('mcp')}
-          >
-            {t('settings.nav.tools')}
-          </button>
+          {TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              className={tab === id ? 'settings-tab selected' : 'settings-tab'}
+              onClick={() => selectTab(id)}
+            >
+              {t(label)}
+            </button>
+          ))}
         </nav>
 
         <div className="settings-content">
