@@ -20,11 +20,11 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 | `architecture/transcript.md` | 履歴の組み立て、送った形の保存、思考の送り返し、間引き | 保存の形を変えるなら当たる |
 | `architecture/concurrency.md` | 多重起動の防止、同期と非同期の境界、応答生成の停止、途中経過の通知 | 2つ目の起動から届く引数を使うなら当たる |
 | `architecture/network-secrets.md` | HTTPクライアント、平文http、秘密情報、資格情報ストア | 当たる |
-| `architecture/webview-boundary.md` | IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる |
+| `architecture/webview-boundary.md` | IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる。IPCコマンドの引数でパス・URL等を受け取るものを足す・広げるなら当たる |
 | `architecture/sanitize.md` | 外部から来た文字列・自由入力を、モデル・画面・端末・ファイルへ出す | 当たる |
 | `architecture/i18n.md` | 画面の文言、言語ファイル、表示言語 | 当たらない |
-| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方(WebViewから受け取る入力)・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
-| `architecture/export.md` | Markdownエクスポート | 書き出し先の決め方(WebViewから受け取る入力)を変えるなら当たる |
+| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方(外から受け取る入力)・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
+| `architecture/export.md` | Markdownエクスポート | 書き出し先の決め方(外から受け取る入力)を変えるなら当たる |
 | `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`、索引、PRAGMAと排他、マイグレーション | 当たる |
 | `data-model/messages.md` | `messages`、ターン境界、操作の記録、`turn_transcripts`。`architecture/transcript.md`と対で読む | 当たる |
 | `tools.md` | LLMに公開するツールのスキーマ、引数検証、履歴への載せ方、外部(MCP)ツールの公開 | 公開する操作・権限を変えるなら当たる |
