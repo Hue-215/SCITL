@@ -28,7 +28,17 @@ pub struct AppState {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // 2つ目の起動を、DBと設定を開く`setup`より前にここで終わらせる。そのため他の
+    // プラグインより先に登録する。
+    let builder = if single_instance_available() {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_main_window(app)
+        }))
+    } else {
+        builder
+    };
+    builder
         .plugin(navigation::guard())
         .setup(|app| {
             let data = DataLayout::new(paths::default_data_dir()?);
@@ -102,6 +112,38 @@ fn main() {
         .expect("error while running tauri application");
 }
 
+/// `tauri.conf.json`で作るウィンドウのラベル。
+const MAIN_WINDOW: &str = "main";
+
+/// 多重起動の防止を使えるか。Linuxのプラグインはセッションバスのアドレスを解釈できないと
+/// 起動ごとpanicするので、同じ解釈で先に確かめ、使えなければ防止なしで起動する。
+#[cfg(target_os = "linux")]
+fn single_instance_available() -> bool {
+    match zbus::Address::session() {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("starting without preventing a second instance: {e}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn single_instance_available() -> bool {
+    true
+}
+
+/// 既に開いているウィンドウを前に出す。2つ目の起動の引数と作業ディレクトリは、同じセッションの
+/// どのプロセスからも送れるので使わない。Windowsではメインスレッドで呼ばれるので、待つ処理を置かない。
+fn focus_main_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 #[cfg(test)]
 mod tests {
     /// GUIとCLIが同じデータディレクトリを開くよう、coreの識別子をTauriの設定と照合する
@@ -111,5 +153,12 @@ mod tests {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(conf["identifier"], scitl_core::paths::APP_IDENTIFIER);
+    }
+
+    #[test]
+    fn main_window_label_matches_tauri_config() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["app"]["windows"][0]["label"], super::MAIN_WINDOW);
     }
 }
