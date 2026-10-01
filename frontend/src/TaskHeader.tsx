@@ -6,8 +6,10 @@ import { taskName, taskProgress } from './taskName'
 import type { TaskDetailView } from './types'
 
 // タイトルの上限文字数。Rust側の`db::tasks::MAX_TITLE_CHARS`と同じ値で、超えた値はRust側が
-// 断る。入力欄で先に止めて、打った名前が断られる前に上限に気付けるようにする。`maxLength`は
-// UTF-16の単位で数えるので、基本多言語面の外の文字(絵文字等)を含むとRust側より手前で止まる。
+// 断る。入力欄で先に止めて、打った名前が断られる前に上限に気付けるようにする。長い名前を
+// 貼り付けると入力欄が切るが、切った値は確定(Enter)の前に入力欄に見えているので、黙って
+// 切ることにはならない。`maxLength`はUTF-16の単位で、整形(前後の括弧等を除く)の前の値を
+// 数えるので、Rust側では通る値でも手前で止まることがある(絵文字を含む・括弧で囲んだ等)。
 const MAX_TITLE_LENGTH = 40
 
 interface TaskHeaderProps {

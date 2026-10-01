@@ -197,6 +197,24 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_title_leaves_the_other_fields_of_the_call_unwritten() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let too_long = "あ".repeat(tasks::MAX_TITLE_CHARS + 1);
+        for title in ["", too_long.as_str()] {
+            let err = execute(
+                &conn,
+                task_id,
+                &json!({ "title": title, "description": "牛乳", "deadline": "2026-10-01" }),
+            )
+            .unwrap_err();
+            assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "title"));
+        }
+        let task = tasks::get_task(&conn, task_id).unwrap();
+        assert!(task.description.is_none() && task.deadline.is_none());
+    }
+
+    #[test]
     fn applies_valid_update() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
