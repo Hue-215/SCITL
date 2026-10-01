@@ -8,7 +8,7 @@
 | マイグレーション | 自前(`db::migrate_to`) | 版番号で管理する通常のマイグレーションは、番号順のSQLと`user_version`だけで足りる。GUIとCLIが同時に開いても二重に適用しないよう、版の読み取りを適用と同じ即時トランザクションに収める必要があり(`../data-model/tables.md`「マイグレーション」)、既存のクレート(`rusqlite_migration`)は版をトランザクションの外で読むため使わない |
 | 秘密情報ストア | `keyring-core` + OSごとの保存先クレート | keyringの現行の構成。保存先は`network-secrets.md`「保存先の選び方」 |
 | Tauriバージョン | Tauri 2.x | 権限・CSPの設定機構がこのバージョン系列を前提にしている |
-| LLMプロバイダ第一弾 | OpenAI互換チャットコンプリーションAPI | クラウド本家に加え、ローカル推論サーバー(llama.cpp/LM Studio/Ollama等)の多くが対応。「クラウド/ローカル同一UX」の原則(`../principles.md` 1節)を安く検証できる |
+| LLMプロバイダ第一弾 | OpenAI互換チャットコンプリーションAPI | クラウド本家に加え、ローカル推論サーバー(llama.cpp/LM Studio/Ollama等)の多くが対応。`../principles.md` 1節「クラウド/ローカルLLMの自由な切替」を安く検証できる |
 | 設定ファイル形式 | TOML | 秘密情報は含まず参照のみを持つ(`network-secrets.md`「秘密情報」) |
 | 言語ファイル形式 | JSON | フロントエンド(Vite)が追加プラグイン無しに読み込める |
 | 多重起動の防止 | `tauri-plugin-single-instance` | 公式プラグインで、通信はローカルのIPCだけ。自前で持つとOSごとのIPCを2通り書くことになり、攻撃面も保守量も増える(`concurrency.md`「多重起動の防止」) |

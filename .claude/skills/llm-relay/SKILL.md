@@ -269,7 +269,7 @@ cargo run -p scitl-core --example relay_session -- \
 ## 6. 本物のサーバーでプロンプトキャッシュを確かめる
 
 リクエストの組み立てを変えたあと、前に送った部分が変わっていないか
-(`docs/spec/architecture/transcript.md`「前に送った部分を変えない」)を、llama.cpp(llama-server)の
+(`docs/spec/architecture/transcript.md`「前に送った部分を書き換えない」)を、llama.cpp(llama-server)の
 プロンプトキャッシュの当たり方で確かめる。ドライバーを本物のOpenAI互換サーバーに向け、モデル名を
 環境変数`RELAY_MODEL`で渡す。
 

@@ -15,7 +15,7 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 - **`title` は `TEXT NULL`**(`../principles.md` 2節「未設定はnullに統一」に従う。
   空文字を未設定の意味には使わない)。
   `title IS NULL` は「未設定」を意味するだけで、専用の自動命名処理の対象という意味は持たない
-  (タイトルはモデルが `update_task` ツールで設定する。`../tools.md` 2節)。未設定のまま残った
+  (タイトルはモデルが `update_task` ツールで、または画面・CLIの名前変更で設定する。`../tools.md` 2節)。未設定のまま残った
   場合の画面表示(一覧・ヘッダー)は表示側のフォールバックで扱い、`title` には書き込まない
 - 主キーは `INTEGER PRIMARY KEY`(SQLiteのrowidエイリアス)
 
@@ -94,7 +94,7 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 
 ## 3. 索引
 
-- `messages(task_id, created_at)` — チャンネル単位の発言取得(支配的クエリ)
+- `messages(task_id, created_at)` — 会話単位の発言取得(支配的クエリ)
 - `messages(turn_id, attempt_no)` — ターン単位のグルーピング
 - `task_steps(task_id, order_index)`
 - `attachments(message_id)`
@@ -104,14 +104,14 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 ## 4. 接続時のPRAGMA
 
 - `journal_mode = WAL` — 永続設定。書き込みは別ファイルに追記され、読み手は書き込み中でも
-  止まらずに読める。GUI・CLI・MCPサーバーが**別プロセスとして同じDBファイルを触る**前提の
+  止まらずに読める。GUIとCLIが**別プロセスとして同じDBファイルを触る**前提の
   ため必須
 - `foreign_keys = ON` — SQLiteは既定でOFF。接続ごとに毎回設定する
 - `busy_timeout` — 別プロセスが書き込み中のとき、失敗せずに待つ上限
 
 ### 複数プロセスからの書き込みの排他
 
-GUI・CLI・MCPサーバーからの同時書き込みは、SQLite自身のロックで直列化する。ファイルロック等の
+GUIとCLIからの同時書き込みは、SQLite自身のロックで直列化する。ファイルロック等の
 別の仕組みは持たない。GUIは原則1つしか起動しない(`../architecture/concurrency.md`「多重起動の防止」)が、
 防止はベストエフォートなので、GUI同士の同時書き込みもSQLiteのロックで扱える前提を崩さない。
 
@@ -141,12 +141,11 @@ DBのロックが守るのは1回の書き込みの整合性まで。応答生�
 排他(`in_flight.rs`)はLLMの応答を跨ぐため、同じプロセスの中でしか効かない。別プロセスとの
 関係は次の通り。
 
-- タスク・工程の操作(CLI #23、MCPサーバー #73)は、応答生成中の会話に操作の記録が挟まり
+- タスク・工程の操作(CLI #23)は、応答生成中の会話に操作の記録が挟まり
   うる。`messages.md`「応答生成以外の経路での操作の記録」の通り。生成中のタスクが別プロセスから
   削除されると、その応答は削除済みのタスクの会話に書かれる(画面には出ず、削除を
   取り消せば会話と一緒に戻る)
-- 応答生成はMCPサーバーには公開しない(`../tools.md` 6節)。`scitl-cli`も行わない。
-  行うのはGUIと`scitl-debug-cli`(`../architecture/cli.md`)で、**この2つが同じ会話で同時に
+- 応答生成を行うのはGUIと`scitl-debug-cli`だけで(`scitl-cli`は行わない。`../architecture/cli.md`)、**この2つが同じ会話で同時に
   生成することは断らない**(Issue #239)。断るにはDBに生成中の印を持つことになるが、印を立てた
   プロセスが落ちると印が残り、それを見分けて外す仕組みまで要る。`scitl-debug-cli`は開発者が
   手で動かすもので、同じ会話を画面と同時に動かさないことは使う側に任せられる。同時に生成した
@@ -168,8 +167,8 @@ DBのロックが守るのは1回の書き込みの整合性まで。応答生�
 
 **CHECK制約はCREATE TABLE時点で入れる**: SQLiteは `ALTER TABLE ADD CONSTRAINT` を
 持たず、後から制約を追加するにはテーブル再構築(新テーブル作成→全行コピー→差し替え)が
-必要になる。各テーブルの制約(`messages.md`の分を含む)はすべて `migrations/0001_init.sql` の `CREATE TABLE` に含める。
-0001より後に加わった不変条件は、再構築の代わりに `BEFORE INSERT`/`BEFORE UPDATE` の
+必要になる。各テーブルの制約(`messages.md`の分を含む)は、そのテーブルを作るマイグレーションの
+`CREATE TABLE` に含める。作った後に加わった不変条件は、再構築の代わりに `BEFORE INSERT`/`BEFORE UPDATE` の
 トリガーで同じ条件を表す(例: `0002_tool_execution_role.sql`)。再構築は外部キーの一時
 無効化を伴い、マイグレーションのトランザクション内では行えないため。
 

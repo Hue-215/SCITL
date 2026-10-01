@@ -2,7 +2,7 @@
 //! 送信内容のプレビュー([`super::preview`])が同じ組み立てを通る。
 //!
 //! ラウンドをまたいで、前に送った部分は変えない。後ろにこのターンの往復を足すだけにする
-//! (`docs/spec/architecture/transcript.md`「前に送った部分を変えない」)。
+//! (`docs/spec/architecture/transcript.md`「前に送った部分を書き換えない」)。
 
 use crate::blocking;
 use crate::db::messages::Chat;
