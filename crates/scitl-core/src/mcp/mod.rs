@@ -233,8 +233,7 @@ fn to_tool_info(tool: rmcp::model::Tool) -> McpToolInfo {
 
 /// ツール呼び出しの結果を、モデルへ返す・実行記録として保存するためのJSONに変換する。
 /// 構造化された結果があればそれを、無ければテキストブロックを連結して返す。
-/// 画像等の非テキストブロックは扱わない。
-// TODO(#107): 非テキストの結果を扱う。
+/// 画像等の非テキストブロックは扱わず、件数だけを残す。
 fn to_result_value(result: CallToolResult) -> Value {
     let mut value = Map::new();
     if let Some(structured) = result.structured_content {

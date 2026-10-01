@@ -20,9 +20,29 @@ SCITL-2.0/
 │   │       ├── db/                 # tasks/steps/messages/attachmentsのrepository
 │   │       ├── attachments/        # 添付の種別の判定・実体の置き場所・送信前の添付(12節)
 │   │       ├── export/             # Markdownエクスポート(13節)
-│   │       ├── llm/                # types(イベント列), adapter trait, 失敗の種類, providers/
+│   │       ├── llm/                # types(イベント列), adapter trait, providers/(方言ごとのアダプタ)
+│   │       │   ├── error.rs            # 失敗の種類
+│   │       │   ├── capabilities.rs     # モデル能力の解決(3節)
+│   │       │   ├── prompt.rs           # 予約タグ・ユーザー発言の囲みとその説明・無害化(3節・10節)
+│   │       │   └── token_estimate.rs   # トークン数の見積もり
 │   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
-│   │       ├── orchestration/      # turn.rs(1ターンの処理フロー), turn_request.rs(各ラウンドで送るものの組み立て), turn_event.rs(途中経過の通知), system_prompt.rs(システムプロンプト), operations.rs(応答生成以外の経路での操作と記録), preview.rs(送信内容のプレビュー)
+│   │       ├── orchestration/      # 応答生成と、会話をモデル・画面へ渡す形の組み立て
+│   │       │   ├── turn.rs             # 1ターンの処理フロー(送信・編集・再試行の入口)
+│   │       │   ├── turn_context.rs     # 1ターンが受け取る文脈
+│   │       │   ├── turn_request.rs     # 各ラウンドで送るものの組み立て
+│   │       │   ├── turn_event.rs       # 途中経過の通知
+│   │       │   ├── turn_error.rs       # LLM呼び出しの失敗をエラー発言にする
+│   │       │   ├── tool_limits.rs      # 1ターンのツール呼び出しの上限
+│   │       │   ├── tool_record.rs      # ツール実行記録の形
+│   │       │   ├── mcp_access.rs       # ターンから見た外部ツールサーバー
+│   │       │   ├── history.rs          # モデルへ送る履歴の組み立て
+│   │       │   ├── history_trim.rs     # 履歴の間引き(3節「間引きの位置」)
+│   │       │   ├── transcript.rs       # 送った形の保存の形(3節「送った形のまま積む」)
+│   │       │   ├── system_prompt.rs    # システムプロンプト
+│   │       │   ├── prompt_defaults.rs  # 設定で書き換えられるプロンプトの既定の文面
+│   │       │   ├── operations.rs       # 応答生成以外の経路での操作と記録
+│   │       │   ├── preview.rs          # 送信内容のプレビュー
+│   │       │   └── chat_view.rs        # 画面に渡す会話の行
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(5節)
 │   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
@@ -30,6 +50,7 @@ SCITL-2.0/
 │   │       ├── paths.rs            # データディレクトリの場所と中の並び(GUI・CLI共通)
 │   │       ├── files.rs            # 書きかけのファイルを完成した名前で残さない書き込み
 │   │       ├── settings/           # 設定・登録の操作(規則・検証・秘密情報の出し入れ・保存)
+│   │       ├── error.rs            # コア全体の失敗の種類(CoreError)
 │   │       ├── blocking.rs         # 非同期層からブロッキング処理を呼ぶ入口(4節)
 │   │       ├── in_flight.rs        # 同じ対象への処理を同時に1本に絞る(タスクごとの応答生成)
 │   │       ├── link.rs             # 本文中のリンクを開く前の判定とOSへの委譲(8節)
