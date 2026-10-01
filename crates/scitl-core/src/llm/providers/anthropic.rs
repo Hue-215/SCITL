@@ -394,6 +394,8 @@ struct MessageResponse {
 impl MessageResponse {
     /// HTTP 200で返ったが返信ではない本文を断る。項目がすべて省略可能なので、断らないと
     /// エラー本文も`{}`も「ブロックが0個の返信」として読め、中身の残らない空の応答になる。
+    /// 200でエラーを返すのは互換サーバー・中継で、エラーの種類の名前が揃う保証が無いので、
+    /// 種類は見ずにプロバイダーのエラーとし、中身を詳細に残す。
     fn reject_non_message(&self, api_key: &str) -> Result<(), LlmError> {
         if let Some(error) = &self.error {
             return Err(LlmError::Http(ErrorDetail::http(

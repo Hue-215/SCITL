@@ -1026,7 +1026,7 @@ mod tests {
             metadata_error(StatusCode::BAD_REQUEST, body, ""),
             LlmError::Auth(_)
         ));
-        // ほかの400は今まで通り。
+        // `reason`が違う400は認証の失敗にしない。
         let other =
             r#"{"error":{"code":400,"status":"INVALID_ARGUMENT","details":[{"reason":"OTHER"}]}}"#;
         assert!(matches!(
