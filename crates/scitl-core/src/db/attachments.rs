@@ -1,7 +1,7 @@
 //! 添付ファイルの行。テキスト添付は本文をこの表に、それ以外は実体を
 //! `attachments::AttachmentStore`に置き、この表はそのハッシュだけを持つ。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -165,6 +165,56 @@ pub fn get_in_chat(conn: &Connection, chat: Chat, id: i64) -> Result<Attachment>
     )
     .optional()?
     .ok_or(CoreError::AttachmentNotFound(id))
+}
+
+/// 添付の行を、付いた発言の情報と一緒に見せる形。画面の会話からは見えない行(論理削除した
+/// 発言の添付)も含めて調べるためのもの。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AttachmentRecord {
+    #[serde(flatten)]
+    pub view: AttachmentView,
+    pub message_id: i64,
+    /// 付いた発言の会話。総合チャットなら`None`。
+    pub task_id: Option<i64>,
+    /// 付いた発言を論理削除した日時。
+    pub message_deleted_at: Option<String>,
+    /// 実体のハッシュ。テキストの添付は本文を行に持つので`None`。
+    pub file_hash: Option<String>,
+    pub created_at: String,
+}
+
+/// すべての添付の行。付けた順。
+pub fn list_all(conn: &Connection) -> Result<Vec<AttachmentRecord>> {
+    let mut stmt = conn.prepare(concat!(
+        "SELECT ",
+        view_columns!(),
+        ", a.message_id, m.task_id, m.deleted_at, a.file_hash, a.created_at
+         FROM attachments a JOIN messages m ON m.id = a.message_id ORDER BY a.id"
+    ))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(AttachmentRecord {
+                view: view_from_row(row, 0)?,
+                message_id: row.get(5)?,
+                task_id: row.get(6)?,
+                message_deleted_at: row.get(7)?,
+                file_hash: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// 添付の行が指している実体のハッシュ。論理削除した発言の添付の分も含む(行は消さないので、
+/// その実体も残す)。
+pub fn file_hashes(conn: &Connection) -> Result<HashSet<String>> {
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT file_hash FROM attachments WHERE file_hash IS NOT NULL")?;
+    let hashes = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<HashSet<String>>>()?;
+    Ok(hashes)
 }
 
 /// 編集で新しい発言へ添付を引き継ぐ。実体は共有し、行だけを写す。写した数を返す。
@@ -354,5 +404,29 @@ mod tests {
             }
         );
         assert_eq!(views_for_message(&conn, from).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn lists_every_row_with_its_message_and_the_hashes_they_point_at() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = db::tasks::create_task(&conn).unwrap().id;
+        let kept = user_message(&conn, task_id);
+        let deleted = user_message(&conn, task_id);
+        insert(&conn, kept, &text("a.txt", "a")).unwrap();
+        insert(&conn, deleted, &image("b.png")).unwrap();
+        messages::soft_delete_message(&conn, deleted).unwrap();
+
+        let records = list_all(&conn).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].view.original_name, "a.txt");
+        assert_eq!(records[0].task_id, Some(task_id));
+        assert_eq!(records[0].file_hash, None);
+        assert_eq!(records[0].message_deleted_at, None);
+        assert_eq!(records[1].message_id, deleted);
+        assert_eq!(records[1].file_hash, Some("a".repeat(64)));
+        assert!(records[1].message_deleted_at.is_some());
+
+        // 論理削除した発言の添付が指す実体も、指されているものに数える。
+        assert_eq!(file_hashes(&conn).unwrap(), HashSet::from(["a".repeat(64)]));
     }
 }
