@@ -161,9 +161,9 @@ fn stage(attachments: &Attachments, files: Vec<PathBuf>) -> Result<Vec<String>, 
     files
         .into_iter()
         .map(|path| {
-            let bytes = std::fs::read(&path).map_err(|e| DebugError::ReadFile {
+            let bytes = std::fs::read(&path).map_err(|source| DebugError::ReadFile {
                 path: path.clone(),
-                kind: e.kind(),
+                source,
             })?;
             let name = path
                 .file_name()

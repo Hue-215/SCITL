@@ -165,10 +165,10 @@ enum DebugError {
     /// 書かれたものは持たない。
     #[error("{0} takes the name of an environment variable that holds the value, not the value")]
     NotAVariableName(&'static str),
-    #[error("failed to read {}: {kind:?}", .path.display())]
+    #[error("failed to read {}: {source}", .path.display())]
     ReadFile {
         path: PathBuf,
-        kind: std::io::ErrorKind,
+        source: std::io::Error,
     },
     #[error("{} was not accepted as an attachment: {reason}", .path.display())]
     AttachmentRejected { path: PathBuf, reason: String },
