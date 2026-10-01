@@ -62,6 +62,7 @@ fn main() {
             commands::chat::list_chat_messages,
             commands::chat::edit_chat_message,
             commands::chat::retry_chat_message,
+            commands::chat::stop_chat_response,
             commands::chat::delete_chat_message,
             commands::attachments::stage_attachment,
             commands::attachments::discard_staged_attachment,

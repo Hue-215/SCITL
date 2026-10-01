@@ -13,7 +13,7 @@ use crate::db::tasks::{self, Task};
 use crate::db::transcripts::{self, NewTranscript};
 use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
-use crate::in_flight::{InFlight, InFlightSet};
+use crate::in_flight::{InFlight, InFlightSet, StopSignal};
 use crate::llm::{
     AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent,
     ToolArguments, ToolCallRequest,
@@ -58,14 +58,14 @@ pub async fn run_turn(
     input: impl Into<UserInput>,
 ) -> Result<()> {
     let UserInput { text, attachments } = input.into();
-    let _generating = begin_generating(ctx.generating, chat)?;
+    let generating = begin_generating(ctx.generating, chat)?;
     let taken = ctx.attachments.take_staged(&attachments)?;
     if let Err(e) = save_user_message(db.clone(), ctx, chat, text, taken.clone()).await {
         ctx.attachments.restore_staged(taken);
         return Err(e);
     }
 
-    generate_turn_response(db, ctx, Attempt::first(chat)).await
+    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
 }
 
 /// ユーザー発言と添付を1つのトランザクションで書く。実体は行より先に置き場所へ書く
@@ -147,7 +147,7 @@ pub async fn open_task_chat(
     task_id: i64,
 ) -> Result<()> {
     let chat = Chat::Task(task_id);
-    let _generating = begin_generating(ctx.generating, chat)?;
+    let generating = begin_generating(ctx.generating, chat)?;
     with_conn(db.clone(), move |conn| {
         require_chat(conn, chat)?;
         if messages::opener(conn, task_id)?.is_some() {
@@ -159,7 +159,7 @@ pub async fn open_task_chat(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat)).await
+    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
 }
 
 /// ユーザー発言の編集。対象の発言以降(自身を含む)の通常発言をすべて論理削除し、編集後の
@@ -172,7 +172,7 @@ pub async fn edit_user_message(
     message_id: i64,
     new_text: String,
 ) -> Result<()> {
-    let _generating = begin_generating(ctx.generating, chat)?;
+    let generating = begin_generating(ctx.generating, chat)?;
     with_conn(db.clone(), move |conn| {
         // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
         in_transaction(conn, |conn| {
@@ -187,7 +187,7 @@ pub async fn edit_user_message(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat)).await
+    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
 }
 
 /// ターンの返信(アシスタント発言またはエラー発言)の再試行。対象の発言以降(自身を含む)の
@@ -203,7 +203,7 @@ pub async fn retry_reply(
     chat: Chat,
     message_id: i64,
 ) -> Result<()> {
-    let _generating = begin_generating(ctx.generating, chat)?;
+    let generating = begin_generating(ctx.generating, chat)?;
     let attempt = with_conn(db.clone(), move |conn| {
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
@@ -228,7 +228,7 @@ pub async fn retry_reply(
     })
     .await?;
 
-    generate_turn_response(db, ctx, attempt).await
+    generate_turn_response(db, ctx, attempt, generating.stop_signal()).await
 }
 
 /// 発言と、それより後ろの通常発言をまとめて論理削除する(編集・再試行と同じく、その地点から
@@ -250,6 +250,19 @@ pub async fn delete_message(
         })
     })
     .await
+}
+
+/// 会話で生成中の応答を止める。止める指示を出すだけで、止まるのは生成の側が次に指示を
+/// 見たとき。LLMの応答を待っている間ならすぐに、ツールの実行中ならその呼び出しが済んでから
+/// 止まる(実行中の呼び出しは打ち切らない。[`run_tool_rounds`])。止めたターンは、それまでに
+/// 実行したツールの記録と、止めたことを表すエラー発言(`TurnFailure::Stopped`)を残して終わり、
+/// その保存は生成を始めた呼び出し([`run_turn`]等)が返るまでに済む。
+///
+/// 同じプロセスの中で生成している会話にしか効かない。生成中でなければ何もせず`false`を返す
+/// (止める指示と生成の終わりが行き違った場合を含む)。発言の削除・タスクの操作も同じ集合で
+/// 生成中として扱うが、それらは指示を見ないので止まらない。
+pub fn stop_response(generating: &InFlightSet<Chat>, chat: Chat) -> bool {
+    generating.request_stop(&chat)
 }
 
 /// ユーザー発言には本文か添付のどちらかが要る。本文が空白だけでも、添付があれば送れる。
@@ -313,10 +326,12 @@ fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
 ///
 /// 失敗はどれもこの試行のエラー発言として保存して`Ok`で返す(何も書かずに抜けると、返信を
 /// 消した再試行ではターンごと会話から消える)。`Err`が返るのはエラー発言自体を書けないときだけ。
+/// `stop`で止めた場合も同じく、止めたことを表すエラー発言を書いて`Ok`で返す([`stop_response`])。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     attempt: Attempt,
+    stop: &StopSignal,
 ) -> Result<()> {
     let adapter = match ready_adapter(ctx) {
         Ok(adapter) => adapter,
@@ -325,8 +340,16 @@ async fn generate_turn_response(
 
     let mut sessions = McpSessions::new();
     let external = prepare_external_tools(&ctx.mcp, attempt.chat, &mut sessions).await;
-    let result =
-        run_tool_rounds(db.clone(), adapter, ctx, &attempt, &external, &mut sessions).await;
+    let result = run_tool_rounds(
+        db.clone(),
+        adapter,
+        ctx,
+        &attempt,
+        &external,
+        &mut sessions,
+        stop,
+    )
+    .await;
     sessions.close().await;
     match result {
         Err(e) => fail_turn(db, &attempt, turn_error::classify(&e)).await,
@@ -469,6 +492,8 @@ pub(super) async fn prepare_external_tools(
 
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
 /// 分けてあるだけで、1ターンの流れとしては地続き。
+///
+/// 止める指示(`stop`)は、LLMの応答待ちの間と、ツール呼び出しの区切りで見る。
 async fn run_tool_rounds(
     db: SharedConnection,
     adapter: &dyn LlmAdapter,
@@ -476,6 +501,7 @@ async fn run_tool_rounds(
     attempt: &Attempt,
     external: &ExternalToolset,
     sessions: &mut McpSessions,
+    stop: &StopSignal,
 ) -> Result<()> {
     let chat = attempt.chat;
     let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
@@ -497,8 +523,8 @@ async fn run_tool_rounds(
         // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
         let mut events = Vec::new();
         let notify = ctx.events;
-        let sent = adapter
-            .send(
+        let sent = stop
+            .unless_requested(adapter.send(
                 &messages_to_send,
                 offered,
                 ctx.reasoning_effort,
@@ -508,11 +534,12 @@ async fn run_tool_rounds(
                     });
                     events.push(event);
                 },
-            )
+            ))
             .await;
         let replay = match sent {
-            Ok(replay) => replay,
-            Err(e) => return fail_turn(db, attempt, turn_error::classify(&e)).await,
+            Some(Ok(replay)) => replay,
+            Some(Err(e)) => return fail_turn(db, attempt, turn_error::classify(&e)).await,
+            None => return fail_turn(db, attempt, TurnFailure::Stopped).await,
         };
 
         let mut text = String::new();
@@ -599,10 +626,14 @@ async fn run_tool_rounds(
         let mut executed: Vec<(ToolCallRequest, CallOutcome)> =
             Vec::with_capacity(tool_calls.len());
         for (i, call) in tool_calls.into_iter().enumerate() {
-            // 合計時間は呼び出しの区切りで判定し、超えたらターンを打ち切る(ほかの失敗と違い、
-            // モデルに返して続けても意味が無い)。実行中の呼び出しを外から打ち切らないのは、
+            // 止める指示と合計時間は呼び出しの区切りで判定し、ターンを打ち切る(ほかの失敗と
+            // 違い、モデルに返して続けても意味が無い)。実行中の呼び出しを外から打ち切らないのは、
             // 内部ツールのDB書き込みは待つのをやめても完走し、書き込みだけが済んで
             // 実行記録が残らない状態を作るため(1回の呼び出しは`mcp`のタイムアウトで有界)。
+            // 外部ツールも、相手の側で済んだ操作の記録を残すため同じく待つ。
+            if stop.is_requested() {
+                return fail_turn(db, attempt, TurnFailure::Stopped).await;
+            }
             if tool_time_used >= ctx.limits.total_timeout {
                 return fail_turn(db, attempt, TurnFailure::ToolTimeout).await;
             }

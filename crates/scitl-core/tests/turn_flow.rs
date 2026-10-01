@@ -16,8 +16,8 @@ use scitl_core::llm::{
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     create_task, delete_message, discard_events, edit_user_message, open_task_chat,
-    preview_request, retry_reply, run_turn, McpAccess, PreviewOptions, SystemPrompts, TaskCreation,
-    ToolLimits, TurnContext, TurnEvent, TurnFailure, UserInput,
+    preview_request, retry_reply, run_turn, stop_response, McpAccess, PreviewOptions,
+    SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure, UserInput,
 };
 use serde_json::json;
 
@@ -298,6 +298,62 @@ impl LlmAdapter for ScriptedAdapter {
         Some(RequestPreview {
             body: serde_json::Value::Null,
         })
+    }
+}
+
+/// `stop_on_call`回目(0始まり)の呼び出しで、その会話の応答生成を止める(`stop_response`)。
+/// `hang`なら応答を返さずに待ち続け(LLMの応答待ちの間に止めた場合)、偽なら台本どおりの応答を
+/// 返す(応答を受け取り終えるのと止める指示が行き違った場合)。
+struct StoppingAdapter<'a> {
+    script: ScriptedAdapter,
+    generating: &'a InFlightSet<Chat>,
+    chat: Chat,
+    stop_on_call: usize,
+    hang: bool,
+    calls: AtomicUsize,
+}
+
+impl<'a> StoppingAdapter<'a> {
+    fn new(
+        script: ScriptedAdapter,
+        generating: &'a InFlightSet<Chat>,
+        chat: Chat,
+        stop_on_call: usize,
+        hang: bool,
+    ) -> Self {
+        Self {
+            script,
+            generating,
+            chat,
+            stop_on_call,
+            hang,
+            calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for StoppingAdapter<'_> {
+    fn readiness(&self) -> Readiness {
+        self.script.readiness()
+    }
+
+    async fn send(
+        &self,
+        messages: &[ChatMessage],
+        tools: ToolOffer<'_>,
+        reasoning_effort: Option<ReasoningEffort>,
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<Replay, CoreError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == self.stop_on_call {
+            assert!(stop_response(self.generating, self.chat));
+            if self.hang {
+                std::future::pending::<()>().await;
+            }
+        }
+        self.script
+            .send(messages, tools, reasoning_effort, on_event)
+            .await
     }
 }
 
@@ -2448,6 +2504,147 @@ async fn a_turn_is_rejected_while_the_same_task_is_generating() {
         generating.try_begin(Chat::Task(task_id)).is_some(),
         "ターンが終われば生成中は外れる"
     );
+}
+
+/// 止めた試行の行(`error_kind`が`stopped`のエラー発言)。
+fn stopped_reply(messages: &[db::messages::Message]) -> &db::messages::Message {
+    let last = messages.last().unwrap();
+    assert_eq!(last.role, Role::Error);
+    assert_eq!(last.error_kind.as_deref(), Some("stopped"));
+    assert_eq!(last.error_detail, None);
+    last
+}
+
+fn transcript_count(conn: &Connection) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM turn_transcripts", [], |row| {
+        row.get(0)
+    })
+    .unwrap()
+}
+
+/// LLMの応答を待っている間に止めると、待っていた呼び出しを打ち切り、止めたことを表す
+/// エラー発言でターンを終える。止めた直後から、同じ会話でその返信を再試行できる。
+#[tokio::test]
+async fn stopping_while_waiting_for_the_model_ends_the_turn_with_a_stopped_reply() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let generating = InFlightSet::new();
+    // 台本は空。止まらずに応答を読みに行けば止まる。
+    let adapter =
+        StoppingAdapter::new(ScriptedAdapter::new(Vec::new()), &generating, chat, 0, true);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&adapter)
+        },
+        chat,
+        "こんにちは".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let stopped_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        let roles: Vec<_> = messages.iter().map(|m| m.role).collect();
+        assert_eq!(roles, vec![Role::User, Role::Error]);
+        stopped_reply(&messages).id
+    };
+
+    let retry = ScriptedAdapter::texts(&["こんにちは!"]);
+    retry_reply(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&retry)
+        },
+        chat,
+        stopped_id,
+    )
+    .await
+    .unwrap();
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    assert_eq!(reply_of(&messages), "こんにちは!");
+}
+
+/// ツールの往復のあとで止めても、実行済みのツールの記録は残り、ターンの会話に並ぶ。送った形は
+/// 返信のある試行にだけ保存するので、止めた試行の分は残らない。
+#[tokio::test]
+async fn stopping_after_a_tool_round_keeps_the_executed_tools_on_record() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let generating = InFlightSet::new();
+    let adapter = StoppingAdapter::new(adds_a_step(), &generating, chat, 1, true);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&adapter)
+        },
+        chat,
+        "工程を足して".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    let roles: Vec<_> = messages.iter().map(|m| m.role).collect();
+    assert_eq!(roles, vec![Role::User, Role::Tool, Role::Error]);
+    stopped_reply(&messages);
+    assert_eq!(
+        db::task_steps::list_for_task(&conn, task_id).unwrap().len(),
+        1
+    );
+    assert_eq!(transcript_count(&conn), 0);
+}
+
+/// ツールの呼び出しを受け取り終えたときに止める指示が来ていれば、どの呼び出しも実行しない。
+#[tokio::test]
+async fn a_stop_that_arrives_with_tool_calls_runs_none_of_them() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let generating = InFlightSet::new();
+    let adapter = StoppingAdapter::new(calls_two_tools(), &generating, chat, 0, false);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&adapter)
+        },
+        chat,
+        "工程とタイトルを".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+    let roles: Vec<_> = messages.iter().map(|m| m.role).collect();
+    assert_eq!(roles, vec![Role::User, Role::Error]);
+    stopped_reply(&messages);
+    assert!(db::task_steps::list_for_task(&conn, task_id)
+        .unwrap()
+        .is_empty());
+    assert_eq!(db::tasks::get_task(&conn, task_id).unwrap().title, None);
+}
+
+/// 生成中でない会話には、止める指示を出しても何も起きない。
+#[test]
+fn stopping_a_chat_that_is_not_generating_does_nothing() {
+    let generating = InFlightSet::new();
+    let _other = generating.try_begin(Chat::Task(1)).unwrap();
+    assert!(!stop_response(&generating, Chat::General));
 }
 
 /// 生成中のタスクでは発言を削除できない。生成中のターンが読んだ履歴とDBの発言が食い違うため。

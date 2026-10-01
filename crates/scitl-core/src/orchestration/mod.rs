@@ -25,7 +25,7 @@ pub use tool_limits::{ToolLimits, DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIM
 pub use tool_record::{ToolExecutionRecord, ToolExecutionView};
 pub use turn::{
     create_task, delete_message, edit_user_message, open_task_chat, retry_reply, run_turn,
-    TaskCreation, UserInput,
+    stop_response, TaskCreation, UserInput,
 };
 pub use turn_context::TurnContext;
 pub use turn_error::TurnFailure;

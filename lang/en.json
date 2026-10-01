@@ -212,6 +212,7 @@
   "turn_error.refused": "The model declined to respond to this request. Rephrase it or try again with a different model.",
   "turn_error.response_timeout": "The LLM provider didn't reply in time. You can change how long to wait with the reply timeout under \"General\" in Settings.",
   "turn_error.settings_unreadable": "Could not read the settings file. Please check the details in Settings.",
+  "turn_error.stopped": "Stopped generating the reply.",
   "turn_error.thinking_effort_unsupported": "This model didn't accept the selected thinking effort. Please pick a different thinking effort below the chat input.",
   "turn_error.thinking_unsupported": "This model didn't accept a thinking effort. Please uncheck \"Think\" for this model in the model list under \"API Providers\" in Settings.",
   "turn_error.tool_round_limit": "Reached the maximum number of tool calls, so the reply was cut short. You can change it under \"Tools/MCP\" in Settings.",
