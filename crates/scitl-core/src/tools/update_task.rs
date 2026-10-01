@@ -3,7 +3,9 @@ use std::sync::LazyLock;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::tasks::{self, FieldChange, TaskStatus, TaskUpdate};
+use crate::db::tasks::{
+    self, FieldChange, TaskStatus, TaskUpdate, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS,
+};
 use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
@@ -30,9 +32,12 @@ pub fn schema() -> &'static ToolSchema {
             json!({
                 "type": "object",
                 "properties": {
-                    "title": { "type": "string" },
+                    // 上限を超える値は`db::tasks::update_task`が弾く。スキーマにも明示して、
+                    // 書き直しの往復を減らす(`deadline`と同じ)。
+                    "title": { "type": "string", "maxLength": MAX_TITLE_CHARS },
                     "description": {
                         "type": "string",
+                        "maxLength": MAX_DESCRIPTION_CHARS,
                         "description": "Task description. Cannot be empty; use clear to remove it."
                     },
                     "deadline": {

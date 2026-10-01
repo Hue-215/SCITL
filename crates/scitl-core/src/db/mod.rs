@@ -164,6 +164,20 @@ fn iso8601(at: chrono::DateTime<chrono::Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// 自由入力の値の長さの上限を確かめる。超えた値は切らずに断り、モデルに短く書き直させる
+/// (黙って切ると、モデルは自分の指定が変わったことに気付けない)。数えるのはUnicodeの
+/// スカラー値(`char`)の数。
+pub(super) fn check_max_chars(name: &str, value: &str, max: usize) -> Result<()> {
+    let count = value.chars().count();
+    if count > max {
+        return Err(CoreError::InvalidArgument {
+            name: name.to_string(),
+            reason: format!("must be at most {max} characters (got {count}); shorten it"),
+        });
+    }
+    Ok(())
+}
+
 /// 他プロセスのロックを待つ上限。
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

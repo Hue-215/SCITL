@@ -5,6 +5,11 @@ import { isCommitEnter } from './keyboard'
 import { taskName, taskProgress } from './taskName'
 import type { TaskDetailView } from './types'
 
+// タイトルの上限文字数。Rust側の`db::tasks::MAX_TITLE_CHARS`と同じ値で、超えた値はRust側が
+// 断る。入力欄で先に止めて、打った名前が断られる前に上限に気付けるようにする。`maxLength`は
+// UTF-16の単位で数えるので、基本多言語面の外の文字(絵文字等)を含むとRust側より手前で止まる。
+const MAX_TITLE_LENGTH = 40
+
 interface TaskHeaderProps {
   task: TaskDetailView
   // 応答待ちの間は操作させない(Rust側でも断る。orchestration::operations)。
@@ -45,6 +50,7 @@ export default function TaskHeader({
             <input
               className="chat-header-title-input"
               value={draft}
+              maxLength={MAX_TITLE_LENGTH}
               // 未設定のタスクは、画面で呼んでいる名前(フォールバック)を手掛かりに出す。
               placeholder={name}
               aria-label={t('task_header.title_input_label')}

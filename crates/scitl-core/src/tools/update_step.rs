@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::task_steps;
+use crate::db::task_steps::{self, MAX_STEP_DESCRIPTION_CHARS};
 use crate::error::Result;
 use crate::llm::ToolSchema;
 
@@ -28,7 +28,7 @@ pub fn schema() -> &'static ToolSchema {
                 "type": "object",
                 "properties": {
                     "step_id": { "type": "integer" },
-                    "description": { "type": "string" },
+                    "description": { "type": "string", "maxLength": MAX_STEP_DESCRIPTION_CHARS },
                     "done": { "type": "boolean" }
                 },
                 "required": ["step_id"],

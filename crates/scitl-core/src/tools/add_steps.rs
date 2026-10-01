@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::task_steps;
+use crate::db::task_steps::{self, MAX_STEPS, MAX_STEP_DESCRIPTION_CHARS};
 use crate::error::Result;
 use crate::llm::ToolSchema;
 
@@ -29,8 +29,10 @@ pub fn schema() -> &'static ToolSchema {
                 "properties": {
                     "descriptions": {
                         "type": "array",
-                        "items": { "type": "string" },
-                        "minItems": 1
+                        "items": { "type": "string", "maxLength": MAX_STEP_DESCRIPTION_CHARS },
+                        "minItems": 1,
+                        // 上限は追加する件数ではなくタスクが持つ件数なので、maxItemsでは書けない。
+                        "description": format!("A task can have at most {MAX_STEPS} steps.")
                     }
                 },
                 "required": ["descriptions"],
