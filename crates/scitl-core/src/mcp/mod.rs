@@ -336,12 +336,16 @@ pub fn validate_header_name(name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// ヘッダー値を検証する。CRLF等のトークン外文字は`HeaderValue`のパース自体が拒否する。
+/// ヘッダー値を検証する。載せられる値の規則は[`crate::net::secret_header_value`]が決める。
 pub fn validate_header_value(value: &str) -> Result<(), CoreError> {
-    reqwest::header::HeaderValue::from_str(value)
-        .map(|_| ())
-        .map_err(|e| CoreError::Mcp(format!("invalid header value: {e}")))
+    crate::net::secret_header_value(value)
+        .map(drop)
+        .ok_or_else(|| CoreError::Mcp(HEADER_VALUE_REFUSED.to_string()))
 }
+
+/// 値は秘密情報なので、エラー文に含めない。
+pub(super) const HEADER_VALUE_REFUSED: &str =
+    "the header value must contain only ASCII characters without line breaks";
 
 /// `refs`が指す秘密情報をまとめて解決する。`secrets::load`は資格情報ストアを呼ぶ同期I/Oの
 /// ため、[`crate::blocking::run`]を通す。
@@ -470,8 +474,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_header_value_rejects_crlf() {
+    fn validate_header_value_rejects_crlf_and_non_ascii() {
         assert!(validate_header_value("normal-value").is_ok());
         assert!(validate_header_value("bad\r\nX-Injected: 1").is_err());
+        assert!(validate_header_value("Bearer\u{3000}token").is_err());
     }
 }

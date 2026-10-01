@@ -64,6 +64,9 @@ pub enum TurnFailure {
     Refused {
         detail: ErrorDetail,
     },
+    /// 鍵を登録したプロバイダーなのに、資格情報ストアから鍵を読めなかった。外部へは何も
+    /// 送っていない。理由は設定画面に出す。
+    KeyUnavailable,
     /// 設定不備(鍵ストア・プロバイダー設定・設定ファイル、ヘッダーに載せられない鍵)。
     /// 鍵名やパスを含みうるため詳細は出さない。
     ProviderConfig,
@@ -96,6 +99,7 @@ impl TurnFailure {
             TurnFailure::Auth { .. } => "auth",
             TurnFailure::RateLimit { .. } => "rate_limit",
             TurnFailure::Refused { .. } => "refused",
+            TurnFailure::KeyUnavailable => "key_unavailable",
             TurnFailure::ProviderConfig => "provider_config",
             TurnFailure::Provider { .. } => "provider",
             TurnFailure::Unexpected { .. } => "unexpected",
@@ -129,6 +133,7 @@ impl TurnFailure {
             | TurnFailure::ToolRoundLimit
             | TurnFailure::ToolTimeout
             | TurnFailure::Stopped
+            | TurnFailure::KeyUnavailable
             | TurnFailure::ProviderConfig => None,
         }
     }
@@ -312,6 +317,7 @@ mod tests {
             TurnFailure::Auth { detail: detail() },
             TurnFailure::RateLimit { detail: detail() },
             TurnFailure::Refused { detail: detail() },
+            TurnFailure::KeyUnavailable,
             TurnFailure::ProviderConfig,
             TurnFailure::Provider { detail: detail() },
             TurnFailure::Unexpected { detail: detail() },
@@ -334,6 +340,7 @@ mod tests {
                 | TurnFailure::Auth { .. }
                 | TurnFailure::RateLimit { .. }
                 | TurnFailure::Refused { .. }
+                | TurnFailure::KeyUnavailable
                 | TurnFailure::ProviderConfig
                 | TurnFailure::Provider { .. }
                 | TurnFailure::Unexpected { .. } => {}

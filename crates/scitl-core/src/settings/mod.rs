@@ -82,8 +82,6 @@ pub enum NewMcpEndpoint {
 struct Current {
     config: Arc<Config>,
     adapter: AdapterState,
-    /// `adapter`を鍵無しで組み立てた(資格情報ストアから読めなかった)。
-    key_unavailable: bool,
 }
 
 /// アクティブなプロバイダーのアダプタ。
@@ -92,6 +90,9 @@ enum AdapterState {
     Ready(SharedAdapter),
     /// アクティブなプロバイダーが無い(未登録・全プロバイダーを削除した等)。
     NoProvider,
+    /// アクティブなプロバイダーの鍵を資格情報ストアから読めない。理由を持つ。
+    /// ターンの開始と設定の変更のたびに読み直す。
+    KeyUnavailable(String),
     /// アクティブなプロバイダーを組み立てられない。理由を持つ。
     Broken(String),
 }
@@ -100,20 +101,27 @@ impl AdapterState {
     fn broken_reason(&self) -> Option<&str> {
         match self {
             Self::Broken(reason) => Some(reason),
-            Self::Ready(_) | Self::NoProvider => None,
+            Self::Ready(_) | Self::NoProvider | Self::KeyUnavailable(_) => None,
+        }
+    }
+
+    fn key_error(&self) -> Option<&str> {
+        match self {
+            Self::KeyUnavailable(reason) => Some(reason),
+            Self::Ready(_) | Self::NoProvider | Self::Broken(_) => None,
         }
     }
 }
 
-/// 組み立ての結果を状態に直す。2つ目は「鍵を読めずに鍵無しで組み立てた」。
-fn adapter_state(built: Result<providers::ActiveAdapter>) -> (AdapterState, bool) {
+/// 組み立ての結果を状態に直す。
+fn adapter_state(built: Result<providers::ActiveAdapter>) -> AdapterState {
     match built {
-        Ok(providers::ActiveAdapter {
-            adapter: Some(adapter),
-            key_unavailable,
-        }) => (AdapterState::Ready(adapter), key_unavailable),
-        Ok(providers::ActiveAdapter { adapter: None, .. }) => (AdapterState::NoProvider, false),
-        Err(e) => (AdapterState::Broken(e.to_string()), false),
+        Ok(providers::ActiveAdapter::Ready(adapter)) => AdapterState::Ready(adapter),
+        Ok(providers::ActiveAdapter::NoProvider) => AdapterState::NoProvider,
+        Ok(providers::ActiveAdapter::KeyUnavailable(reason)) => {
+            AdapterState::KeyUnavailable(reason)
+        }
+        Err(e) => AdapterState::Broken(e.to_string()),
     }
 }
 
@@ -172,6 +180,9 @@ pub struct Settings {
     detected: DetectedCatalog,
     /// [`Self::detect_model_capabilities`]の同時実行を1プロバイダーにつき1本に絞る。
     detecting: InFlightSet<String>,
+    /// [`Self::reload_unavailable_key`]を1本ずつにする(同時に始まったターンが、ロックの
+    /// 解除を求める承認を重ねて出さないように)。
+    reloading_key: tokio::sync::Mutex<()>,
 }
 
 impl Settings {
@@ -187,7 +198,7 @@ impl Settings {
                 (Config::default(), Some(reason))
             }
         };
-        let (adapter, key_unavailable) = adapter_state(providers::build_active_adapter(&config));
+        let adapter = adapter_state(providers::build_active_adapter(&config));
         if let Some(reason) = adapter.broken_reason() {
             eprintln!("the active provider cannot be used: {reason}");
         }
@@ -197,13 +208,13 @@ impl Settings {
             current: Mutex::new(Current {
                 config: Arc::new(config),
                 adapter,
-                key_unavailable,
             }),
             writer: Mutex::new(()),
             mcp_tools: Arc::new(ToolCatalog::new()),
             fetching: InFlightSet::new(),
             detected: DetectedCatalog::new(),
             detecting: InFlightSet::new(),
+            reloading_key: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -213,6 +224,7 @@ impl Settings {
             (Some(_), _) => Err(TurnFailure::SettingsUnreadable),
             (None, AdapterState::Ready(adapter)) => Ok(adapter),
             (None, AdapterState::NoProvider) => Err(TurnFailure::NoProvider),
+            (None, AdapterState::KeyUnavailable(_)) => Err(TurnFailure::KeyUnavailable),
             (None, AdapterState::Broken(_)) => Err(TurnFailure::ProviderConfig),
         };
         let capabilities = self.active_model_capabilities(&current.config);
@@ -224,14 +236,36 @@ impl Settings {
         }
     }
 
-    /// ターンの開始に使う[`Self::snapshot`]。アクティブなモデルの能力をまだ推論サーバーに
+    /// ターンの開始に使う[`Self::snapshot`]。鍵を読めていなければ読み直し
+    /// ([`Self::reload_unavailable_key`])、アクティブなモデルの能力をまだ推論サーバーに
     /// 問い合わせていなければ、先に問い合わせる([`Self::detect_active_model_once`])。
     ///
     /// 問い合わせに失敗してもターンは止めない。サーバーに繋がらないならターン自体が
     /// 失敗して理由がエラー発言に残り、繋がるなら既定値の層で進められるため。
     pub async fn snapshot_for_turn(&self) -> Snapshot {
+        self.reload_unavailable_key().await;
         self.detect_active_model_once().await;
         self.snapshot()
+    }
+
+    /// 鍵を読めずにいたら、資格情報ストアから読み直してアダプタを組み立て直す。GUIは
+    /// 起動したまま使い続けるので、ここで読み直さないと、設定を変えるまで直らない。
+    ///
+    /// 読み直しの間は設定の書き込みロックを持たない(ロックの解除を求める承認で止まっている
+    /// 間、設定画面まで止めないため)。その間に設定が変わっていれば、結果は捨てる(変えた側が
+    /// 組み立て直している)。
+    async fn reload_unavailable_key(&self) {
+        let _reloading = self.reloading_key.lock().await;
+        let before = self.current();
+        if before.adapter.key_error().is_none() {
+            return;
+        }
+        let config = Arc::clone(&before.config);
+        let built = crate::blocking::run(move || providers::build_active_adapter(&config)).await;
+        let mut current = self.current.lock().expect("settings mutex poisoned");
+        if Arc::ptr_eq(&current.config, &before.config) {
+            current.adapter = adapter_state(built);
+        }
     }
 
     /// チャット入力欄の下のモデル選択。思考の強さを選べるかは能力で決まるので、
@@ -244,8 +278,15 @@ impl Settings {
 
     /// アクティブなモデルの能力を、まだ推論サーバーに問い合わせていなければ問い合わせる
     /// (アプリ起動後、モデルごとに最初の1回)。失敗は覚えないので、次の機会に問い合わせ直す。
+    ///
+    /// 鍵を読めていない間は問い合わせない(問い合わせのたびに資格情報ストアを読みに行かない。
+    /// 読み直すのはターンの開始と設定の変更だけ)。
     async fn detect_active_model_once(&self) {
-        let config = self.current().config;
+        let current = self.current();
+        if current.adapter.key_error().is_some() {
+            return;
+        }
+        let config = current.config;
         let target = config.active_model().and_then(|(p, model)| {
             (providers::can_detect_capabilities(p)
                 && self.detected.get(&p.id, &model.name).is_none())
@@ -342,6 +383,7 @@ impl Settings {
             view::Problems {
                 config_error: self.config_error.as_deref(),
                 active_provider_error: adapter.broken_reason(),
+                active_provider_key_error: adapter.key_error(),
             },
         )
     }
@@ -361,8 +403,10 @@ impl Settings {
             _writer: writer,
             config: (*current.config).clone(),
             before: current.config,
-            key_unavailable: current.key_unavailable,
-            adapter_broken: current.adapter.broken_reason().is_some(),
+            adapter_unusable: matches!(
+                current.adapter,
+                AdapterState::KeyUnavailable(_) | AdapterState::Broken(_)
+            ),
         }
     }
 
@@ -433,6 +477,7 @@ impl Settings {
 
         let key_ref = match new.api_key {
             Some(key) if !key.expose_secret().is_empty() => {
+                providers::validate_api_key(&key)?;
                 let key_ref = format!("provider:{}", ulid::Ulid::new());
                 secrets::store(&key_ref, &key)?;
                 Some(key_ref)
@@ -730,8 +775,8 @@ struct Draft<'a> {
     _writer: MutexGuard<'a, ()>,
     before: Arc<Config>,
     config: Config,
-    key_unavailable: bool,
-    adapter_broken: bool,
+    /// 鍵を読めていない・組み立てられていない。
+    adapter_unusable: bool,
 }
 
 impl Draft<'_> {
@@ -753,7 +798,7 @@ impl Draft<'_> {
         }
         let inputs_changed = providers::AdapterInputs::of(&self.before)
             != providers::AdapterInputs::of(&self.config);
-        let rebuilt = if inputs_changed || self.key_unavailable || self.adapter_broken {
+        let rebuilt = if inputs_changed || self.adapter_unusable {
             let built = match providers::build_active_adapter(&self.config) {
                 Err(e) if inputs_changed => return Err(e),
                 built => built,
@@ -772,9 +817,13 @@ impl Draft<'_> {
                 .lock()
                 .expect("settings mutex poisoned");
             current.config = Arc::clone(&config);
-            if let Some((adapter, key_unavailable)) = rebuilt {
-                current.adapter = adapter;
-                current.key_unavailable = key_unavailable;
+            // 入力を変えない変更で組み立て直した結果は、その間に読み直し
+            // ([`Settings::reload_unavailable_key`])が使える状態にしていれば当てはめない
+            // (読み直しの成功を、こちらの失敗で潰さないため)。
+            if let Some(adapter) = rebuilt {
+                if inputs_changed || !matches!(current.adapter, AdapterState::Ready(_)) {
+                    current.adapter = adapter;
+                }
             }
             current.adapter.clone()
         };
@@ -922,7 +971,11 @@ mod tests {
     fn ready_adapter(settings: &Settings) -> SharedAdapter {
         match settings.current().adapter {
             AdapterState::Ready(adapter) => adapter,
-            AdapterState::NoProvider | AdapterState::Broken(_) => panic!("adapter is not ready"),
+            AdapterState::NoProvider
+            | AdapterState::KeyUnavailable(_)
+            | AdapterState::Broken(_) => {
+                panic!("adapter is not ready")
+            }
         }
     }
 
@@ -935,6 +988,61 @@ mod tests {
                 api_key: None,
             })
             .unwrap()
+    }
+
+    /// 空白だけの鍵・ヘッダーに載せられない鍵は、資格情報ストアに触れる前に断る。
+    #[test]
+    fn add_provider_refuses_a_key_that_is_not_visible_ascii() {
+        let (settings, _path, _dir) = temp_settings();
+        for key in ["   ", "sk-test\n"] {
+            let result = settings.add_provider(NewProvider {
+                name: "remote".to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: "http://localhost:1234/v1".to_string(),
+                api_key: Some(SecretString::from(key)),
+            });
+            assert!(
+                matches!(result, Err(CoreError::ProviderConfig(_))),
+                "{key:?}"
+            );
+        }
+        assert!(settings.view().providers.is_empty());
+    }
+
+    fn make_key_unavailable(settings: &Settings) {
+        settings.current.lock().unwrap().adapter = AdapterState::KeyUnavailable("locked".into());
+    }
+
+    /// 鍵を読めない間は送らずに失敗し、理由は設定画面のアクティブなプロバイダーに出す。
+    /// ターンの開始で読み直す(ここでは鍵を登録していないプロバイダーなので、読み直せば
+    /// 組み立てられる)。
+    #[tokio::test]
+    async fn an_unreadable_key_fails_the_turn_and_is_reloaded_at_the_next_turn() {
+        let (settings, _path, _dir) = temp_settings();
+        add_local_provider(&settings, "local");
+        make_key_unavailable(&settings);
+
+        assert!(matches!(
+            settings.snapshot().adapter,
+            Err(TurnFailure::KeyUnavailable)
+        ));
+        let view = settings.view();
+        assert_eq!(view.providers[0].key_error.as_deref(), Some("locked"));
+        assert_eq!(view.providers[0].error, None);
+
+        assert!(settings.snapshot_for_turn().await.adapter.is_ok());
+        assert_eq!(settings.view().providers[0].key_error, None);
+    }
+
+    /// 鍵を読めない間も、鍵と無関係な設定は変えられ、変えたときに読み直す。
+    #[test]
+    fn a_settings_change_reloads_an_unreadable_key() {
+        let (settings, _path, _dir) = temp_settings();
+        add_local_provider(&settings, "local");
+        make_key_unavailable(&settings);
+
+        settings.update_tools(Some(3), None).unwrap();
+        ready_adapter(&settings);
     }
 
     /// 思考に対応するモデルには強さを必ず送り、対応しないモデルには送らない。

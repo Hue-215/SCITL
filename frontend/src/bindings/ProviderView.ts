@@ -10,4 +10,10 @@ can_detect_capabilities: boolean,
 /**
  * このプロバイダーをアクティブにしているが、組み立てられない理由。
  */
-error: string | null, };
+error: string | null, 
+/**
+ * このプロバイダーをアクティブにしているが、鍵を資格情報ストアから読めない理由。
+ * `error`と違い、プロバイダーの設定ではなく資格情報ストアの側の問題で、ストアの
+ * ロックを解除すれば次の送信で直ることがある。
+ */
+key_error: string | null, };

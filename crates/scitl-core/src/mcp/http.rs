@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::HeaderName;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::ServiceExt;
@@ -29,8 +29,8 @@ pub(super) async fn connect(
     for (name, secret) in &resolved {
         let header_name = HeaderName::from_bytes(name.as_bytes())
             .map_err(|e| CoreError::Mcp(format!("invalid header name '{name}': {e}")))?;
-        let header_value = HeaderValue::from_str(secret.expose_secret())
-            .map_err(|_| CoreError::Mcp(format!("invalid header value for '{name}'")))?;
+        let header_value = crate::net::secret_header_value(secret.expose_secret())
+            .ok_or_else(|| CoreError::Mcp(format!("{} ('{name}')", super::HEADER_VALUE_REFUSED)))?;
         headers.insert(header_name, header_value);
     }
 

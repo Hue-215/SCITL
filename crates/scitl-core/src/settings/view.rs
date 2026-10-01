@@ -36,6 +36,10 @@ pub struct ProviderView {
     pub can_detect_capabilities: bool,
     /// このプロバイダーをアクティブにしているが、組み立てられない理由。
     pub error: Option<String>,
+    /// このプロバイダーをアクティブにしているが、鍵を資格情報ストアから読めない理由。
+    /// `error`と違い、プロバイダーの設定ではなく資格情報ストアの側の問題で、ストアの
+    /// ロックを解除すれば次の送信で直ることがある。
+    pub key_error: Option<String>,
 }
 
 /// モデル表の1行。能力は解決済みの値を渡し、画面は3層の解決を自前で行わない。
@@ -239,6 +243,18 @@ pub(super) fn chat_models(config: &Config, detected: &DetectedCatalog) -> ChatMo
 pub(super) struct Problems<'a> {
     pub config_error: Option<&'a str>,
     pub active_provider_error: Option<&'a str>,
+    pub active_provider_key_error: Option<&'a str>,
+}
+
+/// アクティブなプロバイダーの問題を、そのプロバイダーの行にだけ載せる。
+fn active_only(
+    config: &Config,
+    provider: &ProviderConfig,
+    problem: Option<&str>,
+) -> Option<String> {
+    problem
+        .filter(|_| config.active_provider_id.as_deref() == Some(provider.id.as_str()))
+        .map(str::to_string)
 }
 
 pub(super) fn build(
@@ -281,10 +297,8 @@ pub(super) fn build(
                 active_model: p.active_model.clone(),
                 has_api_key: p.key_ref.is_some(),
                 can_detect_capabilities: providers::can_detect_capabilities(p),
-                error: problems
-                    .active_provider_error
-                    .filter(|_| config.active_provider_id.as_deref() == Some(p.id.as_str()))
-                    .map(str::to_string),
+                error: active_only(config, p, problems.active_provider_error),
+                key_error: active_only(config, p, problems.active_provider_key_error),
             })
             .collect(),
         active_provider_id: config.active_provider_id.clone(),

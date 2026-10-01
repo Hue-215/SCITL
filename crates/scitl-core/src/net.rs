@@ -123,6 +123,19 @@ pub fn hardened_client(
         .map_err(|e| CoreError::Config(format!("failed to build HTTP client: {e}")))
 }
 
+/// 秘密情報(APIキー・MCPサーバーのヘッダーの値)を、送るヘッダーの値にする。載せられない
+/// 値なら`None`。`HeaderValue`は改行等の制御文字を拒むが0x80以上のバイトは通すので、
+/// 全角スペース等の混入をそのまま送らないようASCIIに限る。値はデバッグ表示に出ないよう
+/// `sensitive`にする。
+pub fn secret_header_value(value: &str) -> Option<reqwest::header::HeaderValue> {
+    if !value.is_ascii() {
+        return None;
+    }
+    let mut header = reqwest::header::HeaderValue::from_str(value).ok()?;
+    header.set_sensitive(true);
+    Some(header)
+}
+
 /// 接続を拒否されるループバックのアドレスと、そのポートを握っているソケット。
 ///
 /// ポートを確保してすぐ手放すと、並列に走る別のテストが同じポートで待ち受け直し、

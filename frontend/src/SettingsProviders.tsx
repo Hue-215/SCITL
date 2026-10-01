@@ -173,6 +173,11 @@ function ProviderCard({
           {t('settings.provider.unusable', { error: isolated(provider.error) })}
         </p>
       )}
+      {provider.key_error && (
+        <p className="error">
+          {t('settings.provider.key_unavailable', { error: isolated(provider.key_error) })}
+        </p>
+      )}
 
       {hasModel ? (
         <ModelTable provider={provider} onUpdate={onUpdateModels} />
