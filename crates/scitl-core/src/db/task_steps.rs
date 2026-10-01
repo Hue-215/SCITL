@@ -91,7 +91,7 @@ pub fn add_steps(
             });
         }
 
-        let mut next_order_index: i64 = conn.query_row(
+        let first_order_index: i64 = conn.query_row(
             "SELECT COALESCE(MAX(order_index), -1) + 1 FROM task_steps WHERE task_id = ?1",
             [task_id],
             |row| row.get(0),
@@ -99,14 +99,13 @@ pub fn add_steps(
 
         let mut created = Vec::new();
         let now = now_iso8601();
-        for description in &to_add {
+        for (order_index, description) in (first_order_index..).zip(&to_add) {
             conn.execute(
                 "INSERT INTO task_steps (task_id, description, order_index, created_at)
              VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![task_id, description, next_order_index, now],
+                rusqlite::params![task_id, description, order_index, now],
             )?;
             created.push(get_step(conn, conn.last_insert_rowid())?);
-            next_order_index += 1;
         }
 
         if !created.is_empty() {
