@@ -164,14 +164,36 @@ fn iso8601(at: chrono::DateTime<chrono::Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// 他プロセスのロックを待つ上限。
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// 接続を開き、PRAGMAとマイグレーションを適用する。
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
     let conn = Connection::open(path)?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    enable_wal(&conn)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.busy_timeout(Duration::from_secs(5))?;
     migrate_to(&conn, MIGRATIONS.len())?;
     Ok(conn)
+}
+
+/// WALへ切り替える。切り替えは読み取りロックを持ったまま排他ロックへ上げるので、作成直後の
+/// DBを別プロセスが同時に開いていると、SQLiteはデッドロックを避けてビジーハンドラを呼ばずに
+/// `SQLITE_BUSY`を返す(`busy_timeout`が効かない)。そのため自前で間を置いて送り直す。
+fn enable_wal(conn: &Connection) -> Result<()> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(10);
+    let started = std::time::Instant::now();
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::DatabaseBusy
+                    && started.elapsed() < BUSY_TIMEOUT =>
+            {
+                std::thread::sleep(RETRY_INTERVAL);
+            }
+            result => return Ok(result?),
+        }
+    }
 }
 
 pub fn open_in_memory() -> Result<Connection> {
@@ -276,6 +298,35 @@ mod tests {
 
         let opened = late.join().unwrap();
         assert!(opened.is_ok(), "{opened:?}");
+    }
+
+    #[test]
+    fn many_connections_can_create_the_same_database_at_once() {
+        for _ in 0..10 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("scitl.sqlite3");
+            let start = Arc::new(std::sync::Barrier::new(8));
+            let openers: Vec<_> = (0..8)
+                .map(|_| {
+                    let path = path.clone();
+                    let start = Arc::clone(&start);
+                    std::thread::spawn(move || {
+                        start.wait();
+                        open(path).map(drop)
+                    })
+                })
+                .collect();
+
+            for opener in openers {
+                let opened = opener.join().unwrap();
+                assert!(opened.is_ok(), "{opened:?}");
+            }
+            let mode: String = open(&path)
+                .unwrap()
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(mode, "wal");
+        }
     }
 
     /// 辞書順が時系列順になる固定幅の形。秒未満は書かず、UTCは`Z`で書く。
