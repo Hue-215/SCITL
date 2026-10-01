@@ -70,6 +70,8 @@ fn main() {
             commands::chat::open_task_chat,
             commands::chat::send_chat_message,
             commands::chat::list_chat_messages,
+            commands::chat::chat_lacks_reply,
+            commands::chat::generate_chat_reply,
             commands::chat::edit_chat_message,
             commands::chat::retry_chat_message,
             commands::chat::stop_chat_response,

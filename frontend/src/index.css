@@ -733,6 +733,12 @@ option {
   color: var(--color-on-danger-container);
 }
 
+.entry-stopped {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .entry-error-detail {
   font-size: var(--font-size-sm);
 }

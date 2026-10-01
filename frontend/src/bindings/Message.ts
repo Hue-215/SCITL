@@ -3,7 +3,7 @@ import type { AttachmentView } from "./AttachmentView";
 import type { Kind } from "./Kind";
 import type { Role } from "./Role";
 
-export type Message = { id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, reasoning: string | null, error_kind: string | null, error_detail: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
+export type Message = { id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, reasoning: string | null, error_kind: string | null, error_detail: string | null, partial_reply: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
 /**
  * 発言に付いた添付。付けた順。
  */

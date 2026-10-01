@@ -116,6 +116,20 @@ fn retrying_a_reply_makes_another_attempt_of_the_same_turn() {
     assert_eq!(second["attempt_no"], 2);
 }
 
+/// 返信の無い会話にだけ応答を生成する。エラー発言で終わったあとは断る(作り直しを使う)。
+#[test]
+fn reply_answers_only_a_conversation_without_a_reply() {
+    let data = DataDir::new();
+    let task = data.create_task().to_string();
+
+    let replied = stdout_lines(&data.run(&["chat", "reply", "--task", &task]));
+    assert_eq!(replied[0]["message"]["error_kind"], "no_provider");
+
+    let refused = data.run(&["chat", "reply", "--task", &task]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("already ends with a reply"));
+}
+
 #[test]
 fn a_task_is_not_created_while_the_chat_is_unavailable() {
     let data = DataDir::new();

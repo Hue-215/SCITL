@@ -101,6 +101,24 @@ pub async fn retry_chat_message(
     .map_err(|e| e.to_string())
 }
 
+/// 返信の無いまま終わった会話に、応答を生成する([`orchestration::generate_reply`])。
+#[tauri::command]
+pub async fn generate_chat_reply(
+    state: State<'_, AppState>,
+    chat: Chat,
+    on_event: Channel<TurnEvent>,
+) -> Result<(), String> {
+    let snapshot = state.settings.snapshot_for_turn().await;
+    let events = forward(&on_event);
+    orchestration::generate_reply(
+        state.db.clone(),
+        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        chat,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// 会話で生成中の応答を止める([`stop_response`])。
 #[tauri::command]
 pub fn stop_chat_response(state: State<'_, AppState>, chat: Chat) -> bool {
@@ -117,6 +135,12 @@ pub async fn delete_chat_message(
     delete_message(state.db.clone(), &state.generating, chat, message_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 会話が返信の無いまま終わっているか([`orchestration::lacks_reply`])。
+#[tauri::command]
+pub async fn chat_lacks_reply(state: State<'_, AppState>, chat: Chat) -> Result<bool, String> {
+    with_db(&state, move |conn| orchestration::lacks_reply(conn, chat)).await
 }
 
 /// 会話の発言を表示用に取得する。

@@ -60,6 +60,13 @@ pub enum ChatCommand {
         /// The reply (an assistant or error message) to replace.
         message_id: i64,
     },
+    /// Generate a reply in a conversation that ends without one (for example, the process ended
+    /// while generating). Nothing is deleted. Refused when the conversation ends with a reply or
+    /// an error message; use `retry` for those. Output and caveats are those of `send`.
+    Reply {
+        #[command(flatten)]
+        chat: ChatArg,
+    },
 }
 
 /// 応答生成の出力の1行。途中経過([`TurnEvent`])と同じく`type`で見分ける。
@@ -135,6 +142,13 @@ pub async fn run(session: &Session, command: ChatCommand) -> Result<(), DebugErr
             let turns = Turns::open(session).await?;
             let ctx = turns.context(session, &print_event);
             orchestration::retry_reply(db, &ctx, chat, message_id).await?;
+            print_last_message(session, chat).await?;
+        }
+        ChatCommand::Reply { chat } => {
+            let chat = chat.chat();
+            let turns = Turns::open(session).await?;
+            let ctx = turns.context(session, &print_event);
+            orchestration::generate_reply(db, &ctx, chat).await?;
             print_last_message(session, chat).await?;
         }
     }
