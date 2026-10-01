@@ -131,9 +131,10 @@ pub struct GeneralConfig {
     /// 応答タイムアウト(秒)。未設定は[`DEFAULT_RESPONSE_TIMEOUT_SECS`]。値の解釈は
     /// [`Self::response_timeout`]に閉じる。
     pub response_timeout_secs: Option<u64>,
-    /// 表示言語。未設定は[`Language::DEFAULT`]。値の解釈は[`Self::language`]に閉じる。
-    /// 知らない値が書かれていると、他の列挙と同じく設定ファイル全体を読めない扱いになる。
-    pub language: Option<Language>,
+    /// 表示言語のコード([`Language::code`])。未設定と知らない値は[`Language::DEFAULT`]で、
+    /// 値の解釈は[`Self::language`]に閉じる。知らない値(打ち間違い、別の版が書いた言語)も
+    /// 書かれたまま持ち、言語を選び直すまでファイルから消さない。
+    pub language: Option<String>,
 }
 
 impl GeneralConfig {
@@ -148,7 +149,17 @@ impl GeneralConfig {
     }
 
     pub fn language(&self) -> Language {
-        self.language.unwrap_or(Language::DEFAULT)
+        self.language
+            .as_deref()
+            .and_then(Language::from_code)
+            .unwrap_or(Language::DEFAULT)
+    }
+
+    /// 設定に書かれているが使えない表示言語の値。
+    pub fn unknown_language(&self) -> Option<&str> {
+        self.language
+            .as_deref()
+            .filter(|code| Language::from_code(code).is_none())
     }
 }
 
@@ -504,6 +515,28 @@ base_url = "http://localhost:1234/v1"
 models = ["a"]
 "#;
         assert!(toml::from_str::<Config>(text).is_err());
+    }
+
+    /// 知らない表示言語は既定の言語として読み、ほかの設定を変えて保存しても書かれた値を残す。
+    #[test]
+    fn unknown_language_falls_back_to_the_default_and_survives_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[general]\nlanguage = \"jp\"\n").unwrap();
+
+        let config = load(&path).unwrap();
+        assert_eq!(config.general.language(), Language::DEFAULT);
+        assert_eq!(config.general.unknown_language(), Some("jp"));
+
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).unwrap().general.language.as_deref(), Some("jp"));
+
+        let known = GeneralConfig {
+            language: Some("en".to_string()),
+            ..GeneralConfig::default()
+        };
+        assert_eq!(known.language(), Language::En);
+        assert_eq!(known.unknown_language(), None);
     }
 
     /// `task_chat_system_prompt`を含まないTOMLも読める。`#[serde(default)]`の無い`Option`が

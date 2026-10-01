@@ -68,7 +68,7 @@ mod tests {
     fn unset_or_empty_settings_fall_back_to_the_defaults_of_the_display_language() {
         let general = GeneralConfig {
             task_opening_message: Some(String::new()),
-            language: Some(Language::En),
+            language: Some(Language::En.code().to_string()),
             ..GeneralConfig::default()
         };
         assert_eq!(
@@ -97,7 +97,7 @@ mod tests {
         let general = GeneralConfig {
             task_chat_system_prompt: Some(" \n".to_string()),
             task_opening_message: Some("\t".to_string()),
-            language: Some(Language::En),
+            language: Some(Language::En.code().to_string()),
             ..GeneralConfig::default()
         };
         assert_eq!(

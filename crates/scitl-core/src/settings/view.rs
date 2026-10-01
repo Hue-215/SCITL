@@ -120,9 +120,15 @@ pub struct GeneralSettingsView {
     pub default_task_opening_message: &'static str,
     pub response_timeout_secs: Option<u64>,
     pub default_response_timeout_secs: u64,
-    /// 未設定なら既定の言語に解決した値。画面は「未設定」を扱わない。
+    /// 未設定・知らない値なら既定の言語に解決した値。画面は「未設定」を扱わない。
     pub language: Language,
+    /// 設定ファイルに書かれているが使えない表示言語の値(見えない文字を除き、切り詰めた写し)。
+    /// あれば、既定の言語で表示していることを画面に出す。
+    pub unknown_language: Option<String>,
 }
+
+/// [`GeneralSettingsView::unknown_language`]に出す長さの上限。
+const UNKNOWN_LANGUAGE_MAX_CHARS: usize = 32;
 
 /// ツール呼び出しの上限。設定値(未設定は`None`)と未設定時の既定値の両方を渡し、画面は
 /// 既定値をプレースホルダに出す(既定値をTS側に書き写さないため)。
@@ -274,6 +280,10 @@ pub(super) fn build(
             response_timeout_secs: config.general.response_timeout_secs,
             default_response_timeout_secs: DEFAULT_RESPONSE_TIMEOUT_SECS,
             language: config.general.language(),
+            unknown_language: config
+                .general
+                .unknown_language()
+                .map(|code| text::display_label(code, UNKNOWN_LANGUAGE_MAX_CHARS)),
         },
         tools: ToolSettingsView {
             max_rounds_per_turn: config.tools.max_rounds_per_turn,

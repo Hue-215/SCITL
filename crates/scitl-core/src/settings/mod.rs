@@ -443,7 +443,7 @@ impl Settings {
 
     pub fn update_language(&self, language: Language) -> Result<SettingsView> {
         let mut draft = self.edit();
-        draft.config.general.language = Some(language);
+        draft.config.general.language = Some(language.code().to_string());
         draft.commit()
     }
 
@@ -1453,6 +1453,23 @@ name = "m"
             .unwrap();
         assert_eq!(view.general.language, Language::En);
         assert_eq!(Settings::load(path).display_language(), Language::En);
+    }
+
+    /// 設定ファイルの知らない表示言語は画面へ伝え、選び直すと消える。
+    #[test]
+    fn unknown_language_is_reported_until_a_language_is_chosen() {
+        let (_, path, _dir) = temp_settings();
+        std::fs::write(&path, "[general]\nlanguage = \"j\u{202E}p\"\n").unwrap();
+        let settings = Settings::load(path);
+
+        let view = settings.view();
+        assert_eq!(view.config_error, None);
+        assert_eq!(view.general.language, Language::DEFAULT);
+        assert_eq!(view.general.unknown_language.as_deref(), Some("jp"));
+
+        let view = settings.update_language(Language::En).unwrap();
+        assert_eq!(view.general.language, Language::En);
+        assert_eq!(view.general.unknown_language, None);
     }
 
     #[test]

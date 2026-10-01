@@ -80,6 +80,7 @@
   "settings.general.exporting": "Exporting…",
   "settings.general.language_label": "Display language",
   "settings.general.language_restart_note": "Takes effect after restarting",
+  "settings.general.language_unknown_note": "The display language \"{value}\" in the config file isn't available, so the default language is used. Choosing a language replaces this value.",
   "settings.general.open_export_folder": "Open folder",
   "settings.general.open_export_folder_failed": "Could not open the folder: {error}",
   "settings.general.system_prompt_label": "System prompt",
