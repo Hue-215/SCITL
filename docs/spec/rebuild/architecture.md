@@ -847,7 +847,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 `ts-rs`で生成する。手で写すと、Rust側の変更に追従し損ねても型検査が通ってしまうため。
 生成は`cargo test`が行い、CIは生成し直した結果とコミット済みの生成物が一致することを確かめる。
 
-コマンドの失敗は`commands::CommandError`の1つの型で返し、画面へ渡す形(今は`CoreError`の表示文の
+コマンドの失敗は`commands::CommandError`の1つの型で返し、画面へ渡す形(`CoreError`の表示文の
 文字列)をそこだけで決める。各コマンドは`?`で返すだけにする。
 
 `get_current_task_detail` のようなモデル向けツール(引数なし、対象はターン開始時に

@@ -242,7 +242,7 @@ enum ContentPart {
     ImageUrl { image_url: ImageUrl },
 }
 
-/// 画像のdata URL。本体は発言列の画像と共有し、リクエストを組み立てるたびに複製しない。
+/// 画像のdata URL。発言列の画像を持ち、直列化のときだけdata URLを読む。
 #[derive(Serialize)]
 struct ImageUrl {
     #[serde(serialize_with = "serialize_data_url")]
