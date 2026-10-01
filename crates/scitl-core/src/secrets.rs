@@ -59,7 +59,9 @@ fn retry_with_new_store<S, T>(
     let store = acquire()?;
     match op(&store) {
         Err(keyring_core::Error::PlatformFailure(e)) => {
-            eprintln!("secret store operation failed, retrying with a new connection: {e}");
+            crate::diagnostics::report(format_args!(
+                "secret store operation failed, retrying with a new connection: {e}"
+            ));
             discard(&store);
             op(&acquire()?).map_err(store_error)
         }

@@ -226,7 +226,9 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
     let api_key = match load_api_key(provider.key_ref) {
         Ok(api_key) => api_key,
         Err(e) => {
-            eprintln!("failed to read the API key from the secret store: {e}");
+            crate::diagnostics::report(format_args!(
+                "failed to read the API key from the secret store: {e}"
+            ));
             return Ok(ActiveAdapter::KeyUnavailable(e.to_string()));
         }
     };

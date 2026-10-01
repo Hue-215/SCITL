@@ -34,7 +34,7 @@ pub(crate) fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
 fn sync_parent_dir(path: &Path) {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
-            eprintln!("failed to sync a data directory: {e}");
+            crate::diagnostics::report(format_args!("failed to sync a data directory: {e}"));
         }
     }
 }

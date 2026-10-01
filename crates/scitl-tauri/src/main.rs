@@ -122,7 +122,9 @@ fn single_instance_available() -> bool {
     match zbus::Address::session() {
         Ok(_) => true,
         Err(e) => {
-            eprintln!("starting without preventing a second instance: {e}");
+            scitl_core::diagnostics::report(format_args!(
+                "starting without preventing a second instance: {e}"
+            ));
             false
         }
     }
