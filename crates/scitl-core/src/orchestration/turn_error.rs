@@ -51,6 +51,8 @@ pub enum TurnFailure {
     ToolRoundLimit,
     /// 1ターン内のツール実行に使える合計時間を使い切った。
     ToolTimeout,
+    /// ユーザーが応答の生成を止めた(`orchestration::stop_response`)。
+    Stopped,
     /// APIキーの未設定・不正。どちらも実際の呼び出しがHTTP 401/403を返してここに落ちる。
     Auth {
         detail: ErrorDetail,
@@ -90,6 +92,7 @@ impl TurnFailure {
             TurnFailure::ThinkingEffortUnsupported { .. } => "thinking_effort_unsupported",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
             TurnFailure::ToolTimeout => "tool_timeout",
+            TurnFailure::Stopped => "stopped",
             TurnFailure::Auth { .. } => "auth",
             TurnFailure::RateLimit { .. } => "rate_limit",
             TurnFailure::Refused { .. } => "refused",
@@ -125,6 +128,7 @@ impl TurnFailure {
             | TurnFailure::EmptyResponse
             | TurnFailure::ToolRoundLimit
             | TurnFailure::ToolTimeout
+            | TurnFailure::Stopped
             | TurnFailure::ProviderConfig => None,
         }
     }
@@ -304,6 +308,7 @@ mod tests {
             TurnFailure::ThinkingEffortUnsupported { detail: detail() },
             TurnFailure::ToolRoundLimit,
             TurnFailure::ToolTimeout,
+            TurnFailure::Stopped,
             TurnFailure::Auth { detail: detail() },
             TurnFailure::RateLimit { detail: detail() },
             TurnFailure::Refused { detail: detail() },
@@ -325,6 +330,7 @@ mod tests {
                 | TurnFailure::ThinkingEffortUnsupported { .. }
                 | TurnFailure::ToolRoundLimit
                 | TurnFailure::ToolTimeout
+                | TurnFailure::Stopped
                 | TurnFailure::Auth { .. }
                 | TurnFailure::RateLimit { .. }
                 | TurnFailure::Refused { .. }

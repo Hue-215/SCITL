@@ -3,8 +3,8 @@ use tauri::State;
 
 use scitl_core::db::messages::Chat;
 use scitl_core::orchestration::{
-    self, delete_message, edit_user_message, retry_reply, run_turn, MessageView, TurnEvent,
-    UserInput,
+    self, delete_message, edit_user_message, retry_reply, run_turn, stop_response, MessageView,
+    TurnEvent, UserInput,
 };
 
 use super::with_db;
@@ -99,6 +99,12 @@ pub async fn retry_chat_message(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+/// 会話で生成中の応答を止める([`stop_response`])。
+#[tauri::command]
+pub fn stop_chat_response(state: State<'_, AppState>, chat: Chat) -> bool {
+    stop_response(&state.generating, chat)
 }
 
 /// 発言と、それより後ろの発言をまとめて削除する([`delete_message`])。

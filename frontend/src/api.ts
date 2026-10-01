@@ -141,6 +141,12 @@ export function retryChatMessage(
   return invoke('retry_chat_message', { chat, messageId, onEvent: new Channel(onEvent) })
 }
 
+// 生成中の応答を止める。生成中でなければ何もせず`false`。止めたターンは、生成を始めた
+// コマンドが終わったときには保存されている。
+export function stopChatResponse(chat: Chat): Promise<boolean> {
+  return invoke('stop_chat_response', { chat })
+}
+
 // 削除は、対象とそれより後ろの発言をまとめて消す。
 export function deleteChatMessage(chat: Chat, messageId: number): Promise<void> {
   return invoke('delete_chat_message', { chat, messageId })
