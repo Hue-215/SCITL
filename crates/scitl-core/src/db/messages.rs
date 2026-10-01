@@ -162,8 +162,8 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// 1つの会話の発言を取得する。ターンを持つ行は`turn_id`ごとの最新試行に絞り、通常発言が
 /// 1行も残っていないターン(編集・再試行・削除で破棄されたターン)は丸ごと除く。
 /// 応答生成以外の経路での操作の記録は`turn_id`を持たないので、常に残る。
-/// 破棄されたターンのツール実行記録はDBに残すが([`soft_delete_normal_from`])、会話に
-/// 並べると直後の編集後の発言が新規送信と見分けられなくなるため、ここで外す。
+/// 編集・再試行で破棄されたターンのツール実行記録はDBに残すが([`soft_delete_normal_from`])、
+/// 会話に並べると直後の編集後の発言が新規送信と見分けられなくなるため、ここで外す。
 pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
     let mut rows = list_rows_for_chat(conn, chat)?;
     let mut attached = attachments::views_for_chat(conn, chat)?;
@@ -962,6 +962,58 @@ mod tests {
             .unwrap()
             .iter()
             .all(|m| m.id == kept || m.id == by_ui));
+    }
+
+    /// 生き残った発言より前にある記録は、返信を持たないターンのものでも消さない。失敗したターン
+    /// (エラー発言が残る)の記録と、編集で置き換える前の発言のターンの記録が当たる。
+    #[test]
+    fn soft_delete_trailing_turn_records_spares_records_before_a_surviving_message() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let insert = |role, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if role == Role::Tool { "{}" } else { "本文" },
+                    kind: if role == Role::Tool {
+                        Kind::ToolExecution
+                    } else {
+                        Kind::Normal
+                    },
+                    origin,
+                    error_kind: (role == Role::Error).then_some("provider"),
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let turn = |turn_id| Origin::Turn {
+            turn_id,
+            attempt_no: 1,
+        };
+
+        insert(Role::User, Origin::User);
+        let failed = insert(Role::Tool, turn("turn-1"));
+        insert(Role::Error, turn("turn-1"));
+        let original = insert(Role::User, Origin::User);
+        let before_edit = insert(Role::Tool, turn("turn-2"));
+        insert(Role::Assistant, turn("turn-2"));
+        soft_delete_normal_from(&conn, chat, original).unwrap();
+        insert(Role::User, Origin::User);
+        let after_edit = insert(Role::Tool, turn("turn-3"));
+        let reply = insert(Role::Assistant, turn("turn-3"));
+
+        soft_delete_normal_from(&conn, chat, reply).unwrap();
+        soft_delete_trailing_turn_records(&conn, chat).unwrap();
+
+        let alive = |id| find_message(&conn, id).unwrap().is_some();
+        assert!(alive(failed));
+        assert!(alive(before_edit));
+        assert!(!alive(after_edit));
     }
 
     /// 通常発言が1つも残っていなければ、会話のターンの記録すべてを消す。
