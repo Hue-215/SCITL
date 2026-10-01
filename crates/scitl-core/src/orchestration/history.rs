@@ -11,7 +11,7 @@ use crate::db::messages::{self, Chat, Kind, Message, Opener, Role};
 use crate::db::transcripts::{self, Transcript};
 use crate::error::Result;
 use crate::llm::{
-    AdapterIdentity, AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText,
+    AdapterIdentity, AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText, SentAt,
     ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
 };
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
@@ -508,7 +508,11 @@ fn user_message(
         })
         .collect();
     ChatMessage::User {
-        text: PromptText::user_message_with_attachments(&m.content, Some(&m.created_at), &notes),
+        text: PromptText::user_message_with_attachments(
+            &m.content,
+            SentAt::local(&m.created_at).as_ref(),
+            &notes,
+        ),
         images,
     }
 }

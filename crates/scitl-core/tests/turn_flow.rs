@@ -11,7 +11,7 @@ use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::{
     AdapterIdentity, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    Replay, RequestPreview, ResponseEvent, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
+    Replay, RequestPreview, ResponseEvent, SentAt, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -765,7 +765,10 @@ async fn history_carries_send_time_beside_the_user_text() {
         ChatMessage::User { text: content, .. } => {
             assert_eq!(
                 content,
-                &PromptText::user_message("工程を追加して", Some(&stored_user_times[0]))
+                &PromptText::user_message(
+                    "工程を追加して",
+                    SentAt::local(&stored_user_times[0]).as_ref()
+                )
             );
         }
         other => panic!("expected User, got {other:?}"),
@@ -779,7 +782,8 @@ async fn history_carries_send_time_beside_the_user_text() {
     }
     assert_eq!(
         user_text(&history[4]),
-        PromptText::user_message("ありがとう", Some(&stored_user_times[1])).as_str()
+        PromptText::user_message("ありがとう", SentAt::local(&stored_user_times[1]).as_ref())
+            .as_str()
     );
 }
 
@@ -3408,19 +3412,22 @@ async fn an_image_that_cannot_be_read_is_reported_to_the_model() {
     assert_eq!(reply_of(&messages), "確認しました");
 }
 
-/// システムプロンプト(現在時刻を含む)を除き、送信日時の値を伏せた発言列。プレビューとターンで
-/// 仮の発言を書いた時刻は秒をまたぎうる。
+/// システムプロンプト(現在時刻を含む)を除き、送信日時と曜日の値を伏せた発言列。プレビューと
+/// ターンで仮の発言を書いた時刻は秒(や日付)をまたぎうる。
 fn comparable(messages: &[ChatMessage]) -> String {
-    let debug = format!("{:?}", &messages[1..]);
-    let mut out = String::new();
-    let mut rest = debug.as_str();
-    while let Some(start) = rest.find("sent_at=\\\"") {
-        let value_start = start + "sent_at=\\\"".len();
-        out.push_str(&rest[..value_start]);
-        let value_len = rest[value_start..].find('\\').unwrap();
-        rest = &rest[value_start + value_len..];
+    let mut out = format!("{:?}", &messages[1..]);
+    for attribute in ["sent_at=\\\"", "weekday=\\\""] {
+        let mut masked = String::new();
+        let mut rest = out.as_str();
+        while let Some(start) = rest.find(attribute) {
+            let value_start = start + attribute.len();
+            masked.push_str(&rest[..value_start]);
+            let value_len = rest[value_start..].find('\\').unwrap();
+            rest = &rest[value_start + value_len..];
+        }
+        masked.push_str(rest);
+        out = masked;
     }
-    out.push_str(rest);
     out
 }
 
@@ -3467,7 +3474,7 @@ async fn preview_shows_what_the_next_turn_sends_without_saving() {
     let sent = adapter.sent().remove(1);
     assert!(comparable(&previewed.0).contains("次の発言"));
     // 伏せたあとに値の無い属性が残っていれば、伏せる処理が働いている。
-    assert!(comparable(&previewed.0).contains("sent_at=\\\"\\\""));
+    assert!(comparable(&previewed.0).contains("sent_at=\\\"\\\" weekday=\\\"\\\""));
     assert_eq!(comparable(&previewed.0), comparable(&sent.0));
     assert_eq!(previewed.1, sent.1);
     assert_eq!(previewed.2, sent.2);

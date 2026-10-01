@@ -646,7 +646,7 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
-    use crate::llm::{InlineImage, ToolSchema};
+    use crate::llm::{InlineImage, SentAt, ToolSchema};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -968,14 +968,14 @@ mod tests {
         );
 
         let user = serde_json::to_value(to_request_message(&ChatMessage::user(
-            PromptText::user_message("hi", Some("2026-09-22T04:12:00Z")),
+            PromptText::user_message("hi", Some(&utc("2026-09-22T04:12:00Z"))),
         )))
         .unwrap();
         assert_eq!(
             user,
             serde_json::json!({
                 "role": "user",
-                "content": "<scitl:user-message sent_at=\"2026-09-22T04:12:00Z\">\nhi\n</scitl:user-message>",
+                "content": "<scitl:user-message sent_at=\"2026-09-22T04:12:00+00:00\" weekday=\"Tuesday\">\nhi\n</scitl:user-message>",
             })
         );
 
@@ -1030,7 +1030,11 @@ mod tests {
     }
 
     fn user(text: &str, sent_at: &str) -> ChatMessage {
-        ChatMessage::user(PromptText::user_message(text, Some(sent_at)))
+        ChatMessage::user(PromptText::user_message(text, Some(&utc(sent_at))))
+    }
+
+    fn utc(at: &str) -> SentAt {
+        SentAt::in_zone(at, &chrono::Utc).unwrap()
     }
 
     fn assistant(text: &str) -> ChatMessage {
@@ -1092,8 +1096,8 @@ mod tests {
             sent[1]["content"],
             format!(
                 "{}\n\n{}",
-                PromptText::user_message("u1", Some("2026-09-22T04:12:00Z")).as_str(),
-                PromptText::user_message("u2", Some("2026-09-22T05:00:00Z")).as_str(),
+                PromptText::user_message("u1", Some(&utc("2026-09-22T04:12:00Z"))).as_str(),
+                PromptText::user_message("u2", Some(&utc("2026-09-22T05:00:00Z"))).as_str(),
             )
         );
         assert_eq!(sent[2]["content"], "a1\n\na2");
@@ -1138,7 +1142,7 @@ mod tests {
             parts[0]["text"],
             format!(
                 "{}\n\n{}",
-                PromptText::user_message("u1", Some("2026-09-22T04:12:00Z")).as_str(),
+                PromptText::user_message("u1", Some(&utc("2026-09-22T04:12:00Z"))).as_str(),
                 PromptText::user_message("u2", None).as_str(),
             )
         );
