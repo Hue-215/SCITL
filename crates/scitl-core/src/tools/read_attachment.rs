@@ -88,6 +88,15 @@ pub fn execute(
     })
 }
 
+/// 実行記録に残した結果([`ToolOutput::result`])を、中身を伴わずに並べる形にする。記録は本文も
+/// 画像も持たないので、渡し方を名前だけに直す。
+pub(super) fn without_content(mut result: Value) -> Value {
+    if let Some(delivered) = result.get_mut("delivered") {
+        *delivered = json!(Delivery::NameOnly);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +194,21 @@ mod tests {
         assert_eq!(output.result["delivered"], "image");
         assert!(output.result.get("content").is_none());
         assert_eq!(output.image_hashes, ["a".repeat(64)]);
+    }
+
+    /// 記録に残した結果は、本文や画像を渡したと伝えたままにしない。
+    #[test]
+    fn a_recorded_result_placed_without_its_content_says_name_only() {
+        let f = Fixture::new();
+        let text = f.attach(
+            AttachmentKind::Text,
+            AttachmentContent::Text("本文".to_string()),
+        );
+        for (id, image_input) in [(text, false), (f.image(), true)] {
+            let placed = without_content(f.read(id, image_input).unwrap().result);
+            assert_eq!(placed["id"], id);
+            assert_eq!(placed["delivered"], "name_only");
+        }
     }
 
     #[test]

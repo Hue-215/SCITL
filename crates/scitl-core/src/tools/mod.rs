@@ -156,6 +156,16 @@ pub fn has_lasting_effect(name: &str) -> bool {
         })
 }
 
+/// 実行記録に残した結果を、記録から組み立てる履歴に載せる形にする。往復でだけ渡した中身
+/// ([`ToolOutput`])は記録に無いので、中身を渡したと伝える結果は、渡していない形に直す。
+pub fn recorded_result(name: &str, result: Value) -> Value {
+    if name == read_attachment::NAME {
+        read_attachment::without_content(result)
+    } else {
+        result
+    }
+}
+
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]にする。
 /// 総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離をモデルの自己制御に
 /// 頼らない)。タスクチャットの`task_id`は呼び出し元(orchestration)が文脈から渡す(モデルには
