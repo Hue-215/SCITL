@@ -15,7 +15,7 @@ pub(super) const PROVIDER_NAME_MAX_CHARS: usize = 64;
 /// リポジトリのパスや量子化の種類を含む長い名前(`hf.co/…/…-GGUF:Q4_K_M`等)が収まる長さ。
 pub(super) const MODEL_NAME_MAX_CHARS: usize = 256;
 
-/// 応答・ツール実行のタイムアウトの上限(24時間)。
+/// 応答・ツール実行のタイムアウトの上限。
 pub(super) const MAX_TIMEOUT_SECS: u64 = 24 * 60 * 60;
 
 pub(super) const MAX_ROUNDS_PER_TURN: u32 = 100;
