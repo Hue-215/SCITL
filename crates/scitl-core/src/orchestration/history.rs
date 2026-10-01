@@ -126,7 +126,7 @@ pub(super) struct HistoryOptions {
 /// エラー発言は送らない。返信のある試行の実行記録は、失敗でない結果を呼び出しと結果の組にして
 /// 送る。それ以外の実行記録(会話の外での操作、失敗したターンと捨てた試行での実行)は、失敗で
 /// ない結果を操作の記録にまとめ、行の並びだけで決まる位置に置く
-/// (`docs/spec/rebuild/architecture.md`「会話の外での操作の伝え方」)。位置が行の並びだけで
+/// (`docs/spec/architecture/prompt-shape.md`「会話の外での操作の伝え方」)。位置が行の並びだけで
 /// 決まるので、次のターンでも同じ位置に並ぶ。
 pub(super) fn build_history(
     mut stored: StoredChat,

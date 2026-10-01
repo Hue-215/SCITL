@@ -115,7 +115,7 @@ impl Attachments {
         blocking::run(move || store.reveal(id, &attachment.view.original_name, &hash)).await
     }
 
-    /// どの添付の行からも指されていない実体(`docs/spec/rebuild/data-model.md` attachments)。
+    /// どの添付の行からも指されていない実体(`docs/spec/data-model/tables.md` attachments)。
     /// `delete`なら消し、消したものを返す。
     ///
     /// 実体の一覧を先に取り、行はその後に読む。逆にすると、行を読んだあとに送信された添付の

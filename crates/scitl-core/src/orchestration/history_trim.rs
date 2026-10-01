@@ -15,7 +15,7 @@ pub(super) struct Trim {
     pub(super) trimmed: bool,
 }
 
-/// `history`のうち、どこから並べるかを決める(`docs/spec/rebuild/architecture.md`
+/// `history`のうち、どこから並べるかを決める(`docs/spec/architecture/transcript.md`
 /// 「間引きの位置」)。`from`(保っている間引きの位置)から後ろが予算に収まれば、そこから
 /// 並べる。超えたときだけ、予算の半分に収まるまで古い単位から落とす。間引くと前が変わり
 /// 思考も外れるので、毎ターン少しずつではなく、まれにまとめて行う。

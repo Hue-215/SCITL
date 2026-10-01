@@ -391,7 +391,7 @@ pub trait LlmAdapter: Send + Sync {
     }
 
     /// 別の試行で受け取った[`Replay`](送り先は`origin`)を、この送り先に送り返してよいか
-    /// (`docs/spec/rebuild/architecture.md`「思考を送り返す範囲」)。方言が違えば形を読めない。
+    /// (`docs/spec/architecture/transcript.md`「思考を送り返す範囲」)。方言が違えば形を読めない。
     /// 既定は送り返さない。要求URLのオリジンが同じかは呼び出し側が見るので、ここでは方言と
     /// モデルだけで答える。
     fn accepts_replay(&self, _origin: &AdapterIdentity) -> bool {

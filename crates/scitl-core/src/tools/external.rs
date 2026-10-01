@@ -106,7 +106,7 @@ impl ExternalToolset {
     }
 
     /// 有効なのに繋がらなかったサーバーを記録する。そのツールは公開しないが、前に固定した
-    /// ツール定義には残す(`docs/spec/rebuild/architecture.md`「前が変わる場面の扱い」)。
+    /// ツール定義には残す(`docs/spec/architecture/transcript.md`「前が変わる場面の扱い」)。
     /// `reserved`は[`Self::build`]と同じく内部ツールの名前で、公開しているツールや内部ツールと
     /// 同じ名前は記録しない(呼ばれたら、そちらを実行する)。
     pub fn with_unavailable<'a>(

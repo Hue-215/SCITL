@@ -18,6 +18,7 @@ crates/scitl-tauri/gen/
 .idea/
 .DS_Store
 
-# Claude Code のローカル作業領域(サブエージェント用worktreeなど)
-.claude/
+# Claude Code のローカル作業領域(サブエージェント用worktreeなど)。スキルだけは管理する
+.claude/*
+!.claude/skills/
 .mcp.json

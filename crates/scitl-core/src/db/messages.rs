@@ -334,7 +334,7 @@ pub fn turns_answering(conn: &Connection, chat: Chat, user_message_id: i64) -> R
 
 /// 行`after_id`より後ろにある、`kept_turns`以外のターンのツール実行記録を論理削除する。
 /// 編集・再試行で、作り直す地点より後ろのターンの記録を以後モデルに送らないため
-/// (`docs/spec/rebuild/data-model.md`「ターン境界」)。作り直すターン自身の記録は`kept_turns`で
+/// (`docs/spec/data-model/messages.md`「ターン境界」)。作り直すターン自身の記録は`kept_turns`で
 /// 残し、捨てた試行の記録として伝える。
 ///
 /// 応答生成以外の経路での操作の記録(`turn_id`が無い)は会話に並ぶ行なので消さない。

@@ -48,7 +48,7 @@ fn state_note(chat: Chat) -> String {
 /// 基本システムプロンプト + タスクチャット用システムプロンプト(総合チャットなら代わりに
 /// 総合チャットの注記) + ツール結果と状態の読み方 + 予約タグの読み方。会話と設定だけで決まり、
 /// リクエストごとには変わらない。現在日時と状態は添えず、モデルがユーザー発言の送信日時と
-/// ツールで知る(`docs/spec/rebuild/architecture.md`「状態と日時の伝え方」)。
+/// ツールで知る(`docs/spec/architecture/prompt-shape.md`「状態と日時の伝え方」)。
 ///
 /// 自由入力は載せない。
 pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts) -> String {

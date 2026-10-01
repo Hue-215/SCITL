@@ -1,6 +1,6 @@
 //! 疑似API(LLM役が応答を書く。別リポジトリ Hue-215/Sham_llm)を相手に、本物のアダプタとターンの
 //! 処理を通して会話を進める試験用のドライバー。GUIの送信と同じ入口(`create_task`・
-//! `open_task_chat`・`run_turn`)を呼ぶ。使い方は`docs/llm-relay.md`。
+//! `open_task_chat`・`run_turn`)を呼ぶ。使い方は`.claude/skills/llm-relay/SKILL.md`。
 //!
 //! ```text
 //! cargo run -p scitl-core --example relay_session -- <DATA_DIR> <BASE_URL> <STEP>...
@@ -13,7 +13,7 @@
 //! それ以外(今の会話へのユーザー発言)。DATA_DIRは`scitl-cli --data-dir`でそのまま読める。
 //!
 //! 方言は環境変数`RELAY_DIALECT`(`openai`・`anthropic`・`gemini`)で選ぶ。BASE_URLとモデルは
-//! `docs/llm-relay.md`。`RELAY_MODEL`でモデル名を変えられる(本物のサーバーを相手にするとき)。
+//! `.claude/skills/llm-relay/SKILL.md`。`RELAY_MODEL`でモデル名を変えられる(本物のサーバーを相手にするとき)。
 //! `RELAY_CONTEXT_LENGTH`でモデルのコンテキスト長を変えられる(間引きを起こすため)。
 
 use std::path::PathBuf;

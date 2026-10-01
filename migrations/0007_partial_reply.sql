@@ -1,9 +1,9 @@
--- 失敗したターンで、受け取り終えたラウンドの本文(docs/spec/rebuild/data-model.md messages)。
+-- 失敗したターンで、受け取り終えたラウンドの本文(docs/spec/data-model/messages.md)。
 -- 表示とエクスポートのためだけに持ち、モデルには送らない。
 ALTER TABLE messages ADD COLUMN partial_reply TEXT NULL;
 
 -- 持てるのはエラー発言だけで、未設定はNULLに寄せる。0001のCHECKに足せないためトリガーで表す
--- (data-model.md「マイグレーション」)。
+-- (docs/spec/data-model/tables.md「マイグレーション」)。
 CREATE TRIGGER messages_partial_reply_insert
 BEFORE INSERT ON messages
 WHEN NEW.partial_reply IS NOT NULL AND (NEW.role <> 'error' OR NEW.partial_reply = '')

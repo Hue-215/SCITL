@@ -36,7 +36,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 ulid = "1"
 async-trait = "0.1"
 # 秘密情報の保存先(OSの資格情報ストア)。本体と、secrets.rsが設定するOSごとの保存先。
-# 選んだ保存先と理由はarchitecture.md「秘密情報」。
+# 選んだ保存先と理由はdocs/spec/architecture/network-secrets.md「秘密情報」。
 keyring-core = "1"
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 windows-native-keyring-store = "1"
