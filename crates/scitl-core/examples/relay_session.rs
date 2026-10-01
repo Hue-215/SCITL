@@ -120,6 +120,11 @@ async fn main() {
             base = Some(text.to_string());
             continue;
         }
+        if let Some(id) = step.strip_prefix("@task ") {
+            println!("> @task {id}");
+            chat = Chat::Task(id.parse().expect("@task <id>"));
+            continue;
+        }
         if let Some(switch) = step.strip_prefix("@tools ") {
             println!("> @tools {switch}");
             servers[0].enabled = match switch {
@@ -144,11 +149,6 @@ async fn main() {
             attachments: &attachments,
             events: &events,
         };
-        if let Some(id) = step.strip_prefix("@task ") {
-            println!("> @task {id}");
-            chat = Chat::Task(id.parse().expect("@task <id>"));
-            continue;
-        }
         match step.as_str() {
             "@new" => {
                 let TaskCreation::Created { task } = create_task(db.clone(), &ctx).await.unwrap()
