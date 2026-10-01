@@ -17,7 +17,7 @@ pub(super) const TOOL: InternalTool = InternalTool {
     run: Run::Read(execute),
 };
 
-/// 引数なし。文脈から決まる情報を持たないため面によらず同一のスキーマ。
+/// 引数なし。文脈から決まる情報を持たないため会話によらず同一のスキーマ。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(
