@@ -30,8 +30,8 @@
 | カラム | 型 | 制約・備考 |
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
-| title | TEXT | NULL可。NULL=未設定(表示側でフォールバック) |
-| description | TEXT | NULL可。NULL=未設定。空文字列は書かない |
+| title | TEXT | NULL可。NULL=未設定(表示側でフォールバック)。空文字列は書かない。長さの上限は`tools.md` 2節 |
+| description | TEXT | NULL可。NULL=未設定。空文字列は書かない。長さの上限は`tools.md` 2節 |
 | deadline | TEXT | `YYYY-MM-DD`。NULL可 |
 | archived_at | TEXT | ISO8601。NULL=未アーカイブ。再度アーカイブしても上書きしない |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
@@ -50,7 +50,7 @@
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
 | task_id | INTEGER | NOT NULL, `REFERENCES tasks(id)` |
-| description | TEXT | NOT NULL。前後の空白を落として保存し、空は書かない |
+| description | TEXT | NOT NULL。前後の空白を落として保存し、空は書かない。長さと件数の上限は`tools.md` 2節 |
 | done_at | TEXT | ISO8601。NULL=未完了 |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
 | order_index | INTEGER | NOT NULL |

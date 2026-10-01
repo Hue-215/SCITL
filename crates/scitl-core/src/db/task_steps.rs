@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-use super::{now_iso8601, tasks};
+use super::{check_max_chars, now_iso8601, tasks};
 use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,6 +30,13 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<TaskStep>> {
     Ok(rows)
 }
 
+/// 工程の説明の上限文字数。
+pub(crate) const MAX_STEP_DESCRIPTION_CHARS: usize = 100;
+
+/// 1つのタスクが持てる工程(未削除)の上限件数。書き込み系のツールは毎回工程の全体を返すので、
+/// 件数に上限が無いと1回の結果が際限なく大きくなる。
+pub(crate) const MAX_STEPS: usize = 100;
+
 /// 工程の説明の正規化。前後の空白を落とし(落とさないと重複排除が効かない)、空なら
 /// エラーにする。追加と更新で同じ規則を通す。
 fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
@@ -40,12 +47,13 @@ fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
             reason: "must not be empty".to_string(),
         });
     }
+    check_max_chars(arg_name, trimmed, MAX_STEP_DESCRIPTION_CHARS)?;
     Ok(trimmed.to_string())
 }
 
-/// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は除外する。空の
-/// 説明が1つでもあれば、1件も追加せずにエラーを返す。`order_index`は連番で既存の最大値の
-/// 続きから振る。戻り値は新規に追加された工程のみ。
+/// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は除外する。空・
+/// 長すぎる説明が1つでもあるか、追加すると[`MAX_STEPS`]を超えるなら、1件も追加せずにエラーを
+/// 返す。`order_index`は連番で既存の最大値の続きから振る。戻り値は新規に追加された工程のみ。
 pub fn add_steps(
     conn: &Connection,
     task_id: i64,
@@ -61,10 +69,27 @@ pub fn add_steps(
         let mut stmt = conn.prepare(
             "SELECT description FROM task_steps WHERE task_id = ?1 AND deleted_at IS NULL",
         )?;
-        let existing: HashSet<String> = stmt
+        let existing: Vec<String> = stmt
             .query_map([task_id], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<HashSet<_>>>()?;
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
+
+        let existing_count = existing.len();
+        let mut seen: HashSet<String> = existing.into_iter().collect();
+        let to_add: Vec<String> = descriptions
+            .into_iter()
+            .filter(|d| seen.insert(d.clone()))
+            .collect();
+        if existing_count + to_add.len() > MAX_STEPS {
+            return Err(CoreError::InvalidArgument {
+                name: "descriptions".to_string(),
+                reason: format!(
+                    "a task can have at most {MAX_STEPS} steps \
+                     ({existing_count} exist, {} would be added)",
+                    to_add.len()
+                ),
+            });
+        }
 
         let mut next_order_index: i64 = conn.query_row(
             "SELECT COALESCE(MAX(order_index), -1) + 1 FROM task_steps WHERE task_id = ?1",
@@ -72,13 +97,9 @@ pub fn add_steps(
             |row| row.get(0),
         )?;
 
-        let mut seen = existing;
         let mut created = Vec::new();
         let now = now_iso8601();
-        for description in &descriptions {
-            if !seen.insert(description.clone()) {
-                continue;
-            }
+        for description in &to_add {
             conn.execute(
                 "INSERT INTO task_steps (task_id, description, order_index, created_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -243,6 +264,49 @@ mod tests {
         let err = add_steps(&conn, task_id, &["調理".to_string(), "  ".to_string()]).unwrap_err();
         assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "descriptions"));
         assert_eq!(list_for_task(&conn, task_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn step_descriptions_over_the_limit_are_rejected_without_adding_any() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let at_limit = "あ".repeat(MAX_STEP_DESCRIPTION_CHARS);
+        let over = "い".repeat(MAX_STEP_DESCRIPTION_CHARS + 1);
+
+        let err = add_steps(&conn, task_id, &["調理".to_string(), over.clone()]).unwrap_err();
+        assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "descriptions"));
+        assert!(list_for_task(&conn, task_id).unwrap().is_empty());
+
+        // 数えるのは前後の空白を落とした後。
+        let step = add_steps(&conn, task_id, &[format!(" {at_limit} ")])
+            .unwrap()
+            .remove(0);
+        let err = update_step(&conn, step.id, Some(over), None).unwrap_err();
+        assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "description"));
+        assert_eq!(
+            list_for_task(&conn, task_id).unwrap()[0].description,
+            at_limit
+        );
+    }
+
+    #[test]
+    fn add_steps_rejects_going_over_the_step_limit_without_adding_any() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let numbered = |range: std::ops::Range<usize>| -> Vec<String> {
+            range.map(|i| format!("工程{i}")).collect()
+        };
+        add_steps(&conn, task_id, &numbered(0..MAX_STEPS - 1)).unwrap();
+
+        let err = add_steps(&conn, task_id, &numbered(MAX_STEPS - 1..MAX_STEPS + 1)).unwrap_err();
+        assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "descriptions"));
+        assert_eq!(list_for_task(&conn, task_id).unwrap().len(), MAX_STEPS - 1);
+
+        // 既存と重なる説明は数えない。上限ちょうどまでは追加できる。
+        let mut batch = numbered(0..3);
+        batch.push(format!("工程{}", MAX_STEPS - 1));
+        assert_eq!(add_steps(&conn, task_id, &batch).unwrap().len(), 1);
+        assert_eq!(list_for_task(&conn, task_id).unwrap().len(), MAX_STEPS);
     }
 
     #[test]

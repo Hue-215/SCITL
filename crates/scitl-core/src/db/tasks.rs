@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-use super::now_iso8601;
+use super::{check_max_chars, now_iso8601};
 use crate::error::{CoreError, Result};
-use crate::text::{collapse_whitespace, ellipsize, truncate_chars};
+use crate::text::{collapse_whitespace, ellipsize, visible_line};
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -217,16 +217,15 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
                     reason: "must not be empty (to remove the description, use clear)".to_string(),
                 });
             }
+            check_max_chars("description", description, MAX_DESCRIPTION_CHARS)?;
         }
 
         let now = now_iso8601();
-        // サニタイズ後に空文字列になった場合は「タイトルの指定なし」として扱い、既存の値を保つ
-        // (空文字列をtitleに書き込むと`title IS NULL`前提の判定が壊れるため)。
         let title = update
             .title
             .as_deref()
-            .map(sanitize_title)
-            .filter(|t| !t.is_empty())
+            .map(normalize_title)
+            .transpose()?
             .or(current.title);
         // 既にアーカイブ済みなら元の日時を保つ(`task_steps::update_step`の`done_at`と同じ)。
         // 状態の列は現在の状態だけを表し、いつ何をしたかは会話ログのツール実行記録が持つ。
@@ -264,19 +263,33 @@ pub(super) fn touch(conn: &Connection, task_id: i64) -> Result<()> {
     Ok(())
 }
 
-const MAX_TITLE_CHARS: usize = 40;
+pub(crate) const MAX_TITLE_CHARS: usize = 40;
 
-/// タイトル文字列を、1行のタイトルとして書き込める形に正規化する(防御としての無害化は
-/// 出力先ごとに掛ける)。制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、
-/// 連続空白を1つにまとめ、[`MAX_TITLE_CHARS`]で切り詰める。上限は値の形の一部なので省略の
-/// 印は付けない。タイトルの書き込みはすべて`update_task`を通し、この正規化を通す。画面からの
-/// 変更は、これで空になるタイトルを書く前に断る(`orchestration::operations`)。
-pub(crate) fn sanitize_title(raw: &str) -> String {
-    let squeezed = collapse_whitespace(raw);
+/// 説明の上限文字数。説明は画面のヘッダーに出るので、そこで無理なく読める長さにする。
+pub(crate) const MAX_DESCRIPTION_CHARS: usize = 200;
+
+/// タイトル文字列を、1行のタイトルとして書き込める形に正規化する。不可視の書式文字を除き、
+/// 制御文字(改行を含む)を空白に畳み込み、前後の空白・引用符を除き、連続空白を1つにまとめる。
+/// 不可視の書式文字は、出力先ごとではなく保存する時点で除く。タイトルは短い表示用の値で、
+/// 残しておく理由が無い(ゼロ幅接合子も除くので、結合した絵文字は分かれる)。
+///
+/// 空になる値と[`MAX_TITLE_CHARS`]を超える値は、黙って捨てたり切ったりせずに断る。タイトルは
+/// 未設定に戻す操作を持たず、空文字列を書くと`title IS NULL`前提の判定も壊れる。タイトルの
+/// 書き込みはすべて`update_task`を通し、この正規化を通す。
+pub(crate) fn normalize_title(raw: &str) -> Result<String> {
+    let squeezed = visible_line(raw);
     let trimmed =
         squeezed.trim_matches(|c: char| matches!(c, '"' | '\'' | '「' | '」' | '『' | '』'));
-    // 引用符を剥がした内側にも空白が残りうるため、もう一度畳んでから切り詰める。
-    truncate_chars(&collapse_whitespace(trimmed), MAX_TITLE_CHARS).0
+    // 引用符を剥がした内側にも空白が残りうるため、もう一度畳む。
+    let title = collapse_whitespace(trimmed);
+    if title.is_empty() {
+        return Err(CoreError::InvalidArgument {
+            name: "title".to_string(),
+            reason: "must not be empty (the title cannot be removed)".to_string(),
+        });
+    }
+    check_max_chars("title", &title, MAX_TITLE_CHARS)?;
+    Ok(title)
 }
 
 /// `deadline`として書き込める形(`YYYY-MM-DD`)かを検証する。タイトルと違い、外れた値を
@@ -397,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn update_task_sanitizes_title_control_chars_quotes_and_truncates() {
+    fn update_task_normalizes_title_control_chars_invisible_chars_and_quotes() {
         let conn = db::open_in_memory().unwrap();
         let id = seed_task(&conn);
 
@@ -412,17 +425,47 @@ mod tests {
         .unwrap();
         assert_eq!(updated.title.as_deref(), Some("買い物リストの作成"));
 
-        let long = "あ".repeat(MAX_TITLE_CHARS + 10);
         let updated = update_task(
             &conn,
             id,
             TaskUpdate {
-                title: Some(long),
+                title: Some("abc\u{202E}def\u{200B}ghi".to_string()),
                 ..Default::default()
             },
         )
         .unwrap();
-        assert_eq!(updated.title.unwrap().chars().count(), MAX_TITLE_CHARS);
+        assert_eq!(updated.title.as_deref(), Some("abcdefghi"));
+    }
+
+    #[test]
+    fn update_task_rejects_title_over_the_limit_without_truncating() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+
+        // 上限ちょうどは通る。数えるのは引用符と不可視の文字を除いた後。
+        let at_limit = "あ".repeat(MAX_TITLE_CHARS);
+        let updated = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some(format!("「{at_limit}\u{200B}」")),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.title.as_deref(), Some(at_limit.as_str()));
+
+        let err = update_task(
+            &conn,
+            id,
+            TaskUpdate {
+                title: Some("い".repeat(MAX_TITLE_CHARS + 1)),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "title"));
+        assert_eq!(get_task(&conn, id).unwrap().title, Some(at_limit));
     }
 
     #[test]
@@ -454,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn update_task_ignores_title_that_is_blank_after_sanitizing() {
+    fn update_task_rejects_title_that_is_blank_after_normalizing() {
         let conn = db::open_in_memory().unwrap();
         let id = seed_task(&conn);
         update_task(
@@ -467,16 +510,49 @@ mod tests {
         )
         .unwrap();
 
-        let updated = update_task(
-            &conn,
-            id,
-            TaskUpdate {
-                title: Some("   \n\"\"   ".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(updated.title.as_deref(), Some("買い物"));
+        for blank in ["", "   \n\"\"   ", "\u{200B}"] {
+            let err = update_task(
+                &conn,
+                id,
+                TaskUpdate {
+                    title: Some(blank.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&err, CoreError::InvalidArgument { name, .. } if name == "title"),
+                "expected InvalidArgument for {blank:?}, got {err:?}"
+            );
+        }
+        assert_eq!(
+            get_task(&conn, id).unwrap().title.as_deref(),
+            Some("買い物")
+        );
+    }
+
+    #[test]
+    fn update_task_rejects_description_over_the_limit() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        let set = |description: String| {
+            update_task(
+                &conn,
+                id,
+                TaskUpdate {
+                    description: FieldChange::Set(description),
+                    ..Default::default()
+                },
+            )
+        };
+
+        set("あ".repeat(MAX_DESCRIPTION_CHARS)).unwrap();
+        let err = set("い".repeat(MAX_DESCRIPTION_CHARS + 1)).unwrap_err();
+        assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "description"));
+        assert_eq!(
+            get_task(&conn, id).unwrap().description,
+            Some("あ".repeat(MAX_DESCRIPTION_CHARS))
+        );
     }
 
     #[test]

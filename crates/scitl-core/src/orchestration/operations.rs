@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::db::messages::{self, Chat, Kind, NewMessage, OperationSource, Origin, Role};
 use crate::db::tasks::{self, Task};
 use crate::db::{in_transaction, with_conn, SharedConnection};
-use crate::error::{CoreError, Result};
+use crate::error::Result;
 use crate::in_flight::InFlightSet;
 use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn::begin_generating;
@@ -22,8 +22,7 @@ use crate::tools::update_task;
 /// ツール名に揃える。
 const DELETE_TASK: &str = "delete_task";
 
-/// タイトルの変更。整形すると空になるタイトルは断る(モデルの`update_task`は空を「指定なし」
-/// として扱うが、画面から空を送るのは取り消しと同じなので、変更の記録を残さない)。
+/// タイトルの変更。整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
 pub async fn rename_task(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,
@@ -31,14 +30,8 @@ pub async fn rename_task(
     task_id: i64,
     title: String,
 ) -> Result<()> {
-    let sanitized = tasks::sanitize_title(&title);
-    if sanitized.is_empty() {
-        return Err(CoreError::InvalidArgument {
-            name: "title".to_string(),
-            reason: "must not be empty".to_string(),
-        });
-    }
-    let unchanged = move |task: &Task| task.title.as_deref() == Some(sanitized.as_str());
+    let normalized = tasks::normalize_title(&title)?;
+    let unchanged = move |task: &Task| task.title.as_deref() == Some(normalized.as_str());
     update(
         db,
         generating,
@@ -150,6 +143,7 @@ mod tests {
 
     use super::*;
     use crate::db;
+    use crate::error::CoreError;
 
     struct Fixture {
         db: SharedConnection,
@@ -211,9 +205,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_blank_title_changes_and_records_nothing() {
+    async fn a_blank_or_too_long_title_changes_and_records_nothing() {
         let f = Fixture::new();
-        for title in ["", "  ", "「」"] {
+        let too_long = "あ".repeat(tasks::MAX_TITLE_CHARS + 1);
+        for title in ["", "  ", "「」", &too_long] {
             let err = rename_task(
                 f.db.clone(),
                 &f.generating,

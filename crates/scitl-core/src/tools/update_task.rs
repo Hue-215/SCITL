@@ -3,7 +3,9 @@ use std::sync::LazyLock;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::tasks::{self, FieldChange, TaskStatus, TaskUpdate};
+use crate::db::tasks::{
+    self, FieldChange, TaskStatus, TaskUpdate, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS,
+};
 use crate::error::{CoreError, Result};
 use crate::llm::ToolSchema;
 
@@ -30,9 +32,12 @@ pub fn schema() -> &'static ToolSchema {
             json!({
                 "type": "object",
                 "properties": {
-                    "title": { "type": "string" },
+                    // 上限を超える値は`db::tasks::update_task`が弾く。スキーマにも明示して、
+                    // 書き直しの往復を減らす(`deadline`と同じ)。
+                    "title": { "type": "string", "maxLength": MAX_TITLE_CHARS },
                     "description": {
                         "type": "string",
+                        "maxLength": MAX_DESCRIPTION_CHARS,
                         "description": "Task description. Cannot be empty; use clear to remove it."
                     },
                     "deadline": {
@@ -189,6 +194,24 @@ mod tests {
             let err = execute(&conn, task_id, &json!({ "clear": clear })).unwrap_err();
             assert!(matches!(err, CoreError::InvalidArgument { .. }));
         }
+    }
+
+    #[test]
+    fn a_rejected_title_leaves_the_other_fields_of_the_call_unwritten() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let too_long = "あ".repeat(tasks::MAX_TITLE_CHARS + 1);
+        for title in ["", too_long.as_str()] {
+            let err = execute(
+                &conn,
+                task_id,
+                &json!({ "title": title, "description": "牛乳", "deadline": "2026-10-01" }),
+            )
+            .unwrap_err();
+            assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "title"));
+        }
+        let task = tasks::get_task(&conn, task_id).unwrap();
+        assert!(task.description.is_none() && task.deadline.is_none());
     }
 
     #[test]
