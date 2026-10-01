@@ -435,10 +435,9 @@ impl LlmAdapter for GeminiAdapter {
         })
     }
 
-    /// 別のモデルが出した`thought`を送ってよいかは確かめていないので、同じモデルのものだけ
-    /// 送り返す。
+    /// 別のモデルが出した`thought`も送り返す。
     fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
-        origin.api_format == ApiFormat::Gemini && origin.model == self.model
+        origin.api_format == ApiFormat::Gemini
     }
 
     fn request_preview(
@@ -790,9 +789,9 @@ mod tests {
             .starts_with("… ("));
     }
 
-    /// 思考を送り返すのは、同じ方言の同じモデルに対してだけ。
+    /// 同じ方言なら、別のモデルの思考も送り返す。
     #[test]
-    fn accepts_replays_only_from_the_same_model() {
+    fn accepts_replays_from_any_model_of_the_same_format() {
         let adapter = adapter("http://127.0.0.1:1", "");
         let origin = |api_format, model: &str| AdapterIdentity {
             api_format,
@@ -800,7 +799,7 @@ mod tests {
             server: "http://127.0.0.1:1".to_string(),
         };
         assert!(adapter.accepts_replay(&origin(ApiFormat::Gemini, "gemini-test")));
-        assert!(!adapter.accepts_replay(&origin(ApiFormat::Gemini, "gemini-other")));
+        assert!(adapter.accepts_replay(&origin(ApiFormat::Gemini, "gemini-other")));
         assert!(!adapter.accepts_replay(&origin(ApiFormat::Anthropic, "gemini-test")));
     }
 
