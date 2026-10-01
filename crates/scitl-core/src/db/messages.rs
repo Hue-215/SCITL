@@ -289,8 +289,8 @@ pub fn soft_delete_message(conn: &Connection, id: i64) -> Result<()> {
 /// 作り直す前に使う)。
 ///
 /// ツール実行記録は消さない。残った記録は[`list_for_chat`]が会話から外す。実行記録の保全を
-/// 優先しているので、表示を合わせるために記録の側を消してはならない。発言の削除だけは、
-/// 続けて[`soft_delete_trailing_turn_records`]で記録も消す。
+/// 優先しているので、表示を合わせるために記録の側を消してはならない。消えたターンの記録は、
+/// 続けて[`soft_delete_turn_records_after`]か[`soft_delete_trailing_turn_records`]で消す。
 pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
@@ -300,29 +300,62 @@ pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> R
     Ok(())
 }
 
-/// 生き残っている最後の通常発言より後ろの、ターンのツール実行記録を論理削除する(通常発言が
-/// 1つも残っていなければ、会話のターンの記録すべて)。発言の削除で、
-/// [`soft_delete_normal_from`]のあとに使う。消した範囲のターンの記録を、以後モデルに送らない
-/// ため(`docs/spec/rebuild/data-model.md`「ターン境界」)。
+/// 行`id`より後ろにある最初のターンの`turn_id`。ユーザー発言を指せば、その発言に答えたターンに
+/// なる。後ろにターンの行が無ければ`None`。論理削除した行は見ない。
+pub fn turn_after(conn: &Connection, chat: Chat, id: i64) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT turn_id FROM messages
+             WHERE task_id IS ?1 AND id > ?2 AND turn_id IS NOT NULL AND deleted_at IS NULL
+             ORDER BY id ASC
+             LIMIT 1",
+            rusqlite::params![chat.task_id(), id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// 行`after_id`より後ろにある、`kept_turn`以外のターンのツール実行記録を論理削除する(`kept_turn`が
+/// `None`ならすべてのターン)。編集・再試行で、作り直す地点より後ろのターンの記録を以後モデルに
+/// 送らないため(`docs/spec/rebuild/data-model.md`「ターン境界」)。作り直すターン自身の記録は
+/// `kept_turn`で残し、捨てた試行の記録として伝える。
 ///
-/// 消した発言のターンの記録は、再試行で捨てた試行の分も含め、すべてこの範囲に入る。編集で
-/// 置き換える前の発言のターンの記録も、置き換えたあとの発言より前にあるので、その発言を消せば
-/// 入る。応答生成以外の経路での操作の記録(`turn_id`が無い)は会話に並ぶ行なので消さない。
-pub fn soft_delete_trailing_turn_records(conn: &Connection, chat: Chat) -> Result<()> {
+/// 応答生成以外の経路での操作の記録(`turn_id`が無い)は会話に並ぶ行なので消さない。
+pub fn soft_delete_turn_records_after(
+    conn: &Connection,
+    chat: Chat,
+    after_id: i64,
+    kept_turn: Option<&str>,
+) -> Result<()> {
     conn.execute(
         "UPDATE messages SET deleted_at = ?1
          WHERE task_id IS ?2
            AND kind = 'tool_execution'
            AND turn_id IS NOT NULL
+           AND turn_id IS NOT ?4
            AND deleted_at IS NULL
-           AND id > COALESCE(
-             (SELECT MAX(id) FROM messages
-              WHERE task_id IS ?2 AND kind = 'normal' AND deleted_at IS NULL),
-             0
-           )",
-        rusqlite::params![now_iso8601(), chat.task_id()],
+           AND id > ?3",
+        rusqlite::params![now_iso8601(), chat.task_id(), after_id, kept_turn],
     )?;
     Ok(())
+}
+
+/// 生き残っている最後の通常発言より後ろの、ターンのツール実行記録を論理削除する(通常発言が
+/// 1つも残っていなければ、会話のターンの記録すべて)。発言の削除で、
+/// [`soft_delete_normal_from`]のあとに使う。編集・再試行と違い、消した発言のターン自身の記録も
+/// 消す。
+///
+/// 消した発言のターンの記録は、再試行で捨てた試行の分も含め、すべてこの範囲に入る。編集で
+/// 置き換える前の発言のターンの記録も、置き換えたあとの発言より前にあるので、その発言を消せば
+/// 入る。
+pub fn soft_delete_trailing_turn_records(conn: &Connection, chat: Chat) -> Result<()> {
+    let last_normal: Option<i64> = conn.query_row(
+        "SELECT MAX(id) FROM messages
+         WHERE task_id IS ?1 AND kind = 'normal' AND deleted_at IS NULL",
+        [chat.task_id()],
+        |row| row.get(0),
+    )?;
+    soft_delete_turn_records_after(conn, chat, last_normal.unwrap_or(0), None)
 }
 
 /// タスクの会話を始めた側。
@@ -1048,6 +1081,111 @@ mod tests {
         soft_delete_trailing_turn_records(&conn, Chat::General).unwrap();
 
         assert!(find_message(&conn, stale).unwrap().is_none());
+    }
+
+    /// 編集・再試行で消すのは、作り直す地点より後ろの、残すターン以外の記録だけ。残すターンの
+    /// 前の試行の記録、それより前のターンの記録、操作の記録は消さない。
+    #[test]
+    fn soft_delete_turn_records_after_spares_the_kept_turn() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let insert = |role, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if role == Role::Tool { "{}" } else { "本文" },
+                    kind: if role == Role::Tool {
+                        Kind::ToolExecution
+                    } else {
+                        Kind::Normal
+                    },
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let turn = |turn_id, attempt_no| Origin::Turn {
+            turn_id,
+            attempt_no,
+        };
+
+        insert(Role::User, Origin::User);
+        let earlier = insert(Role::Tool, turn("turn-1", 1));
+        insert(Role::Assistant, turn("turn-1", 1));
+        let user = insert(Role::User, Origin::User);
+        let old_attempt = insert(Role::Tool, turn("turn-2", 1));
+        insert(Role::Assistant, turn("turn-2", 1));
+        let kept = insert(Role::Tool, turn("turn-2", 2));
+        let reply = insert(Role::Assistant, turn("turn-2", 2));
+        insert(Role::User, Origin::User);
+        let later = insert(Role::Tool, turn("turn-3", 1));
+        let by_ui = insert(Role::Tool, Origin::Operation(OperationSource::Ui));
+        insert(Role::Assistant, turn("turn-3", 1));
+
+        assert_eq!(
+            turn_after(&conn, chat, user).unwrap().as_deref(),
+            Some("turn-2")
+        );
+        soft_delete_normal_from(&conn, chat, reply).unwrap();
+        soft_delete_turn_records_after(&conn, chat, reply, Some("turn-2")).unwrap();
+
+        let alive = |id| find_message(&conn, id).unwrap().is_some();
+        assert!(alive(earlier));
+        assert!(alive(old_attempt));
+        assert!(alive(kept));
+        assert!(!alive(later));
+        assert!(alive(by_ui));
+    }
+
+    #[test]
+    fn turn_after_skips_deleted_rows_and_finds_nothing_at_the_end() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let insert = |role, origin| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: "本文",
+                    kind: Kind::Normal,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    reasoning: None,
+                },
+            )
+            .unwrap()
+        };
+        let user = insert(Role::User, Origin::User);
+        let deleted = insert(
+            Role::Assistant,
+            Origin::Turn {
+                turn_id: "turn-1",
+                attempt_no: 1,
+            },
+        );
+        soft_delete_message(&conn, deleted).unwrap();
+        assert_eq!(turn_after(&conn, chat, user).unwrap(), None);
+
+        insert(
+            Role::Assistant,
+            Origin::Turn {
+                turn_id: "turn-2",
+                attempt_no: 1,
+            },
+        );
+        assert_eq!(
+            turn_after(&conn, chat, user).unwrap().as_deref(),
+            Some("turn-2")
+        );
     }
 
     #[test]

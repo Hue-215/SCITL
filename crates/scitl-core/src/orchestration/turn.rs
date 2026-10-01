@@ -165,6 +165,9 @@ pub async fn open_task_chat(
 /// ユーザー発言の編集。対象の発言以降(自身を含む)の通常発言をすべて論理削除し、編集後の
 /// 内容を新しい発言として挿入したうえで、新しいターンとして応答を生成し直す。添付は新しい
 /// 発言へ引き継ぐ。
+///
+/// 対象の発言に答えたターンより後ろのターンのツール実行記録も論理削除する。答えたターン自身の
+/// 記録は、置き換える前の試行で実行したこととして新しいターンに伝える。
 pub async fn edit_user_message(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -178,7 +181,15 @@ pub async fn edit_user_message(
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
             expect_normal(&target, &[Role::User])?;
+            // 答えたターンは、その返信を消す前に引く(消したあとは後ろのターンの行が先に当たる)。
+            let answered_by = messages::turn_after(conn, chat, target.id)?;
             messages::soft_delete_normal_from(conn, chat, target.id)?;
+            messages::soft_delete_turn_records_after(
+                conn,
+                chat,
+                target.id,
+                answered_by.as_deref(),
+            )?;
             let message_id = insert_user_message(conn, chat, &new_text)?;
             let carried = db_attachments::copy_to_message(conn, target.id, message_id)?;
             // 断るとトランザクションごと戻り、元の発言は消えない。
@@ -192,7 +203,8 @@ pub async fn edit_user_message(
 
 /// ターンの返信(アシスタント発言またはエラー発言)の再試行。対象の発言以降(自身を含む)の
 /// 通常発言を論理削除し、同じ`turn_id`のまま`attempt_no`を増やして応答を生成し直す。対応する
-/// ユーザー発言は対象より前なので残る。
+/// ユーザー発言は対象より前なので残る。後ろのターンのツール実行記録も論理削除する。同じターンの
+/// 前の試行の記録は残し、新しい試行に伝える。
 ///
 /// ターンのユーザー発言だけが削除されていることがあるので、返信以降を消した残りが応答すべき
 /// 発言で終わらなければ断る(`history::awaits_reply`)。新規送信と編集は必ずユーザー発言を
@@ -213,6 +225,7 @@ pub async fn retry_reply(
             })?;
             let attempt_no = messages::next_attempt_no(conn, &turn_id)?;
             messages::soft_delete_normal_from(conn, chat, message_id)?;
+            messages::soft_delete_turn_records_after(conn, chat, message_id, Some(&turn_id))?;
             // 断るとトランザクションごと戻り、返信は消えない。
             if !history::awaits_reply(conn, chat)? {
                 return Err(CoreError::InvalidMessageOperation(
