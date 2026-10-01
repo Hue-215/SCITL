@@ -164,7 +164,7 @@
   "settings.tools.max_rounds_caption": "How many times the model can go back and forth to run tools. A single round may call several tools. Once they're used up, the model is called one more time to reply without tools.",
   "settings.tools.max_rounds_label": "Max tool call rounds per turn",
   "settings.tools.none_registered": "No servers registered.",
-  "settings.tools.not_exposable": "Can't be enabled because its name can't be passed to the model",
+  "settings.tools.not_exposable": "Can't be enabled because its name or argument schema can't be passed to the model",
   "settings.tools.secret_helper": "Values are saved to the credential store, not to the settings file.",
   "settings.tools.secret_names_display": "{label} (values hidden): {names}",
   "settings.tools.server_id_hint": "ID (up to {max} characters; letters, digits and underscores only, with single underscores between letters or digits)",

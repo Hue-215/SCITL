@@ -14,6 +14,7 @@ name: string,
  */
 label: string, description: string | null, 
 /**
- * モデルへ公開できる名前か。公開できないツールは有効にできない。
+ * モデルへ公開できるか(名前と引数スキーマ。`tools::external::is_exposable`)。公開できない
+ * ツールは有効にできない。
  */
 exposable: boolean, };

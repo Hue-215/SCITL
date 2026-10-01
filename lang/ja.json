@@ -164,7 +164,7 @@
   "settings.tools.max_rounds_caption": "ツールを実行するためにモデルと往復できる回数です。1回の往復でツールを複数呼ぶこともあります。使い切ると、ツールを使わずに返信させるため、もう一度だけモデルを呼びます。",
   "settings.tools.max_rounds_label": "1ターンあたりのツール呼び出しの最大回数",
   "settings.tools.none_registered": "サーバーが未登録です。",
-  "settings.tools.not_exposable": "モデルに渡せない名前のため、有効にできません",
+  "settings.tools.not_exposable": "名前か引数の定義がモデルに渡せない形のため、有効にできません",
   "settings.tools.secret_helper": "値は資格情報ストアに保存され、設定ファイルには残りません。",
   "settings.tools.secret_names_display": "{label}（値は非表示）: {names}",
   "settings.tools.server_id_hint": "識別子（{max}字以内で入力、英数字とアンダーバーのみ使用可能。アンダーバーは英数字の間に1つずつ）",
