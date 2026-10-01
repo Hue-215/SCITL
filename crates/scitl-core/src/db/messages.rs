@@ -162,8 +162,9 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
 /// 1つの会話の発言を取得する。ターンを持つ行は`turn_id`ごとの最新試行に絞り、通常発言が
 /// 1行も残っていないターン(編集・再試行・削除で破棄されたターン)は丸ごと除く。
 /// 応答生成以外の経路での操作の記録は`turn_id`を持たないので、常に残る。
-/// 編集・再試行で破棄されたターンのツール実行記録はDBに残すが([`soft_delete_normal_from`])、
-/// 会話に並べると直後の編集後の発言が新規送信と見分けられなくなるため、ここで外す。
+/// 編集・再試行で作り直すターンの、破棄された試行のツール実行記録はDBに残すが
+/// ([`soft_delete_normal_from`])、会話に並べると直後の編集後の発言が新規送信と見分けられなく
+/// なるため、ここで外す。
 pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Message>> {
     let mut rows = list_rows_for_chat(conn, chat)?;
     let mut attached = attachments::views_for_chat(conn, chat)?;
@@ -300,16 +301,27 @@ pub fn soft_delete_normal_from(conn: &Connection, chat: Chat, from_id: i64) -> R
     Ok(())
 }
 
-/// 行`id`より後ろにある最初のターンの`turn_id`。ユーザー発言を指せば、その発言に答えたターンに
-/// なる。後ろにターンの行が無ければ`None`。論理削除した行は見ない。
-pub fn turn_after(conn: &Connection, chat: Chat, id: i64) -> Result<Option<String>> {
+/// ユーザー発言`user_message_id`に答えたターンの`turn_id`。発言の直後から次のユーザー発言の
+/// 手前までにある、最初のターンの行で決める。答えたターンの行が無ければ`None`。
+///
+/// 論理削除した行も見る。答えたターンの行が削除で消えていても、その後ろの発言に答えたターンを
+/// 取り違えないため。同じ理由で、区切りの次のユーザー発言も削除したものを含める。
+pub fn turn_answering(
+    conn: &Connection,
+    chat: Chat,
+    user_message_id: i64,
+) -> Result<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT turn_id FROM messages
-             WHERE task_id IS ?1 AND id > ?2 AND turn_id IS NOT NULL AND deleted_at IS NULL
+             WHERE task_id IS ?1 AND id > ?2 AND turn_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM messages u
+                 WHERE u.task_id IS ?1 AND u.role = 'user' AND u.id > ?2 AND u.id < messages.id
+               )
              ORDER BY id ASC
              LIMIT 1",
-            rusqlite::params![chat.task_id(), id],
+            rusqlite::params![chat.task_id(), user_message_id],
             |row| row.get(0),
         )
         .optional()?)
@@ -1128,12 +1140,11 @@ mod tests {
         let by_ui = insert(Role::Tool, Origin::Operation(OperationSource::Ui));
         insert(Role::Assistant, turn("turn-3", 1));
 
-        assert_eq!(
-            turn_after(&conn, chat, user).unwrap().as_deref(),
-            Some("turn-2")
-        );
-        soft_delete_normal_from(&conn, chat, reply).unwrap();
-        soft_delete_turn_records_after(&conn, chat, reply, Some("turn-2")).unwrap();
+        // `user`を編集する。答えたターン(`turn-2`)の記録は`user`より後ろにあっても残す。
+        let answered_by = turn_answering(&conn, chat, user).unwrap();
+        assert_eq!(answered_by.as_deref(), Some("turn-2"));
+        soft_delete_normal_from(&conn, chat, user).unwrap();
+        soft_delete_turn_records_after(&conn, chat, user, answered_by.as_deref()).unwrap();
 
         let alive = |id| find_message(&conn, id).unwrap().is_some();
         assert!(alive(earlier));
@@ -1141,10 +1152,18 @@ mod tests {
         assert!(alive(kept));
         assert!(!alive(later));
         assert!(alive(by_ui));
+        assert!(find_message(&conn, reply).unwrap().is_none());
+
+        // 残すターンが無ければ(答えのない発言の編集)、後ろのターンの記録はすべて消す。
+        soft_delete_turn_records_after(&conn, chat, user, None).unwrap();
+        assert!(!alive(kept));
+        assert!(alive(earlier));
     }
 
+    /// 答えたターンの行が削除で消えていても、後ろの発言に答えたターンを返さない。答えたターンの
+    /// 行が1つも無ければ`None`。
     #[test]
-    fn turn_after_skips_deleted_rows_and_finds_nothing_at_the_end() {
+    fn turn_answering_stops_at_the_next_user_message() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
         let chat = Chat::Task(task_id);
@@ -1164,28 +1183,22 @@ mod tests {
             )
             .unwrap()
         };
-        let user = insert(Role::User, Origin::User);
-        let deleted = insert(
-            Role::Assistant,
-            Origin::Turn {
-                turn_id: "turn-1",
-                attempt_no: 1,
-            },
-        );
+        let turn = |turn_id| Origin::Turn {
+            turn_id,
+            attempt_no: 1,
+        };
+        let first = insert(Role::User, Origin::User);
+        let deleted = insert(Role::Assistant, turn("turn-1"));
         soft_delete_message(&conn, deleted).unwrap();
-        assert_eq!(turn_after(&conn, chat, user).unwrap(), None);
+        let unanswered = insert(Role::User, Origin::User);
+        insert(Role::User, Origin::User);
+        insert(Role::Assistant, turn("turn-2"));
+        let last = insert(Role::User, Origin::User);
 
-        insert(
-            Role::Assistant,
-            Origin::Turn {
-                turn_id: "turn-2",
-                attempt_no: 1,
-            },
-        );
-        assert_eq!(
-            turn_after(&conn, chat, user).unwrap().as_deref(),
-            Some("turn-2")
-        );
+        let answering = |id| turn_answering(&conn, chat, id).unwrap();
+        assert_eq!(answering(first).as_deref(), Some("turn-1"));
+        assert_eq!(answering(unanswered), None);
+        assert_eq!(answering(last), None);
     }
 
     #[test]

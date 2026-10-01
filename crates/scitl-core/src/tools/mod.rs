@@ -150,7 +150,10 @@ pub fn has_lasting_effect(name: &str) -> bool {
         .into_iter()
         .flat_map(Surface::tools)
         .find(|tool| (tool.schema)().name() == name)
-        .is_none_or(|tool| matches!(tool.run, Run::UpdateTask(_)))
+        .is_none_or(|tool| match tool.run {
+            Run::UpdateTask(_) => true,
+            Run::Read(_) | Run::ReadTask(_) | Run::ReadAttachment => false,
+        })
 }
 
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]にする。

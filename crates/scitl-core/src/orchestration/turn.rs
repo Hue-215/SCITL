@@ -181,8 +181,7 @@ pub async fn edit_user_message(
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
             expect_normal(&target, &[Role::User])?;
-            // 答えたターンは、その返信を消す前に引く(消したあとは後ろのターンの行が先に当たる)。
-            let answered_by = messages::turn_after(conn, chat, target.id)?;
+            let answered_by = messages::turn_answering(conn, chat, target.id)?;
             messages::soft_delete_normal_from(conn, chat, target.id)?;
             messages::soft_delete_turn_records_after(
                 conn,

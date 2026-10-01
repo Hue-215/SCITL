@@ -939,10 +939,10 @@ mod tests {
         assert_eq!(operations[0]["result"], json!({ "text": "x" }));
     }
 
-    /// 捨てた試行の記録のうち、読み取りの内部ツールは効果が残らないので伝えない。更新系と外部
-    /// ツールは伝える。
+    /// 失敗したターンの記録のうち、読み取りの内部ツールは効果が残らないので伝えない。更新系と
+    /// 外部ツールは伝える。
     #[test]
-    fn leaves_out_reads_from_a_discarded_attempt() {
+    fn leaves_out_reads_from_a_failed_turn() {
         let f = Fixture::new();
         f.user("u1");
         for tool in [
