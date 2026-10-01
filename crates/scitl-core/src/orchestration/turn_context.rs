@@ -17,8 +17,7 @@ pub struct TurnContext<'a> {
     pub prompts: SystemPrompts<'a>,
     /// 聞き取りから始まった会話で、最初の返信が答えた発言([`crate::orchestration::open_task_chat`])。
     pub opening_message: &'a str,
-    /// 使うモデルの能力(`llm::resolve_capabilities`で解決済み)。ツールに対応しなければ
-    /// ツールを渡さない。
+    /// 使うモデルの能力(`llm::resolve_capabilities`で解決済み)。
     pub capabilities: ModelCapabilities,
     /// リクエストで指定する思考の強さ。思考に対応しないモデルでは`None`
     /// ([`LlmAdapter::send`]の契約)。

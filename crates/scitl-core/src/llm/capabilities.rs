@@ -225,6 +225,18 @@ mod tests {
         assert_eq!(resolved.context_length, 8192);
     }
 
+    /// 警告するのは非対応と報告されたときだけ。教えないサーバーのモデルは警告しない。
+    #[test]
+    fn only_reported_lack_of_tools_is_warned() {
+        let with = |tools| DetectedCapabilities {
+            tools,
+            ..Default::default()
+        };
+        assert!(with(Some(false)).lacks_tools());
+        assert!(!with(Some(true)).lacks_tools());
+        assert!(!with(None).lacks_tools());
+    }
+
     #[test]
     fn detected_zero_context_length_falls_through_to_defaults() {
         let detected = DetectedCapabilities {

@@ -68,8 +68,7 @@ pub async fn preview_request(
     })
     .await?;
 
-    let external_tools = options.external_tools;
-    let external = if external_tools {
+    let external = if options.external_tools {
         let mut sessions = McpSessions::new();
         let external = prepare_external_tools(&ctx.mcp, chat, &mut sessions).await;
         sessions.close().await;
@@ -95,7 +94,7 @@ pub async fn preview_request(
             CoreError::Internal("this provider cannot preview its requests".to_string())
         })?;
     Ok(Ok(Preview {
-        external_tools,
+        external_tools: options.external_tools,
         request,
     }))
 }
