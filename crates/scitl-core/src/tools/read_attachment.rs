@@ -22,8 +22,7 @@ pub(super) const TOOL: InternalTool = InternalTool {
 /// 総合チャット・タスクチャットで同じ形。対象の会話は文脈から固定するので引数に取らず、添付
 /// IDだけを選ばせる。
 ///
-/// 説明はモデルの能力で変えず、画像を読めないモデルがあることを文で伝える。定義を変えると、
-/// モデルを切り替えるたびに固定した先頭を作り直すことになる。
+/// 説明はモデルの能力で変えない(`docs/spec/rebuild/tools.md`「添付の読み込み」)。
 pub fn schema() -> &'static ToolSchema {
     static SCHEMA: LazyLock<ToolSchema> = LazyLock::new(|| {
         ToolSchema::internal(

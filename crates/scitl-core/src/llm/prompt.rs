@@ -199,7 +199,7 @@ impl PromptText {
     /// 先頭に置かれたシステムプロンプトの変更の通知が、`system`の全文を伝えるものか。通知で
     /// 始まらなければ`None`。アプリが通知を置くのはuserの発言の先頭だけで、中身に書かれた同じ
     /// タグは無害化されているので、先頭のタグはアプリが置いたものと分かる。閉じタグも中身には
-    /// 現れないので、先頭の一致だけで全文が同じと分かる。
+    /// 現れないので、先頭の一致だけで、`system`を伝える通知と送る形が同じと分かる。
     pub fn leading_system_update_is(&self, system: &str) -> Option<bool> {
         self.0
             .starts_with(&format!("<{SYSTEM_UPDATE_TAG}>\n"))

@@ -2241,8 +2241,7 @@ async fn a_system_update_is_told_again_when_the_turn_that_told_it_failed() {
 }
 
 /// 画像に対応しないモデルへ切り替えて前の並びが変わっても、並びに残った通知が今の設定のもの
-/// なら、通知を重ねない。画像を含む保存を使う・使わないが入れ替わるたびに前は変わるので、
-/// 重ねると切り替えるたびに通知が増える。
+/// なら、通知を重ねない。
 #[tokio::test]
 async fn a_system_update_still_in_the_sequence_is_not_told_again() {
     let conn = db::open_in_memory().unwrap();
