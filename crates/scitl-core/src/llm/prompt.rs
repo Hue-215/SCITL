@@ -193,6 +193,16 @@ impl PromptText {
         ))
     }
 
+    /// 先頭に置かれたシステムプロンプトの変更の通知が、`system`の全文を伝えるものか。通知で
+    /// 始まらなければ`None`。アプリが通知を置くのはuserの発言の先頭だけで、中身に書かれた同じ
+    /// タグは無害化されているので、先頭のタグはアプリが置いたものと分かる。閉じタグも中身には
+    /// 現れないので、先頭の一致だけで全文が同じと分かる。
+    pub fn leading_system_update_is(&self, system: &str) -> Option<bool> {
+        self.0
+            .starts_with(&format!("<{SYSTEM_UPDATE_TAG}>\n"))
+            .then(|| self.0.starts_with(Self::system_update(system).as_str()))
+    }
+
     /// 自由入力を載せたJSON(ツール結果・操作の記録)を、直列化した形のまま無害化する。
     /// JSONの構文に`<`は現れないので、置き換わるのは文字列値とキーの中身だけで、
     /// JSONとしての形は崩れない。
