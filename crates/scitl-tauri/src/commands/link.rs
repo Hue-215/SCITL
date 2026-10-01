@@ -3,6 +3,8 @@
 
 use scitl_core::link::LinkInspection;
 
+use super::CommandResult;
+
 /// 確認ダイアログに出す内容を返す。純粋な計算のみでI/Oを伴わないため同期コマンドにする。
 #[tauri::command]
 pub fn inspect_link(url: String) -> LinkInspection {
@@ -11,8 +13,6 @@ pub fn inspect_link(url: String) -> LinkInspection {
 
 /// 確認ダイアログで承認されたリンクを開く。外部プロセスの起動を伴うため`blocking::run`で呼ぶ。
 #[tauri::command]
-pub async fn open_confirmed_link(url: String) -> Result<(), String> {
-    scitl_core::blocking::run(move || scitl_core::link::open_confirmed(&url))
-        .await
-        .map_err(|e| e.to_string())
+pub async fn open_confirmed_link(url: String) -> CommandResult<()> {
+    Ok(scitl_core::blocking::run(move || scitl_core::link::open_confirmed(&url)).await?)
 }

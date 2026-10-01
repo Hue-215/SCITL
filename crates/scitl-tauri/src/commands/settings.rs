@@ -10,7 +10,7 @@ use scitl_core::settings::{
     AvailableModel, ChatModelsView, GeneralUpdate, NewProvider, SettingsView,
 };
 
-use super::with_settings;
+use super::{with_settings, CommandResult};
 use crate::AppState;
 
 /// ロックを一瞬取るだけでI/Oを伴わないため、同期コマンドのままにする。
@@ -26,7 +26,7 @@ pub async fn update_general_settings(
     task_chat_system_prompt: Option<String>,
     task_opening_message: Option<String>,
     response_timeout_secs: Option<u64>,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     let update = GeneralUpdate {
         system_prompt,
         task_chat_system_prompt,
@@ -46,7 +46,7 @@ pub fn get_display_language(state: State<'_, AppState>) -> Language {
 pub async fn update_language(
     state: State<'_, AppState>,
     language: Language,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| s.update_language(language)).await
 }
 
@@ -55,7 +55,7 @@ pub async fn update_tool_settings(
     state: State<'_, AppState>,
     max_rounds_per_turn: Option<u32>,
     total_timeout_secs: Option<u64>,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| {
         s.update_tools(max_rounds_per_turn, total_timeout_secs)
     })
@@ -69,7 +69,7 @@ pub async fn add_provider(
     api_format: ApiFormat,
     base_url: String,
     api_key: Option<SecretString>,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     let new = NewProvider {
         name,
         api_format,
@@ -83,7 +83,7 @@ pub async fn add_provider(
 pub async fn delete_provider(
     state: State<'_, AppState>,
     provider_id: String,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| s.delete_provider(&provider_id)).await
 }
 
@@ -92,7 +92,7 @@ pub async fn add_models(
     state: State<'_, AppState>,
     provider_id: String,
     models: Vec<String>,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| s.add_models(&provider_id, &models)).await
 }
 
@@ -101,7 +101,7 @@ pub async fn remove_model(
     state: State<'_, AppState>,
     provider_id: String,
     model: String,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| s.remove_model(&provider_id, &model)).await
 }
 
@@ -111,7 +111,7 @@ pub async fn set_model_visible(
     provider_id: String,
     model: String,
     visible: bool,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| {
         s.set_model_visible(&provider_id, &model, visible)
     })
@@ -125,7 +125,7 @@ pub async fn set_model_capability(
     model: String,
     capability: Capability,
     supported: bool,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| {
         s.set_model_capability(&provider_id, &model, capability, supported)
     })
@@ -138,7 +138,7 @@ pub async fn set_model_context_length(
     provider_id: String,
     model: String,
     context_length: Option<u32>,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| {
         s.set_model_context_length(&provider_id, &model, context_length)
     })
@@ -150,7 +150,7 @@ pub async fn reset_model_capabilities(
     state: State<'_, AppState>,
     provider_id: String,
     model: String,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| {
         s.reset_model_capabilities(&provider_id, &model)
     })
@@ -162,12 +162,11 @@ pub async fn reset_model_capabilities(
 pub async fn detect_model_capabilities(
     state: State<'_, AppState>,
     provider_id: String,
-) -> Result<SettingsView, String> {
-    state
+) -> CommandResult<SettingsView> {
+    Ok(state
         .settings
         .detect_model_capabilities(&provider_id)
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 /// プロバイダーへの問い合わせは非同期で、`detect_model_capabilities`と同じく
@@ -176,18 +175,14 @@ pub async fn detect_model_capabilities(
 pub async fn list_provider_models(
     state: State<'_, AppState>,
     provider_id: String,
-) -> Result<Vec<AvailableModel>, String> {
-    state
-        .settings
-        .list_provider_models(&provider_id)
-        .await
-        .map_err(|e| e.to_string())
+) -> CommandResult<Vec<AvailableModel>> {
+    Ok(state.settings.list_provider_models(&provider_id).await?)
 }
 
 /// チャット入力欄の下のモデル選択。アクティブなモデルを推論サーバーに
 /// 問い合わせることがあるため非同期で、`with_settings`を通さない。
 #[tauri::command]
-pub async fn get_chat_models(state: State<'_, AppState>) -> Result<ChatModelsView, String> {
+pub async fn get_chat_models(state: State<'_, AppState>) -> CommandResult<ChatModelsView> {
     Ok(state.settings.chat_models().await)
 }
 
@@ -197,7 +192,7 @@ pub async fn select_chat_model(
     state: State<'_, AppState>,
     provider_id: String,
     model: String,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     with_settings(&state, move |s| s.select_chat_model(&provider_id, &model)).await
 }
 
@@ -207,7 +202,7 @@ pub async fn set_reasoning_effort(
     provider_id: String,
     model: String,
     effort: ReasoningEffort,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     with_settings(&state, move |s| {
         s.set_reasoning_effort(&provider_id, &model, effort)
     })

@@ -6,7 +6,7 @@ use tauri::State;
 
 use scitl_core::settings::{NewMcpEndpoint, SettingsView};
 
-use super::with_settings;
+use super::{with_settings, CommandResult};
 use crate::AppState;
 
 #[tauri::command]
@@ -14,7 +14,7 @@ pub async fn add_mcp_server(
     state: State<'_, AppState>,
     name: String,
     endpoint: NewMcpEndpoint,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| s.add_mcp_server(&name, endpoint)).await
 }
 
@@ -22,7 +22,7 @@ pub async fn add_mcp_server(
 pub async fn delete_mcp_server(
     state: State<'_, AppState>,
     server_id: String,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| s.delete_mcp_server(&server_id)).await
 }
 
@@ -31,7 +31,7 @@ pub async fn set_mcp_server_enabled(
     state: State<'_, AppState>,
     server_id: String,
     enabled: bool,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| {
         s.set_mcp_server_enabled(&server_id, enabled)
     })
@@ -44,7 +44,7 @@ pub async fn set_mcp_tool_enabled(
     server_id: String,
     tool_name: String,
     enabled: bool,
-) -> Result<SettingsView, String> {
+) -> CommandResult<SettingsView> {
     with_settings(&state, move |s| {
         s.set_mcp_tool_enabled(&server_id, &tool_name, enabled)
     })
@@ -56,10 +56,6 @@ pub async fn set_mcp_tool_enabled(
 pub async fn fetch_mcp_tools(
     state: State<'_, AppState>,
     server_id: String,
-) -> Result<SettingsView, String> {
-    state
-        .settings
-        .fetch_mcp_tools(&server_id)
-        .await
-        .map_err(|e| e.to_string())
+) -> CommandResult<SettingsView> {
+    Ok(state.settings.fetch_mcp_tools(&server_id).await?)
 }
