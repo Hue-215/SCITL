@@ -64,6 +64,7 @@ impl TurnRequest {
         let options = HistoryOptions {
             image_input: ctx.capabilities.image,
             opening: ctx.opening_message.to_string(),
+            sender: adapter.identity(),
         };
         // 添付画像の読み出しはファイルI/Oなので、DBのロックの外でブロッキング処理として行う。
         let store = ctx.attachments.store();
