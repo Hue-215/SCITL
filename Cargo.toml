@@ -35,6 +35,11 @@ percent-encoding = "2.3.2"
 # 上流の版が上がったら合わせて上げる(`cargo tree -e features -i chrono`で確認)
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 ulid = "1"
+# 予約タグの照合で、全角・数学用英字などの見た目の似た偽装を互換分解(NFKC)で畳む
+# (`scitl-core/src/llm/prompt.rs`)。同じ版と`compiled_data`が`url` → `idna`の依存として既に
+# ビルドされている。上流の版が上がったら合わせて上げる(`cargo tree -e features -i icu_normalizer`
+# で確認)。既定のfeatureは別のクレート(`utf8_iter`等)を引き込むので外す
+icu_normalizer = { version = "2.3.0", default-features = false, features = ["compiled_data"] }
 async-trait = "0.1"
 # 秘密情報の保存先(OSの資格情報ストア)。本体と、secrets.rsが設定するOSごとの保存先。
 # 選んだ保存先と理由はdocs/spec/architecture/network-secrets.md「秘密情報」。

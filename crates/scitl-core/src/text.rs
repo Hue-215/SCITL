@@ -9,24 +9,46 @@ fn is_bidi_control(c: char) -> bool {
     )
 }
 
-/// `char::is_control`(Cc)が拾わない書式文字(Cf)のうち、見えないまま文字列に紛れて
-/// 見た目を惑わすもの(双方向制御文字・ゼロ幅文字・タグ文字等)。タグ文字(U+E0000〜)は
-/// ASCIIを見えない形で写せるため、画面に見えない指示を紛れ込ませる手口に使われる。
-/// 標準ライブラリに一般カテゴリの判定が無いため、該当する範囲を列挙する。
+/// 見えないまま文字列に紛れて見た目を惑わす文字。Unicodeの`Default_Ignorable_Code_Point`
+/// (何も描かれない文字。双方向制御文字・ゼロ幅文字・タグ文字・ハングルのフィラー等)から
+/// 異体字セレクタ([`is_variation_selector`])を除いたものと、行間注釈の書式文字
+/// (U+FFF9〜U+FFFB)。タグ文字(U+E0000〜)はASCIIを見えない形で写せるため、画面に見えない
+/// 指示を紛れ込ませる手口に使われる。ハングルのフィラーは一般カテゴリが文字(Lo)で、空白とも
+/// 書式文字とも判定されない。
+///
+/// 異体字セレクタを除くのは、絵文字の表示(U+FE0F等)を変えるため。標準ライブラリに文字の
+/// 性質の判定が無く、依存クレートの版で画面・保存値の規則が変わらないよう、範囲を列挙する
+/// (`DerivedCoreProperties.txt`の範囲を写したもの。未割り当ての範囲も含む)。
 pub fn is_invisible_format(c: char) -> bool {
     is_bidi_control(c)
         || matches!(
             c,
             '\u{00AD}'
+                | '\u{034F}'
+                | '\u{115F}'..='\u{1160}'
+                | '\u{17B4}'..='\u{17B5}'
                 | '\u{180E}'
                 | '\u{200B}'..='\u{200D}'
-                | '\u{2060}'..='\u{2064}'
+                | '\u{2060}'..='\u{2065}'
                 | '\u{206A}'..='\u{206F}'
+                | '\u{3164}'
                 | '\u{FEFF}'
-                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{FFA0}'
+                | '\u{FFF0}'..='\u{FFFB}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
                 | '\u{1D173}'..='\u{1D17A}'
-                | '\u{E0000}'..='\u{E007F}'
+                | '\u{E0000}'..='\u{E00FF}'
+                | '\u{E01F0}'..='\u{E0FFF}'
         )
+}
+
+/// 異体字セレクタ。前の文字の字形を選ぶもので、それ自体は描かれない。絵文字の表示に使う
+/// (U+FE0F)ため、画面に出す文字列からは除かない([`is_invisible_format`])。
+pub fn is_variation_selector(c: char) -> bool {
+    matches!(
+        c,
+        '\u{180B}'..='\u{180D}' | '\u{180F}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'
+    )
 }
 
 /// 制御文字(改行を含む)を空白に畳み、連続空白を1つにまとめ、前後の空白を落とす。
@@ -136,6 +158,29 @@ mod tests {
             display_label("read\u{E0068}\u{E0069}_file", 100),
             "read_file"
         );
+    }
+
+    /// 文字(Lo)として扱われるが何も描かれないハングルのフィラーと、速記の書式制御も除く。
+    #[test]
+    fn label_removes_characters_that_draw_nothing() {
+        assert_eq!(
+            display_label(
+                "a\u{3164}b\u{115F}\u{1160}c\u{FFA0}d\u{1BCA0}e\u{034F}f",
+                100
+            ),
+            "abcdef"
+        );
+        // 名前が空に見える偽装は、空の名前になる。
+        assert_eq!(display_label("\u{3164}\u{3164}", 100), "");
+        assert_eq!(reveal_invisible("x\u{3164}"), "x\\u3164");
+    }
+
+    /// 異体字セレクタは除かない(絵文字の表示が変わる)。
+    #[test]
+    fn label_keeps_variation_selectors() {
+        assert_eq!(display_label("\u{2764}\u{FE0F}", 100), "\u{2764}\u{FE0F}");
+        assert!(!is_invisible_format('\u{FE0F}') && is_variation_selector('\u{FE0F}'));
+        assert!(!is_invisible_format('\u{E0100}') && is_variation_selector('\u{E0100}'));
     }
 
     #[test]
