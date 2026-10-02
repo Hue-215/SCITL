@@ -6,6 +6,7 @@ import type {
   Capability,
   Chat,
   ChatModelsView,
+  DropNotice,
   ExportSummary,
   Language,
   LinkInspection,
@@ -91,6 +92,16 @@ export async function stageAttachment(file: File): Promise<StageOutcome> {
 
 export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
+}
+
+// 窓に落としたファイル。パスはOSからRust側へ直接届き、画面には名前だけが知らされる。知らせ先は
+// 1つで、渡し直すと置き換わる。受け付けたものだけを、ドロップの番号と並びの位置で指して読ませる。
+export function watchDroppedFiles(onDrop: (notice: DropNotice) => void): Promise<void> {
+  return invoke('watch_dropped_files', { onDrop: new Channel(onDrop) })
+}
+
+export function stageDroppedFile(dropId: number, index: number): Promise<StageOutcome> {
+  return invoke('stage_dropped_file', { dropId, index })
 }
 
 export function getAttachmentLimits(): Promise<PickingLimits> {

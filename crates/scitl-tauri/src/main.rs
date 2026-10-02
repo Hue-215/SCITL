@@ -6,13 +6,14 @@ mod navigation;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use scitl_core::attachments::{AttachmentStore, Attachments};
+use scitl_core::attachments::{AttachmentStore, Attachments, DropNotice};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::SharedConnection;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::paths::{self, DataLayout};
 use scitl_core::settings::Settings;
-use tauri::Manager;
+use tauri::ipc::Channel;
+use tauri::{DragDropEvent, Manager, WindowEvent};
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
 /// (DBは`db::with_conn`、設定は`settings::Settings`、生成中の会話は`in_flight`)。
@@ -25,6 +26,8 @@ pub struct AppState {
     pub attachments: Arc<Attachments>,
     /// Markdownエクスポートの書き出し先。画面からは変えられない。
     pub export_dir: PathBuf,
+    /// 窓にファイルが落とされたことの知らせ先(`commands::attachments::watch_dropped_files`)。
+    pub dropped: Mutex<Option<Channel<DropNotice>>>,
 }
 
 fn main() {
@@ -57,8 +60,15 @@ fn main() {
                 generating: InFlightSet::new(),
                 attachments,
                 export_dir: data.export(),
+                dropped: Mutex::new(None),
             });
             Ok(())
+        })
+        // 窓に落としたファイルのパスは、OSのドロップからここへ直接届く(WebViewを通らない)。
+        .on_window_event(|window, event| {
+            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+                commands::attachments::receive_drop(window.app_handle(), paths.clone());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::tasks::get_task_detail,
@@ -79,6 +89,8 @@ fn main() {
             commands::attachments::stage_attachment,
             commands::attachments::discard_staged_attachment,
             commands::attachments::get_attachment_limits,
+            commands::attachments::watch_dropped_files,
+            commands::attachments::stage_dropped_file,
             commands::attachments::read_text_attachment,
             commands::attachments::read_image_attachment,
             commands::attachments::reveal_attachment,

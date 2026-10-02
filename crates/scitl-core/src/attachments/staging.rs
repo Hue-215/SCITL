@@ -47,6 +47,8 @@ pub enum Rejection {
         kind: AttachmentKind,
         limit_bytes: u64,
     },
+    /// 窓に落としたものがファイルでない(フォルダ等)。
+    NotAFile,
 }
 
 #[derive(Debug, Clone)]

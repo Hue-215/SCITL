@@ -7,11 +7,12 @@ import {
   useRef,
   useState,
 } from 'react'
+import { watchDroppedFiles } from './api'
 import { StagedAttachmentChips } from './Attachments'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
 import { isCommitEnter } from './keyboard'
-import type { AttachmentDeliveries, SelectedModel } from './types'
+import type { AttachmentDeliveries, DropNotice, SelectedModel } from './types'
 import {
   type StagedAttachments,
   type TakenAttachments,
@@ -26,7 +27,7 @@ interface ComposeState {
   setDraft: (draft: string) => void
   staged: StagedAttachments
   // 窓に落としたファイルの受け取り先を差し替える。入力欄が出ていて、添付を足せるときだけ置く。
-  setDropTarget: (target: ((files: File[]) => void) | null) => void
+  setDropTarget: (target: ((notice: DropNotice) => void) | null) => void
 }
 
 const ComposeContext = createContext<ComposeState | null>(null)
@@ -37,39 +38,21 @@ const ComposeContext = createContext<ComposeState | null>(null)
  * 状態が変わっても描き直されるのは入力欄だけになる(`children`は外から渡された同じ要素の
  * まま)。
  *
- * 窓に落としたファイルもここで受ける。窓のどこに落としても入力欄の添付に加え、入力欄が
- * 出ていない・添付を足せないときは受け付けない。受け付けない落とし方も止めておかないと、
- * WebViewが落としたファイルそのものを開こうとする(遷移はRust側の`navigation::guard`も止める)。
+ * 窓に落としたファイルもここで受ける。パスはOSからRust側へ直接届き、画面には名前だけが知らされる
+ * (`watchDroppedFiles`)。窓のどこに落としても入力欄の添付に加え、入力欄が出ていない・添付を
+ * 足せないときは受け付けない(読ませないまま、次のドロップで捨てられる)。
  */
 export function ComposeProvider({ children }: { children: ReactNode }) {
   const [draft, setDraft] = useState('')
   const staged = useStagedAttachments()
-  const dropTarget = useRef<((files: File[]) => void) | null>(null)
-  const setDropTarget = useCallback((target: ((files: File[]) => void) | null) => {
+  const dropTarget = useRef<((notice: DropNotice) => void) | null>(null)
+  const setDropTarget = useCallback((target: ((notice: DropNotice) => void) | null) => {
     dropTarget.current = target
   }, [])
 
   useEffect(() => {
-    // 文字や画面の中の要素を引きずる操作には触れない(入力欄への文字のドロップ等)。
-    const carriesFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false
-    const over = (e: DragEvent) => {
-      if (!carriesFiles(e)) return
-      e.preventDefault()
-      e.dataTransfer!.dropEffect = dropTarget.current ? 'copy' : 'none'
-    }
-    const drop = (e: DragEvent) => {
-      if (!carriesFiles(e)) return
-      e.preventDefault()
-      dropTarget.current?.(Array.from(e.dataTransfer!.files))
-    }
-    window.addEventListener('dragenter', over)
-    window.addEventListener('dragover', over)
-    window.addEventListener('drop', drop)
-    return () => {
-      window.removeEventListener('dragenter', over)
-      window.removeEventListener('dragover', over)
-      window.removeEventListener('drop', drop)
-    }
+    // 送り先は1つで、渡し直すと置き換わる(StrictModeで2回渡しても、後のものだけが残る)。
+    watchDroppedFiles((notice) => dropTarget.current?.(notice)).catch(() => undefined)
   }, [])
 
   return (
@@ -118,9 +101,9 @@ export default function ChatCompose({
     [],
   )
 
-  // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`add`は描くたびに変わる)。
+  // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addDropped`は描くたびに変わる)。
   useEffect(() => {
-    setDropTarget(canAdd ? staged.add : null)
+    setDropTarget(canAdd ? staged.addDropped : null)
     return () => setDropTarget(null)
   })
 
@@ -172,7 +155,7 @@ export default function ChatCompose({
               const files = Array.from(e.clipboardData.files)
               // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
               // 一緒に、その見た目の画像も載せるため。
-              if (files.length === 0 || e.clipboardData.types.includes('text/plain')) return
+              if (files.length === 0 || e.clipboardData.getData('text/plain').trim() !== '') return
               e.preventDefault()
               if (canAdd) staged.add(files)
             }}

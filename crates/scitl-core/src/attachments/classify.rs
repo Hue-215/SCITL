@@ -34,10 +34,16 @@ impl Limits {
         }
     }
 
+    /// どの種別でも受け付けない大きさの下限。種別は中身を読むまで分からないので、読む前には
+    /// これで見る。
+    pub fn largest_bytes(&self) -> u64 {
+        self.text_bytes.max(self.image_bytes).max(self.other_bytes)
+    }
+
     /// 画面がファイルの中身を読む前に確かめる上限。
     pub fn for_picking(&self) -> PickingLimits {
         PickingLimits {
-            largest_bytes: self.text_bytes.max(self.image_bytes).max(self.other_bytes),
+            largest_bytes: self.largest_bytes(),
             per_message: self.per_message,
         }
     }

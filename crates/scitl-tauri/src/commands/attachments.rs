@@ -1,11 +1,14 @@
 //! 添付ファイルのIPCコマンド。画面はファイルの中身を渡し、パスを受け取るコマンドは持たない。
-//! WebViewを乗っ取られても、利用者が選んでいないファイルを読ませないため。
+//! WebViewを乗っ取られても、利用者が選んでいないファイルを読ませないため。窓に落としたファイルは
+//! OSのドロップからパスがここへ直接届くので、画面には名前だけを知らせ、画面が受け付けたものを
+//! Rust側で読む。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use scitl_core::attachments::{PickingLimits, StageOutcome, LIMITS};
-use tauri::ipc::{InvokeBody, Request};
-use tauri::State;
+use scitl_core::attachments::{DropNotice, PickingLimits, StageOutcome, LIMITS};
+use tauri::ipc::{Channel, InvokeBody, Request};
+use tauri::{AppHandle, Manager, State};
 
 use super::{with_db, CommandResult};
 use crate::AppState;
@@ -41,6 +44,43 @@ pub async fn stage_attachment(
 #[tauri::command]
 pub fn discard_staged_attachment(state: State<'_, AppState>, token: String) {
     state.attachments.discard(&token);
+}
+
+/// 窓にファイルが落とされたことの知らせ先を受け取る。画面が起動時に渡し、渡し直したら
+/// 置き換える。受け取るのは知らせ先だけで、パスは受け取らない。
+#[tauri::command]
+pub fn watch_dropped_files(state: State<'_, AppState>, on_drop: Channel<DropNotice>) {
+    *state.dropped.lock().expect("dropped files mutex poisoned") = Some(on_drop);
+}
+
+/// 窓に落とされたファイルを受け取り、名前だけを画面へ知らせる。ここでは読まない。受け付けるか
+/// (入力欄が出ているか・応答待ちでないか・1つの発言に付けられる数)は画面が決め、受け付けた
+/// ものだけを[`stage_dropped_file`]で読ませる。画面が知らせ先を渡す前なら受け取らない。
+pub fn receive_drop(app: &AppHandle, paths: Vec<PathBuf>) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let Some(channel) = state
+        .dropped
+        .lock()
+        .expect("dropped files mutex poisoned")
+        .clone()
+    else {
+        return;
+    };
+    let _ = channel.send(state.attachments.receive_drop(paths));
+}
+
+/// 落とされたファイルのうち1つを読んで預け、判定の結果を返す。ファイルはドロップの番号と並びの
+/// 位置で指し、パスは受け取らない。最後のドロップの、まだ読んでいないものだけを読める。
+#[tauri::command]
+pub async fn stage_dropped_file(
+    state: State<'_, AppState>,
+    drop_id: u64,
+    index: usize,
+) -> CommandResult<StageOutcome> {
+    let attachments = Arc::clone(&state.attachments);
+    Ok(scitl_core::blocking::run(move || attachments.stage_dropped(drop_id, index)).await?)
 }
 
 /// 受け付ける大きさの上限。画面が大きすぎるファイルを読む前に弾くのに使う。
