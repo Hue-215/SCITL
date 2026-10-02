@@ -5,14 +5,20 @@
 //! - 環境変数を継承させない(`env_clear`)。既定の環境変数継承は、ユーザーが登録した
 //!   サーバーへシェルの他の秘密情報(他社APIキー等)を黙って渡してしまう
 //! - シェルを経由しない(`command`/`args`を分離したまま渡す。1行のコマンド文字列を
-//!   受け取って分割するような実装はしない)
+//!   受け取って分割するような実装はしない)。Windowsでは`npx`のように実体がバッチファイルの
+//!   コマンドがあり、バッチファイルはOSの仕組みとして`cmd.exe`が実行する。その場合も引数は
+//!   分離したまま渡し、`cmd.exe`に解釈されない形へ整えるのは標準ライブラリに任せる
+//!   (整えられない引数は起動の失敗になる)
 //! - プロセスグループごとkillする(`npx`等が生む孫プロセスの取り残しを防ぐ。
 //!   `rmcp`の子プロセスtransport自体は直接の子しかkillしないため`process-wrap`の
 //!   `ProcessGroup`/`JobObject`を明示的に併用する)。子が標準入力の終了を受けて
 //!   自分で終了した場合も、残ったグループをkillする(`KillGroupAfterExit`)
 //! - stderrは継承させず、上限付きで捕捉してエラー診断にのみ使う(サーバーが書いた
-//!   文字列をアプリの標準エラーへ素通りさせない)
+//!   文字列をアプリの標準エラーへ素通りさせない)。Windowsではコンソールも持たせない
+//!   (GUIからの起動でコンソールウィンドウが開くのと、CLIの端末へ直接書かれるのを防ぐ)
 
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::{future::Future, pin::Pin, process::ExitStatus};
 
@@ -42,6 +48,17 @@ pub(super) async fn connect(
     args: &[String],
     env_refs: &[SecretRef],
 ) -> Result<ClientService, CoreError> {
+    #[cfg(windows)]
+    let mut cmd = tokio::process::Command::new(
+        batch_file_on_path(
+            command,
+            std::env::var_os("PATH")
+                .iter()
+                .flat_map(std::env::split_paths),
+        )
+        .unwrap_or_else(|| command.into()),
+    );
+    #[cfg(not(windows))]
     let mut cmd = tokio::process::Command::new(command);
     cmd.args(args);
 
@@ -67,7 +84,10 @@ pub(super) async fn connect(
     #[cfg(windows)]
     wrapped
         .wrap(process_wrap::tokio::KillOnDrop)
-        .wrap(process_wrap::tokio::JobObject);
+        .wrap(process_wrap::tokio::JobObject)
+        .wrap(process_wrap::tokio::CreationFlags(
+            windows::Win32::System::Threading::CREATE_NO_WINDOW,
+        ));
     // グループを作るラッパーより後に足し、その外側に被せる(`wrap_child`は足した順に適用される)。
     wrapped.wrap(KillGroupAfterExit);
 
@@ -177,11 +197,63 @@ async fn capture_stderr(stderr: Option<ChildStderr>) -> String {
     crate::text::display_block(&String::from_utf8_lossy(&buf), MAX_STDERR_CHARS)
 }
 
+/// 拡張子もディレクトリも付いていないコマンド名が、PATH上のバッチファイル(`npx.cmd`等)を
+/// 指していれば、そのパスを返す。
+///
+/// OSも標準ライブラリも、拡張子の無い名前には`.exe`しか補わないので、`npx`と登録された
+/// サーバーはそのままでは起動できない。実行ファイルが先に見つかる場合は`None`を返し、
+/// 解決を標準ライブラリに任せる(端末で名前を打ったときと同じく、PATHの並び順で決まる)。
+#[cfg(windows)]
+fn batch_file_on_path(command: &str, dirs: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
+    let name = std::path::Path::new(command);
+    if name.extension().is_some() || name.components().count() != 1 {
+        return None;
+    }
+    for dir in dirs {
+        let with_extension = |extension: &str| dir.join(format!("{command}.{extension}"));
+        if ["exe", "com"].iter().any(|e| with_extension(e).is_file()) {
+            return None;
+        }
+        if let Some(batch) = ["cmd", "bat"]
+            .iter()
+            .map(|e| with_extension(e))
+            .find(|p| p.is_file())
+        {
+            return Some(batch);
+        }
+    }
+    None
+}
+
 /// stdio子プロセスに引き継ぐ環境変数の許可リスト。OS標準の実行に必要な最小限のみ
-/// (PATH解決、ホームディレクトリ、Windowsのシステムディレクトリ)。
+/// (PATH解決、ホームディレクトリ、Windowsのシステムとアプリのデータのディレクトリ)。
+///
+/// Windowsのものは、MCPの公式SDK(TypeScript)が既定で引き継ぐ一覧に`TMP`を足したもの。
+/// Windowsのプログラムは、これらが指す場所を前提に動く。`APPDATA`・`LOCALAPPDATA`が無いと、
+/// `npm`はキャッシュをホームディレクトリ直下に作り、インストール先を解決できない。
 fn inherited_env_allowlist() -> &'static [&'static str] {
     if cfg!(windows) {
-        &["PATH", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP"]
+        &[
+            "APPDATA",
+            "COMSPEC",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "LOCALAPPDATA",
+            "PATH",
+            "PATHEXT",
+            "PROCESSOR_ARCHITECTURE",
+            "PROGRAMDATA",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+            "PROGRAMW6432",
+            "SYSTEMDRIVE",
+            "SYSTEMROOT",
+            "TEMP",
+            "TMP",
+            "USERNAME",
+            "USERPROFILE",
+            "WINDIR",
+        ]
     } else {
         &["PATH", "HOME"]
     }
@@ -435,5 +507,60 @@ if [ "$2" = linger ]; then sleep 60; fi
             wait_until_gone(&grandchild).await,
             "grandchild {grandchild} survived"
         );
+    }
+
+    #[cfg(windows)]
+    mod batch_files {
+        use std::path::{Path, PathBuf};
+
+        use super::super::batch_file_on_path;
+
+        fn dir_with(files: &[&str]) -> tempfile::TempDir {
+            let dir = tempfile::tempdir().unwrap();
+            for file in files {
+                std::fs::write(dir.path().join(file), "").unwrap();
+            }
+            dir
+        }
+
+        fn find(command: &str, dirs: &[&Path]) -> Option<PathBuf> {
+            batch_file_on_path(command, dirs.iter().map(|d| d.to_path_buf()))
+        }
+
+        #[test]
+        fn a_bare_name_finds_the_batch_file_on_the_path() {
+            let empty = dir_with(&[]);
+            // 拡張子の無い同名のファイル(シェルスクリプト)は、npmが並べて置く。
+            let node = dir_with(&["npx", "npx.cmd"]);
+
+            assert_eq!(
+                find("npx", &[empty.path(), node.path()]),
+                Some(node.path().join("npx.cmd"))
+            );
+        }
+
+        #[test]
+        fn an_executable_found_first_is_left_to_the_standard_library() {
+            let exe = dir_with(&["tool.exe"]);
+            let batch = dir_with(&["tool.cmd"]);
+
+            assert_eq!(find("tool", &[exe.path(), batch.path()]), None);
+            assert_eq!(
+                find("tool", &[batch.path(), exe.path()]),
+                Some(batch.path().join("tool.cmd"))
+            );
+            // 同じディレクトリに両方あれば、実行ファイルが勝つ。
+            let both = dir_with(&["tool.exe", "tool.cmd"]);
+            assert_eq!(find("tool", &[both.path()]), None);
+        }
+
+        #[test]
+        fn a_name_with_an_extension_or_a_directory_is_not_searched() {
+            let dir = dir_with(&["npx.cmd", "npx.cmd.cmd"]);
+
+            assert_eq!(find("npx.cmd", &[dir.path()]), None);
+            assert_eq!(find(r"bin\npx", &[dir.path()]), None);
+            assert_eq!(find("missing", &[dir.path()]), None);
+        }
     }
 }
