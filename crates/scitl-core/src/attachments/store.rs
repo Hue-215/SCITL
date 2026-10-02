@@ -75,6 +75,8 @@ impl AttachmentStore {
     pub fn reveal(&self, attachment_id: i64, original_name: &str, hash: &str) -> Result<()> {
         let dir = self.revealed.join(attachment_id.to_string());
         let path = dir.join(safe_file_name(original_name));
+        crate::paths::create_private_dir(&self.revealed)
+            .map_err(io_error("create the reveal directory"))?;
         if !path.exists() {
             fs::create_dir_all(&dir).map_err(io_error("create the reveal directory"))?;
             self.copy_to(hash, &path)?;
