@@ -86,6 +86,40 @@ jobs:
           git status --porcelain -- frontend/src/bindings | tee /tmp/bindings-diff
           test ! -s /tmp/bindings-diff
 
+  # Windowsにしか無い経路(ジョブオブジェクトでの子プロセスの後始末、資格情報マネージャー)は、
+  # Linuxのジョブではコンパイルもされない。Windowsのランナーは実行時間が2倍で計上されるので、
+  # PRごとには回さず、合流後のブランチでだけ回す。壊れたことにはマージの直後に気付ける。
+  rust-windows:
+    if: github.event_name == 'push'
+    # `rust`ジョブと同じ理由で、版を明示的に固定する。
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargoのキャッシュ
+        uses: Swatinem/rust-cache@v2
+
+      # 書式とフロントエンドはOSに依らないので、Linuxのジョブに任せる。
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: テスト
+        run: |
+          rm -rf frontend/src/bindings
+          cargo test --workspace --locked
+
+      # 生成物はLFで書かれる。チェックアウト側をLFに揃えるのは`.gitattributes`。
+      - name: 型定義の生成物
+        run: |
+          git status --porcelain -- frontend/src/bindings | tee "$RUNNER_TEMP/bindings-diff"
+          test ! -s "$RUNNER_TEMP/bindings-diff"
+
   frontend:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
