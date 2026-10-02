@@ -6,13 +6,14 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 
 use crate::attachments::{self, AttachmentStore, Delivery};
+use crate::config::ApiFormat;
 use crate::db::attachments::{self as db_attachments, Attachment, AttachmentContent};
 use crate::db::messages::{self, Chat, Kind, Message, Opener, Role};
 use crate::db::transcripts::{self, Transcript};
 use crate::error::Result;
 use crate::llm::{
-    AdapterIdentity, AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText, SentAt,
-    ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
+    AdapterIdentity, AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText, Replay,
+    SentAt, ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
 };
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
 use crate::orchestration::transcript::{Front, Replayable, SavedHead};
@@ -112,6 +113,9 @@ pub(super) struct HistoryOptions {
     pub image_input: bool,
     /// 聞き取りの開始の発言(`TurnContext::opening_message`)。
     pub opening: String,
+    /// 送り先(`LlmAdapter::identity`)。保存した呼び出しIDをそのまま送るかを決める
+    /// ([`reissue_call_ids`])。
+    pub sender: Option<AdapterIdentity>,
 }
 
 /// ユーザー発言の送信日時は本文と分けて囲みの属性に置く(`llm::PromptText::user_message`)。
@@ -407,7 +411,8 @@ impl History {
 }
 
 /// 表示される返信のある試行のうち、送った形の保存を読み戻せるもの(`turn_id`ごと)。今のモデルが
-/// 受け付けない形を含む保存は使わない(`Replayable::load`)。
+/// 受け付けない形を含む保存は使わない(`Replayable::load`)。払い出した送り先と違う送り先へ送る
+/// ときは呼び出しIDを置き換え、置き換えられない保存は使わない([`reissue_call_ids`])。
 fn used_transcripts(
     stored: &StoredChat,
     options: &HistoryOptions,
@@ -424,10 +429,81 @@ fn used_transcripts(
         .iter()
         .filter(|t| replied.contains(&(t.turn_id.as_str(), t.attempt_no)))
         .filter_map(|t| {
-            let saved = Replayable::load(t, options.image_input, store)?;
+            let mut saved = Replayable::load(t, options.image_input, store)?;
+            if !issued_by(&saved.origin, options.sender.as_ref()) {
+                let records = attempt_records(&stored.messages, &t.turn_id, t.attempt_no);
+                reissue_call_ids(&mut saved.messages, &records)?;
+            }
             Some((t.turn_id.clone(), saved))
         })
         .collect()
+}
+
+/// 保存した呼び出しIDを払い出した送り先が、今の送り先と同じか。IDの書式は払い出したサーバーの
+/// ものなので、方言と要求URLのオリジンで見る。Anthropic形式・Gemini形式はモデルを見ない(同じ
+/// サーバーが払い出したIDはモデルを替えても受け付ける。置き換えると前が変わり、同じ方言なら
+/// 送り返せる思考が外れる)。OpenAI互換はモデルも見る。ゲートウェイやモデルの切り替えを挟む
+/// サーバーは、1つのオリジンでモデルごとに別の実装へ振り分け、IDの書式もそれぞれ違う。
+/// OpenAI互換は別の試行の思考を送り返さないので、置き換えても失うものは無い。送り先が分からな
+/// ければ違うものとする。
+fn issued_by(origin: &AdapterIdentity, sender: Option<&AdapterIdentity>) -> bool {
+    sender.is_some_and(|s| {
+        s.api_format == origin.api_format
+            && s.server == origin.server
+            && (s.api_format != ApiFormat::OpenAiCompat || s.model == origin.model)
+    })
+}
+
+/// 試行の実行記録の行id(実行した順)。
+fn attempt_records(messages: &[Message], turn: &str, attempt_no: i64) -> Vec<i64> {
+    let mut rows: Vec<i64> = messages
+        .iter()
+        .filter(|m| {
+            m.kind == Kind::ToolExecution
+                && m.turn_id.as_deref() == Some(turn)
+                && m.attempt_no == Some(attempt_no)
+        })
+        .map(|m| m.id)
+        .collect();
+    rows.sort_unstable();
+    rows
+}
+
+/// 保存から並べる試行の呼び出しIDを、その試行の実行記録の行idから作ったID([`history_call_id`])に
+/// 置き換える(`docs/spec/architecture/llm-adapter.md`「過去のターンの呼び出しには、実行記録の
+/// 行idからIDを作る」)。保存は書き換えず、並べる発言だけを変える。呼び出しを置き換えた発言の
+/// 思考(`Replay`)も外す。思考のブロックは元のIDの呼び出しを含み、送り返すと結果と食い違う
+/// (今は払い出した送り先と違えば送り返さない(`turn_request::settle_replays`)が、それに頼らない)。
+///
+/// 保存した往復の呼び出しは、すべて実行して記録を書いたもの(書けなければ試行が失敗して保存
+/// されない)なので、呼び出しと`records`は実行した順に1対1で対応する。ツール結果は、直前の
+/// 呼び出しのうち同じIDのものに対応させる(IDが無ければ並んだ順)。対応が取れなければ`None`。
+fn reissue_call_ids(messages: &mut [ChatMessage], records: &[i64]) -> Option<()> {
+    let mut records = records.iter();
+    // 直前の呼び出しのうち、まだ結果を対応させていないもの(保存したID、置き換えたID)。
+    let mut open: Vec<(Option<String>, String)> = Vec::new();
+    for message in messages {
+        match message {
+            ChatMessage::Assistant {
+                tool_calls, replay, ..
+            } => {
+                open.clear();
+                if !tool_calls.is_empty() {
+                    *replay = Replay::default();
+                }
+                for call in tool_calls {
+                    let id = history_call_id(*records.next()?);
+                    open.push((call.id.replace(id.clone()), id));
+                }
+            }
+            ChatMessage::Tool { tool_call_id, .. } => {
+                let i = open.iter().position(|(saved, _)| saved == tool_call_id)?;
+                *tool_call_id = Some(open.remove(i).1);
+            }
+            ChatMessage::System(_) | ChatMessage::User { .. } => {}
+        }
+    }
+    records.next().is_none().then_some(())
 }
 
 /// 表示される行と捨てた試行の記録を、行の並び(`db::messages::list_rows_for_chat`と同じ
@@ -654,6 +730,12 @@ mod tests {
             let options = HistoryOptions {
                 image_input,
                 opening: OPENING.to_string(),
+                // 保存([`Self::save`])を払い出した送り先。
+                sender: Some(AdapterIdentity {
+                    api_format: ApiFormat::OpenAiCompat,
+                    model: "m".to_string(),
+                    server: "https://api.example.com".to_string(),
+                }),
             };
             build_history(load(&self.conn, chat).unwrap(), &options, &self.temp.store)
         }
@@ -1441,6 +1523,280 @@ mod tests {
         f.reply("t1", "了解しました");
         messages::soft_delete_message(&f.conn, first).unwrap();
         assert!(!f.history().contains(&opening_message()));
+    }
+
+    fn saved_call(id: Option<&str>) -> ToolCallRequest {
+        ToolCallRequest {
+            id: id.map(str::to_string),
+            name: "search".to_string(),
+            arguments: ToolArguments::parse("{}".to_string()),
+        }
+    }
+
+    fn saved_calls(ids: &[Option<&str>]) -> ChatMessage {
+        ChatMessage::Assistant {
+            content: None,
+            tool_calls: ids.iter().map(|id| saved_call(*id)).collect(),
+            replay: Default::default(),
+        }
+    }
+
+    fn saved_result(id: Option<&str>, content: &str) -> ChatMessage {
+        ChatMessage::Tool {
+            tool_call_id: id.map(str::to_string),
+            content: PromptText::untrusted(content),
+            images: Vec::new(),
+        }
+    }
+
+    fn saved_reply() -> ChatMessage {
+        ChatMessage::Assistant {
+            content: Some("返信".to_string()),
+            tool_calls: Vec::new(),
+            replay: Default::default(),
+        }
+    }
+
+    /// ツール結果ごとの(指すID、本文)。
+    type ResultIds = Vec<(Option<String>, String)>;
+
+    /// 呼び出しのIDと、ツール結果ごとの(指すID、本文)。
+    fn reissued(messages: &[ChatMessage]) -> (Vec<Option<String>>, ResultIds) {
+        let calls = messages
+            .iter()
+            .flat_map(|m| match m {
+                ChatMessage::Assistant { tool_calls, .. } => tool_calls.as_slice(),
+                _ => &[],
+            })
+            .map(|c| c.id.clone())
+            .collect();
+        let results = messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Tool {
+                    tool_call_id,
+                    content,
+                    ..
+                } => Some((tool_call_id.clone(), content.as_str().to_string())),
+                _ => None,
+            })
+            .collect();
+        (calls, results)
+    }
+
+    /// 呼び出しは実行記録に実行した順で対応させ、結果は同じIDの呼び出しに(IDが無ければ並んだ
+    /// 順に)対応させる。
+    #[test]
+    fn reissued_call_ids_follow_the_records_in_the_order_they_were_run() {
+        let id = |row| Some(history_call_id(row));
+        let mut unnamed = vec![
+            ChatMessage::user(PromptText::user_message("u", None)),
+            saved_calls(&[None, None]),
+            saved_result(None, "a"),
+            saved_result(None, "b"),
+            saved_calls(&[None]),
+            saved_result(None, "c"),
+            saved_reply(),
+        ];
+        assert_eq!(reissue_call_ids(&mut unnamed, &[11, 12, 15]), Some(()));
+        assert_eq!(
+            reissued(&unnamed),
+            (
+                vec![id(11), id(12), id(15)],
+                vec![
+                    (id(11), "a".to_string()),
+                    (id(12), "b".to_string()),
+                    (id(15), "c".to_string())
+                ]
+            )
+        );
+
+        let mut named = vec![
+            saved_calls(&[Some("x"), Some("y")]),
+            saved_result(Some("y"), "b"),
+            saved_result(Some("x"), "a"),
+        ];
+        assert_eq!(reissue_call_ids(&mut named, &[3, 4]), Some(()));
+        assert_eq!(
+            reissued(&named),
+            (
+                vec![id(3), id(4)],
+                vec![(id(4), "b".to_string()), (id(3), "a".to_string())]
+            )
+        );
+    }
+
+    /// 呼び出しと実行記録の数が合わない保存と、対応する呼び出しの無い結果を含む保存は、
+    /// 置き換えられない。
+    #[test]
+    fn call_ids_are_not_reissued_without_a_one_to_one_match() {
+        let messages = || vec![saved_calls(&[Some("x")]), saved_result(Some("x"), "a")];
+        assert_eq!(reissue_call_ids(&mut messages(), &[]), None);
+        assert_eq!(reissue_call_ids(&mut messages(), &[1, 2]), None);
+        let mut orphan = vec![saved_calls(&[Some("x")]), saved_result(Some("z"), "a")];
+        assert_eq!(reissue_call_ids(&mut orphan, &[1]), None);
+        let mut twice = vec![
+            saved_calls(&[Some("x")]),
+            saved_result(Some("x"), "a"),
+            saved_result(Some("x"), "b"),
+        ];
+        assert_eq!(reissue_call_ids(&mut twice, &[1]), None);
+    }
+
+    /// 払い出した送り先かは、方言と要求URLのオリジンで見る。モデルはOpenAI互換でだけ見る。
+    #[test]
+    fn call_ids_are_kept_for_the_format_and_server_that_issued_them() {
+        let identity = |api_format, model: &str, server: &str| AdapterIdentity {
+            api_format,
+            model: model.to_string(),
+            server: server.to_string(),
+        };
+        const SERVER: &str = "https://api.example.com";
+        let issued = |origin: AdapterIdentity, sender: Option<AdapterIdentity>| {
+            issued_by(&origin, sender.as_ref())
+        };
+        let compat = |model, server| identity(ApiFormat::OpenAiCompat, model, server);
+        assert!(issued(compat("a", SERVER), Some(compat("a", SERVER))));
+        assert!(!issued(compat("a", SERVER), Some(compat("b", SERVER))));
+        assert!(!issued(
+            compat("a", SERVER),
+            Some(compat("a", "https://api.mistral.ai"))
+        ));
+        assert!(!issued(
+            compat("a", SERVER),
+            Some(identity(ApiFormat::Anthropic, "a", SERVER))
+        ));
+        for format in [ApiFormat::Anthropic, ApiFormat::Gemini] {
+            assert!(issued(
+                identity(format, "a", SERVER),
+                Some(identity(format, "b", SERVER))
+            ));
+        }
+        assert!(!issued(compat("a", SERVER), None));
+    }
+
+    /// 呼び出しを置き換えた発言の思考は外す(思考のブロックは元のIDを含む)。
+    #[test]
+    fn reissuing_call_ids_drops_the_thinking_that_carries_the_old_ones() {
+        let replay: Replay =
+            serde_json::from_str(r#"[{"type":"tool_use","id":"toolu_1"}]"#).unwrap();
+        let mut messages = vec![
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![saved_call(Some("toolu_1"))],
+                replay: replay.clone(),
+            },
+            saved_result(Some("toolu_1"), "a"),
+            ChatMessage::Assistant {
+                content: Some("返信".to_string()),
+                tool_calls: Vec::new(),
+                replay: replay.clone(),
+            },
+        ];
+        assert_eq!(reissue_call_ids(&mut messages, &[1]), Some(()));
+        let replays: Vec<_> = messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Assistant { replay, .. } => Some(replay.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(replays, [Replay::default(), replay]);
+    }
+
+    /// 送り先が保存と違えば、保存から並べた試行の呼び出しIDを実行記録の行idから作る。
+    #[test]
+    fn a_saved_attempt_sent_elsewhere_carries_ids_made_from_its_records() {
+        let f = Fixture::new();
+        let u = f.user("u");
+        let record = f.record(Some("t1"), json!({"ok": true}));
+        f.reply("t1", "返信");
+        let input = StoredInput::new(
+            vec![u],
+            vec![
+                StoredMessage::of(&ChatMessage::user(PromptText::user_message("u", None))).unwrap(),
+            ],
+        );
+        let rounds: Vec<StoredMessage> = [
+            saved_calls(&[None]),
+            saved_result(None, "{}"),
+            saved_reply(),
+        ]
+        .iter()
+        .map(|m| StoredMessage::of(m).unwrap())
+        .collect();
+        transcripts::insert(
+            &f.conn,
+            &transcripts::NewTranscript {
+                chat: Chat::Task(f.task_id),
+                turn_id: "t1",
+                attempt_no: 1,
+                api_format: "open_ai_compat",
+                model: "m",
+                server: "https://api.example.com",
+                system: "s",
+                settings_system: "s",
+                tools: "[]",
+                prefix_digest: "p",
+                history_start: None,
+                input: &serde_json::to_string(&input).unwrap(),
+                rounds: &serde_json::to_string(&rounds).unwrap(),
+            },
+        )
+        .unwrap();
+        let build = |api_format| {
+            let options = HistoryOptions {
+                image_input: false,
+                opening: OPENING.to_string(),
+                sender: Some(AdapterIdentity {
+                    api_format,
+                    model: "m".to_string(),
+                    server: "https://api.example.com".to_string(),
+                }),
+            };
+            let history = build_history(
+                load(&f.conn, Chat::Task(f.task_id)).unwrap(),
+                &options,
+                &f.temp.store,
+            );
+            assert_eq!(history.segments.len(), 1, "保存から並べる");
+            reissued(&history.messages)
+        };
+        let id = Some(history_call_id(record));
+        assert_eq!(
+            build(ApiFormat::Anthropic),
+            (vec![id.clone()], vec![(id, "{}".to_string())])
+        );
+        assert_eq!(
+            build(ApiFormat::OpenAiCompat),
+            (vec![None], vec![(None, "{}".to_string())])
+        );
+    }
+
+    /// 置き換えられない保存は使わず、実行記録から組み立てる。
+    #[test]
+    fn a_saved_attempt_whose_ids_cannot_be_reissued_is_rebuilt_from_the_records() {
+        let f = Fixture::new();
+        let u = f.user("u");
+        // 往復を含まない保存に、実行記録が1件ある(対応が取れない)。
+        f.record(Some("t1"), json!({"ok": true}));
+        f.reply("t1", "返信");
+        f.save("t1", 1, vec![u], &["u"], "返信");
+        let options = HistoryOptions {
+            image_input: false,
+            opening: OPENING.to_string(),
+            sender: None,
+        };
+        let history = build_history(
+            load(&f.conn, Chat::Task(f.task_id)).unwrap(),
+            &options,
+            &f.temp.store,
+        );
+        assert!(history.segments.is_empty());
+        assert!(history
+            .messages
+            .iter()
+            .any(|m| matches!(m, ChatMessage::Tool { .. })));
     }
 
     #[test]

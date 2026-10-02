@@ -107,6 +107,8 @@ struct ScriptedAdapter {
     replay: Replay,
     /// 別の試行で受け取った思考を送り返してよいか。
     accepts_replays: bool,
+    /// 送り先。既定はOpenAI互換の`http://127.0.0.1:1`。
+    identity: AdapterIdentity,
     calls: AtomicUsize,
     sent: Mutex<Vec<Sent>>,
     previewed: Mutex<Vec<Sent>>,
@@ -121,6 +123,11 @@ impl ScriptedAdapter {
             without_tools: None,
             replay: Replay::default(),
             accepts_replays: true,
+            identity: AdapterIdentity {
+                api_format: ApiFormat::OpenAiCompat,
+                model: "scripted".to_string(),
+                server: "http://127.0.0.1:1".to_string(),
+            },
             calls: AtomicUsize::new(0),
             sent: Mutex::new(Vec::new()),
             previewed: Mutex::new(Vec::new()),
@@ -185,6 +192,18 @@ impl ScriptedAdapter {
         }
     }
 
+    /// 方言と要求URLのオリジンが既定と違う送り先。
+    fn sending_to(self, api_format: ApiFormat, server: &str) -> Self {
+        Self {
+            identity: AdapterIdentity {
+                api_format,
+                server: server.to_string(),
+                ..self.identity.clone()
+            },
+            ..self
+        }
+    }
+
     fn sent(&self) -> Vec<Sent> {
         self.sent.lock().unwrap().clone()
     }
@@ -239,11 +258,7 @@ impl LlmAdapter for ScriptedAdapter {
     }
 
     fn identity(&self) -> Option<AdapterIdentity> {
-        Some(AdapterIdentity {
-            api_format: ApiFormat::OpenAiCompat,
-            model: "scripted".to_string(),
-            server: "http://127.0.0.1:1".to_string(),
-        })
+        Some(self.identity.clone())
     }
 
     fn accepts_replay(&self, origin: &AdapterIdentity) -> bool {
@@ -2148,6 +2163,79 @@ async fn thinking_is_not_sent_back_to_a_provider_that_cannot_read_it() {
     assert_eq!(
         replay_of(&second.sent_messages()[0], "返信1"),
         Replay::default()
+    );
+}
+
+/// 送った発言列に並んだツール呼び出しのIDと、ツール結果が指すID(並んだ順)。
+fn call_ids(messages: &[ChatMessage]) -> (Vec<Option<String>>, Vec<Option<String>>) {
+    let calls = messages
+        .iter()
+        .flat_map(|m| match m {
+            ChatMessage::Assistant { tool_calls, .. } => tool_calls.as_slice(),
+            _ => &[],
+        })
+        .map(|c| c.id.clone())
+        .collect();
+    let results = messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Tool { tool_call_id, .. } => Some(tool_call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    (calls, results)
+}
+
+/// 保存したターンの呼び出しIDは、払い出した送り先(方言と要求URLのオリジン)にだけそのまま
+/// 送る。別の送り先へは実行記録の行idから作ったIDに置き換え、戻れば保存したIDのまま並べる(#374)。
+#[tokio::test]
+async fn saved_call_ids_are_sent_only_to_where_they_were_issued() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    // IDを払い出さないサーバー。
+    let unnamed = |description: &str| ResponseEvent::ToolCall {
+        id: None,
+        name: "add_steps".to_string(),
+        arguments: json!({ "descriptions": [description] }).into(),
+    };
+    let first = ScriptedAdapter::new(vec![
+        calls(vec![unnamed("買い出し"), unnamed("掃除")]),
+        text("返信1"),
+    ]);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+    let anthropic = |reply| {
+        ScriptedAdapter::texts(&[reply])
+            .sending_to(ApiFormat::Anthropic, "https://api.anthropic.com")
+    };
+    let second = anthropic("返信2").with_replay(THINKING_1);
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+    let third = anthropic("返信3");
+    turn_with(&db, &third, prompts, task_id, "3回目").await;
+    let back = ScriptedAdapter::texts(&["返信4"]);
+    turn_with(&db, &back, prompts, task_id, "4回目").await;
+
+    let (calls, results) = call_ids(&second.sent_messages()[0]);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(results, calls, "結果は同じ順の呼び出しを指す");
+    let ids: Vec<&str> = calls.iter().map(|id| id.as_deref().unwrap()).collect();
+    assert_ne!(ids[0], ids[1]);
+    assert!(ids
+        .iter()
+        .all(|id| id.len() == 9 && id.bytes().all(|b| b.is_ascii_alphanumeric())));
+    // 同じ送り先へ続けて送る間は、置き換えたIDも変わらない。前が変わらないので、その送り先で
+    // 受け取った思考も送り返す。
+    assert_eq!(
+        call_ids(&third.sent_messages()[0]),
+        (calls.clone(), results)
+    );
+    let thinking: Replay = serde_json::from_str(THINKING_1).unwrap();
+    assert_eq!(replay_of(&third.sent_messages()[0], "返信2"), thinking);
+    // 払い出した送り先に戻れば、保存したIDのまま並べる。
+    assert_eq!(
+        call_ids(&back.sent_messages()[0]),
+        (vec![None, None], vec![None, None])
     );
 }
 
