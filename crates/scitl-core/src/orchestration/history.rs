@@ -6,13 +6,14 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 
 use crate::attachments::{self, AttachmentStore, Delivery};
+use crate::config::ApiFormat;
 use crate::db::attachments::{self as db_attachments, Attachment, AttachmentContent};
 use crate::db::messages::{self, Chat, Kind, Message, Opener, Role};
 use crate::db::transcripts::{self, Transcript};
 use crate::error::Result;
 use crate::llm::{
-    AdapterIdentity, AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText, SentAt,
-    ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
+    AdapterIdentity, AttachmentNote, ChatMessage, InlineImage, OperationNote, PromptText, Replay,
+    SentAt, ToolArguments, ToolCallRequest, DISCARDED_ATTEMPT_SOURCE,
 };
 use crate::orchestration::tool_record::{is_error_result, ToolExecutionRecord};
 use crate::orchestration::transcript::{Front, Replayable, SavedHead};
@@ -439,11 +440,18 @@ fn used_transcripts(
 }
 
 /// 保存した呼び出しIDを払い出した送り先が、今の送り先と同じか。IDの書式は払い出したサーバーの
-/// ものなので、方言と要求URLのオリジンで見る。モデルは見ない(同じサーバーが払い出したIDは
-/// モデルを替えても受け付ける。置き換えると前が変わり、同じ方言なら送り返せる思考が外れる)。
-/// 送り先が分からなければ違うものとする。
+/// ものなので、方言と要求URLのオリジンで見る。Anthropic形式・Gemini形式はモデルを見ない(同じ
+/// サーバーが払い出したIDはモデルを替えても受け付ける。置き換えると前が変わり、同じ方言なら
+/// 送り返せる思考が外れる)。OpenAI互換はモデルも見る。ゲートウェイやモデルの切り替えを挟む
+/// サーバーは、1つのオリジンでモデルごとに別の実装へ振り分け、IDの書式もそれぞれ違う。
+/// OpenAI互換は別の試行の思考を送り返さないので、置き換えても失うものは無い。送り先が分からな
+/// ければ違うものとする。
 fn issued_by(origin: &AdapterIdentity, sender: Option<&AdapterIdentity>) -> bool {
-    sender.is_some_and(|s| s.api_format == origin.api_format && s.server == origin.server)
+    sender.is_some_and(|s| {
+        s.api_format == origin.api_format
+            && s.server == origin.server
+            && (s.api_format != ApiFormat::OpenAiCompat || s.model == origin.model)
+    })
 }
 
 /// 試行の実行記録の行id(実行した順)。
@@ -463,7 +471,9 @@ fn attempt_records(messages: &[Message], turn: &str, attempt_no: i64) -> Vec<i64
 
 /// 保存から並べる試行の呼び出しIDを、その試行の実行記録の行idから作ったID([`history_call_id`])に
 /// 置き換える(`docs/spec/architecture/llm-adapter.md`「過去のターンの呼び出しには、実行記録の
-/// 行idからIDを作る」)。保存は書き換えず、並べる発言だけを変える。
+/// 行idからIDを作る」)。保存は書き換えず、並べる発言だけを変える。呼び出しを置き換えた発言の
+/// 思考(`Replay`)も外す。思考のブロックは元のIDの呼び出しを含み、送り返すと結果と食い違う
+/// (今は払い出した送り先と違えば送り返さない(`turn_request::settle_replays`)が、それに頼らない)。
 ///
 /// 保存した往復の呼び出しは、すべて実行して記録を書いたもの(書けなければ試行が失敗して保存
 /// されない)なので、呼び出しと`records`は実行した順に1対1で対応する。ツール結果は、直前の
@@ -474,8 +484,13 @@ fn reissue_call_ids(messages: &mut [ChatMessage], records: &[i64]) -> Option<()>
     let mut open: Vec<(Option<String>, String)> = Vec::new();
     for message in messages {
         match message {
-            ChatMessage::Assistant { tool_calls, .. } => {
+            ChatMessage::Assistant {
+                tool_calls, replay, ..
+            } => {
                 open.clear();
+                if !tool_calls.is_empty() {
+                    *replay = Replay::default();
+                }
                 for call in tool_calls {
                     let id = history_call_id(*records.next()?);
                     open.push((call.id.replace(id.clone()), id));
@@ -717,7 +732,7 @@ mod tests {
                 opening: OPENING.to_string(),
                 // 保存([`Self::save`])を払い出した送り先。
                 sender: Some(AdapterIdentity {
-                    api_format: crate::config::ApiFormat::OpenAiCompat,
+                    api_format: ApiFormat::OpenAiCompat,
                     model: "m".to_string(),
                     server: "https://api.example.com".to_string(),
                 }),
@@ -1628,33 +1643,65 @@ mod tests {
         assert_eq!(reissue_call_ids(&mut twice, &[1]), None);
     }
 
-    /// 払い出した送り先かは、方言と要求URLのオリジンで見る。モデルは見ない。
+    /// 払い出した送り先かは、方言と要求URLのオリジンで見る。モデルはOpenAI互換でだけ見る。
     #[test]
     fn call_ids_are_kept_for_the_format_and_server_that_issued_them() {
-        use crate::config::ApiFormat;
         let identity = |api_format, model: &str, server: &str| AdapterIdentity {
             api_format,
             model: model.to_string(),
             server: server.to_string(),
         };
-        let origin = identity(ApiFormat::OpenAiCompat, "a", "https://api.example.com");
-        let issued = |sender: Option<AdapterIdentity>| issued_by(&origin, sender.as_ref());
-        assert!(issued(Some(identity(
-            ApiFormat::OpenAiCompat,
-            "b",
-            "https://api.example.com"
-        ))));
-        assert!(!issued(Some(identity(
-            ApiFormat::Anthropic,
-            "a",
-            "https://api.example.com"
-        ))));
-        assert!(!issued(Some(identity(
-            ApiFormat::OpenAiCompat,
-            "a",
-            "https://api.mistral.ai"
-        ))));
-        assert!(!issued(None));
+        const SERVER: &str = "https://api.example.com";
+        let issued = |origin: AdapterIdentity, sender: Option<AdapterIdentity>| {
+            issued_by(&origin, sender.as_ref())
+        };
+        let compat = |model, server| identity(ApiFormat::OpenAiCompat, model, server);
+        assert!(issued(compat("a", SERVER), Some(compat("a", SERVER))));
+        assert!(!issued(compat("a", SERVER), Some(compat("b", SERVER))));
+        assert!(!issued(
+            compat("a", SERVER),
+            Some(compat("a", "https://api.mistral.ai"))
+        ));
+        assert!(!issued(
+            compat("a", SERVER),
+            Some(identity(ApiFormat::Anthropic, "a", SERVER))
+        ));
+        for format in [ApiFormat::Anthropic, ApiFormat::Gemini] {
+            assert!(issued(
+                identity(format, "a", SERVER),
+                Some(identity(format, "b", SERVER))
+            ));
+        }
+        assert!(!issued(compat("a", SERVER), None));
+    }
+
+    /// 呼び出しを置き換えた発言の思考は外す(思考のブロックは元のIDを含む)。
+    #[test]
+    fn reissuing_call_ids_drops_the_thinking_that_carries_the_old_ones() {
+        let replay: Replay =
+            serde_json::from_str(r#"[{"type":"tool_use","id":"toolu_1"}]"#).unwrap();
+        let mut messages = vec![
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![saved_call(Some("toolu_1"))],
+                replay: replay.clone(),
+            },
+            saved_result(Some("toolu_1"), "a"),
+            ChatMessage::Assistant {
+                content: Some("返信".to_string()),
+                tool_calls: Vec::new(),
+                replay: replay.clone(),
+            },
+        ];
+        assert_eq!(reissue_call_ids(&mut messages, &[1]), Some(()));
+        let replays: Vec<_> = messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Assistant { replay, .. } => Some(replay.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(replays, [Replay::default(), replay]);
     }
 
     /// 送り先が保存と違えば、保存から並べた試行の呼び出しIDを実行記録の行idから作る。
@@ -1715,7 +1762,6 @@ mod tests {
             assert_eq!(history.segments.len(), 1, "保存から並べる");
             reissued(&history.messages)
         };
-        use crate::config::ApiFormat;
         let id = Some(history_call_id(record));
         assert_eq!(
             build(ApiFormat::Anthropic),
@@ -1732,9 +1778,9 @@ mod tests {
     fn a_saved_attempt_whose_ids_cannot_be_reissued_is_rebuilt_from_the_records() {
         let f = Fixture::new();
         let u = f.user("u");
-        f.reply("t1", "返信");
         // 往復を含まない保存に、実行記録が1件ある(対応が取れない)。
         f.record(Some("t1"), json!({"ok": true}));
+        f.reply("t1", "返信");
         f.save("t1", 1, vec![u], &["u"], "返信");
         let options = HistoryOptions {
             image_input: false,
