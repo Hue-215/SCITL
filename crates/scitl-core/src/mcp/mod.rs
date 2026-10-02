@@ -43,8 +43,8 @@ const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 応答を保存し終えたあとのターンが切断待ちのまま返らなくなる。
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// クライアント側のMCPセッション。サーバーからの要求(サンプリング等)で通信や処理が増えない
-/// よう、意図的にハンドラを持たない(`()`)。
+/// クライアント側のMCPセッション。ハンドラには名乗り(`client_config`)だけを渡す。サーバーからの
+/// 要求(サンプリング等)は処理せずrmcpの既定の応答を返し、通信や処理を増やさない。
 type ClientService = RunningService<RoleClient, ClientConfig>;
 
 /// 接続のときに外部ツールサーバーへ名乗る情報(`initialize`の`clientInfo`)。能力は何も宣言しない。
@@ -424,6 +424,23 @@ impl ServerError for ClientInitializeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::model::ProtocolVersion;
+
+    /// 名乗りはSCITLの名前と版だけで、能力は宣言せず、プロトコルの版はrmcpの既定のまま。
+    /// rmcpを上げて既定が変わったときに気付けるよう、送る中身を固定する。
+    #[test]
+    fn client_config_names_scitl_and_declares_no_capabilities() {
+        let config = client_config();
+        assert_eq!(config.client_info.name, "scitl");
+        assert_eq!(config.client_info.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            config.client_info.title.as_deref(),
+            Some(crate::PRODUCT_NAME)
+        );
+        assert_eq!(config.capabilities, ClientCapabilities::default());
+        assert_eq!(config.protocol_version, ProtocolVersion::default());
+        assert!(config.meta.is_none());
+    }
 
     #[test]
     fn server_errors_leave_out_the_transport_type_name() {
