@@ -5,11 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = "2"
 
 [dependencies]
 scitl-core = { path = "../scitl-core" }
-tauri = { version = "2", features = [] }
+tauri = "2"
 secrecy = { workspace = true }
 percent-encoding = { workspace = true }
 tauri-plugin-single-instance = "2.4"
@@ -19,10 +19,6 @@ zbus = "5.9"
 
 [dev-dependencies]
 serde_json = { workspace = true }
-
-[[bin]]
-name = "scitl-tauri"
-path = "src/main.rs"
 
 [features]
 # このフィーチャの有無が、Tauriが `devUrl`(Vite開発サーバー)と埋め込み済みの
