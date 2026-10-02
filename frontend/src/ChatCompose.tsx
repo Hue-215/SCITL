@@ -1,9 +1,20 @@
-import { createContext, type ReactNode, useCallback, useContext, useRef, useState } from 'react'
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
+import { watchDroppedFiles } from './api'
 import { StagedAttachmentChips } from './Attachments'
+import { PASTED_IMAGES_NEED_READING, readClipboardImages } from './clipboard'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
 import { isCommitEnter } from './keyboard'
-import type { AttachmentDeliveries, SelectedModel } from './types'
+import type { AttachmentDeliveries, DropNotice, SelectedModel } from './types'
 import {
   type StagedAttachments,
   type TakenAttachments,
@@ -17,6 +28,8 @@ interface ComposeState {
   draft: string
   setDraft: (draft: string) => void
   staged: StagedAttachments
+  // 窓に落としたファイルの受け取り先を差し替える。入力欄が出ていて、添付を足せるときだけ置く。
+  setDropTarget: (target: ((notice: DropNotice) => void) | null) => void
 }
 
 const ComposeContext = createContext<ComposeState | null>(null)
@@ -26,11 +39,27 @@ const ComposeContext = createContext<ComposeState | null>(null)
  * 書きかけを残すため、画面の切り替えより上に置く。中身は`ChatCompose`だけが読むので、
  * 状態が変わっても描き直されるのは入力欄だけになる(`children`は外から渡された同じ要素の
  * まま)。
+ *
+ * 窓に落としたファイルもここで受ける。パスはOSからRust側へ直接届き、画面には名前だけが知らされる
+ * (`watchDroppedFiles`)。窓のどこに落としても入力欄の添付に加え、入力欄が出ていない・添付を
+ * 足せないときは受け付けない(読ませないまま、次のドロップで捨てられる)。
  */
 export function ComposeProvider({ children }: { children: ReactNode }) {
   const [draft, setDraft] = useState('')
   const staged = useStagedAttachments()
-  return <ComposeContext value={{ draft, setDraft, staged }}>{children}</ComposeContext>
+  const dropTarget = useRef<((notice: DropNotice) => void) | null>(null)
+  const setDropTarget = useCallback((target: ((notice: DropNotice) => void) | null) => {
+    dropTarget.current = target
+  }, [])
+
+  useEffect(() => {
+    // 送り先は1つで、渡し直すと置き換わる(StrictModeで2回渡しても、後のものだけが残る)。
+    watchDroppedFiles((notice) => dropTarget.current?.(notice)).catch(() => undefined)
+  }, [])
+
+  return (
+    <ComposeContext value={{ draft, setDraft, staged, setDropTarget }}>{children}</ComposeContext>
+  )
 }
 
 /** 送信する発言。送信のコマンドが失敗したら`restore`で添付を入力欄へ戻す。 */
@@ -63,7 +92,9 @@ export default function ChatCompose({
 }) {
   const compose = useContext(ComposeContext)
   if (!compose) throw new Error('ChatCompose needs ComposeProvider')
-  const { draft, setDraft, staged } = compose
+  const { draft, setDraft, staged, setDropTarget } = compose
+  // 添付を足せるか。選ぶ・落とす・貼り付けるのどれにも同じ条件を使う。
+  const canAdd = !disabled && staged.canAdd
   const fileInputRef = useRef<HTMLInputElement>(null)
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
   const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)
@@ -71,6 +102,19 @@ export default function ChatCompose({
     (selected: SelectedModel | null) => setDeliveries(selected?.attachments ?? null),
     [],
   )
+
+  // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addDropped`は描くたびに
+  // 変わる)。応答待ちになった描画のすぐ後から受け付けないよう、画面に出す前に差し替える。
+  // 貼り付けの画像を読み直したあとの受け取り先。読み終えたときの入力欄の状態で受ける。
+  const pasteTarget = useRef<((files: File[]) => void) | null>(null)
+  useLayoutEffect(() => {
+    pasteTarget.current = canAdd ? staged.add : null
+    setDropTarget(canAdd ? staged.addDropped : null)
+    return () => {
+      pasteTarget.current = null
+      setDropTarget(null)
+    }
+  })
 
   // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
   const canSend = !disabled && !staged.busy && (draft.trim() !== '' || staged.ready)
@@ -107,7 +151,7 @@ export default function ChatCompose({
           />
           <button
             type="button"
-            disabled={disabled || !staged.canAdd}
+            disabled={!canAdd}
             title={t('attachment.add_tooltip')}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -116,6 +160,24 @@ export default function ChatCompose({
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
+              // 一緒に、その見た目の画像も載せるため。
+              const text = e.clipboardData.getData('text/plain')
+              if (text.trim() !== '') return
+              const files = Array.from(e.clipboardData.files)
+              if (files.length > 0) {
+                e.preventDefault()
+                if (canAdd) staged.add(files)
+                return
+              }
+              // 文字(空白だけを除く)もファイルも無い。WebKitGTKは画像を`clipboardData`に
+              // 入れないので読み直す。空白だけの文字は、画像があるか分からないので既定どおり貼る。
+              if (!PASTED_IMAGES_NEED_READING || !canAdd) return
+              void readClipboardImages().then((images) => {
+                if (images.length > 0) pasteTarget.current?.(images)
+              })
+            }}
             onKeyDown={(e) => {
               if (isCommitEnter(e) && !e.shiftKey) {
                 e.preventDefault()

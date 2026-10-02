@@ -5,6 +5,7 @@
   "attachment.image_not_sent": "The selected model cannot read images; only the name and size are sent",
   "attachment.load_failed": "Could not load: {error}",
   "attachment.loading": "Loading…",
+  "attachment.not_a_file": "Only files can be attached, not folders",
   "attachment.remove": "Remove attachment {name}",
   "attachment.reveal_tooltip": "Show in folder",
   "attachment.too_large": "Too large to attach (limit {limit})",

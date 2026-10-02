@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { discardStagedAttachment, failureText, getAttachmentLimits, stageAttachment } from './api'
+import {
+  discardStagedAttachment,
+  failureText,
+  getAttachmentLimits,
+  stageAttachment,
+  stageDroppedFile,
+} from './api'
 import { formatBytes, isolated, t } from './i18n'
-import type { AttachmentKind, PickingLimits } from './types'
+import type { AttachmentKind, DropNotice, PickingLimits, StageOutcome } from './types'
 
 /** 送信前の添付1件。 */
 export type StagedItem = { key: string; name: string } & (
@@ -19,7 +25,10 @@ export interface TakenAttachments {
 
 export interface StagedAttachments {
   items: StagedItem[]
+  /** 選んだ・貼り付けたファイルを、中身を渡して預ける。 */
   add: (files: File[]) => void
+  /** 窓に落としたファイルを、Rust側が受け取ったドロップの番号と位置で指して預ける。 */
+  addDropped: (notice: DropNotice) => void
   remove: (key: string) => void
   /** 送る添付を取り出し、一覧を空にする。受け付けなかったものも一緒に消える。 */
   take: () => TakenAttachments
@@ -34,6 +43,13 @@ export interface StagedAttachments {
   busy: boolean
   /** 送れるものがある。 */
   ready: boolean
+}
+
+/** 預ける元のファイル1つ。`size`は預ける前に分かるときだけ持つ(落としたファイルは分からない)。 */
+interface Source {
+  name: string
+  size: number | null
+  stage: () => Promise<StageOutcome>
 }
 
 /** 入力欄の送信前の添付。選んだファイルはRust側で判定させて預け、トークンで持つ。 */
@@ -52,11 +68,10 @@ export function useStagedAttachments(): StagedAttachments {
     setItems((prev) => prev.map((item) => (item.key === key ? next : item)))
   }
 
-  const add = (files: File[]) => {
+  const addSources = (sources: Source[]) => {
     const counted = items.filter((i) => i.state !== 'rejected').length
-    const added: StagedItem[] = files.map((file, i) => {
+    const added: StagedItem[] = sources.map(({ name, size, stage }, i) => {
       const key = String(nextKey.current++)
-      const name = file.name
       if (limits && counted + i >= limits.per_message) {
         return {
           key,
@@ -66,7 +81,7 @@ export function useStagedAttachments(): StagedAttachments {
         }
       }
       // どの種別でも受け付けない大きさなら、中身を読む前に弾く(種別ごとの上限はRust側が見る)。
-      if (limits && file.size > limits.largest_bytes) {
+      if (limits && size !== null && size > limits.largest_bytes) {
         return {
           key,
           name,
@@ -74,7 +89,7 @@ export function useStagedAttachments(): StagedAttachments {
           message: t('attachment.too_large', { limit: formatBytes(limits.largest_bytes) }),
         }
       }
-      stageAttachment(file).then(
+      stage().then(
         (outcome) => {
           if (withdrawn.current.delete(key)) {
             if (outcome.status === 'staged') void discardStagedAttachment(outcome.token)
@@ -91,12 +106,7 @@ export function useStagedAttachments(): StagedAttachments {
                   kind: outcome.kind,
                   size: outcome.size_bytes,
                 }
-              : {
-                  key,
-                  name,
-                  state: 'rejected',
-                  message: t('attachment.too_large', { limit: formatBytes(outcome.limit_bytes) }),
-                },
+              : { key, name, state: 'rejected', message: rejectionText(outcome) },
           )
         },
         (e) => {
@@ -113,6 +123,24 @@ export function useStagedAttachments(): StagedAttachments {
     })
     setItems((prev) => [...prev, ...added])
   }
+
+  const add = (files: File[]) =>
+    addSources(
+      files.map((file) => ({
+        name: file.name,
+        size: file.size,
+        stage: () => stageAttachment(file),
+      })),
+    )
+
+  const addDropped = (notice: DropNotice) =>
+    addSources(
+      notice.names.map((name, index) => ({
+        name,
+        size: null,
+        stage: () => stageDroppedFile(notice.drop_id, index),
+      })),
+    )
 
   const remove = (key: string) => {
     const item = items.find((i) => i.key === key)
@@ -141,11 +169,22 @@ export function useStagedAttachments(): StagedAttachments {
   return {
     items,
     add,
+    addDropped,
     remove,
     take,
     restore,
     canAdd: limits !== null,
     busy: items.some((i) => i.state === 'staging'),
     ready: items.some((i) => i.state === 'staged'),
+  }
+}
+
+/** 預けなかった理由の文言。 */
+function rejectionText(outcome: StageOutcome & { status: 'rejected' }): string {
+  switch (outcome.reason) {
+    case 'too_large':
+      return t('attachment.too_large', { limit: formatBytes(outcome.limit_bytes) })
+    case 'not_a_file':
+      return t('attachment.not_a_file')
   }
 }

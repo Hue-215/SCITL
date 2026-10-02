@@ -2,14 +2,18 @@
 //! 読み出しをここに閉じる。行の読み書きは`db::attachments`。
 
 mod classify;
+mod dropped;
 mod normalize;
 mod staging;
 mod store;
+
+use std::path::PathBuf;
 
 use rusqlite::Connection;
 use serde::Serialize;
 
 pub use classify::{classify, image_mime_type, Classified, Limits, PickingLimits, LIMITS};
+pub use dropped::DropNotice;
 pub(crate) use staging::Taken;
 pub use staging::{Rejection, StageOutcome};
 pub(crate) use store::safe_file_name;
@@ -51,6 +55,7 @@ pub fn delivery(kind: AttachmentKind, image_input: bool, in_latest_message: bool
 pub struct Attachments {
     store: AttachmentStore,
     staged: staging::Staged,
+    dropped: dropped::Dropped,
 }
 
 impl Attachments {
@@ -58,6 +63,7 @@ impl Attachments {
         Self {
             store,
             staged: staging::Staged::default(),
+            dropped: dropped::Dropped::default(),
         }
     }
 
@@ -65,6 +71,26 @@ impl Attachments {
     /// DBにそのまま残す。
     pub fn stage(&self, name: String, bytes: Vec<u8>) -> Result<StageOutcome> {
         self.staged.stage(name, bytes)
+    }
+
+    /// 窓に落とされたファイルを受け取り、画面へ知らせる形にする。パスはOSのドロップからGUIの
+    /// シェルへ届いたもので、WebViewからは受け取らない(`docs/spec/architecture/attachments.md`
+    /// 「受け取り方」)。ここでは読まない。
+    pub fn receive_drop(&self, paths: Vec<PathBuf>) -> Option<DropNotice> {
+        self.dropped.receive(paths)
+    }
+
+    /// 落としたファイルのうち、画面が受け付けたものを読み、[`Self::stage`]と同じく判定して
+    /// 預ける。ファイルを読むのでブロッキング処理として呼ぶ。
+    pub fn stage_dropped(&self, drop_id: u64, index: usize) -> Result<StageOutcome> {
+        let path = self
+            .dropped
+            .take(drop_id, index)
+            .ok_or_else(|| CoreError::Attachment("dropped file not found".to_string()))?;
+        match dropped::read(&path)? {
+            Ok(bytes) => self.stage(dropped::name_of(&path), bytes),
+            Err(reason) => Ok(StageOutcome::Rejected { reason }),
+        }
     }
 
     pub fn discard(&self, token: &str) {
@@ -228,5 +254,33 @@ mod tests {
         let attachments = Attachments::new(t.store.clone());
 
         assert_eq!(attachments.orphaned_blobs(db, true).await.unwrap(), vec![]);
+    }
+
+    #[test]
+    fn stages_a_dropped_file_under_its_own_name_and_refuses_folders() {
+        let t = TempStore::new();
+        let attachments = Attachments::new(t.store.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("memo.txt");
+        std::fs::write(&path, "hello").unwrap();
+
+        let notice = attachments
+            .receive_drop(vec![path, dir.path().to_path_buf()])
+            .unwrap();
+        assert_eq!(notice.names[0], "memo.txt");
+        let StageOutcome::Staged { token, kind, .. } =
+            attachments.stage_dropped(notice.drop_id, 0).unwrap()
+        else {
+            panic!("expected staged");
+        };
+        assert_eq!(kind, AttachmentKind::Text);
+        assert_eq!(attachments.take_staged(&[token]).unwrap().len(), 1);
+        assert_eq!(
+            attachments.stage_dropped(notice.drop_id, 1).unwrap(),
+            StageOutcome::Rejected {
+                reason: Rejection::NotAFile
+            }
+        );
+        assert!(attachments.stage_dropped(notice.drop_id, 0).is_err());
     }
 }

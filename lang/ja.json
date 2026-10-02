@@ -5,6 +5,7 @@
   "attachment.image_not_sent": "選んでいるモデルは画像を読めないため、名前と大きさだけが伝わります",
   "attachment.load_failed": "読み込めませんでした: {error}",
   "attachment.loading": "読み込み中…",
+  "attachment.not_a_file": "フォルダなど、ファイルでないものは添付できません",
   "attachment.remove": "{name}の添付を取り消す",
   "attachment.reveal_tooltip": "入っているフォルダを開く",
   "attachment.too_large": "大きすぎるため添付できません（上限 {limit}）",
