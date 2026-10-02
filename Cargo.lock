@@ -3736,6 +3736,7 @@ dependencies = [
  "ts-rs",
  "ulid",
  "url",
+ "windows 0.62.2",
  "windows-native-keyring-store",
 ]
 

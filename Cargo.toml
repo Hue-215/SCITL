@@ -87,7 +87,13 @@ process-wrap = { version = "10.0", default-features = false, features = [
     "process-group",
     "job-object",
     "kill-on-drop",
+    "creation-flags",
 ] }
+# 子プロセスの起動フラグの型(process-wrapの`CreationFlags`が受け取る)。コンソールを持たないGUIから
+# コンソールアプリのサーバーを起動しても、コンソールウィンドウを開かせない(`scitl-core/src/mcp/stdio.rs`)。
+# 同じ版がprocess-wrapの依存として既にビルドされている。上流の版が上がったら合わせて上げる
+# (`cargo tree -p process-wrap --depth 1`で確認)
+windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"
