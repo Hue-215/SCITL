@@ -65,7 +65,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 ## ワークスペース構成
 
 ```
-SCITL-2.0/
+SCITL/
 ├── Cargo.toml                      # workspace root
 ├── crates/
 │   ├── scitl-core/                 # UI非依存のコアライブラリ
