@@ -9,16 +9,19 @@ fn is_bidi_control(c: char) -> bool {
     )
 }
 
-/// 見えないまま文字列に紛れて見た目を惑わす文字。Unicodeの`Default_Ignorable_Code_Point`
+/// 描かれないまま文字列に紛れて見た目を惑わす文字。Unicodeの`Default_Ignorable_Code_Point`
 /// (何も描かれない文字。双方向制御文字・ゼロ幅文字・タグ文字・ハングルのフィラー等)から
 /// 異体字セレクタ([`is_variation_selector`])を除いたものと、行間注釈の書式文字
 /// (U+FFF9〜U+FFFB)。タグ文字(U+E0000〜)はASCIIを見えない形で写せるため、画面に見えない
 /// 指示を紛れ込ませる手口に使われる。ハングルのフィラーは一般カテゴリが文字(Lo)で、空白とも
 /// 書式文字とも判定されない。
 ///
-/// 異体字セレクタを除くのは、絵文字の表示(U+FE0F等)を変えるため。標準ライブラリに文字の
-/// 性質の判定が無く、依存クレートの版で画面・保存値の規則が変わらないよう、範囲を列挙する
+/// 異体字セレクタを判定から外すのは、除くと絵文字の表示(U+FE0F等)が変わるため。標準ライブラリに
+/// 文字の性質の判定が無く、依存クレートの版で画面・保存値の規則が変わらないよう、範囲を列挙する
 /// (`DerivedCoreProperties.txt`の範囲を写したもの。未割り当ての範囲も含む)。
+///
+/// 予約タグの無害化(`llm::prompt`)も、照合で読み飛ばす文字にこの判定を使う。範囲を変えると
+/// モデルへ送る文字列の無害化の規則も変わるので、保存の形の版(`FORM_VERSION`)を見直す。
 pub fn is_invisible_format(c: char) -> bool {
     is_bidi_control(c)
         || matches!(
@@ -77,7 +80,7 @@ pub fn ellipsize(s: &str, max: usize) -> String {
     }
 }
 
-/// 不可視の書式文字を除き、制御文字を空白にして1行に畳む。[`display_label`]の切り詰め前の
+/// 描かれない文字を除き、制御文字を空白にして1行に畳む。[`display_label`]の切り詰め前の
 /// 段階で、切り詰めの前に別の処理(秘密情報の伏せ字等)を挟む呼び出し側が使う。
 pub fn visible_line(s: &str) -> String {
     let visible: String = s.chars().filter(|&c| !is_invisible_format(c)).collect();
