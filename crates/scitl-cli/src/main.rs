@@ -12,7 +12,7 @@ use scitl_cli::{terminal, ChatCommand, CliError, DataDirArg, Session, TaskComman
 #[command(
     name = "scitl-cli",
     version,
-    about = "Command line interface for SCITL Task Companion"
+    about = format!("Command line interface for {}", scitl_core::PRODUCT_NAME)
 )]
 struct Cli {
     #[command(flatten)]

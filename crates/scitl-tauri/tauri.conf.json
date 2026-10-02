@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SCITL",
-  "version": "0.1.0",
-  "identifier": "dev.niigo.scitl",
+  "productName": "SCITL Task Companion",
+  "mainBinaryName": "scitl",
+  "identifier": "net.niigo.scitl",
   "build": {
     "frontendDist": "../../frontend/dist",
     "devUrl": "http://localhost:1420",
@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Niigo",
     "icon": ["icons/icon.png"]
   }
 }

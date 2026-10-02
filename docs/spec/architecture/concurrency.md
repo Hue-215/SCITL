@@ -10,9 +10,9 @@ APIキーの参照が黙って消える)、同じ会話を同時に生成でき�
 - 対象はGUIだけ。CLI(`scitl-cli`・`scitl-debug-cli`)とGUIが同時に開く場合は、
   SQLiteのロックで扱う(`../data-model/tables.md`「複数プロセスからの書き込みの排他」)。設定ファイルの
   書き換えの競合もCLIとの間には残るので、この防止だけに頼らない
-- **外に開いている口**: Linuxはセッションバスの名前`dev.niigo.scitl.SingleInstance`と
+- **外に開いている口**: Linuxはセッションバスの名前`net.niigo.scitl.SingleInstance`と
   メソッド`org.SingleInstance.DBus.ExecuteCallback(as, s)`(2つ目の起動の引数と作業ディレクトリを
-  受け取る)。Windowsは名前付きミューテックス`dev.niigo.scitl-sim`と、隠しウィンドウ
+  受け取る)。Windowsは名前付きミューテックス`net.niigo.scitl-sim`と、隠しウィンドウ
   (`-sic`/`-siw`)へのWM_COPYDATA
 - 届く引数と作業ディレクトリは、同じセッションのどのプロセスからも送れる信用できない入力として
   扱い、使わない(DB・設定・WebViewに渡さず、ログにも出さない)。将来「引数で渡したファイルを
