@@ -14,7 +14,7 @@
 //!   `ProcessGroup`/`JobObject`を明示的に併用する)。子が標準入力の終了を受けて
 //!   自分で終了した場合も、残ったグループをkillする(`KillGroupAfterExit`)
 //! - stderrは継承させず、上限付きで捕捉してエラー診断にのみ使う(サーバーが書いた
-//!   文字列をアプリの標準エラーへ素通りさせない)。Windowsではコンソールも持たせない
+//!   文字列をアプリの標準エラーへ素通りさせない)。Windowsではコンソールウィンドウも持たせない
 //!   (GUIからの起動でコンソールウィンドウが開くのと、CLIの端末へ直接書かれるのを防ぐ)
 
 #[cfg(windows)]
@@ -201,17 +201,25 @@ async fn capture_stderr(stderr: Option<ChildStderr>) -> String {
 /// 指していれば、そのパスを返す。
 ///
 /// OSも標準ライブラリも、拡張子の無い名前には`.exe`しか補わないので、`npx`と登録された
-/// サーバーはそのままでは起動できない。実行ファイルが先に見つかる場合は`None`を返し、
-/// 解決を標準ライブラリに任せる(端末で名前を打ったときと同じく、PATHの並び順で決まる)。
+/// サーバーはそのままでは起動できない。`.exe`が先に見つかる場合は`None`を返し、解決を
+/// 標準ライブラリに任せる(どちらが選ばれるかはPATHの並び順で決まる)。
+///
+/// 絶対パスでないPATHの要素は探さない。空の要素(PATHの末尾の`;`等)や相対の要素を繋ぐと、
+/// 作業ディレクトリを探すことになる。
 #[cfg(windows)]
 fn batch_file_on_path(command: &str, dirs: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
-    let name = std::path::Path::new(command);
-    if name.extension().is_some() || name.components().count() != 1 {
+    use std::path::{Component, Path};
+
+    let name = Path::new(command);
+    let mut components = name.components();
+    let bare =
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    if !bare || name.extension().is_some() {
         return None;
     }
-    for dir in dirs {
+    for dir in dirs.filter(|dir| dir.is_absolute()) {
         let with_extension = |extension: &str| dir.join(format!("{command}.{extension}"));
-        if ["exe", "com"].iter().any(|e| with_extension(e).is_file()) {
+        if with_extension("exe").is_file() {
             return None;
         }
         if let Some(batch) = ["cmd", "bat"]
@@ -225,8 +233,8 @@ fn batch_file_on_path(command: &str, dirs: impl Iterator<Item = PathBuf>) -> Opt
     None
 }
 
-/// stdio子プロセスに引き継ぐ環境変数の許可リスト。OS標準の実行に必要な最小限のみ
-/// (PATH解決、ホームディレクトリ、Windowsのシステムとアプリのデータのディレクトリ)。
+/// stdio子プロセスに引き継ぐ環境変数の許可リスト。プログラムがOSの上で動くのに要る場所の
+/// 情報だけにする(PATH解決、ホームディレクトリ、Windowsのシステムとアプリのデータのディレクトリ)。
 ///
 /// Windowsのものは、MCPの公式SDK(TypeScript)が既定で引き継ぐ一覧に`TMP`を足したもの。
 /// Windowsのプログラムは、これらが指す場所を前提に動く。`APPDATA`・`LOCALAPPDATA`が無いと、
