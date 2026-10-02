@@ -1128,6 +1128,18 @@ name = "m"
     }
 
     #[test]
+    fn chat_models_tell_the_deliveries_that_do_not_depend_on_the_model_before_one_is_selected() {
+        let (settings, _, _dir) = temp_settings();
+        add_local_provider(&settings, "A");
+        let listed = view::chat_models(&settings.current().config, &settings.detected);
+        assert!(listed.selected.is_none());
+        assert_eq!(listed.attachments.text, Some(Delivery::Content));
+        assert_eq!(listed.attachments.other, Some(Delivery::NameOnly));
+        // 画像はモデルが画像を読めるかで変わる。
+        assert_eq!(listed.attachments.image, None);
+    }
+
+    #[test]
     fn chat_models_list_visible_models_and_the_selected_one_even_if_hidden() {
         let (settings, _, _dir) = temp_settings();
         let a = add_local_provider(&settings, "A").providers[0].id.clone();
@@ -1160,20 +1172,21 @@ name = "m"
         );
 
         settings.select_chat_model(&b, "qwen2.5:7b").unwrap();
-        let selected = chat_models(&settings).selected.unwrap();
+        let listed = chat_models(&settings);
+        let selected = listed.selected.unwrap();
         assert_eq!(selected.choice.provider_name, "B");
         assert!(!selected.thinking);
         // 既定では画像に対応しないので、画像の添付は名前だけになる。
-        assert_eq!(selected.attachments.image, Delivery::NameOnly);
-        assert_eq!(selected.attachments.text, Delivery::Content);
-        assert_eq!(selected.attachments.other, Delivery::NameOnly);
+        assert_eq!(listed.attachments.image, Some(Delivery::NameOnly));
+        assert_eq!(listed.attachments.text, Some(Delivery::Content));
+        assert_eq!(listed.attachments.other, Some(Delivery::NameOnly));
 
         settings
             .set_model_capability(&b, "qwen2.5:7b", Capability::Image, true)
             .unwrap();
-        let selected = chat_models(&settings).selected.unwrap();
-        assert_eq!(selected.attachments.image, Delivery::Image);
-        assert_eq!(selected.attachments.other, Delivery::NameOnly);
+        let listed = chat_models(&settings);
+        assert_eq!(listed.attachments.image, Some(Delivery::Image));
+        assert_eq!(listed.attachments.other, Some(Delivery::NameOnly));
     }
 
     #[test]

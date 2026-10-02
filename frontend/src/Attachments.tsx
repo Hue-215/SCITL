@@ -184,7 +184,7 @@ export function StagedAttachmentChips({
   disabled,
 }: {
   staged: StagedAttachments
-  // 選んでいるモデルの、種別ごとの渡し方。モデルが未選択なら警告は出さない。
+  // 種別ごとの渡し方。モデルが未選択なら、モデルによって変わる種別(画像)の警告は出さない。
   deliveries: AttachmentDeliveries | null
   disabled: boolean
 }) {

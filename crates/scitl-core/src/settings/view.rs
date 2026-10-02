@@ -160,6 +160,9 @@ pub struct ChatModelsView {
     pub choices: Vec<ModelChoice>,
     /// チャットで使うモデル。一覧から隠したモデルでも、使っていれば入る。
     pub selected: Option<SelectedModel>,
+    /// 送る発言の添付を、種別ごとにモデルへどう渡すか(`attachments::delivery`)。
+    /// 画面は`name_only`の種別に警告を出す(送信は止めない)。
+    pub attachments: AttachmentDeliveries,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,23 +194,25 @@ pub struct SelectedModel {
     /// 思考に対応する(3層で解決済み)。対応しなければ思考の強さは選べない。
     pub thinking: bool,
     pub reasoning_effort: ReasoningEffort,
-    /// 送る発言の添付を、種別ごとにモデルへどう渡すか(`attachments::delivery`)。
-    /// 画面は`name_only`の種別に警告を出す(送信は止めない)。
-    pub attachments: AttachmentDeliveries,
 }
 
+/// 種別ごとの渡し方。`None`は、モデルが未選択で決まらない。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct AttachmentDeliveries {
-    pub text: Delivery,
-    pub image: Delivery,
-    pub other: Delivery,
+    pub text: Option<Delivery>,
+    pub image: Option<Delivery>,
+    pub other: Option<Delivery>,
 }
 
 impl AttachmentDeliveries {
-    /// これから送る発言は、送った時点で直近のユーザー発言になる。
-    fn for_next_message(image_input: bool) -> Self {
-        let of = |kind| attachments::delivery(kind, image_input, true);
+    /// これから送る発言は、送った時点で直近のユーザー発言になる。`image_input`はモデルが画像入力に
+    /// 対応するかで、モデルが未選択なら`None`。
+    fn for_next_message(image_input: Option<bool>) -> Self {
+        let of = |kind| match image_input {
+            Some(image_input) => Some(attachments::delivery(kind, image_input, true)),
+            None => attachments::delivery_without_model(kind),
+        };
         Self {
             text: of(AttachmentKind::Text),
             image: of(AttachmentKind::Image),
@@ -217,6 +222,10 @@ impl AttachmentDeliveries {
 }
 
 pub(super) fn chat_models(config: &Config, detected: &DetectedCatalog) -> ChatModelsView {
+    let active = config.active_model().map(|(p, m)| {
+        let capabilities = llm::resolve_capabilities(m, detected.get(&p.id, &m.name).as_ref());
+        (p, m, capabilities)
+    });
     ChatModelsView {
         choices: config
             .providers
@@ -228,15 +237,16 @@ pub(super) fn chat_models(config: &Config, detected: &DetectedCatalog) -> ChatMo
                     .map(|m| ModelChoice::of(p, m))
             })
             .collect(),
-        selected: config.active_model().map(|(p, m)| {
-            let capabilities = llm::resolve_capabilities(m, detected.get(&p.id, &m.name).as_ref());
-            SelectedModel {
-                choice: ModelChoice::of(p, m),
-                thinking: capabilities.thinking,
-                reasoning_effort: m.reasoning_effort,
-                attachments: AttachmentDeliveries::for_next_message(capabilities.image),
-            }
+        selected: active.as_ref().map(|(p, m, capabilities)| SelectedModel {
+            choice: ModelChoice::of(p, m),
+            thinking: capabilities.thinking,
+            reasoning_effort: m.reasoning_effort,
         }),
+        attachments: AttachmentDeliveries::for_next_message(
+            active
+                .as_ref()
+                .map(|(_, _, capabilities)| capabilities.image),
+        ),
     }
 }
 

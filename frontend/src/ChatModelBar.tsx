@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { failureText, getChatModels, selectChatModel, setReasoningEffort } from './api'
 import Dropdown, { type DropdownOption } from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
-import type { ChatModelsView, ModelChoice, ReasoningEffort, SelectedModel } from './types'
+import type { AttachmentDeliveries, ChatModelsView, ModelChoice, ReasoningEffort } from './types'
 
 const EFFORT_LABELS: Record<ReasoningEffort, MessageKey> = {
   off: 'select.effort.off',
@@ -28,13 +28,13 @@ function choiceKey(choice: ModelChoice): string {
 export default function ChatModelBar({
   onError,
   onChanged,
-  onSelected,
+  onDeliveries,
 }: {
   onError: (message: string) => void
   // 選択を変えられたとき。
   onChanged: () => void
-  // 選択中のモデル(未選択ならnull)を読み込むたび。入力欄の添付の警告に使う。
-  onSelected: (selected: SelectedModel | null) => void
+  // 添付の渡し方を読み込むたび。入力欄の添付の警告に使う。
+  onDeliveries: (deliveries: AttachmentDeliveries) => void
 }) {
   const [view, setView] = useState<ChatModelsView | null>(null)
 
@@ -42,11 +42,11 @@ export default function ChatModelBar({
     try {
       const next = await getChatModels()
       setView(next)
-      onSelected(next.selected)
+      onDeliveries(next.attachments)
     } catch (e) {
       onError(failureText(e))
     }
-  }, [onError, onSelected])
+  }, [onError, onDeliveries])
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
