@@ -32,11 +32,18 @@ pub(super) struct Dropped {
 }
 
 impl Dropped {
-    pub(super) fn receive(&self, paths: Vec<PathBuf>) -> DropNotice {
+    /// 落とされたものを受け取る。ファイルのパス(絶対パス)でないものは捨てる。ファイル以外
+    /// (ブラウザのリンク・画像のdata URL等)を落とすと、`file://`を外せなかったURIが相対パスとして
+    /// 届くため。何も残らなければ`None`で、前のドロップの分はそのまま残す。
+    pub(super) fn receive(&self, paths: Vec<PathBuf>) -> Option<DropNotice> {
+        let paths: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_absolute()).collect();
+        if paths.is_empty() {
+            return None;
+        }
         let drop_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let names = paths.iter().map(|path| name_of(path)).collect();
         *self.lock() = Some((drop_id, paths.into_iter().map(Some).collect()));
-        DropNotice { drop_id, names }
+        Some(DropNotice { drop_id, names })
     }
 
     /// 落としたファイルのパスを取り出す。同じ位置は1回だけ取り出せ、置き換わった前のドロップは
@@ -61,21 +68,29 @@ pub(super) fn name_of(path: &Path) -> String {
 }
 
 /// 落としたファイルの中身を読む。通常のファイルだけを読み(フォルダ・デバイス・名前付きパイプ等は
-/// 断る)、どの種別の上限も超える分は読まない。読めなければ`Err`で、その表示文はパスを含まない。
+/// 断る)、どの種別の上限も超えるものは読まずに断る。読めなければ`Err`で、その表示文はパスを
+/// 含まない。
 pub(super) fn read(path: &Path) -> Result<std::result::Result<Vec<u8>, Rejection>> {
     let failed =
         |e: std::io::Error| CoreError::Attachment(format!("could not read the dropped file: {e}"));
     // 開く前に確かめる。名前付きパイプは、開くだけで書き手が来るまで止まる。
-    if !fs::metadata(path).map_err(failed)?.is_file() {
+    let metadata = fs::metadata(path).map_err(failed)?;
+    if !metadata.is_file() {
         return Ok(Err(Rejection::NotAFile));
     }
-    let file = File::open(path).map_err(failed)?;
     let largest = LIMITS.largest_bytes();
+    let too_large = metadata.len() > largest;
+    let file = File::open(path).map_err(failed)?;
+    // 大きさは調べた時点のもので、読む間に伸びうるので、読む量も上限で止める。
+    let limit = if too_large {
+        TOO_LARGE_PREFIX
+    } else {
+        largest + 1
+    };
     let mut bytes = Vec::new();
-    file.take(largest + 1)
-        .read_to_end(&mut bytes)
-        .map_err(failed)?;
-    if bytes.len() as u64 > largest {
+    file.take(limit).read_to_end(&mut bytes).map_err(failed)?;
+    if too_large || bytes.len() as u64 > largest {
+        // 種別は読んだ分だけで見る(断る理由の文言に、その種別の上限を添えるため)。
         let kind = classify(&bytes).kind;
         return Ok(Err(Rejection::TooLarge {
             kind,
@@ -84,6 +99,9 @@ pub(super) fn read(path: &Path) -> Result<std::result::Result<Vec<u8>, Rejection
     }
     Ok(Ok(bytes))
 }
+
+/// 上限を超えるファイルの、種別を見るために読む先頭の長さ。画像の形式は先頭の数バイトで決まる。
+const TOO_LARGE_PREFIX: u64 = 4096;
 
 #[cfg(test)]
 mod tests {
@@ -143,18 +161,26 @@ mod tests {
     #[test]
     fn hands_out_each_dropped_path_once_and_only_for_the_last_drop() {
         let dropped = Dropped::default();
-        let first = dropped.receive(vec![PathBuf::from("/a/one.txt")]);
-        let second = dropped.receive(vec![
-            PathBuf::from("/b/two.txt"),
-            PathBuf::from("/b/three.png"),
-        ]);
+        let first = dropped.receive(vec![absolute("one.txt")]).unwrap();
+        // ファイル以外を落としたもの(相対パスで届く)は受け取らず、前のドロップを残す。
+        assert_eq!(dropped.receive(vec![PathBuf::from("data:image/png")]), None);
+        assert_eq!(dropped.take(first.drop_id, 0), Some(absolute("one.txt")));
+        let second = dropped
+            .receive(vec![
+                absolute("two.txt"),
+                PathBuf::from("https:/example.com/x"),
+                absolute("three.png"),
+            ])
+            .unwrap();
         assert_eq!(second.names, ["two.txt", "three.png"]);
         assert_eq!(dropped.take(first.drop_id, 0), None);
-        assert_eq!(
-            dropped.take(second.drop_id, 1),
-            Some(PathBuf::from("/b/three.png"))
-        );
+        assert_eq!(dropped.take(second.drop_id, 1), Some(absolute("three.png")));
         assert_eq!(dropped.take(second.drop_id, 1), None);
         assert_eq!(dropped.take(second.drop_id, 2), None);
+    }
+
+    /// どのOSでも絶対パスになるパス。
+    fn absolute(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
     }
 }

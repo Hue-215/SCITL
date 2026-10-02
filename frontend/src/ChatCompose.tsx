@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react'
@@ -101,8 +102,9 @@ export default function ChatCompose({
     [],
   )
 
-  // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addDropped`は描くたびに変わる)。
-  useEffect(() => {
+  // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addDropped`は描くたびに
+  // 変わる)。応答待ちになった描画のすぐ後から受け付けないよう、画面に出す前に差し替える。
+  useLayoutEffect(() => {
     setDropTarget(canAdd ? staged.addDropped : null)
     return () => setDropTarget(null)
   })

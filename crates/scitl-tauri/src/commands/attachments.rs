@@ -68,7 +68,9 @@ pub fn receive_drop(app: &AppHandle, paths: Vec<PathBuf>) {
     else {
         return;
     };
-    let _ = channel.send(state.attachments.receive_drop(paths));
+    if let Some(notice) = state.attachments.receive_drop(paths) {
+        let _ = channel.send(notice);
+    }
 }
 
 /// 落とされたファイルのうち1つを読んで預け、判定の結果を返す。ファイルはドロップの番号と並びの

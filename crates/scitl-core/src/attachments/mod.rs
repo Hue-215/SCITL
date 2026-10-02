@@ -76,7 +76,7 @@ impl Attachments {
     /// 窓に落とされたファイルを受け取り、画面へ知らせる形にする。パスはOSのドロップからGUIの
     /// シェルへ届いたもので、WebViewからは受け取らない(`docs/spec/architecture/attachments.md`
     /// 「受け取り方」)。ここでは読まない。
-    pub fn receive_drop(&self, paths: Vec<PathBuf>) -> DropNotice {
+    pub fn receive_drop(&self, paths: Vec<PathBuf>) -> Option<DropNotice> {
         self.dropped.receive(paths)
     }
 
@@ -264,7 +264,9 @@ mod tests {
         let path = dir.path().join("memo.txt");
         std::fs::write(&path, "hello").unwrap();
 
-        let notice = attachments.receive_drop(vec![path, dir.path().to_path_buf()]);
+        let notice = attachments
+            .receive_drop(vec![path, dir.path().to_path_buf()])
+            .unwrap();
         assert_eq!(notice.names[0], "memo.txt");
         let StageOutcome::Staged { token, kind, .. } =
             attachments.stage_dropped(notice.drop_id, 0).unwrap()

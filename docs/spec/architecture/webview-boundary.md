@@ -49,11 +49,19 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   ファイルのパスはRust側にだけ届き、画面へは名前だけを知らせ、画面が受け付けたものをRust側が読む
   (`attachments.md`「受け取り方」)。切ってWebView標準のドロップにすると、落としたフォルダ以下をWebViewが読めるように
   なり(`webkitGetAsEntry`)、WindowsのWebView2で外からのドロップを止める設定
-  (`SetAllowExternalDrop(false)`)も外れる。受け口はパスを`tauri://drag-drop`のイベントとしても出すが、
-  画面はイベントを聞く権限を持たない(下の「途中経過の通知」の項)ので、WebViewには届かない。
-  知らせ先を受け取る`watch_dropped_files`はChannelだけを、読ませる`stage_dropped_file`はドロップの
-  番号と並びの位置だけを引数に取り、パスを受け取らない。WebViewを乗っ取られても、読めるのは利用者が
-  最後に落としたファイルだけになる
+  (`SetAllowExternalDrop(false)`)も外れる。受け口はパスを`tauri://drag-enter`・`tauri://drag-drop`の
+  イベントとしても出すが、画面はイベントを聞く権限を持たない(下の「途中経過の通知」の項)ので、
+  WebViewには届かない。知らせ先を受け取る`watch_dropped_files`はChannelだけを、読ませる
+  `stage_dropped_file`はドロップの番号と並びの位置だけを引数に取り、パスを受け取らない。WebViewを
+  乗っ取られても、読めるのは利用者が最後に落としたファイルだけになる
+  - 受け口は、落としたフォルダをassetプロトコルの許可範囲にも足す(Tauri 2.11で確認)。今は
+    `protocol-asset`のfeatureを有効にしていないので害は無いが、**有効にすると、落としたフォルダ以下を
+    WebViewが読めるようになる**。有効にするなら、この扱いを先に見直す
+  - 残っているおそれ(未確認): Linux(WebKitGTK)の受け口は、窓の中から始まったドラッグと外から来た
+    ドラッグを区別せず、`text/uri-list`のURIをパスとして渡す。乗っ取られた画面が、掴ませた要素の
+    ドラッグに`file://`のURIを載せ、利用者がそれを窓の中で落とすと、利用者が選んでいないファイルを
+    読ませられるかもしれない。WebKitGTKが画面から`file://`のURIを載せさせるかは実機で確かめていない。
+    正規の画面は本文のリンクに`href`を持たせない(`Markdown.tsx`)ので、乗っ取られていることが前提になる
 - 外部リンクはWebViewから直接開かせない。確認ダイアログに出す判定(スキーム許可リスト・
   ホモグラフ・ユーザー情報)はRust側の `inspect_link` が返し、開く側の `open_confirmed_link` は
   同じ判定を**Rust側でやり直し**、許可された形に正規化したURLだけをOSに委譲する
