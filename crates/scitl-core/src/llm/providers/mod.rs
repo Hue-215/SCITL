@@ -57,13 +57,9 @@ pub fn validate_api_key(api_key: &SecretString) -> Result<(), CoreError> {
 }
 
 /// 登録前の`base_url`の検証。平文の`http://`で鍵を送れる範囲(ループバックとプライベート
-/// IPリテラル)は[`ExternalUrl::parse`]が決める。今はどの方言も同じ規則。
-pub fn validate_base_url(api_format: ApiFormat, base_url: &str) -> Result<(), CoreError> {
-    match api_format {
-        ApiFormat::OpenAiCompat | ApiFormat::Anthropic | ApiFormat::Gemini => {
-            parse_base_url(base_url).map(drop)
-        }
-    }
+/// IPリテラル)は[`ExternalUrl::parse`]が決め、どの方言も同じ規則。
+pub fn validate_base_url(base_url: &str) -> Result<(), CoreError> {
+    parse_base_url(base_url).map(drop)
 }
 
 fn parse_base_url(base_url: &str) -> Result<ExternalUrl, CoreError> {
@@ -312,7 +308,7 @@ const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is n
 enum KeyHeader {
     /// `Authorization: Bearer`
     Bearer,
-    /// 鍵をそのまま値にする独自のヘッダー(`x-api-key`等)。
+    /// 鍵をそのまま値にする独自のヘッダー(`x-api-key`等)。名前は小文字で書く。
     Named(&'static str),
 }
 
@@ -332,19 +328,29 @@ async fn send_with_key(
             .await
             .map_err(|e| LlmError::from_transport(e, key));
     }
-    // ヘッダーに載せられない鍵は、方言によらず送る前に同じ文言で断る(`bearer_auth`に任せると、
-    // reqwestの組み立ての失敗として内部の文言のまま出る)。登録時の検証([`validate_api_key`])
-    // より前に保存された鍵のために残す。
-    let value = crate::net::secret_header_value(key).ok_or_else(|| {
+    // ヘッダーに載せられない鍵は、方言によらず送る前に同じ文言で断る(reqwestに任せると、
+    // 組み立ての失敗として内部の文言のまま出る)。登録時の検証([`validate_api_key`])より前に
+    // 保存された鍵のために残す。
+    let (name, value) = match header {
+        KeyHeader::Bearer => {
+            let bearer = SecretString::from(format!("Bearer {key}"));
+            (
+                reqwest::header::AUTHORIZATION,
+                crate::net::secret_header_value(bearer.expose_secret()),
+            )
+        }
+        KeyHeader::Named(name) => (
+            reqwest::header::HeaderName::from_static(name),
+            crate::net::secret_header_value(key),
+        ),
+    };
+    let value = value.ok_or_else(|| {
         LlmError::InvalidRequest(ErrorDetail::internal(
             "the API key contains characters that cannot be sent in a header",
         ))
     })?;
-    let request = match header {
-        KeyHeader::Bearer => request.bearer_auth(key),
-        KeyHeader::Named(name) => request.header(name, value),
-    };
     request
+        .header(name, value)
         .send()
         .await
         .map_err(|e| LlmError::from_transport(e, key))

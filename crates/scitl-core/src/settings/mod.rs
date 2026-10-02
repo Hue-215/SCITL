@@ -478,7 +478,7 @@ impl Settings {
     pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
         let name = input::name(&new.name, "provider name", input::PROVIDER_NAME_MAX_CHARS)?;
         let base_url = new.base_url.trim().to_string();
-        providers::validate_base_url(new.api_format, &base_url)?;
+        providers::validate_base_url(&base_url)?;
         // 鍵を保存する前にも確かめ、登録できないと分かっている名前のために資格情報ストアへ
         // 書かない。
         refuse_registered_provider_name(&self.current().config, &name)?;
