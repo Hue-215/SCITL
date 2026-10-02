@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { watchDroppedFiles } from './api'
 import { StagedAttachmentChips } from './Attachments'
+import { PASTED_IMAGES_NEED_READING, readClipboardImages } from './clipboard'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
 import { isCommitEnter } from './keyboard'
@@ -100,7 +101,10 @@ export default function ChatCompose({
 
   // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addDropped`は描くたびに
   // 変わる)。応答待ちになった描画のすぐ後から受け付けないよう、画面に出す前に差し替える。
+  // 貼り付けの画像を読み直したあとの受け取り先。読み終えたときの入力欄の状態で受ける。
+  const pasteTarget = useRef<((files: File[]) => void) | null>(null)
   useLayoutEffect(() => {
+    pasteTarget.current = canAdd ? staged.add : null
     setDropTarget(canAdd ? staged.addDropped : null)
     return () => setDropTarget(null)
   })
@@ -150,12 +154,23 @@ export default function ChatCompose({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => {
-              const files = Array.from(e.clipboardData.files)
               // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
               // 一緒に、その見た目の画像も載せるため。
-              if (files.length === 0 || e.clipboardData.getData('text/plain').trim() !== '') return
-              e.preventDefault()
-              if (canAdd) staged.add(files)
+              const text = e.clipboardData.getData('text/plain')
+              if (text.trim() !== '') return
+              const files = Array.from(e.clipboardData.files)
+              if (files.length > 0) {
+                e.preventDefault()
+                if (canAdd) staged.add(files)
+                return
+              }
+              // 文字もファイルも無い。WebKitGTKは画像を`clipboardData`に入れないので読み直す。
+              // 空白だけの文字は、ファイルがあるときと同じく貼らない。
+              if (!PASTED_IMAGES_NEED_READING || !canAdd) return
+              if (text !== '') e.preventDefault()
+              void readClipboardImages().then((images) => {
+                if (images.length > 0) pasteTarget.current?.(images)
+              })
             }}
             onKeyDown={(e) => {
               if (isCommitEnter(e) && !e.shiftKey) {

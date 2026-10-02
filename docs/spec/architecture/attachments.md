@@ -30,6 +30,13 @@
   いない(空白だけを含む)ときに添付として受ける。文字も載っていれば文字として貼る。表計算ソフト等は、
   コピーしたセルの文字と一緒にその見た目の画像も載せるため。ファイル管理ソフトでコピーしたファイルは、
   名前やパスが文字として一緒に載るOSでは添付にならず、ファイルだけが載るOSでは添付になる。
+  WebKitGTKは、画像だけが載ったクリップボードを貼り付けても`clipboardData`にファイルを入れない
+  (2.52.6で確認。Xvfb上でxclipから`image/png`を載せ、WebViewのクリップボードの設定はTauriの既定と同じ
+  無効のまま)。そこでLinux(TauriはWebKitGTKを使う)では、文字(空白だけを除く)もファイルも無い
+  貼り付けのとき、貼り付けの操作の中から非同期のClipboard API(`navigator.clipboard.read`)で画像を
+  読み直す。WebKitGTKでは操作の中からなら許可を求められずに読める。ほかのWebView(WebView2・
+  WKWebView)は画像を`clipboardData`に入れ、Clipboard APIで読むと許可を求めうるので読み直さない
+  (`frontend/src/clipboard.ts`)
   貼り付けたものは(フォルダを含め)WebViewが`File`として持つ。これはWebViewが元から持つ扱いで、
   ドラッグ&ドロップのようにRust側へ回す手段は無い
 - **選んだ時点でcoreが判定し、送信まで預かる**(`Attachments::stage`)。種別・大きさの上限の
