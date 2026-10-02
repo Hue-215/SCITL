@@ -34,7 +34,9 @@
   (2.52.6で確認。Xvfb上でxclipから`image/png`を載せ、WebViewのクリップボードの設定はTauriの既定と同じ
   無効のまま)。そこでLinux(TauriはWebKitGTKを使う)では、文字(空白だけを除く)もファイルも無い
   貼り付けのとき、貼り付けの操作の中から非同期のClipboard API(`navigator.clipboard.read`)で画像を
-  読み直す。WebKitGTKでは操作の中からなら許可を求められずに読める。ほかのWebView(WebView2・
+  読み直す。WebKitGTKでは、キー操作の貼り付けの中からなら許可を求められずに読める(中クリックの
+  貼り付けの中では拒まれるので、画像は受けない)。空白だけの文字は、画像があるかを読む前に決められない
+  ので、既定どおり文字として貼る。ほかのWebView(WebView2・
   WKWebView)は画像を`clipboardData`に入れ、Clipboard APIで読むと許可を求めうるので読み直さない
   (`frontend/src/clipboard.ts`)
   貼り付けたものは(フォルダを含め)WebViewが`File`として持つ。これはWebViewが元から持つ扱いで、
