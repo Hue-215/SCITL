@@ -49,6 +49,7 @@ export default function ChatModelBar({
   }, [onError, onSelected])
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
     void reload()
   }, [reload])
 

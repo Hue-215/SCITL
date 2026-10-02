@@ -1,5 +1,5 @@
 // 設定画面の複数のタブが共有する入力の扱い。
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { t } from './i18n'
 
@@ -19,10 +19,13 @@ export function usePositiveIntegerInput(
   const [text, setText] = useState(value?.toString() ?? '')
   const [invalid, setInvalid] = useState(false)
 
-  useEffect(() => {
+  // 保存された値が変わったら、入力欄をそれに戻す。描画の中で前回の値と比べて揃える。
+  const [shown, setShown] = useState(value)
+  if (shown !== value) {
+    setShown(value)
     setText(value?.toString() ?? '')
     setInvalid(false)
-  }, [value])
+  }
 
   const save = () => {
     // IMEを切り忘れて打った全角の数字も受け付ける。

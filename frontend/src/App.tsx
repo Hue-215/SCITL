@@ -107,6 +107,7 @@ export default function App() {
   )
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
     void loadTasks()
   }, [loadTasks])
 
@@ -144,6 +145,7 @@ export default function App() {
   }
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
     void loadChat(chat)
   }, [chat, loadChat])
 
