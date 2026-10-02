@@ -1,0 +1,207 @@
+//! 外部ツールサーバー(MCP)の登録と、公開するツールの選択。
+
+use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
+
+use super::{delete_secret, input, invalid, Settings, SettingsView};
+use crate::config::{validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef};
+use crate::error::{CoreError, Result};
+use crate::mcp;
+use crate::secrets;
+use crate::tools::external;
+
+/// サーバー追加フォームからの入力。`McpEndpoint`と同じく、接続方式ごとに必要な値だけを
+/// 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
+/// `Debug`は付けない(ログに出す経路を作らない)。
+#[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "transport", rename_all = "snake_case")]
+pub enum NewMcpEndpoint {
+    StreamableHttp {
+        url: String,
+        #[serde(default)]
+        #[cfg_attr(test, ts(type = "Array<[string, string]>"))]
+        headers: Vec<(String, SecretString)>,
+    },
+}
+
+impl Settings {
+    /// 検証→重複確認→秘密情報の保存→登録の順。重複確認から登録までを書き込みロックの中で
+    /// 行うので、同名の登録が割り込んで秘密情報が孤児になることはない。登録に失敗したら
+    /// 保存した秘密情報を消す。
+    pub fn add_mcp_server(&self, name: &str, endpoint: NewMcpEndpoint) -> Result<SettingsView> {
+        let name = name.trim().to_string();
+        validate_mcp_server_name(&name)?;
+        let endpoint = validate_endpoint(endpoint)?;
+
+        let mut draft = self.edit();
+        if draft.config.mcp_servers.iter().any(|s| s.name == name) {
+            return Err(invalid(format!(
+                "MCP server name already registered: {name}"
+            )));
+        }
+        let endpoint = store_endpoint_secrets(endpoint)?;
+        let refs = endpoint_secret_refs(&endpoint).to_vec();
+        draft.config.mcp_servers.push(McpServerConfig {
+            id: ulid::Ulid::new().to_string(),
+            name,
+            enabled: true,
+            endpoint,
+            enabled_tools: Default::default(),
+        });
+        draft.commit().inspect_err(|_| delete_secret_refs(&refs))
+    }
+
+    /// 保存済みの秘密情報も消す。`delete_provider`と同じく、設定の保存が済んでから消す。
+    /// 削除したサーバーのツール一覧がキャッシュに残らないよう、ここで捨てる。
+    pub fn delete_mcp_server(&self, server_id: &str) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        let index = draft
+            .config
+            .mcp_servers
+            .iter()
+            .position(|s| s.id == server_id)
+            .ok_or_else(|| mcp_server_not_found(server_id))?;
+        let removed = draft.config.mcp_servers.remove(index);
+
+        let view = draft.commit()?;
+        delete_secret_refs(endpoint_secret_refs(&removed.endpoint));
+        self.mcp_tools.forget(&removed.id);
+        Ok(view)
+    }
+
+    pub fn set_mcp_server_enabled(&self, server_id: &str, enabled: bool) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        find_mcp_server_mut(&mut draft.config, server_id)?.enabled = enabled;
+        draft.commit()
+    }
+
+    pub fn set_mcp_tool_enabled(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        enabled: bool,
+    ) -> Result<SettingsView> {
+        let mut draft = self.edit();
+        let enabled_count: usize = draft
+            .config
+            .mcp_servers
+            .iter()
+            .map(|s| s.enabled_tools.len())
+            .sum();
+        let server = find_mcp_server_mut(&mut draft.config, server_id)?;
+        if enabled && !server.enabled_tools.contains(tool_name) {
+            // 画面でも有効にできないようにしているが、判定を画面に任せない。一覧が未取得なら
+            // 名前だけで判定する(引数スキーマはターンで公開するときにも見る)。
+            let listed = self
+                .mcp_tools
+                .get(server_id)
+                .and_then(|tools| tools.into_iter().find(|t| t.name == tool_name));
+            let exposable = match listed {
+                Some(tool) => external::is_exposable(&server.name, &tool),
+                None => external::exposed_name(&server.name, tool_name).is_some(),
+            };
+            if !exposable {
+                return Err(invalid(
+                    "this tool cannot be enabled because its name or argument schema cannot be exposed to the model",
+                ));
+            }
+            // 無効なサーバーのツールも数える。サーバーを有効に戻したときに上限を超えないため。
+            if enabled_count >= external::MAX_EXTERNAL_TOOLS {
+                return Err(invalid(format!(
+                    "at most {} external tools can be enabled",
+                    external::MAX_EXTERNAL_TOOLS
+                )));
+            }
+            server.enabled_tools.insert(tool_name.to_string());
+        } else {
+            server.enabled_tools.remove(tool_name);
+        }
+        draft.commit()
+    }
+
+    /// サーバーに接続してツール一覧を取得し、キャッシュへ載せて設定の状態ごと返す。
+    /// config.tomlには書き込まない。ロックはサーバー設定を複製するまでだけ持ち、接続の
+    /// `.await`をまたがせない。
+    pub async fn fetch_mcp_tools(&self, server_id: &str) -> Result<SettingsView> {
+        let _in_flight = self
+            .fetching
+            .try_begin(server_id.to_string())
+            .ok_or_else(|| invalid("already fetching tools for this server"))?;
+        let server = self
+            .current()
+            .config
+            .mcp_servers
+            .iter()
+            .find(|s| s.id == server_id)
+            .cloned()
+            .ok_or_else(|| mcp_server_not_found(server_id))?;
+
+        let tools = mcp::list_tools(&server).await?;
+        self.mcp_tools.store(server_id, tools);
+        Ok(self.view())
+    }
+}
+
+/// 秘密情報に触れる前に済ませられる検証をすべて行う。
+fn validate_endpoint(endpoint: NewMcpEndpoint) -> Result<NewMcpEndpoint> {
+    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+    let url = url.trim().to_string();
+    mcp::validate_streamable_http_url(&url)?;
+    for (name, value) in &headers {
+        mcp::validate_header_name(name)?;
+        mcp::validate_header_value(value.expose_secret())?;
+    }
+    input::unique_names(&headers, "header", str::to_ascii_lowercase)?;
+    Ok(NewMcpEndpoint::StreamableHttp { url, headers })
+}
+
+fn store_endpoint_secrets(endpoint: NewMcpEndpoint) -> Result<McpEndpoint> {
+    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+    Ok(McpEndpoint::StreamableHttp {
+        url,
+        header_refs: store_secret_refs(headers)?,
+    })
+}
+
+/// 秘密情報の値を保存し、`(name, key_ref)`の組に変換する。途中で失敗したら
+/// それまでに保存した分を削除してからエラーを返す(孤児を残さない)。
+fn store_secret_refs(pairs: Vec<(String, SecretString)>) -> Result<Vec<SecretRef>> {
+    let mut refs = Vec::with_capacity(pairs.len());
+    for (name, value) in pairs {
+        let key_ref = format!("mcp:{}", ulid::Ulid::new());
+        if let Err(e) = secrets::store(&key_ref, &value) {
+            delete_secret_refs(&refs);
+            return Err(e);
+        }
+        refs.push(SecretRef { name, key_ref });
+    }
+    Ok(refs)
+}
+
+/// 1件が失敗しても残りは試す。
+fn delete_secret_refs(refs: &[SecretRef]) {
+    for r in refs {
+        delete_secret(&r.key_ref, &format!("MCP secret '{}'", r.name));
+    }
+}
+
+fn endpoint_secret_refs(endpoint: &McpEndpoint) -> &[SecretRef] {
+    let McpEndpoint::StreamableHttp { header_refs, .. } = endpoint;
+    header_refs
+}
+
+fn find_mcp_server_mut<'a>(
+    config: &'a mut Config,
+    server_id: &str,
+) -> Result<&'a mut McpServerConfig> {
+    config
+        .mcp_servers
+        .iter_mut()
+        .find(|s| s.id == server_id)
+        .ok_or_else(|| mcp_server_not_found(server_id))
+}
+
+fn mcp_server_not_found(server_id: &str) -> CoreError {
+    invalid(format!("MCP server not found: {server_id}"))
+}
