@@ -1,4 +1,12 @@
-import { createContext, type ReactNode, useCallback, useContext, useRef, useState } from 'react'
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import { StagedAttachmentChips } from './Attachments'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
@@ -17,6 +25,8 @@ interface ComposeState {
   draft: string
   setDraft: (draft: string) => void
   staged: StagedAttachments
+  // 窓に落としたファイルの受け取り先を差し替える。入力欄が出ていて、添付を足せるときだけ置く。
+  setDropTarget: (target: ((files: File[]) => void) | null) => void
 }
 
 const ComposeContext = createContext<ComposeState | null>(null)
@@ -26,11 +36,45 @@ const ComposeContext = createContext<ComposeState | null>(null)
  * 書きかけを残すため、画面の切り替えより上に置く。中身は`ChatCompose`だけが読むので、
  * 状態が変わっても描き直されるのは入力欄だけになる(`children`は外から渡された同じ要素の
  * まま)。
+ *
+ * 窓に落としたファイルもここで受ける。窓のどこに落としても入力欄の添付に加え、入力欄が
+ * 出ていない・添付を足せないときは受け付けない。受け付けない落とし方も止めておかないと、
+ * WebViewが落としたファイルそのものを開こうとする(遷移はRust側の`navigation::guard`も止める)。
  */
 export function ComposeProvider({ children }: { children: ReactNode }) {
   const [draft, setDraft] = useState('')
   const staged = useStagedAttachments()
-  return <ComposeContext value={{ draft, setDraft, staged }}>{children}</ComposeContext>
+  const dropTarget = useRef<((files: File[]) => void) | null>(null)
+  const setDropTarget = useCallback((target: ((files: File[]) => void) | null) => {
+    dropTarget.current = target
+  }, [])
+
+  useEffect(() => {
+    // 文字や画面の中の要素を引きずる操作には触れない(入力欄への文字のドロップ等)。
+    const carriesFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false
+    const over = (e: DragEvent) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      e.dataTransfer!.dropEffect = dropTarget.current ? 'copy' : 'none'
+    }
+    const drop = (e: DragEvent) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      dropTarget.current?.(Array.from(e.dataTransfer!.files))
+    }
+    window.addEventListener('dragenter', over)
+    window.addEventListener('dragover', over)
+    window.addEventListener('drop', drop)
+    return () => {
+      window.removeEventListener('dragenter', over)
+      window.removeEventListener('dragover', over)
+      window.removeEventListener('drop', drop)
+    }
+  }, [])
+
+  return (
+    <ComposeContext value={{ draft, setDraft, staged, setDropTarget }}>{children}</ComposeContext>
+  )
 }
 
 /** 送信する発言。送信のコマンドが失敗したら`restore`で添付を入力欄へ戻す。 */
@@ -63,7 +107,9 @@ export default function ChatCompose({
 }) {
   const compose = useContext(ComposeContext)
   if (!compose) throw new Error('ChatCompose needs ComposeProvider')
-  const { draft, setDraft, staged } = compose
+  const { draft, setDraft, staged, setDropTarget } = compose
+  // 添付を足せるか。選ぶ・落とす・貼り付けるのどれにも同じ条件を使う。
+  const canAdd = !disabled && staged.canAdd
   const fileInputRef = useRef<HTMLInputElement>(null)
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
   const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)
@@ -71,6 +117,12 @@ export default function ChatCompose({
     (selected: SelectedModel | null) => setDeliveries(selected?.attachments ?? null),
     [],
   )
+
+  // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`add`は描くたびに変わる)。
+  useEffect(() => {
+    setDropTarget(canAdd ? staged.add : null)
+    return () => setDropTarget(null)
+  })
 
   // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
   const canSend = !disabled && !staged.busy && (draft.trim() !== '' || staged.ready)
@@ -107,7 +159,7 @@ export default function ChatCompose({
           />
           <button
             type="button"
-            disabled={disabled || !staged.canAdd}
+            disabled={!canAdd}
             title={t('attachment.add_tooltip')}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -116,6 +168,14 @@ export default function ChatCompose({
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files)
+              // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
+              // 一緒に、その見た目の画像も載せるため。
+              if (files.length === 0 || e.clipboardData.types.includes('text/plain')) return
+              e.preventDefault()
+              if (canAdd) staged.add(files)
+            }}
             onKeyDown={(e) => {
               if (isCommitEnter(e) && !e.shiftKey) {
                 e.preventDefault()
