@@ -66,11 +66,6 @@ pub struct ModelView {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum McpEndpointView {
-    Stdio {
-        command: String,
-        args: Vec<String>,
-        env_names: Vec<String>,
-    },
     StreamableHttp {
         url: String,
         header_names: Vec<String>,
@@ -375,20 +370,10 @@ fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView 
             .filter(|name| !listed.iter().any(|t| &t.name == *name))
             .map(|name| mcp_tool_view(name, None, external::exposed_name(&s.name, name).is_some())),
     );
-    let endpoint = match &s.endpoint {
-        McpEndpoint::Stdio {
-            command,
-            args,
-            env_refs,
-        } => McpEndpointView::Stdio {
-            command: command.clone(),
-            args: args.clone(),
-            env_names: env_refs.iter().map(|r| r.name.clone()).collect(),
-        },
-        McpEndpoint::StreamableHttp { url, header_refs } => McpEndpointView::StreamableHttp {
-            url: url.clone(),
-            header_names: header_refs.iter().map(|r| r.name.clone()).collect(),
-        },
+    let McpEndpoint::StreamableHttp { url, header_refs } = &s.endpoint;
+    let endpoint = McpEndpointView::StreamableHttp {
+        url: url.clone(),
+        header_names: header_refs.iter().map(|r| r.name.clone()).collect(),
     };
     McpServerView {
         id: s.id.clone(),
@@ -432,10 +417,9 @@ mod tests {
             id: "id1".to_string(),
             name: "files".to_string(),
             enabled: true,
-            endpoint: McpEndpoint::Stdio {
-                command: "true".to_string(),
-                args: Vec::new(),
-                env_refs: Vec::new(),
+            endpoint: McpEndpoint::StreamableHttp {
+                url: "http://127.0.0.1:8000/mcp".to_string(),
+                header_refs: Vec::new(),
             },
             enabled_tools: BTreeSet::from(["gone".to_string()]),
         };

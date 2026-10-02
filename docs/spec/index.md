@@ -76,7 +76,7 @@ SCITL-2.0/
 │   │       ├── llm/                # 方言によらない型・アダプタ・能力の解決・プロンプトの形式(architecture/llm-adapter.md・prompt-shape.md)
 │   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
 │   │       ├── orchestration/      # 応答生成と、会話をモデル・画面へ渡す形の組み立て(architecture/transcript.md)
-│   │       ├── mcp/                # 外部ツールサーバーのクライアント(stdio / streamable_http)
+│   │       ├── mcp/                # 外部ツールサーバーのクライアント(streamable_http)
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(architecture/network-secrets.md)
 │   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
 │   │       ├── config.rs           # 設定(TOML)。秘密情報は参照(`key_ref`)だけを持つ

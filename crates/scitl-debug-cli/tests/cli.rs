@@ -273,13 +273,9 @@ fn values_are_spelled_as_in_the_config_file_and_others_are_refused() {
 fn mcp_servers_are_registered_changed_and_removed() {
     let data = DataDir::new();
 
-    let added = stdout_json(&data.run(&["mcp", "add-stdio", "files", "npx", "-y", "server"]));
+    let added = stdout_json(&data.run(&["mcp", "add-http", "files", "http://127.0.0.1:1/mcp"]));
     let server = &added["mcp_servers"][0];
-    assert_eq!(server["endpoint"]["command"], "npx");
-    assert_eq!(
-        server["endpoint"]["args"],
-        serde_json::json!(["-y", "server"])
-    );
+    assert_eq!(server["endpoint"]["url"], "http://127.0.0.1:1/mcp");
     let id = server["id"].as_str().unwrap().to_string();
 
     let disabled = stdout_json(&data.run(&["mcp", "disable", &id]));
@@ -303,11 +299,11 @@ fn a_secret_whose_variable_is_unset_registers_nothing() {
         .arg(data.path())
         .args([
             "mcp",
-            "add-stdio",
-            "--env",
-            "TOKEN=SCITL_TEST_UNSET",
+            "add-http",
+            "--header",
+            "Authorization=SCITL_TEST_UNSET",
             "files",
-            "npx",
+            "http://127.0.0.1:1/mcp",
         ])
         .env_remove("SCITL_TEST_UNSET")
         .output()
@@ -335,11 +331,11 @@ fn a_secret_written_in_place_of_a_variable_name_is_not_echoed() {
         ][..],
         &[
             "mcp",
-            "add-stdio",
-            "--env",
-            "TOKEN=s3cr3t-value",
-            "files",
-            "npx",
+            "add-http",
+            "--header",
+            "X-Token=s3cr3t-value",
+            "web",
+            "https://example.com/mcp",
         ],
         &[
             "provider",

@@ -5,4 +5,4 @@
  * 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
  * `Debug`は付けない(ログに出す経路を作らない)。
  */
-export type NewMcpEndpoint = { "transport": "stdio", command: string, args: Array<string>, env: Array<[string, string]>, } | { "transport": "streamable_http", url: string, headers: Array<[string, string]>, };
+export type NewMcpEndpoint = { "transport": "streamable_http", url: string, headers: Array<[string, string]>, };

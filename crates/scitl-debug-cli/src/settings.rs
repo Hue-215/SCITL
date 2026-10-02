@@ -86,19 +86,6 @@ pub enum ModelCommand {
 
 #[derive(Subcommand)]
 pub enum McpCommand {
-    /// Register a server started as a child process. Options go before NAME.
-    AddStdio {
-        /// Environment variable NAME to give the server, taking its value from this process's
-        /// variable VAR. The value goes to the OS credential store. Can be repeated.
-        #[arg(long, value_name = "NAME=VAR")]
-        env: Vec<String>,
-        name: String,
-        command: String,
-        /// Arguments of the server. Put `--` before them when one could be read as an option
-        /// of this program.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
     /// Register a server reached over streamable HTTP.
     AddHttp {
         /// Request header NAME, taking its value from this process's variable VAR. The value
@@ -263,19 +250,6 @@ pub async fn run_model(session: &Session, command: ModelCommand) -> Result<(), D
 pub async fn run_mcp(session: &Session, command: McpCommand) -> Result<(), DebugError> {
     let settings = load_settings(session).await?;
     match command {
-        McpCommand::AddStdio {
-            env,
-            name,
-            command,
-            args,
-        } => {
-            let endpoint = NewMcpEndpoint::Stdio {
-                command,
-                args,
-                env: secrets_from_env("--env", env)?,
-            };
-            change(settings, move |s| s.add_mcp_server(&name, endpoint)).await
-        }
         McpCommand::AddHttp { header, name, url } => {
             let endpoint = NewMcpEndpoint::StreamableHttp {
                 url,

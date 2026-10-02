@@ -5,11 +5,13 @@
 //! ツール一覧取得は1回ごとに開いて閉じる。取得したツール一覧はアプリ起動中だけ
 //! [`ToolCatalog`]に持ち、config.tomlには書かない(サーバー側の更新に追従できないため)。
 //!
+//! 接続方式はstreamable_httpだけ。サーバーを子プロセスとして起動する方式(stdio)は持たない
+//! (`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
+//!
 //! `rmcp`のOAuth/認可系(`auth`)featureは有効にしない。`.well-known`ディスカバリ等で、
 //! ユーザーが登録していない先へ通信しうるため。
 
 mod http;
-mod stdio;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -195,7 +197,7 @@ impl McpSessions {
 
     /// 開いたセッションをすべて閉じる。ターンの終わりに必ず呼ぶ。
     /// 切断にも上限を設ける(応じないサーバーがあっても待ち続けない)。閉じきれなかった
-    /// 接続は`RunningService`のDropが後始末する(stdioは子プロセスのkillまで含む)。
+    /// 接続は`RunningService`のDropが後始末する。
     pub async fn close(self) {
         for (_, mut service) in self.by_server {
             let _ = service.close_with_timeout(CLOSE_TIMEOUT).await;
@@ -214,17 +216,10 @@ fn call_params(tool_name: &str, arguments: Option<Map<String, Value>>) -> CallTo
 /// サーバーへ接続する。接続自体にもタイムアウトを設ける(応答しないサーバーで
 /// ターンが止まらないようにする)。
 async fn connect(server: &McpServerConfig) -> Result<ClientService, CoreError> {
-    let connecting = match &server.endpoint {
-        McpEndpoint::Stdio {
-            command,
-            args,
-            env_refs,
-        } => tokio::time::timeout(CONNECT_TIMEOUT, stdio::connect(command, args, env_refs)).await,
-        McpEndpoint::StreamableHttp { url, header_refs } => {
-            tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, header_refs)).await
-        }
-    };
-    connecting.map_err(|_| CoreError::Mcp("timed out connecting to MCP server".to_string()))?
+    let McpEndpoint::StreamableHttp { url, header_refs } = &server.endpoint;
+    tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, header_refs))
+        .await
+        .map_err(|_| CoreError::Mcp("timed out connecting to MCP server".to_string()))?
 }
 
 /// サーバーへ接続し、ツール一覧を取得して切断する(設定画面からの1回限りの取得)。
@@ -343,18 +338,6 @@ pub fn validate_header_name(name: &str) -> Result<(), CoreError> {
         .any(|r| name.eq_ignore_ascii_case(r))
     {
         return Err(CoreError::Mcp(format!("header name '{name}' is reserved")));
-    }
-    Ok(())
-}
-
-/// 子プロセスへ渡す環境変数の名前を検証する(サーバー登録時)。空の名前と、`=`・空白・
-/// 制御文字・ASCII以外を含む名前を断る(`=`やNULを含む名前は起動に失敗する)。
-pub fn validate_env_name(name: &str) -> Result<(), CoreError> {
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_graphic() && c != '=') {
-        return Err(CoreError::Mcp(format!(
-            "invalid environment variable name {name:?}: \
-             it must be visible ASCII characters without '='"
-        )));
     }
     Ok(())
 }
@@ -511,15 +494,6 @@ mod tests {
         assert!(validate_header_name("X-Bad\r\nEvil: 1").is_err());
         assert!(validate_header_name("").is_err());
         assert!(validate_header_name("has space").is_err());
-    }
-
-    #[test]
-    fn validate_env_name_rejects_names_a_process_cannot_take() {
-        assert!(validate_env_name("API_TOKEN").is_ok());
-        assert!(validate_env_name("ProgramFiles(x86)").is_ok());
-        for refused in ["", "A B", "A=B", "A\0", "鍵"] {
-            assert!(validate_env_name(refused).is_err(), "{refused:?}");
-        }
     }
 
     #[test]

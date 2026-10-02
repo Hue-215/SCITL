@@ -183,18 +183,11 @@ pub struct SecretRef {
     pub key_ref: String,
 }
 
-/// MCPサーバーへの接続方式。接続方式ごとに必要な値だけを持たせ、`Stdio`なのに`url`が
-/// あるような状態を型で防ぐ。
+/// MCPサーバーへの接続方式。設定ファイルでは`transport`の値で見分ける。接続方式ごとに
+/// 必要な値だけを持たせる。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum McpEndpoint {
-    Stdio {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env_refs: Vec<SecretRef>,
-    },
     StreamableHttp {
         url: String,
         #[serde(default)]
@@ -346,11 +339,10 @@ mod tests {
                 id: "srv".to_string(),
                 name: "my_tools".to_string(),
                 enabled: true,
-                endpoint: McpEndpoint::Stdio {
-                    command: "npx".to_string(),
-                    args: vec!["-y".to_string(), "some-server".to_string()],
-                    env_refs: vec![SecretRef {
-                        name: "API_TOKEN".to_string(),
+                endpoint: McpEndpoint::StreamableHttp {
+                    url: "http://127.0.0.1:8000/mcp".to_string(),
+                    header_refs: vec![SecretRef {
+                        name: "Authorization".to_string(),
                         key_ref: "mcp:01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
                     }],
                 },
@@ -378,15 +370,26 @@ mod tests {
         assert_eq!(loaded.mcp_servers.len(), 1);
         let server = &loaded.mcp_servers[0];
         assert!(server.enabled_tools.contains("list_things"));
-        match &server.endpoint {
-            McpEndpoint::Stdio {
-                command, env_refs, ..
-            } => {
-                assert_eq!(command, "npx");
-                assert_eq!(env_refs[0].name, "API_TOKEN");
-            }
-            McpEndpoint::StreamableHttp { .. } => panic!("expected stdio endpoint"),
-        }
+        let McpEndpoint::StreamableHttp { url, header_refs } = &server.endpoint;
+        assert_eq!(url, "http://127.0.0.1:8000/mcp");
+        assert_eq!(header_refs[0].name, "Authorization");
+    }
+
+    /// 外部ツールサーバーを子プロセスとして起動する方式(stdio)は持たない。書かれた設定ファイルは
+    /// 読めない設定として扱う(`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
+    #[test]
+    fn stdio_servers_are_rejected() {
+        let text = r#"
+[[mcp_servers]]
+id = "srv"
+name = "files"
+enabled = true
+
+[mcp_servers.endpoint]
+transport = "stdio"
+command = "npx"
+"#;
+        assert!(toml::from_str::<Config>(text).is_err());
     }
 
     #[test]

@@ -105,10 +105,9 @@ async fn main() {
         id: "relay".to_string(),
         name: "relay".to_string(),
         enabled: false,
-        endpoint: McpEndpoint::Stdio {
-            command: "relay-session-no-such-server".to_string(),
-            args: Vec::new(),
-            env_refs: Vec::new(),
+        endpoint: McpEndpoint::StreamableHttp {
+            url: "http://127.0.0.1:1/mcp".to_string(),
+            header_refs: Vec::new(),
         },
         enabled_tools: ["lookup".to_string()].into(),
     }];

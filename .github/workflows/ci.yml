@@ -86,7 +86,7 @@ jobs:
           git status --porcelain -- frontend/src/bindings | tee /tmp/bindings-diff
           test ! -s /tmp/bindings-diff
 
-  # Windowsにしか無い経路(ジョブオブジェクトでの子プロセスの後始末、資格情報マネージャー)は、
+  # Windowsにしか無い経路(資格情報マネージャー等)は、
   # Linuxのジョブではコンパイルもされない。Windowsのランナーは実行時間が2倍で計上されるので、
   # PRごとには回さず、合流後のブランチでだけ回す。壊れたことにはマージの直後に気付ける。
   rust-windows:
