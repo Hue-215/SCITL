@@ -8,8 +8,8 @@ description: 疑似API(Sham_llm)とscitl-debug-cliで、APIキーを使わずに
 - **scitl-debug-cli**: SCITLをGUI無しで操作するコマンド
 - **Sham_llm**: LLMのAPIとして振る舞う疑似サーバー。応答の中身は、エージェント(または人)が
   「LLM役」として書く。本体は別リポジトリ[Hue-215/Sham_llm](https://github.com/Hue-215/Sham_llm)
-  (ローカルでは`~/Documents/Sham_llm`)にあり、受け口・検査の範囲・LLM役の窓口・起動方法は
-  そちらの文書を正とする
+  にあり、受け口・検査の範囲・LLM役の窓口・起動方法はそちらの文書を正とする。このリポジトリには
+  含まれず、今は公開していない
 
 LLM役は本物のモデルではない。言い回しやツールの選び方は本物と違いうるので、プロンプトの評価には
 使わない。アダプタが固まったら本物のAPIで一度確かめる。
@@ -25,10 +25,17 @@ LLM役は本物のモデルではない。言い回しやツールの選び方�
 curl -s http://127.0.0.1:18080/v1/models    # {"object":"list","data":[{"id":"dummy-o",...}]} が返ればよい
 ```
 
-返らなければ、Sham_llmのリポジトリ(`~/Documents/Sham_llm`)で`npm run dev`を実行して起動する
+返らなければ、手元に置いたSham_llmのリポジトリで`npm run dev`を実行して起動する
 (Node.js 22以降)。
 
-LLM役の窓口は、このプロジェクトに登録済みのMCPサーバー`sham-llm`のツールとして使える。
+LLM役の窓口は、MCPサーバー`sham-llm`として`.mcp.json`(gitの管理外)に登録する。`next`は
+リクエストが届くまで返らないので、タイムアウトを長くしておく。
+
+```json
+{ "mcpServers": { "sham-llm": { "type": "http", "url": "http://127.0.0.1:18080/mcp", "timeout": 3600000 } } }
+```
+
+登録すると、次のツールが使える。
 
 | ツール | 用途 |
 |---|---|
@@ -97,7 +104,8 @@ cli settings general --response-timeout-secs 900   # 既定の120秒ではLLM役
 
 1ターンの中でツール呼び出しを何往復まで許すかは`settings tools`で決まる。
 
-LLM役を自分で務めずに、サブエージェント`llm-role`に任せてもよい(`next`と`reply`だけを持つ)。
+LLM役を自分で務めずに、サブエージェントに任せてもよい。定義はこのスキルの`llm-role.md`にあり、
+`.claude/agents/`か`~/.claude/agents/`へ写して使う(`next`と`reply`だけを持つ)。
 場面ごとに決まった応答を返させたいときは、台本を渡して立てる。
 
 ### 2.4 コマンド
