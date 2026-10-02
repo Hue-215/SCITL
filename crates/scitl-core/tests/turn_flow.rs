@@ -2390,6 +2390,222 @@ async fn a_system_update_still_in_the_sequence_is_not_told_again() {
     assert_eq!(notices(&back), 1);
 }
 
+/// 並びの中で最後に置いた変更の通知(無ければ先頭)。モデルはこれに従う。
+fn told_system(messages: &[ChatMessage]) -> &str {
+    user_texts(messages)
+        .into_iter()
+        .rev()
+        .find(|t| t.starts_with("<scitl:system-update>"))
+        .unwrap_or_else(|| system_of(messages))
+}
+
+/// 先頭を作り直したターンでも、並びに残った前の通知が今の設定と違えば、今の設定を伝える。
+/// 伝えないと、モデルは先頭より後ろにある前の通知に従う(#361)。
+#[tokio::test]
+async fn a_rebuilt_front_is_told_again_over_an_older_update_left_in_the_sequence() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    // 見積もりは英数字以外が1文字1トークン。1回目と3回目を合わせると予算を超え、2回目と
+    // 3回目だけなら予算の半分に収まる(先頭とツール定義の分を多めに見ても)。
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 100_000;
+    let turn = |adapter, base, text: String| {
+        let db = db.clone();
+        async move {
+            let ctx = TurnContext {
+                capabilities,
+                prompts: SystemPrompts {
+                    base: Some(base),
+                    task_chat: None,
+                },
+                ..context(adapter)
+            };
+            run_turn(db, &ctx, Chat::Task(task_id), text).await.unwrap();
+        }
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]);
+    turn(&first, "ALPHA", format!("1回目{}", "あ".repeat(50_000))).await;
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    turn(&second, "BRAVO", "2回目".to_string()).await;
+    assert!(told_system(&second.sent_messages()[0]).contains("BRAVO"));
+
+    let third = ScriptedAdapter::texts(&["返信3"]);
+    turn(&third, "CHARLIE", format!("3回目{}", "あ".repeat(25_000))).await;
+    let sent = &third.sent_messages()[0];
+    assert!(
+        !user_texts(sent).iter().any(|t| t.contains("1回目")),
+        "間引く"
+    );
+    assert!(system_of(sent).contains("CHARLIE"));
+    assert!(
+        told_system(sent).contains("CHARLIE"),
+        "{:?}",
+        user_texts(sent)
+    );
+
+    let fourth = ScriptedAdapter::texts(&["返信4"]);
+    turn(&fourth, "CHARLIE", "4回目".to_string()).await;
+    assert_told_without_a_new_notice(&fourth, "CHARLIE");
+}
+
+/// 新しい入力に通知を置かず、並びから`system`を読み取れる(伝えた次のターンで通知を重ねない)。
+fn assert_told_without_a_new_notice(adapter: &ScriptedAdapter, system: &str) {
+    let sent = &adapter.sent_messages()[0];
+    let input = *user_texts(sent).last().unwrap();
+    assert!(!input.starts_with("<scitl:system-update>"), "{input}");
+    assert!(told_system(sent).contains(system), "{:?}", user_texts(sent));
+}
+
+/// ツール定義が変わって先頭を作り直したターンでも、並びに残った前の通知が今の設定と違えば、
+/// 今の設定を伝える(#361)。
+#[tokio::test]
+async fn a_front_rebuilt_for_new_tools_is_told_again_over_an_older_update() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = |base| SystemPrompts {
+        base: Some(base),
+        task_chat: None,
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]);
+    turn_with(&db, &first, prompts("ALPHA"), task_id, "1回目").await;
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    turn_with(&db, &second, prompts("BRAVO"), task_id, "2回目").await;
+    // 保存に添えたツール定義を、今の定義より少ないものにする(その後にツールを有効にした)。
+    db.lock()
+        .unwrap()
+        .execute(
+            "UPDATE transcript_blobs SET body = '[]' \
+             WHERE digest IN (SELECT tools_digest FROM turn_transcripts)",
+            [],
+        )
+        .unwrap();
+
+    let third = ScriptedAdapter::texts(&["返信3"]);
+    turn_with(&db, &third, prompts("CHARLIE"), task_id, "3回目").await;
+    let sent = &third.sent_messages()[0];
+    assert!(system_of(sent).contains("CHARLIE"), "作り直す");
+    assert!(user_texts(sent).iter().any(|t| t.contains("2回目")));
+    assert!(
+        told_system(sent).contains("CHARLIE"),
+        "{:?}",
+        user_texts(sent)
+    );
+
+    let fourth = ScriptedAdapter::texts(&["返信4"]);
+    turn_with(&db, &fourth, prompts("CHARLIE"), task_id, "4回目").await;
+    assert_told_without_a_new_notice(&fourth, "CHARLIE");
+}
+
+/// 通知を含めて見積もり直すと前の通知が落ちて要らなくなるときは、見積もり直した位置から
+/// 通知を置かずに並べる。
+#[tokio::test]
+async fn an_older_update_trimmed_away_by_the_notice_needs_no_notice() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    // 見積もりは英数字以外が1文字1トークン。3回目は作り直した先頭(30,000)の下で、通知なしなら
+    // 2回目から予算の半分に収まり、通知(30,000)を含めると3回目だけになる(先頭の固定の文言と
+    // ツール定義の分を多めに見ても)。
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 100_000;
+    let turn = |adapter, base: String, text: String| {
+        let db = db.clone();
+        async move {
+            let ctx = TurnContext {
+                capabilities,
+                prompts: SystemPrompts {
+                    base: Some(&base),
+                    task_chat: None,
+                },
+                ..context(adapter)
+            };
+            run_turn(db, &ctx, Chat::Task(task_id), text).await.unwrap();
+        }
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]);
+    turn(
+        &first,
+        "ALPHA".into(),
+        format!("1回目{}", "あ".repeat(40_000)),
+    )
+    .await;
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    turn(&second, "BRAVO".into(), "2回目".to_string()).await;
+
+    let third = ScriptedAdapter::texts(&["返信3"]);
+    let charlie = format!("CHARLIE{}", "い".repeat(30_000));
+    turn(&third, charlie, format!("3回目{}", "あ".repeat(12_000))).await;
+    let sent = &third.sent_messages()[0];
+    let texts = user_texts(sent);
+    assert!(system_of(sent).contains("CHARLIE"));
+    assert!(texts[0].contains("3回目"), "2回目も落ちる");
+    assert!(!texts.iter().any(|t| t.contains("<scitl:system-update>")));
+}
+
+/// 先頭を固定したままでも、前の並びが変わって今の設定を伝えた通知が消え、それより前の通知が
+/// 残れば、今の設定を伝え直す(#361)。
+#[tokio::test]
+async fn a_front_matching_the_settings_is_told_again_over_an_older_update() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let temp = TempAttachments::new();
+    let attachments = &temp.attachments;
+    let turn = |adapter, image: bool, base, input: UserInput| {
+        let db = db.clone();
+        async move {
+            let mut capabilities = DEFAULT_CAPABILITIES;
+            capabilities.image = image;
+            // 画像は1枚ごとに大きく見積もるので、既定のコンテキスト長では前のターンが間引かれる。
+            capabilities.context_length = 200_000;
+            let ctx = TurnContext {
+                capabilities,
+                attachments,
+                prompts: SystemPrompts {
+                    base: Some(base),
+                    task_chat: None,
+                },
+                ..context(adapter)
+            };
+            run_turn(db, &ctx, chat, input).await.unwrap();
+        }
+    };
+
+    let first = ScriptedAdapter::texts(&["返信1"]);
+    turn(&first, true, "ALPHA", "1回目".to_string().into()).await;
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    turn(&second, true, "BRAVO", "2回目".to_string().into()).await;
+    // 元に戻した通知を、画像を含む試行で伝える。
+    let back = ScriptedAdapter::texts(&["返信3"]);
+    let image = staged_token(attachments.stage("photo.png".into(), png()).unwrap());
+    let input = UserInput {
+        text: "3回目".to_string(),
+        attachments: vec![image],
+    };
+    turn(&back, true, "ALPHA", input).await;
+    assert!(told_system(&back.sent_messages()[0]).contains("ALPHA"));
+    let fourth = ScriptedAdapter::texts(&["返信4"]);
+    turn(&fourth, true, "ALPHA", "4回目".to_string().into()).await;
+
+    // 画像に対応しないモデルでは3回目の保存を使わず、そこで伝えた通知が並びから消える。
+    let without_images = ScriptedAdapter::texts(&["返信5"]);
+    turn(&without_images, false, "ALPHA", "5回目".to_string().into()).await;
+    let sent = &without_images.sent_messages()[0];
+    assert!(system_of(sent).contains("ALPHA"));
+    assert!(
+        told_system(sent).contains("ALPHA"),
+        "{:?}",
+        user_texts(sent)
+    );
+
+    let sixth = ScriptedAdapter::texts(&["返信6"]);
+    turn(&sixth, false, "ALPHA", "6回目".to_string().into()).await;
+    assert_told_without_a_new_notice(&sixth, "ALPHA");
+}
+
 /// 間引いたターンは前がどのみち変わるので、通知を置かずに先頭ごと今の設定で作り直す。
 #[tokio::test]
 async fn a_trimmed_turn_takes_the_new_system_prompt_instead_of_telling_it() {

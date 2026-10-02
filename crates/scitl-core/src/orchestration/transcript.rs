@@ -170,7 +170,6 @@ pub(super) struct Front {
     /// 最初に並べたユーザー発言(間引きの位置)。`None`は会話の最初から。
     pub(super) history_start: Option<i64>,
     system_digest: String,
-    settings_system_digest: String,
     tools_digest: String,
 }
 
@@ -179,7 +178,6 @@ impl Front {
         Self {
             history_start: transcript.history_start,
             system_digest: transcript.system_digest.clone(),
-            settings_system_digest: transcript.settings_system_digest.clone(),
             tools_digest: transcript.tools_digest.clone(),
         }
     }
@@ -188,7 +186,6 @@ impl Front {
     pub(super) fn head(&self, blobs: &HashMap<String, String>) -> Option<SavedHead> {
         Some(SavedHead {
             system: blobs.get(&self.system_digest)?.clone(),
-            settings_system_digest: self.settings_system_digest.clone(),
             tools: blobs.get(&self.tools_digest)?.clone(),
         })
     }
@@ -198,8 +195,6 @@ impl Front {
 pub(super) struct SavedHead {
     /// 先頭に置いたシステムプロンプト。
     pub(super) system: String,
-    /// そのとき設定から作ったシステムプロンプトの指紋。変更の通知を置いたかを見分ける。
-    pub(super) settings_system_digest: String,
     /// 渡したツール定義の一覧の本文([`tools_body`])。
     pub(super) tools: String,
 }
@@ -277,7 +272,7 @@ impl StoredInput {
 /// 1ターンで送った形のうち、試行によらない部分(`db::transcripts::NewTranscript`に渡す)。
 pub(super) struct SavedTurn {
     pub(super) system: String,
-    /// そのとき設定から作ったシステムプロンプト。先頭と違えば入力に変更の通知を置いた。
+    /// そのとき設定から作ったシステムプロンプト。記録として残す(通知を置くかの判断には使わない)。
     pub(super) settings_system: String,
     pub(super) tools: String,
     pub(super) prefix_digest: String,
