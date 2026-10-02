@@ -167,7 +167,7 @@
   "settings.tools.secret_names_display": "{label}（値は非表示）: {names}",
   "settings.tools.server_id_hint": "識別子（{max}字以内で入力、英数字とアンダーバーのみ使用可能。アンダーバーは英数字の間に1つずつ）",
   "settings.tools.show_all": "{count}件のツールを表示",
-  "settings.tools.stdio_bridge_hint": "標準入出力（stdio）で動くサーバーは直接起動しません。stdioをHTTPへ中継するツールを手元で起動し、そのURLを登録してください。中継は127.0.0.1で待ち受けさせてください。",
+  "settings.tools.stdio_bridge_hint": "標準入出力（stdio）で動くサーバーは直接起動しません。stdioをHTTPへ中継するツールを手元で起動し、そのURLを登録してください。中継は127.0.0.1で待ち受けさせ、認証用のトークンを必須にして、その値をHTTPヘッダーとして登録してください（認証が無いと、同じマシンの他のアカウントからもツールを呼べます）。",
   "settings.tools.timeout_caption": "1ターン内のツール実行に使える時間の合計です。モデルの応答待ちは含みません。",
   "settings.tools.timeout_label": "ツール呼び出し全体のタイムアウト（秒）",
   "settings.tools.tools_enabled_only": "ツールが取得されていません。有効化済みのツールのみ表示しています。",

@@ -63,18 +63,31 @@ impl DataLayout {
 /// 既にあれば権限をそれに揃える(会話や添付を、同じマシンの他のアカウントに読ませないため)。
 /// 親のディレクトリは通常の権限で作り、変えない。Windowsはユーザーごとの`AppData`が初めから
 /// 本人だけのものなので、作るだけにする。
+///
+/// 同じ名前のディレクトリでないものがあれば失敗にする。既にあるディレクトリの権限を変えられない
+/// (権限を持たないファイルシステム、持ち主が別のディレクトリ等)ときは、診断に書いて先へ進む。
 pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
     #[cfg(unix)]
     {
+        use std::io::ErrorKind;
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         match std::fs::DirBuilder::new().mode(0o700).create(dir) {
-            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
-            _ => {}
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() != ErrorKind::AlreadyExists => return Err(e),
+            Err(_) => {}
         }
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        if !std::fs::metadata(dir)?.is_dir() {
+            return Err(ErrorKind::NotADirectory.into());
+        }
+        if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+            crate::diagnostics::report(format_args!(
+                "could not restrict a data directory to its owner: {e}"
+            ));
+        }
+        Ok(())
     }
     #[cfg(not(unix))]
     std::fs::create_dir_all(dir)
@@ -107,5 +120,16 @@ mod tests {
         std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
         create_private_dir(&existing).unwrap();
         assert_eq!(mode(&existing), 0o700);
+    }
+
+    #[test]
+    fn a_file_in_place_of_the_dir_is_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("data");
+        std::fs::write(&file, b"").unwrap();
+        let mode_before = mode(&file);
+
+        assert!(create_private_dir(&file).is_err());
+        assert_eq!(mode(&file), mode_before);
     }
 }

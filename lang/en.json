@@ -167,7 +167,7 @@
   "settings.tools.secret_names_display": "{label} (values hidden): {names}",
   "settings.tools.server_id_hint": "ID (up to {max} characters; letters, digits and underscores only, with single underscores between letters or digits)",
   "settings.tools.show_all": "Show tools ({count})",
-  "settings.tools.stdio_bridge_hint": "Servers that speak stdio are not started by the app. Run a tool that bridges stdio to HTTP yourself and register its URL. Have the bridge listen on 127.0.0.1.",
+  "settings.tools.stdio_bridge_hint": "Servers that speak stdio are not started by the app. Run a tool that bridges stdio to HTTP yourself and register its URL. Have the bridge listen on 127.0.0.1 and require an auth token, and register that token as an HTTP header (without auth, other accounts on the same machine can call the tools too).",
   "settings.tools.timeout_caption": "The total time tools can run within one turn. Waiting for the model's reply isn't included.",
   "settings.tools.timeout_label": "Total tool call timeout (seconds)",
   "settings.tools.tools_enabled_only": "No tools fetched yet. Only enabled tools are shown.",

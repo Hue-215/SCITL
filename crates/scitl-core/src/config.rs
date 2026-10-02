@@ -174,7 +174,7 @@ pub struct ToolConfig {
     pub total_timeout_secs: Option<u64>,
 }
 
-/// [`crate::secrets`]に保存した1つの値(環境変数またはHTTPヘッダーの値)を指す参照。
+/// [`crate::secrets`]に保存した1つの値(HTTPヘッダーの値)を指す参照。
 /// `key_ref`はULIDで払い出し、`name`からは組み立てない(`name`はユーザー入力で、`:`等を
 /// 含んで衝突しうるため)。
 #[derive(Debug, Clone, Serialize, Deserialize)]

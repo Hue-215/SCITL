@@ -87,9 +87,9 @@ jobs:
           git status --porcelain -- frontend/src/bindings | tee /tmp/bindings-diff
           test ! -s /tmp/bindings-diff
 
-  # Windowsにしか無い経路(資格情報マネージャー等)は、
-  # Linuxのジョブではコンパイルもされない。Windowsのランナーはビルドに時間が掛かるので、
-  # PRごとには回さず、合流後のブランチでだけ回す。壊れたことにはマージの直後に気付ける。
+  # Windowsにしか無い経路(資格情報マネージャー等)は、Linuxのジョブではコンパイルもされない。
+  # Windowsのランナーはビルドに時間が掛かるので、PRごとには回さず、合流後のブランチでだけ
+  # 回す。壊れたことにはマージの直後に気付ける。
   rust-windows:
     if: github.event_name == 'push'
     # `rust`ジョブと同じ理由で、版を明示的に固定する。
