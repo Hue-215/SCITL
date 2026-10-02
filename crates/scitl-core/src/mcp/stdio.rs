@@ -77,7 +77,7 @@ pub(super) async fn connect(
     // 子プロセス(`child`)の後始末は`rmcp`側に委ねる: `serve`に渡した後は
     // `service.cancel()`が`Transport::close`経由で`graceful_shutdown`を呼び、
     // `serve`自体が失敗した場合も`TokioChildProcess`のDropがkillする(安全網)。
-    match ().serve(child).await {
+    match super::client_config().serve(child).await {
         Ok(service) => {
             drain_stderr(stderr);
             Ok(service)

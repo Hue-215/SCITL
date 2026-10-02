@@ -15,7 +15,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ClientCapabilities, ClientConfig,
+    ContentBlock, Implementation,
+};
 use rmcp::service::{ClientInitializeError, RunningService, ServiceError};
 use rmcp::transport::DynamicTransportError;
 use rmcp::RoleClient;
@@ -42,7 +45,15 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// クライアント側のMCPセッション。サーバーからの要求(サンプリング等)で通信や処理が増えない
 /// よう、意図的にハンドラを持たない(`()`)。
-type ClientService = RunningService<RoleClient, ()>;
+type ClientService = RunningService<RoleClient, ClientConfig>;
+
+/// 接続のときに外部ツールサーバーへ名乗る情報(`initialize`の`clientInfo`)。能力は何も宣言しない。
+fn client_config() -> ClientConfig {
+    ClientConfig::new(
+        ClientCapabilities::default(),
+        Implementation::new("scitl", env!("CARGO_PKG_VERSION")).with_title(crate::PRODUCT_NAME),
+    )
+}
 
 /// サーバーから受け取ったツール1件。どの値も受け取ったまま持つ。画面へ出す形は
 /// `settings::view`が作り、これ自体はWebViewへ渡さない。

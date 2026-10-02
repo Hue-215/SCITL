@@ -3,9 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// アプリの識別子。Tauriの`identifier`(`scitl-tauri/tauri.conf.json`)と揃える。設定ファイルは
-/// Rustの定数を参照できないので、scitl-tauriのテストが照合する。
-pub const APP_IDENTIFIER: &str = "dev.niigo.scitl";
+use crate::APP_IDENTIFIER;
 
 /// OSがアプリのデータ・キャッシュの置き場所を持たない。
 #[derive(Debug, thiserror::Error)]

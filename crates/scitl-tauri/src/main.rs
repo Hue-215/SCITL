@@ -151,12 +151,20 @@ fn focus_main_window(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     /// GUIとCLIが同じデータディレクトリを開くよう、coreの識別子をTauriの設定と照合する
-    /// (`scitl_core::paths::APP_IDENTIFIER`)。
+    /// (`scitl_core::APP_IDENTIFIER`)。
     #[test]
     fn core_identifier_matches_tauri_config() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(conf["identifier"], scitl_core::paths::APP_IDENTIFIER);
+        assert_eq!(conf["identifier"], scitl_core::APP_IDENTIFIER);
+    }
+
+    /// 外部ツールサーバーへ名乗る名前を、配布物の名前と照合する(`scitl_core::PRODUCT_NAME`)。
+    #[test]
+    fn core_product_name_matches_tauri_config() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["productName"], scitl_core::PRODUCT_NAME);
     }
 
     #[test]
