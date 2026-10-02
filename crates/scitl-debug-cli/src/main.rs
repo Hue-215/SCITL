@@ -24,7 +24,7 @@ use scitl_core::{blocking, db, paths, CoreError};
 #[command(
     name = "scitl-debug-cli",
     version,
-    about = "Debugging command line interface for SCITL Task Companion"
+    about = format!("Debugging command line interface for {}", scitl_core::PRODUCT_NAME)
 )]
 struct Cli {
     #[command(flatten)]

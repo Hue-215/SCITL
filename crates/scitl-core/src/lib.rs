@@ -28,6 +28,5 @@ pub use error::CoreError;
 /// 名前もこれで決まる。設定ファイルはRustの定数を参照できないので、scitl-tauriのテストが照合する。
 pub const APP_IDENTIFIER: &str = "net.niigo.scitl";
 
-/// アプリの名前。Tauriの`productName`と揃える(照合は`APP_IDENTIFIER`と同じ)。外部ツールサーバーへの
-/// 名乗りに使う。
+/// 製品名。Tauriの`productName`と揃える(照合は`APP_IDENTIFIER`と同じ)。
 pub const PRODUCT_NAME: &str = "SCITL Task Companion";
