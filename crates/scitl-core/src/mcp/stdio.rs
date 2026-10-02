@@ -14,12 +14,9 @@
 //!   文字列をアプリの標準エラーへ素通りさせない)
 
 use std::process::Stdio;
-#[cfg(unix)]
 use std::{future::Future, pin::Pin, process::ExitStatus};
 
-#[cfg(unix)]
-use process_wrap::tokio::ChildWrapper;
-use process_wrap::tokio::{CommandWrap, ProcessGroup};
+use process_wrap::tokio::{ChildWrapper, CommandWrap};
 use rmcp::transport::TokioChildProcess;
 use rmcp::ServiceExt;
 use secrecy::ExposeSecret;
@@ -62,12 +59,17 @@ pub(super) async fn connect(
     }
 
     let mut wrapped: CommandWrap = cmd.into();
-    wrapped.wrap(ProcessGroup::leader());
-    // `ProcessGroup`より後に足し、その外側に被せる(`wrap_child`は足した順に適用される)。
     #[cfg(unix)]
-    wrapped.wrap(KillGroupAfterExit);
+    wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
+    // `JobObject`は`KillOnDrop`が併用されているときだけ、ジョブのハンドルが閉じられたら成員を
+    // 終了させる設定にする。アプリ自体が終了・異常終了してkillを呼べなかった場合も、ハンドルは
+    // OSが閉じるので孫まで止まる。
     #[cfg(windows)]
-    wrapped.wrap(process_wrap::tokio::JobObject);
+    wrapped
+        .wrap(process_wrap::tokio::KillOnDrop)
+        .wrap(process_wrap::tokio::JobObject);
+    // グループを作るラッパーより後に足し、その外側に被せる(`wrap_child`は足した順に適用される)。
+    wrapped.wrap(KillGroupAfterExit);
 
     let (child, stderr) = TokioChildProcess::builder(wrapped)
         .stderr(Stdio::piped())
@@ -94,17 +96,15 @@ pub(super) async fn connect(
     }
 }
 
-/// 子プロセスの終了を待ち終えたあとに、プロセスグループの残りをkillさせる。
+/// 子プロセスの終了を待ち終えたあとに、プロセスグループ(Windowsではジョブ)の残りをkillさせる。
 ///
 /// 子が自分で終了した場合は他にkillを呼ぶ経路が無いので、`wait`の後に結果に関わらず
 /// グループへSIGKILLを送る(既に誰も居なければ失敗するだけなので結果は捨てる)。
 /// 成員が残っている間はそのグループIDが別のプロセスに再利用されないので(POSIXの規定)、
-/// 届く先は残った成員になる。
-#[cfg(unix)]
+/// 届く先は残った成員になる。Windowsではジョブをハンドルで指すので、取り違えは起きない。
 #[derive(Debug)]
 struct KillGroupAfterExit;
 
-#[cfg(unix)]
 impl process_wrap::tokio::CommandWrapper for KillGroupAfterExit {
     fn wrap_child(
         &mut self,
@@ -115,11 +115,9 @@ impl process_wrap::tokio::CommandWrapper for KillGroupAfterExit {
     }
 }
 
-#[cfg(unix)]
 #[derive(Debug)]
 struct KillGroupAfterExitChild(Box<dyn ChildWrapper>);
 
-#[cfg(unix)]
 impl ChildWrapper for KillGroupAfterExitChild {
     fn inner(&self) -> &dyn ChildWrapper {
         self.0.as_ref()
@@ -133,10 +131,21 @@ impl ChildWrapper for KillGroupAfterExitChild {
         self.0
     }
 
+    #[cfg(windows)]
+    fn process_handle(&self) -> Option<std::os::windows::io::BorrowedHandle<'_>> {
+        self.0.process_handle()
+    }
+
     fn wait(&mut self) -> Pin<Box<dyn Future<Output = std::io::Result<ExitStatus>> + Send + '_>> {
         Box::pin(async {
+            #[cfg(unix)]
             let status = self.0.wait().await;
-            // 内側は`ProcessGroupChild`なので、`start_kill`はグループ全体へのSIGKILLになる。
+            // `JobObjectChild`の`wait`は、ジョブの成員が全員終了するまで返らない。孫が残っていると
+            // `rmcp`が待ちを打ち切るまで閉じられないので、その内側(起動した子そのもの)の終了だけを待つ。
+            #[cfg(windows)]
+            let status = self.0.inner_mut().wait().await;
+            // 内側は`ProcessGroupChild`(Windowsでは`JobObjectChild`)なので、`start_kill`は
+            // グループ全体へのSIGKILL(ジョブの終了)になる。
             let _ = self.0.start_kill();
             status
         })
@@ -179,7 +188,7 @@ fn inherited_env_allowlist() -> &'static [&'static str] {
 
 /// 多層防御(環境変数を継承させない・プロセスグループごと終了させる)が、依存の更新で
 /// 黙って崩れていないことを、偽のMCPサーバーを実際に起動して確かめる。
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
@@ -187,9 +196,56 @@ mod tests {
 
     use super::*;
 
+    /// 偽のサーバーを動かすシェルと、スクリプトのファイル名。
+    #[cfg(unix)]
+    const SHELL: &str = "/bin/sh";
+    #[cfg(unix)]
+    const SCRIPT: &str = "server.sh";
+    #[cfg(windows)]
+    const SHELL: &str = "powershell.exe";
+    #[cfg(windows)]
+    const SCRIPT: &str = "server.ps1";
+
+    /// シェルにスクリプトを実行させるための、スクリプトのパスより前に置く引数。
+    #[cfg(unix)]
+    const SHELL_ARGS: &[&str] = &[];
+    #[cfg(windows)]
+    const SHELL_ARGS: &[&str] = &[
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+    ];
+
     /// `initialize`にだけ応答する偽のMCPサーバー。受け取った環境変数と、自分が起動した
     /// 孫プロセスのPIDを、第1引数のディレクトリに書き出す。第2引数が`linger`なら、
     /// 標準入力が閉じられても終了せずに居座る。
+    #[cfg(windows)]
+    const FAKE_SERVER: &str = r#"
+param($out, $mode)
+$vars = Get-ChildItem env: | ForEach-Object { "$($_.Name)=$($_.Value)" }
+[IO.File]::WriteAllLines("$out\env", [string[]]$vars)
+# 孫には標準入出力を引き継がせない(孫の出力が応答に混ざるため)。
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = "$env:SYSTEMROOT\System32\ping.exe"
+$psi.Arguments = '-n 60 127.0.0.1'
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$psi.RedirectStandardInput = $true
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$grandchild = [System.Diagnostics.Process]::Start($psi)
+[IO.File]::WriteAllText("$out\grandchild", "$($grandchild.Id)")
+$line = [Console]::In.ReadLine()
+$id = [regex]::Match($line, '"id":(\d+)').Groups[1].Value
+$version = [regex]::Match($line, '"protocolVersion":"([^"]*)"').Groups[1].Value
+[Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $id + ',"result":{"protocolVersion":"' + $version + '","capabilities":{},"serverInfo":{"name":"fake","version":"0"}}}')
+[Console]::Out.Flush()
+while ($null -ne [Console]::In.ReadLine()) {}
+if ($mode -eq 'linger') { Start-Sleep 60 }
+"#;
+    #[cfg(unix)]
     const FAKE_SERVER: &str = r#"
 out="$1"
 env > "$out/env"
@@ -209,16 +265,18 @@ if [ "$2" = linger ]; then sleep 60; fi
     impl Scratch {
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("server.sh"), FAKE_SERVER).unwrap();
+            std::fs::write(dir.path().join(SCRIPT), FAKE_SERVER).unwrap();
             Self(dir)
         }
 
         fn args(&self, mode: &str) -> Vec<String> {
-            vec![
-                self.0.path().join("server.sh").display().to_string(),
+            let mut args: Vec<String> = SHELL_ARGS.iter().map(|a| a.to_string()).collect();
+            args.extend([
+                self.0.path().join(SCRIPT).display().to_string(),
                 self.0.path().display().to_string(),
                 mode.to_string(),
-            ]
+            ]);
+            args
         }
 
         fn read(&self, file: &str) -> String {
@@ -234,14 +292,30 @@ if [ "$2" = linger ]; then sleep 60; fi
         fn drop(&mut self) {
             // テストが途中で落ちても孫プロセスを残さない。
             if let Ok(pid) = std::fs::read_to_string(self.0.path().join("grandchild")) {
+                #[cfg(unix)]
                 let _ = std::process::Command::new("kill")
                     .args(["-KILL", pid.trim()])
                     .status();
+                #[cfg(windows)]
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/PID", pid.trim()])
+                    .output();
             }
         }
     }
 
+    /// プロセスが生きているか。
+    #[cfg(windows)]
+    fn is_alive(pid: &str) -> bool {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+    }
+
     /// プロセスが生きているか。終了して回収を待つだけのゾンビは終了扱いにする。
+    #[cfg(unix)]
     fn is_alive(pid: &str) -> bool {
         let out = std::process::Command::new("ps")
             .args(["-o", "stat=", "-p", pid])
@@ -276,7 +350,7 @@ if [ "$2" = linger ]; then sleep 60; fi
     async fn connect_fake(scratch: &Scratch, mode: &str, env_refs: &[SecretRef]) -> ClientService {
         tokio::time::timeout(
             Duration::from_secs(10),
-            connect("/bin/sh", &scratch.args(mode), env_refs),
+            connect(SHELL, &scratch.args(mode), env_refs),
         )
         .await
         .expect("the fake server did not complete initialize")
@@ -307,10 +381,22 @@ if [ "$2" = linger ]; then sleep 60; fi
             assert!(env.lines().any(|l| l == format!("PATH={path}")), "{env}");
         }
         // シェル自身が設定する変数は除く。
+        #[cfg(unix)]
         const SHELL_OWN: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
+        // PowerShellが起動時に自分で足す(最後のものは`-ExecutionPolicy`の指定による)。名前の
+        // 大文字小文字は版で揺れるので区別しない。
+        #[cfg(windows)]
+        const SHELL_OWN: &[&str] = &["PATHEXT", "PSMODULEPATH", "PSEXECUTIONPOLICYPREFERENCE"];
         for name in names(&env) {
+            let shell_own = SHELL_OWN.iter().any(|own| {
+                if cfg!(windows) {
+                    own.eq_ignore_ascii_case(name)
+                } else {
+                    *own == name
+                }
+            });
             assert!(
-                allowlist.contains(&name) || name == "FAKE_TOKEN" || SHELL_OWN.contains(&name),
+                allowlist.contains(&name) || name == "FAKE_TOKEN" || shell_own,
                 "{name} leaked into the server's environment"
             );
         }
