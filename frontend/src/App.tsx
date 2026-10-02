@@ -17,26 +17,16 @@ import {
   setTaskArchived,
   stopChatResponse,
 } from './api'
-import { StagedAttachmentChips } from './Attachments'
+import ChatCompose, { type ComposedMessage } from './ChatCompose'
 import ChatLog from './ChatLog'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
-import ChatModelBar from './ChatModelBar'
 import { t, turnErrorText } from './i18n'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
-import type {
-  AttachmentDeliveries,
-  Chat,
-  MessageView,
-  SelectedModel,
-  TaskDetailView,
-  TaskListItem,
-} from './types'
+import type { Chat, MessageView, TaskDetailView, TaskListItem } from './types'
 import { useChatRequests } from './useChatRequests'
-import { useStagedAttachments } from './useStagedAttachments'
 import { useStickToBottom } from './useStickToBottom'
-import { isCommitEnter } from './keyboard'
 
 export default function App() {
   const [tasks, setTasks] = useState<TaskListItem[]>([])
@@ -51,16 +41,6 @@ export default function App() {
   const [messages, setMessages] = useState<MessageView[]>([])
   // 表示中の会話が返信の無いまま終わっているか。真なら応答を生成する操作を出す。
   const [lacksReply, setLacksReply] = useState(false)
-  const [draft, setDraft] = useState('')
-  // 入力欄の送信前の添付。本文と同じく、会話を切り替えても残す。
-  const staged = useStagedAttachments()
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
-  const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)
-  const onModelSelected = useCallback(
-    (selected: SelectedModel | null) => setDeliveries(selected?.attachments ?? null),
-    [],
-  )
   // 会話に属さない操作(一覧・作成・読み込み)の失敗。会話へのコマンドの失敗は
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
@@ -182,18 +162,10 @@ export default function App() {
   // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする。他の会話は応答待ちの
   // 間も操作できる。
   const disableActions = requests.isBusy(chat)
-  // 応答を生成中の会話では、送信ボタンの位置に停止ボタンを出す。
-  const generating = requests.isGenerating(chat)
 
-  // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
-  const canSend = !disableActions && !staged.busy && (draft.trim() !== '' || staged.ready)
-
-  const send = async () => {
-    if (!canSend) return
-    const text = draft.trim()
+  // 送れるかは入力欄(`ChatCompose`)が判定済み。
+  const send = async ({ text, attachments, restore }: ComposedMessage) => {
     const target = chat
-    const attachments = staged.take()
-    setDraft('')
     stick()
     // 楽観表示はユーザー発言と応答待ちプレースホルダのみに留め、応答本体は確定後に
     // DBから引き直す。
@@ -205,7 +177,7 @@ export default function App() {
       ],
       (onEvent) =>
         sendChatMessage(target, text, attachments.tokens, onEvent).catch((e: unknown) => {
-          staged.restore(attachments)
+          restore()
           throw e
         }),
       settle,
@@ -384,76 +356,15 @@ export default function App() {
           onGenerateReply={lacksReply ? () => void generateReply() : null}
         />
 
-        <StagedAttachmentChips staged={staged} deliveries={deliveries} disabled={disableActions} />
-
-        <div className="chat-compose-area">
-          <form
-            className="chat-compose"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void send()
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              hidden
-              onChange={(e) => {
-                staged.add(Array.from(e.target.files ?? []))
-                // 同じファイルをもう一度選んでも変更として届くように空へ戻す。
-                e.target.value = ''
-              }}
-            />
-            <button
-              type="button"
-              disabled={disableActions || !staged.canAdd}
-              title={t('attachment.add_tooltip')}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {t('attachment.add_button')}
-            </button>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (isCommitEnter(e) && !e.shiftKey) {
-                  e.preventDefault()
-                  void send()
-                }
-              }}
-              disabled={disableActions}
-              placeholder={t('chat.input_hint')}
-            />
-            {generating ? (
-              // 送信ボタンとは別の要素にする(同じ要素だと、送信を押したフォーカスが残り、
-              // 応答待ちの間のEnterで止めてしまう)。
-              <button
-                key="stop"
-                type="button"
-                className="primary"
-                disabled={requests.isStopping(chat)}
-                onClick={(e) => {
-                  // 送信をダブルクリックした2回目が、入れ替わった停止ボタンに当たっても止めない。
-                  if (e.detail > 1) return
-                  stop()
-                }}
-              >
-                {t('chat.stop_button')}
-              </button>
-            ) : (
-              <button key="send" type="submit" className="primary" disabled={!canSend}>
-                {t('chat.send_button')}
-              </button>
-            )}
-          </form>
-
-          <ChatModelBar
-            onError={setError}
-            onChanged={() => setAddBlocked(null)}
-            onSelected={onModelSelected}
-          />
-        </div>
+        <ChatCompose
+          disabled={disableActions}
+          generating={requests.isGenerating(chat)}
+          stopping={requests.isStopping(chat)}
+          onSend={(message) => void send(message)}
+          onStop={stop}
+          onError={setError}
+          onModelChanged={() => setAddBlocked(null)}
+        />
       </main>
     </div>
   )

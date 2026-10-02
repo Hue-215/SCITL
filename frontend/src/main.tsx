@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './tokens.css'
 import './index.css'
 import App from './App.tsx'
+import { ComposeProvider } from './ChatCompose'
 import { getDisplayLanguage } from './api'
 import { DEFAULT_LANGUAGE, initI18n } from './i18n'
 import { applyTheme } from './theme.ts'
@@ -16,6 +17,8 @@ initI18n(await getDisplayLanguage().catch(() => DEFAULT_LANGUAGE))
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ComposeProvider>
+      <App />
+    </ComposeProvider>
   </StrictMode>,
 )
