@@ -57,31 +57,67 @@ function evictImages() {
   }
 }
 
-/** 発言に付いた添付。押すと、画像は拡大、テキストは全文、その他は入っているフォルダを開く。 */
-export function MessageAttachments({ attachments }: { attachments: AttachmentView[] }) {
+/**
+ * 発言に付いた添付。押すと、画像は拡大、テキストは全文、その他は入っているフォルダを開く。
+ * 中身をモデルへ渡していない添付(`undelivered`。判定はRust側)には警告の印を付ける。
+ */
+export function MessageAttachments({
+  attachments,
+  undelivered,
+}: {
+  attachments: AttachmentView[]
+  undelivered: number[]
+}) {
   if (attachments.length === 0) return null
   return (
     <div className="chip-list">
       {attachments.map((a) => (
-        <AttachmentChip key={a.id} attachment={a} />
+        <AttachmentChip key={a.id} attachment={a} undelivered={undelivered.includes(a.id)} />
       ))}
     </div>
   )
 }
 
-function AttachmentChip({ attachment }: { attachment: AttachmentView }) {
+interface ChipOf {
+  attachment: AttachmentView
+  size: string
+  // 中身をモデルへ渡していないときの説明。渡していれば`null`。
+  warning: string | null
+}
+
+function AttachmentChip({
+  attachment,
+  undelivered,
+}: {
+  attachment: AttachmentView
+  undelivered: boolean
+}) {
   const size = formatBytes(attachment.size_bytes)
   switch (attachment.kind) {
     case 'image':
-      return <ImageChip attachment={attachment} size={size} />
+      return (
+        <ImageChip
+          attachment={attachment}
+          size={size}
+          warning={undelivered ? t('attachment.image_not_delivered') : null}
+        />
+      )
     case 'text':
       return <TextChip attachment={attachment} size={size} />
     case 'other':
-      return <OtherChip attachment={attachment} size={size} />
+      return (
+        <OtherChip
+          attachment={attachment}
+          size={size}
+          warning={undelivered ? t('attachment.content_not_sent') : null}
+        />
+      )
   }
 }
 
-function ImageChip({ attachment, size }: { attachment: AttachmentView; size: string }) {
+const warningMark = <span className="chip-mark">⚠</span>
+
+function ImageChip({ attachment, size, warning }: ChipOf) {
   const [url, setUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
@@ -102,9 +138,18 @@ function ImageChip({ attachment, size }: { attachment: AttachmentView; size: str
       <Chip
         label={attachment.original_name}
         detail={size}
-        tone={error ? 'error' : 'normal'}
-        title={error ? t('attachment.load_failed', { error: isolated(error) }) : undefined}
-        leading={url && <img className="chip-thumbnail" src={url} alt="" />}
+        tone={error ? 'error' : warning ? 'warning' : 'normal'}
+        title={
+          [warning, error && t('attachment.load_failed', { error: isolated(error) })]
+            .filter(Boolean)
+            .join('\n') || undefined
+        }
+        leading={
+          <>
+            {warning && warningMark}
+            {url && <img className="chip-thumbnail" src={url} alt="" />}
+          </>
+        }
         onOpen={url ? () => setOpen(true) : undefined}
       />
       {open && url && (
@@ -120,7 +165,7 @@ function ImageChip({ attachment, size }: { attachment: AttachmentView; size: str
   )
 }
 
-function TextChip({ attachment, size }: { attachment: AttachmentView; size: string }) {
+function TextChip({ attachment, size }: Omit<ChipOf, 'warning'>) {
   const [open, setOpen] = useState(false)
   return (
     <>
@@ -157,17 +202,18 @@ function TextDialog({ attachment, onClose }: { attachment: AttachmentView; onClo
   )
 }
 
-function OtherChip({ attachment, size }: { attachment: AttachmentView; size: string }) {
+function OtherChip({ attachment, size, warning }: ChipOf) {
   const [error, setError] = useState<string | null>(null)
   return (
     <Chip
       label={attachment.original_name}
       detail={size}
-      tone={error ? 'error' : 'normal'}
+      tone={error ? 'error' : warning ? 'warning' : 'normal'}
+      leading={warning && warningMark}
       title={
         error
           ? t('attachment.load_failed', { error: isolated(error) })
-          : t('attachment.reveal_tooltip')
+          : [warning, t('attachment.reveal_tooltip')].filter(Boolean).join('\n')
       }
       onOpen={() => {
         setError(null)
@@ -184,7 +230,7 @@ export function StagedAttachmentChips({
   disabled,
 }: {
   staged: StagedAttachments
-  // 選んでいるモデルの、種別ごとの渡し方。モデルが未選択なら警告は出さない。
+  // 種別ごとの渡し方。モデルが未選択なら、モデルによって変わる種別(画像)の警告は出さない。
   deliveries: AttachmentDeliveries | null
   disabled: boolean
 }) {

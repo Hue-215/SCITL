@@ -14,7 +14,7 @@ import { PASTED_IMAGES_NEED_READING, readClipboardImages } from './clipboard'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
 import { isCommitEnter } from './keyboard'
-import type { AttachmentDeliveries, DropNotice, SelectedModel } from './types'
+import type { AttachmentDeliveries, DropNotice } from './types'
 import {
   type StagedAttachments,
   type TakenAttachments,
@@ -98,10 +98,6 @@ export default function ChatCompose({
   const fileInputRef = useRef<HTMLInputElement>(null)
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
   const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)
-  const onModelSelected = useCallback(
-    (selected: SelectedModel | null) => setDeliveries(selected?.attachments ?? null),
-    [],
-  )
 
   // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addDropped`は描くたびに
   // 変わる)。応答待ちになった描画のすぐ後から受け付けないよう、画面に出す前に差し替える。
@@ -210,7 +206,7 @@ export default function ChatCompose({
           )}
         </form>
 
-        <ChatModelBar onError={onError} onChanged={onModelChanged} onSelected={onModelSelected} />
+        <ChatModelBar onError={onError} onChanged={onModelChanged} onDeliveries={setDeliveries} />
       </div>
     </>
   )

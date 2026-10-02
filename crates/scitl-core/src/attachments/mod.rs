@@ -51,6 +51,13 @@ pub fn delivery(kind: AttachmentKind, image_input: bool, in_latest_message: bool
     }
 }
 
+/// モデルが決まっていなくても決まる、これから送る発言の添付の渡し方。モデルの能力で変わる
+/// 種別(画像)は`None`。モデルを選ぶ前から、画面が添付に警告を出せるようにするため。
+pub fn delivery_without_model(kind: AttachmentKind) -> Option<Delivery> {
+    let without = delivery(kind, false, true);
+    (without == delivery(kind, true, true)).then_some(without)
+}
+
 /// アプリの起動中ずっと1つを使う。
 pub struct Attachments {
     store: AttachmentStore,

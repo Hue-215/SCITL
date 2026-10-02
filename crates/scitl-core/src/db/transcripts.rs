@@ -140,6 +140,20 @@ pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Transcript>> {
     Ok(rows)
 }
 
+/// 会話の保存の`input`だけを、試行(`turn_id`・`attempt_no`)と一緒に保存した順に引く(画面に出す
+/// 添付の印に使う。`rounds`は引かない)。どの試行の分を使うかは呼び出し側が`messages`から決める。
+pub fn inputs_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<(String, i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT turn_id, attempt_no, input FROM turn_transcripts WHERE task_id IS ?1 ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([chat.task_id()], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// 指紋が指す本文。無ければ`None`。
 pub fn blob(conn: &Connection, digest: &str) -> Result<Option<String>> {
     Ok(conn

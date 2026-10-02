@@ -204,6 +204,18 @@ pub fn list_all(conn: &Connection) -> Result<Vec<AttachmentRecord>> {
     Ok(rows)
 }
 
+/// 1つの会話の、論理削除していない発言に付いた添付のうち、実体を持つもの(画像・その他)の
+/// 実体のハッシュを、添付のidごとに引く。
+pub fn file_hashes_in_chat(conn: &Connection, chat: Chat) -> Result<HashMap<i64, String>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT a.id, a.file_hash {IN_CHAT} AND a.file_hash IS NOT NULL"
+    ))?;
+    let hashes = stmt
+        .query_map([chat.task_id()], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<HashMap<i64, String>>>()?;
+    Ok(hashes)
+}
+
 /// 添付の行が指している実体のハッシュ。論理削除した発言の添付の分も含む(行は消さないので、
 /// その実体も残す)。
 pub fn file_hashes(conn: &Connection) -> Result<HashSet<String>> {

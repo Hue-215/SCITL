@@ -1,8 +1,9 @@
 //! モデルに送った形の保存の形(`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
 //! 行の読み書きは`db::transcripts`。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -19,6 +20,9 @@ use crate::llm::{
 /// 保存は使わず、実行記録から組み立て直す(組み立ては今の規則で無害化する)。囲みの読み方の
 /// 説明(`llm::user_message_format_note`)を変えたときも上げる。固定した先頭に前の説明が残り、
 /// 保存した本文を前の説明のまま読ませ続けることになるため。
+///
+/// 画面に出す添付の印([`SentInput`])は、版によらず`input`の含めた行とユーザー発言の画像を読む。
+/// その2つの形を変えるときは、版を上げるだけでなく[`SentInput::read`]も古い形を読めるようにする。
 const FORM_VERSION: u32 = 6;
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
@@ -266,6 +270,45 @@ impl StoredInput {
             rows,
             messages,
         }
+    }
+}
+
+/// 保存した入力のうち、入力に含めた行と、ユーザー発言として載せた画像の実体のハッシュ。画面に出す
+/// 添付の印(`chat_view`)に使う。送り直しには使わないので、形の版によらず読む。
+pub(super) struct SentInput {
+    pub(super) rows: Vec<i64>,
+    pub(super) images: HashSet<String>,
+}
+
+impl SentInput {
+    /// 保存の`input`を読む。読めなければ`None`。本文(添付のテキストを含みうる)は読み飛ばし、
+    /// 値として持たない。
+    pub(super) fn read(input: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Input {
+            rows: Vec<i64>,
+            messages: Vec<Message>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Message {
+            User { images: Vec<String> },
+            Assistant(IgnoredAny),
+            Tool(IgnoredAny),
+        }
+        let input: Input = serde_json::from_str(input).ok()?;
+        let images = input
+            .messages
+            .into_iter()
+            .flat_map(|m| match m {
+                Message::User { images } => images,
+                Message::Assistant(_) | Message::Tool(_) => Vec::new(),
+            })
+            .collect();
+        Some(Self {
+            rows: input.rows,
+            images,
+        })
     }
 }
 
@@ -540,6 +583,28 @@ mod tests {
         };
         assert_eq!(StoredMessage::of(&unknown), None);
         assert_eq!(StoredMessage::all_of(&[user("a"), unknown]), None);
+    }
+
+    #[test]
+    fn the_sent_input_reads_the_rows_and_the_user_images_of_a_stored_input() {
+        let input = StoredInput::new(
+            vec![3, 4],
+            vec![
+                StoredMessage::User {
+                    text: "u".to_string(),
+                    images: vec!["abc".to_string()],
+                },
+                StoredMessage::Tool {
+                    tool_call_id: None,
+                    content: "t".to_string(),
+                    images: vec!["tool".to_string()],
+                },
+            ],
+        );
+        let sent = SentInput::read(&serde_json::to_string(&input).unwrap()).unwrap();
+        assert_eq!(sent.rows, [3, 4]);
+        assert_eq!(sent.images, HashSet::from(["abc".to_string()]));
+        assert!(SentInput::read("{}").is_none());
     }
 
     #[test]
