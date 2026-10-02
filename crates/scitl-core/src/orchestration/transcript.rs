@@ -1,7 +1,7 @@
 //! モデルに送った形の保存の形(`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
 //! 行の読み書きは`db::transcripts`。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -266,6 +266,36 @@ impl StoredInput {
             rows,
             messages,
         }
+    }
+}
+
+/// 保存した入力のうち、入力に含めた行と、ユーザー発言として載せた画像の実体のハッシュ。画面に出す
+/// 添付の印(`chat_view`)に使う。送り直しには使わないので、形の版によらず読む。
+pub(super) struct SentInput {
+    pub(super) rows: Vec<i64>,
+    pub(super) images: HashSet<String>,
+}
+
+impl SentInput {
+    /// 保存の`input`を読む。読めなければ`None`。
+    pub(super) fn read(input: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Input {
+            rows: Vec<i64>,
+            messages: Vec<serde_json::Value>,
+        }
+        let input: Input = serde_json::from_str(input).ok()?;
+        let images = input
+            .messages
+            .iter()
+            .filter_map(|m| m.get("user")?.get("images")?.as_array())
+            .flatten()
+            .filter_map(|hash| hash.as_str().map(str::to_string))
+            .collect();
+        Some(Self {
+            rows: input.rows,
+            images,
+        })
     }
 }
 
@@ -540,6 +570,28 @@ mod tests {
         };
         assert_eq!(StoredMessage::of(&unknown), None);
         assert_eq!(StoredMessage::all_of(&[user("a"), unknown]), None);
+    }
+
+    #[test]
+    fn the_sent_input_reads_the_rows_and_the_user_images_of_a_stored_input() {
+        let input = StoredInput::new(
+            vec![3, 4],
+            vec![
+                StoredMessage::User {
+                    text: "u".to_string(),
+                    images: vec!["abc".to_string()],
+                },
+                StoredMessage::Tool {
+                    tool_call_id: None,
+                    content: "t".to_string(),
+                    images: vec!["tool".to_string()],
+                },
+            ],
+        );
+        let sent = SentInput::read(&serde_json::to_string(&input).unwrap()).unwrap();
+        assert_eq!(sent.rows, [3, 4]);
+        assert_eq!(sent.images, HashSet::from(["abc".to_string()]));
+        assert!(SentInput::read("{}").is_none());
     }
 
     #[test]

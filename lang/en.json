@@ -2,6 +2,7 @@
   "attachment.add_button": "Attach",
   "attachment.add_tooltip": "Attach files",
   "attachment.content_not_sent": "The content of this file type is not sent to the model; only its name and size are",
+  "attachment.image_not_delivered": "This image did not reach the model; only its name and size did",
   "attachment.image_not_sent": "The selected model cannot read images; only the name and size are sent",
   "attachment.load_failed": "Could not load: {error}",
   "attachment.loading": "Loading…",

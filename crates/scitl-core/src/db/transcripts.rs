@@ -140,6 +140,16 @@ pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Transcript>> {
     Ok(rows)
 }
 
+/// 会話の保存の`input`だけを、保存した順に引く(画面に出す添付の印に使う。`rounds`は引かない)。
+pub fn inputs_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT input FROM turn_transcripts WHERE task_id IS ?1 ORDER BY id")?;
+    let rows = stmt
+        .query_map([chat.task_id()], |row| row.get(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// 指紋が指す本文。無ければ`None`。
 pub fn blob(conn: &Connection, digest: &str) -> Result<Option<String>> {
     Ok(conn

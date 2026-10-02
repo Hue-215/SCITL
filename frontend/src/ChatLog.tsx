@@ -111,6 +111,13 @@ export default function ChatLog({
     pending.length > 0
       ? items.length
       : items.findLastIndex((i) => i.kind === 'turn' || i.message.role === 'user')
+  // 応答を生成中に答えているユーザー発言(最後のユーザー発言)。添付を渡したかがまだ決まって
+  // いないので、渡していない印を出さない。
+  const answering = pending.some((entry) => entry.role === 'pending')
+    ? messages.findLast((m) => m.role === 'user' && m.kind === 'normal')?.id
+    : undefined
+  const undeliveredOf = (message: MessageView) =>
+    message.id === answering ? [] : message.undelivered_attachments
   return (
     <ul className="chat-log" ref={logRef} onScroll={onScroll}>
       {items.map((item, index) => {
@@ -147,7 +154,10 @@ export default function ChatLog({
                   }}
                   autoFocus
                 />
-                <MessageAttachments attachments={message.attachments} />
+                <MessageAttachments
+                  attachments={message.attachments}
+                  undelivered={undeliveredOf(message)}
+                />
                 <div className="button-row entry-actions">
                   <button type="button" onClick={editing.cancel}>
                     {t('common.cancel')}
@@ -170,7 +180,10 @@ export default function ChatLog({
                   errorKind={message.error_kind}
                 />
               )}
-              <MessageAttachments attachments={message.attachments} />
+              <MessageAttachments
+                attachments={message.attachments}
+                undelivered={undeliveredOf(message)}
+              />
               <time className="entry-time">{formatDateTime(message.created_at)}</time>
               {canEditOrDelete && (
                 <EntryActions

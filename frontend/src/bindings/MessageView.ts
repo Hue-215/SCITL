@@ -8,7 +8,11 @@ export type MessageView = {
 /**
  * ツール実行記録の行だけが持つ。
  */
-tool_execution: ToolExecutionView | null, id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, reasoning: string | null, error_kind: string | null, error_detail: string | null, partial_reply: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
+tool_execution: ToolExecutionView | null, 
+/**
+ * 添付のうち、中身(テキストの本文・画像)をモデルへ渡していないもののid([`undelivered`])。
+ */
+undelivered_attachments: Array<number>, id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, reasoning: string | null, error_kind: string | null, error_detail: string | null, partial_reply: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
 /**
  * 発言に付いた添付。付けた順。
  */
