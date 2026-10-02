@@ -110,7 +110,10 @@ export default function ChatCompose({
   useLayoutEffect(() => {
     pasteTarget.current = canAdd ? staged.add : null
     setDropTarget(canAdd ? staged.addDropped : null)
-    return () => setDropTarget(null)
+    return () => {
+      pasteTarget.current = null
+      setDropTarget(null)
+    }
   })
 
   // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
@@ -168,10 +171,9 @@ export default function ChatCompose({
                 if (canAdd) staged.add(files)
                 return
               }
-              // 文字もファイルも無い。WebKitGTKは画像を`clipboardData`に入れないので読み直す。
-              // 空白だけの文字は、ファイルがあるときと同じく貼らない。
+              // 文字(空白だけを除く)もファイルも無い。WebKitGTKは画像を`clipboardData`に
+              // 入れないので読み直す。空白だけの文字は、画像があるか分からないので既定どおり貼る。
               if (!PASTED_IMAGES_NEED_READING || !canAdd) return
-              if (text !== '') e.preventDefault()
               void readClipboardImages().then((images) => {
                 if (images.length > 0) pasteTarget.current?.(images)
               })
