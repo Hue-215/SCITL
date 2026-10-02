@@ -216,10 +216,9 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             enabled: true,
-            endpoint: McpEndpoint::Stdio {
-                command: "true".to_string(),
-                args: Vec::new(),
-                env_refs: Vec::new(),
+            endpoint: McpEndpoint::StreamableHttp {
+                url: "http://127.0.0.1:8000/mcp".to_string(),
+                header_refs: Vec::new(),
             },
             enabled_tools: enabled_tools
                 .iter()

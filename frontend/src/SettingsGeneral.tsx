@@ -1,5 +1,5 @@
 // 設定画面の「一般」タブ。
-import { useEffect, useId, useState } from 'react'
+import { useId, useState } from 'react'
 import { exportMarkdown, openExportFolder, updateGeneralSettings } from './api'
 import type { ExportSummary, Language, SettingsView } from './types'
 import Dropdown from './Dropdown'
@@ -49,13 +49,17 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     general.task_opening_message ?? general.default_task_opening_message,
   )
 
-  useEffect(() => {
+  // 保存して設定が読み直されたら、入力欄を保存された値に戻す。描画の中で前回の値と比べて
+  // 揃える(effectで揃えると、古い値で1回描いてから描き直す)。
+  const [shown, setShown] = useState(general)
+  if (shown !== general) {
+    setShown(general)
     setSystemPrompt(general.system_prompt ?? '')
     setTaskChatSystemPrompt(
       general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
     )
     setTaskOpeningMessage(general.task_opening_message ?? general.default_task_opening_message)
-  }, [general])
+  }
 
   const current = (): GeneralUpdate => ({
     systemPrompt: systemPrompt || null,

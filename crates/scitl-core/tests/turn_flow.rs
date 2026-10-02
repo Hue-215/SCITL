@@ -532,15 +532,17 @@ async fn run_turn_continues_when_an_mcp_server_cannot_be_reached() {
     let adapter = sets_the_title();
     let db = Arc::new(Mutex::new(conn));
 
+    // bindしたままlistenしないソケットのポート。接続はRSTで拒否される。ソケットはターンが
+    // 終わるまで持っておく(手放すと、並列に走る別のテストが同じポートで待ち受けうる)。
+    let refusing = tokio::net::TcpSocket::new_v4().unwrap();
+    refusing.bind(([127, 0, 0, 1], 0).into()).unwrap();
     let servers = vec![McpServerConfig {
         id: "srv".to_string(),
         name: "broken".to_string(),
         enabled: true,
-        endpoint: McpEndpoint::Stdio {
-            // 存在しないコマンド。接続の時点で失敗する。
-            command: "scitl-no-such-mcp-server".to_string(),
-            args: Vec::new(),
-            env_refs: Vec::new(),
+        endpoint: McpEndpoint::StreamableHttp {
+            url: format!("http://{}/mcp", refusing.local_addr().unwrap()),
+            header_refs: Vec::new(),
         },
         enabled_tools: ["anything".to_string()].into_iter().collect(),
     }];

@@ -33,8 +33,8 @@ fn store_error(e: keyring_core::Error) -> CoreError {
     }
 }
 
-/// `key_ref`の項目に`op`を行う。保存先そのものの失敗(`PlatformFailure`)なら、その保存先を
-/// 捨てて新しく組み立て、1回だけやり直す([`retry_with_new_store`])。
+/// `key_ref`の項目に`op`を行う。保存先の組み立てか保存先そのものの失敗(`PlatformFailure`)なら、
+/// 新しく組み立てて1回だけやり直す([`retry_with_new_store`])。
 fn with_entry<T>(
     key_ref: &str,
     op: impl Fn(&Entry) -> keyring_core::Result<T>,
@@ -44,26 +44,30 @@ fn with_entry<T>(
     })
 }
 
-/// `acquire`で得た保存先で`op`を行い、`PlatformFailure`なら`discard`してから1回だけ
-/// やり直す。
+/// `acquire`で得た保存先で`op`を行う。組み立てか`op`が`PlatformFailure`なら(`op`の失敗では
+/// その保存先を`discard`してから)、組み立てからもう1回だけやり直す。
 ///
-/// Linuxの保存先は、組み立てたときに張ったSecret Serviceのセッション1本を使い続ける。
-/// セッションの暗号鍵がサービス側と食い違った・サービスが再起動した場合は、そのセッションでの
-/// 操作がすべて失敗し続けるので、同じ保存先で繰り返しても直らない。ロック中・承認の拒否
+/// 同じ保存先で繰り返しても直らない失敗と、組み立て直せば通る失敗があるため
+/// (`docs/spec/architecture/network-secrets.md`「保存先の選び方」)。ロック中・承認の拒否
 /// (`NoStorageAccess`)はやり直さない(承認を2回求めないため)。
 fn retry_with_new_store<S, T>(
-    acquire: impl Fn() -> Result<S, CoreError>,
+    acquire: impl Fn() -> keyring_core::Result<S>,
     discard: impl FnOnce(&S),
     op: impl Fn(&S) -> keyring_core::Result<T>,
 ) -> Result<T, CoreError> {
-    let store = acquire()?;
-    match op(&store) {
+    let first = acquire().and_then(|store| match op(&store) {
+        Err(e @ keyring_core::Error::PlatformFailure(_)) => {
+            discard(&store);
+            Err(e)
+        }
+        result => result,
+    });
+    match first {
         Err(keyring_core::Error::PlatformFailure(e)) => {
             crate::diagnostics::report(format_args!(
                 "secret store operation failed, retrying with a new connection: {e}"
             ));
-            discard(&store);
-            op(&acquire()?).map_err(store_error)
+            acquire().and_then(|store| op(&store)).map_err(store_error)
         }
         result => result.map_err(store_error),
     }
@@ -75,14 +79,14 @@ static SETTING_UP: Mutex<()> = Mutex::new(());
 /// OSの保存先を、最初に使うときに組み立てて既定にする。組み立てに失敗しても覚えておかず、
 /// 次に使うときに組み立て直す(保存先のサービスが後から起動した・ロックが解除された場合に、
 /// 再起動せずに直るように)。
-fn default_store() -> Result<Arc<CredentialStore>, CoreError> {
+fn default_store() -> keyring_core::Result<Arc<CredentialStore>> {
     let _guard = SETTING_UP
         .lock()
         .expect("secret store setup mutex poisoned");
     if let Some(store) = keyring_core::get_default_store() {
         return Ok(store);
     }
-    let store = os_store().map_err(store_error)?;
+    let store = os_store()?;
     keyring_core::set_default_store(Arc::clone(&store));
     Ok(store)
 }
@@ -178,7 +182,7 @@ mod tests {
     }
 
     /// 保存先を番号で表す。`acquire`は呼ばれるたびに新しい番号の保存先を返す。
-    fn numbered_stores() -> impl Fn() -> Result<u32, CoreError> {
+    fn numbered_stores() -> impl Fn() -> keyring_core::Result<u32> {
         let next = std::cell::Cell::new(0);
         move || {
             let n = next.get();
@@ -203,6 +207,38 @@ mod tests {
         );
         assert_eq!(result.unwrap(), 1);
         assert_eq!(discarded.get(), Some(0));
+    }
+
+    /// 組み立て(Linuxではセッションの鍵交換)の失敗も、組み立て直して1回だけやり直す。
+    #[test]
+    fn a_platform_failure_while_acquiring_is_retried_once() {
+        let tries = std::cell::Cell::new(0);
+        let acquire = || {
+            tries.set(tries.get() + 1);
+            if tries.get() == 1 {
+                Err(platform_failure())
+            } else {
+                Ok(tries.get())
+            }
+        };
+        let result = retry_with_new_store(
+            acquire,
+            |_| panic!("a store that was never built must not be discarded"),
+            |store| Ok(*store),
+        );
+        assert_eq!(result.unwrap(), 2);
+
+        let tries = std::cell::Cell::new(0);
+        let result: Result<(), _> = retry_with_new_store(
+            || -> keyring_core::Result<()> {
+                tries.set(tries.get() + 1);
+                Err(platform_failure())
+            },
+            |_| {},
+            |_| Ok(()),
+        );
+        assert!(matches!(result, Err(CoreError::Secrets(_))));
+        assert_eq!(tries.get(), 2);
     }
 
     #[test]

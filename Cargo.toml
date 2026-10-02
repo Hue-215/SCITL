@@ -16,7 +16,7 @@ license = "MIT"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 # LLMアダプタとMCPクライアントの双方が使う唯一のHTTPクライアント。バージョンはrmcpの
 # 要求(0.13.2以上)に合わせてある。`rustls` featureはaws-lc-rs + rustls-platform-verifier
 # (信頼ルートはOSの証明書ストア)を選ぶ。ハードニング設定は`scitl-core/src/net.rs`の
@@ -72,28 +72,13 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # MCPクライアント。`default-features = false`にした上で必要なfeatureだけを明示する。
 # OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない先へ通信しうるので
 # 有効にしない。
-# `client`(素朴なクライアント)・`transport-child-process`(stdio)・
-# `transport-streamable-http-client-reqwest`(streamable_http、内部でreqwestを使う)のみ。
+# `client`(素朴なクライアント)・`transport-streamable-http-client-reqwest`(streamable_http、
+# 内部でreqwestを使う)のみ。サーバーを子プロセスとして起動するstdio方式は持たない
+# (`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
 rmcp = { version = "=3.4.0", default-features = false, features = [
     "client",
-    "transport-child-process",
     "transport-streamable-http-client-reqwest",
 ] }
-# rmcpのstdioトランスポートは子プロセスを`kill()`しても、子がさらに生んだ孫プロセス
-# (`npx`が起動する`node`等)までは殺さない。プロセスグループごと
-# kill(Unix)/ジョブオブジェクト(Windows)するために明示的に利用する
-process-wrap = { version = "10.0", default-features = false, features = [
-    "tokio1",
-    "process-group",
-    "job-object",
-    "kill-on-drop",
-    "creation-flags",
-] }
-# 子プロセスの起動フラグの型(process-wrapの`CreationFlags`が受け取る)。コンソールを持たないGUIから
-# コンソールアプリのサーバーを起動しても、コンソールウィンドウを開かせない(`scitl-core/src/mcp/stdio.rs`)。
-# 同じ版がprocess-wrapの依存として既にビルドされている。上流の版が上がったら合わせて上げる
-# (`cargo tree -p process-wrap --depth 1`で確認)
-windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"

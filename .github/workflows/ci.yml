@@ -19,8 +19,8 @@ on:
       - 'release/**'
       - 'hotfix/**'
 
-# 同じブランチに続けてpushしたときは古い実行を捨てる(privateリポジトリのため
-# 実行時間そのものが有限の資源)。
+# 同じブランチに続けてpushしたときは古い実行を捨てる(結果を見るのは最後の実行だけで、
+# 古い実行はランナーを空けるのを遅らせるだけ)。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -41,9 +41,9 @@ jobs:
       - uses: actions/checkout@v4
 
       # scitl-tauri のビルドには webkit2gtk 等のシステム依存が要る。
-      # scitl-core だけに絞れば不要だが、それでは scitl-core と scitl-tauri の
-      # 境目で起きる食い違いが素通りする。ここが一番の検出対象なので
-      # ワークスペース全体をコンパイルする。
+      # scitl-core だけに絞れば資格情報ストア(Secret Service)のための libdbus だけで済むが、
+      # それでは scitl-core と scitl-tauri の境目で起きる食い違いが素通りする。ここが一番の
+      # 検出対象なのでワークスペース全体をコンパイルする。
       #
       # なおデバッグビルドは devUrl を読むため `frontend/dist` を必要としない。
       # フロントのビルド成果物をこのジョブに持ち込む必要はない。
@@ -51,19 +51,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
+            libdbus-1-dev \
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            libxdo-dev \
-            libssl-dev
+            libxdo-dev
 
       # 保存の前に、今のビルドで使わなかった成果物を`target`から捨てる。`target`を丸ごと
       # 保存し直すと、古い版の依存の成果物が積み重なってランナーのディスクを使い切る。
       # キーにはrustcの版・Cargo.lock・`CARGO`で始まる環境変数が入る(ツールチェーンは
       # ピン留めしていないので、rustcが上がれば別のキャッシュになる)。
       - name: cargoのキャッシュ
-        uses: Swatinem/rust-cache@v2
+        # 第三者のアクションなので、タグではなくコミットで固定する(タグは付け替えられる)。
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # 速い順に並べる。書式・lintで落ちるならテストの完走を待たせない。
       # `--locked`: Cargo.lock を更新しないと通らない変更が、lockの更新漏れのまま
@@ -86,9 +87,9 @@ jobs:
           git status --porcelain -- frontend/src/bindings | tee /tmp/bindings-diff
           test ! -s /tmp/bindings-diff
 
-  # Windowsにしか無い経路(ジョブオブジェクトでの子プロセスの後始末、資格情報マネージャー)は、
-  # Linuxのジョブではコンパイルもされない。Windowsのランナーは実行時間が2倍で計上されるので、
-  # PRごとには回さず、合流後のブランチでだけ回す。壊れたことにはマージの直後に気付ける。
+  # Windowsにしか無い経路(資格情報マネージャー等)は、Linuxのジョブではコンパイルもされない。
+  # Windowsのランナーはビルドに時間が掛かるので、PRごとには回さず、合流後のブランチでだけ
+  # 回す。壊れたことにはマージの直後に気付ける。
   rust-windows:
     if: github.event_name == 'push'
     # `rust`ジョブと同じ理由で、版を明示的に固定する。
@@ -103,7 +104,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: cargoのキャッシュ
-        uses: Swatinem/rust-cache@v2
+        # 第三者のアクションなので、タグではなくコミットで固定する(タグは付け替えられる)。
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # 書式とフロントエンドはOSに依らないので、Linuxのジョブに任せる。
       - name: clippy

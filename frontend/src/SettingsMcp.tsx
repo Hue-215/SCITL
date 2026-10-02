@@ -1,21 +1,13 @@
 // 設定画面の「ツール」タブ。
-import { useId, useState } from 'react'
+import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
-import Dropdown from './Dropdown'
-import { isolated, type MessageKey, t } from './i18n'
+import { isolated, t } from './i18n'
 import { CollapseToggle, NumberField } from './settingsFields'
 import { httpPlainTextHint } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
-
-type Transport = McpServerView['endpoint']['transport']
-
-const TRANSPORT_LABELS: Record<Transport, MessageKey> = {
-  stdio: 'settings.tools.transport_stdio',
-  streamable_http: 'settings.tools.transport_http',
-}
 
 // 「1行1件、KEY=VALUE」形式のテキストをパースする。エラーは行ごとに個別指摘する。行は前後の
 // 空白を除いてから見るので、`=`が先頭でなければキーは空にならない。
@@ -145,18 +137,9 @@ function McpServerCard({
   const tools = server.tools
   const { collapsible, collapsed, toggle } = useCollapse(tools.length)
 
-  const endpointSummary =
-    server.endpoint.transport === 'stdio'
-      ? t('settings.tools.endpoint_stdio', {
-          command: isolated([server.endpoint.command, ...server.endpoint.args].join(' ')),
-        })
-      : t('settings.tools.endpoint_http', { url: isolated(server.endpoint.url) })
-  const secretNames =
-    server.endpoint.transport === 'stdio' ? server.endpoint.env_names : server.endpoint.header_names
-  const secretLabel =
-    server.endpoint.transport === 'stdio'
-      ? t('settings.tools.env_names_label')
-      : t('settings.tools.header_names_label')
+  const endpointSummary = t('settings.tools.endpoint_http', { url: isolated(server.endpoint.url) })
+  const secretNames = server.endpoint.header_names
+  const secretLabel = t('settings.tools.header_names_label')
 
   const fetched = server.tools_fetched
   const visibleTools = collapsed ? [] : tools
@@ -248,12 +231,7 @@ interface AddMcpServerFormProps {
 }
 
 function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFormProps) {
-  const transportLabelId = useId()
   const [name, setName] = useState('')
-  const [transport, setTransport] = useState<Transport>('stdio')
-  const [command, setCommand] = useState('')
-  const [argsText, setArgsText] = useState('')
-  const [envText, setEnvText] = useState('')
   const [url, setUrl] = useState('')
   const [headersText, setHeadersText] = useState('')
   const [errors, setErrors] = useState<string[]>([])
@@ -263,9 +241,6 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
 
   const reset = () => {
     setName('')
-    setCommand('')
-    setArgsText('')
-    setEnvText('')
     setUrl('')
     setHeadersText('')
   }
@@ -283,42 +258,20 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
       validationErrors.push(t('settings.tools.id_duplicate', { id: isolated(trimmedName) }))
     }
 
-    if (transport === 'stdio') {
-      if (!command.trim()) validationErrors.push(t('settings.tools.command_required'))
-      const args = argsText
-        .split('\n')
-        .map((s) => s.trim())
-        .filter((s) => s !== '')
-      const { pairs, errors: envErrors } = parseKeyValueLines(envText)
-      validationErrors.push(...envErrors)
-      if (validationErrors.length > 0) {
-        setErrors(validationErrors)
-        return
-      }
-      setErrors([])
-      const endpoint: NewMcpEndpoint = {
-        transport: 'stdio',
-        command: command.trim(),
-        args,
-        env: pairs,
-      }
-      void submission.run(() => onAdd(trimmedName, endpoint), reset)
-    } else {
-      if (!url.trim()) validationErrors.push(t('settings.tools.url_required'))
-      const { pairs, errors: headerErrors } = parseKeyValueLines(headersText)
-      validationErrors.push(...headerErrors)
-      if (validationErrors.length > 0) {
-        setErrors(validationErrors)
-        return
-      }
-      setErrors([])
-      const endpoint: NewMcpEndpoint = {
-        transport: 'streamable_http',
-        url: url.trim(),
-        headers: pairs,
-      }
-      void submission.run(() => onAdd(trimmedName, endpoint), reset)
+    if (!url.trim()) validationErrors.push(t('settings.tools.url_required'))
+    const { pairs, errors: headerErrors } = parseKeyValueLines(headersText)
+    validationErrors.push(...headerErrors)
+    if (validationErrors.length > 0) {
+      setErrors(validationErrors)
+      return
     }
+    setErrors([])
+    const endpoint: NewMcpEndpoint = {
+      transport: 'streamable_http',
+      url: url.trim(),
+      headers: pairs,
+    }
+    void submission.run(() => onAdd(trimmedName, endpoint), reset)
   }
 
   return (
@@ -333,56 +286,17 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
           required
         />
       </label>
-      <div className="settings-field">
-        <span id={transportLabelId}>{t('settings.tools.transport_label')}</span>
-        <Dropdown
-          labelledBy={transportLabelId}
-          label={t(TRANSPORT_LABELS[transport])}
-          options={Object.entries(TRANSPORT_LABELS).map(([key, label]) => ({ key, label: t(label) }))}
-          selectedKey={transport}
-          onSelect={(key) => setTransport(key as Transport)}
-          direction="down"
-          align="start"
-        />
-      </div>
-
-      {transport === 'stdio' ? (
-        <>
-          <label className="settings-field">
-            <span>{t('settings.tools.command_hint')}</span>
-            <input value={command} onChange={(e) => setCommand(e.target.value)} required />
-          </label>
-          <label className="settings-field">
-            <span>{t('settings.tools.args_hint')}</span>
-            <textarea value={argsText} onChange={(e) => setArgsText(e.target.value)} />
-          </label>
-          <label className="settings-field">
-            <span>
-              {t('settings.tools.env_hint', { sample: t('settings.tools.kv_sample') })}
-            </span>
-            <textarea value={envText} onChange={(e) => setEnvText(e.target.value)} />
-            <p className="settings-hint">{t('settings.tools.secret_helper')}</p>
-          </label>
-          <p className="settings-hint">{t('settings.tools.stdio_warning')}</p>
-        </>
-      ) : (
-        <>
-          <label className="settings-field">
-            <span>{t('settings.tools.url_hint')}</span>
-            <input value={url} onChange={(e) => setUrl(e.target.value)} required />
-            <p className="settings-hint">
-              {httpPlainTextHint(t('settings.tools.header_secret'))}
-            </p>
-          </label>
-          <label className="settings-field">
-            <span>
-              {t('settings.tools.headers_hint', { sample: t('settings.tools.kv_sample') })}
-            </span>
-            <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
-            <p className="settings-hint">{t('settings.tools.secret_helper')}</p>
-          </label>
-        </>
-      )}
+      <label className="settings-field">
+        <span>{t('settings.tools.url_hint')}</span>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} required />
+        <p className="settings-hint">{httpPlainTextHint(t('settings.tools.header_secret'))}</p>
+        <p className="settings-hint">{t('settings.tools.stdio_bridge_hint')}</p>
+      </label>
+      <label className="settings-field">
+        <span>{t('settings.tools.headers_hint', { sample: t('settings.tools.kv_sample') })}</span>
+        <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
+        <p className="settings-hint">{t('settings.tools.secret_helper')}</p>
+      </label>
 
       {errors.map((e) => (
         <p key={e} className="error">

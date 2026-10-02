@@ -42,7 +42,7 @@ fn main() {
         .plugin(navigation::guard())
         .setup(|app| {
             let data = DataLayout::new(paths::default_data_dir()?);
-            std::fs::create_dir_all(data.root())?;
+            paths::create_private_dir(data.root())?;
             let conn = scitl_core::db::open(data.database())?;
 
             let settings = Settings::load(data.config());

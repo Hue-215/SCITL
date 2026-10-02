@@ -66,14 +66,6 @@ pub struct GeneralUpdate {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "transport", rename_all = "snake_case")]
 pub enum NewMcpEndpoint {
-    Stdio {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        #[cfg_attr(test, ts(type = "Array<[string, string]>"))]
-        env: Vec<(String, SecretString)>,
-    },
     StreamableHttp {
         url: String,
         #[serde(default)]
@@ -486,7 +478,7 @@ impl Settings {
     pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
         let name = input::name(&new.name, "provider name", input::PROVIDER_NAME_MAX_CHARS)?;
         let base_url = new.base_url.trim().to_string();
-        providers::validate_base_url(new.api_format, &base_url)?;
+        providers::validate_base_url(&base_url)?;
         // 鍵を保存する前にも確かめ、登録できないと分かっている名前のために資格情報ストアへ
         // 書かない。
         refuse_registered_provider_name(&self.current().config, &name)?;
@@ -852,42 +844,22 @@ impl Draft<'_> {
 
 /// 秘密情報に触れる前に済ませられる検証をすべて行う。
 fn validate_endpoint(endpoint: NewMcpEndpoint) -> Result<NewMcpEndpoint> {
-    match endpoint {
-        NewMcpEndpoint::Stdio { command, args, env } => {
-            let command = command.trim().to_string();
-            if command.is_empty() {
-                return Err(invalid("command must not be empty"));
-            }
-            for (name, _) in &env {
-                mcp::validate_env_name(name)?;
-            }
-            input::unique_names(&env, "environment variable", str::to_string)?;
-            Ok(NewMcpEndpoint::Stdio { command, args, env })
-        }
-        NewMcpEndpoint::StreamableHttp { url, headers } => {
-            let url = url.trim().to_string();
-            mcp::validate_streamable_http_url(&url)?;
-            for (name, value) in &headers {
-                mcp::validate_header_name(name)?;
-                mcp::validate_header_value(value.expose_secret())?;
-            }
-            input::unique_names(&headers, "header", str::to_ascii_lowercase)?;
-            Ok(NewMcpEndpoint::StreamableHttp { url, headers })
-        }
+    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+    let url = url.trim().to_string();
+    mcp::validate_streamable_http_url(&url)?;
+    for (name, value) in &headers {
+        mcp::validate_header_name(name)?;
+        mcp::validate_header_value(value.expose_secret())?;
     }
+    input::unique_names(&headers, "header", str::to_ascii_lowercase)?;
+    Ok(NewMcpEndpoint::StreamableHttp { url, headers })
 }
 
 fn store_endpoint_secrets(endpoint: NewMcpEndpoint) -> Result<McpEndpoint> {
-    Ok(match endpoint {
-        NewMcpEndpoint::Stdio { command, args, env } => McpEndpoint::Stdio {
-            command,
-            args,
-            env_refs: store_secret_refs(env)?,
-        },
-        NewMcpEndpoint::StreamableHttp { url, headers } => McpEndpoint::StreamableHttp {
-            url,
-            header_refs: store_secret_refs(headers)?,
-        },
+    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+    Ok(McpEndpoint::StreamableHttp {
+        url,
+        header_refs: store_secret_refs(headers)?,
     })
 }
 
@@ -924,10 +896,8 @@ fn delete_secret(key_ref: &str, what: &str) {
 }
 
 fn endpoint_secret_refs(endpoint: &McpEndpoint) -> &[SecretRef] {
-    match endpoint {
-        McpEndpoint::Stdio { env_refs, .. } => env_refs,
-        McpEndpoint::StreamableHttp { header_refs, .. } => header_refs,
-    }
+    let McpEndpoint::StreamableHttp { header_refs, .. } = endpoint;
+    header_refs
 }
 
 fn refuse_registered_provider_name(config: &Config, name: &str) -> Result<()> {
@@ -1022,6 +992,14 @@ mod tests {
                 api_key: None,
             })
             .unwrap()
+    }
+
+    /// 秘密情報を持たないので、登録しても資格情報ストアに触れない。
+    fn http_endpoint() -> NewMcpEndpoint {
+        NewMcpEndpoint::StreamableHttp {
+            url: "http://127.0.0.1:8000/mcp".to_string(),
+            headers: Vec::new(),
+        }
     }
 
     /// 空白だけの鍵・ヘッダーに載せられない鍵は、資格情報ストアに触れる前に断る。
@@ -1389,22 +1367,16 @@ name = "m"
                 .map(|n| (n.to_string(), SecretString::from("v")))
                 .collect()
         };
-        for env in [&["A", "A"][..], &["A B"], &[""], &["A=B"]] {
-            let endpoint = NewMcpEndpoint::Stdio {
-                command: "npx".to_string(),
-                args: Vec::new(),
-                env: pairs(env),
+        for headers in [&["X-Api-Key", "x-api-key"][..], &["A B"], &[""], &["Host"]] {
+            let endpoint = NewMcpEndpoint::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                headers: pairs(headers),
             };
             assert!(
                 settings.add_mcp_server("tools", endpoint).is_err(),
-                "{env:?}"
+                "{headers:?}"
             );
         }
-        let endpoint = NewMcpEndpoint::StreamableHttp {
-            url: "https://example.com/mcp".to_string(),
-            headers: pairs(&["X-Api-Key", "x-api-key"]),
-        };
-        assert!(settings.add_mcp_server("tools", endpoint).is_err());
         assert!(settings.view().mcp_servers.is_empty());
     }
 
@@ -1501,51 +1473,35 @@ name = "m"
             "headers": [["Authorization", "Bearer token"]],
         }))
         .unwrap();
-        let NewMcpEndpoint::StreamableHttp { headers, .. } = endpoint else {
-            panic!("expected streamable_http");
-        };
+        let NewMcpEndpoint::StreamableHttp { headers, .. } = endpoint;
         assert_eq!(headers[0].0, "Authorization");
         assert_eq!(headers[0].1.expose_secret(), "Bearer token");
+    }
 
-        let endpoint: NewMcpEndpoint = serde_json::from_value(serde_json::json!({
+    /// 子プロセスとして起動する方式(stdio)の登録は、画面からもCLIからも受け付けない。
+    #[test]
+    fn new_mcp_endpoint_refuses_stdio() {
+        let endpoint = serde_json::from_value::<NewMcpEndpoint>(serde_json::json!({
             "transport": "stdio",
             "command": "npx",
-            "env": [["API_KEY", "secret"]],
-        }))
-        .unwrap();
-        let NewMcpEndpoint::Stdio { env, .. } = endpoint else {
-            panic!("expected stdio");
-        };
-        assert_eq!(env[0].0, "API_KEY");
-        assert_eq!(env[0].1.expose_secret(), "secret");
+        }));
+        assert!(endpoint.is_err());
     }
 
     #[test]
     fn mcp_server_name_must_be_unique() {
         let (settings, _, _dir) = temp_settings();
-        let endpoint = || NewMcpEndpoint::Stdio {
-            command: "npx".to_string(),
-            args: Vec::new(),
-            env: Vec::new(),
-        };
-        settings.add_mcp_server("tools", endpoint()).unwrap();
-        let err = settings.add_mcp_server("tools", endpoint()).unwrap_err();
+        settings.add_mcp_server("tools", http_endpoint()).unwrap();
+        let err = settings
+            .add_mcp_server("tools", http_endpoint())
+            .unwrap_err();
         assert!(matches!(err, CoreError::InvalidSettings(_)));
     }
 
     #[test]
     fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
         let (settings, _, _dir) = temp_settings();
-        let view = settings
-            .add_mcp_server(
-                "tools",
-                NewMcpEndpoint::Stdio {
-                    command: "npx".to_string(),
-                    args: Vec::new(),
-                    env: Vec::new(),
-                },
-            )
-            .unwrap();
+        let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
         let id = view.mcp_servers[0].id.clone();
 
         let err = settings
@@ -1568,16 +1524,7 @@ name = "m"
     #[test]
     fn tools_whose_schema_cannot_be_exposed_cannot_be_enabled() {
         let (settings, _, _dir) = temp_settings();
-        let view = settings
-            .add_mcp_server(
-                "tools",
-                NewMcpEndpoint::Stdio {
-                    command: "npx".to_string(),
-                    args: Vec::new(),
-                    env: Vec::new(),
-                },
-            )
-            .unwrap();
+        let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
         let id = view.mcp_servers[0].id.clone();
         let tool = |name: &str, input_schema: serde_json::Value| mcp::McpToolInfo {
             name: name.to_string(),
@@ -1609,16 +1556,7 @@ name = "m"
     #[test]
     fn enabling_more_external_tools_than_the_limit_is_refused() {
         let (settings, _, _dir) = temp_settings();
-        let view = settings
-            .add_mcp_server(
-                "tools",
-                NewMcpEndpoint::Stdio {
-                    command: "npx".to_string(),
-                    args: Vec::new(),
-                    env: Vec::new(),
-                },
-            )
-            .unwrap();
+        let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
         let id = view.mcp_servers[0].id.clone();
         for i in 0..external::MAX_EXTERNAL_TOOLS {
             settings
@@ -1710,16 +1648,7 @@ name = "m"
         let id = add_local_provider(&settings, "A").providers[0].id.clone();
         let before = ready_adapter(&settings);
 
-        settings
-            .add_mcp_server(
-                "tools",
-                NewMcpEndpoint::Stdio {
-                    command: "npx".to_string(),
-                    args: Vec::new(),
-                    env: Vec::new(),
-                },
-            )
-            .unwrap();
+        settings.add_mcp_server("tools", http_endpoint()).unwrap();
         assert!(Arc::ptr_eq(&before, &ready_adapter(&settings)));
 
         settings.add_models(&id, &["m1"]).unwrap();

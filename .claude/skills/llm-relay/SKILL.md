@@ -9,7 +9,8 @@ description: 疑似API(Sham_llm)とscitl-debug-cliで、APIキーを使わずに
 - **Sham_llm**: LLMのAPIとして振る舞う疑似サーバー。応答の中身は、エージェント(または人)が
   「LLM役」として書く。本体は別リポジトリ[Hue-215/Sham_llm](https://github.com/Hue-215/Sham_llm)
   にあり、受け口・検査の範囲・LLM役の窓口・起動方法はそちらの文書を正とする。このリポジトリには
-  含まれず、今は公開していない
+  含まれず、今は公開していない。外部からの貢献では、この手順の代わりに実際のAPIか手元の推論サーバーで
+  確かめる
 
 LLM役は本物のモデルではない。言い回しやツールの選び方は本物と違いうるので、プロンプトの評価には
 使わない。アダプタが固まったら本物のAPIで一度確かめる。
@@ -127,7 +128,7 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
 | `settings show` / `general` / `tools` / `language <コード>` | 設定の表示・変更 |
 | `provider add` / `delete <P>` / `models <P>` | プロバイダーの登録・削除・提供モデルの問い合わせ |
 | `model add <P> <モデル>...` / `remove` / `select` | モデルの登録・削除・選択 |
-| `mcp add-stdio` / `add-http` / `delete` / `enable` / `disable` / `enable-tool` / `disable-tool` / `fetch-tools` | 外部ツール(MCP)サーバーの登録と管理。秘密情報は`NAME=VAR`(VARは環境変数の名前)で渡す |
+| `mcp add-http` / `delete` / `enable` / `disable` / `enable-tool` / `disable-tool` / `fetch-tools` | 外部ツール(MCP)サーバーの登録と管理。秘密情報は`NAME=VAR`(VARは環境変数の名前)で渡す |
 
 #### 出力と終了コード
 

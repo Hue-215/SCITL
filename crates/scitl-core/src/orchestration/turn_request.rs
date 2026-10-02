@@ -613,10 +613,9 @@ mod tests {
             id: "id".to_string(),
             name: "down".to_string(),
             enabled: true,
-            endpoint: crate::config::McpEndpoint::Stdio {
-                command: "true".to_string(),
-                args: Vec::new(),
-                env_refs: Vec::new(),
+            endpoint: crate::config::McpEndpoint::StreamableHttp {
+                url: "http://127.0.0.1:8000/mcp".to_string(),
+                header_refs: Vec::new(),
             },
             enabled_tools: ["search".to_string()].into(),
         };

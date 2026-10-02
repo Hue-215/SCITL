@@ -34,10 +34,17 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   だけが本番ビルドで失敗する。開発時(devUrl)はこの差が表に出ないので、本番ビルドで確かめる
 - 開発時のVite HMRはWebSocketを使うため、Tauri 2の `devCsp` を本番CSPと分離して設定する
   (開発と本番で同じCSPにしようとして本番を緩めるのが典型的な失敗)
-- **自前コマンドはcapabilities/permissionsでは絞れない**(capabilities/permissionsが
-  規定するのは主にプラグインのコマンドで、`invoke_handler` に登録した自前コマンドは
-  既定でWebViewから到達可能)。実際の制御点は「必要なコマンドだけ登録する」+ CSP +
-  Isolationパターン(IPCを仲介する隔離iframe。多層防御として採否を検討する)
+- **自前コマンドは、既定ではcapabilitiesに関係なくWebViewから到達できる**。ACLに載せるには、
+  `build.rs`で`tauri_build::AppManifest::commands`にコマンドを並べ、capabilitiesで許可する
+  (tauri-build 2.6で確認)。今はウィンドウが1つで、そのウィンドウがすべてのコマンドを使うので
+  載せていない。ウィンドウやWebViewを足すときは載せる。実際の制御点は「必要なコマンドだけ
+  登録する」+ CSP + Isolationパターン(IPCを仲介する隔離iframe。多層防御として採否を検討する)
+- **WebViewを乗っ取られても、ファイルを読ませない・コマンドを実行させない**。パスを受け取る
+  コマンドを持たず(`attachments.md`「受け取り方」・`export.md`)、外部ツールサーバーを子プロセスとして
+  起動する方式も持たない(`../tools.md`「外部(MCP)ツールの公開」)。一方、プロバイダーやMCPサーバーの
+  登録はIPCで行うので、攻撃者のURLを登録して選ばせ、会話を送らせることはできる。WebViewが既に
+  見えている会話のデータを持ち出せる経路として受け入れている。塞ぐには、新しい通信先の登録を
+  ネイティブのダイアログで確かめる必要がある
 - 外部リンクはWebViewから直接開かせない。確認ダイアログに出す判定(スキーム許可リスト・
   ホモグラフ・ユーザー情報)はRust側の `inspect_link` が返し、開く側の `open_confirmed_link` は
   同じ判定を**Rust側でやり直し**、許可された形に正規化したURLだけをOSに委譲する
