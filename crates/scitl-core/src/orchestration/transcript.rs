@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -19,6 +20,9 @@ use crate::llm::{
 /// 保存は使わず、実行記録から組み立て直す(組み立ては今の規則で無害化する)。囲みの読み方の
 /// 説明(`llm::user_message_format_note`)を変えたときも上げる。固定した先頭に前の説明が残り、
 /// 保存した本文を前の説明のまま読ませ続けることになるため。
+///
+/// 画面に出す添付の印([`SentInput`])は、版によらず`input`の含めた行とユーザー発言の画像を読む。
+/// その2つの形を変えるときは、版を上げるだけでなく[`SentInput::read`]も古い形を読めるようにする。
 const FORM_VERSION: u32 = 6;
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
@@ -277,20 +281,29 @@ pub(super) struct SentInput {
 }
 
 impl SentInput {
-    /// 保存の`input`を読む。読めなければ`None`。
+    /// 保存の`input`を読む。読めなければ`None`。本文(添付のテキストを含みうる)は読み飛ばし、
+    /// 値として持たない。
     pub(super) fn read(input: &str) -> Option<Self> {
         #[derive(Deserialize)]
         struct Input {
             rows: Vec<i64>,
-            messages: Vec<serde_json::Value>,
+            messages: Vec<Message>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Message {
+            User { images: Vec<String> },
+            Assistant(IgnoredAny),
+            Tool(IgnoredAny),
         }
         let input: Input = serde_json::from_str(input).ok()?;
         let images = input
             .messages
-            .iter()
-            .filter_map(|m| m.get("user")?.get("images")?.as_array())
-            .flatten()
-            .filter_map(|hash| hash.as_str().map(str::to_string))
+            .into_iter()
+            .flat_map(|m| match m {
+                Message::User { images } => images,
+                Message::Assistant(_) | Message::Tool(_) => Vec::new(),
+            })
             .collect();
         Some(Self {
             rows: input.rows,

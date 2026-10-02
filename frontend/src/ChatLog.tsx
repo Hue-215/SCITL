@@ -111,13 +111,20 @@ export default function ChatLog({
     pending.length > 0
       ? items.length
       : items.findLastIndex((i) => i.kind === 'turn' || i.message.role === 'user')
-  // 応答を生成中に答えているユーザー発言(最後のユーザー発言)。添付を渡したかがまだ決まって
-  // いないので、渡していない印を出さない。
-  const answering = pending.some((entry) => entry.role === 'pending')
-    ? messages.findLast((m) => m.role === 'user' && m.kind === 'normal')?.id
-    : undefined
+  // 応答を生成中に答えているユーザー発言(最後のユーザー発言)。画像を渡したかがまだ決まって
+  // いないので、画像に渡していない印を出さない。送信中は答えている発言がまだ楽観表示にしか無い
+  // (保存済みの最後のユーザー発言は、前の発言)。
+  const answering =
+    pending.some((entry) => entry.role === 'pending') &&
+    !pending.some((entry) => entry.role === 'user')
+      ? messages.findLast((m) => m.role === 'user' && m.kind === 'normal')?.id
+      : undefined
   const undeliveredOf = (message: MessageView) =>
-    message.id === answering ? [] : message.undelivered_attachments
+    message.id === answering
+      ? message.undelivered_attachments.filter(
+          (id) => message.attachments.find((a) => a.id === id)?.kind !== 'image',
+        )
+      : message.undelivered_attachments
   return (
     <ul className="chat-log" ref={logRef} onScroll={onScroll}>
       {items.map((item, index) => {

@@ -139,7 +139,11 @@ function ImageChip({ attachment, size, warning }: ChipOf) {
         label={attachment.original_name}
         detail={size}
         tone={error ? 'error' : warning ? 'warning' : 'normal'}
-        title={error ? t('attachment.load_failed', { error: isolated(error) }) : (warning ?? undefined)}
+        title={
+          [warning, error && t('attachment.load_failed', { error: isolated(error) })]
+            .filter(Boolean)
+            .join('\n') || undefined
+        }
         leading={
           <>
             {warning && warningMark}

@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::attachments::{delivery_without_model, Delivery};
 use crate::db::attachments::{self, AttachmentKind};
 use crate::db::messages::{self, Chat, Kind, Message, Role};
 use crate::db::transcripts;
@@ -43,20 +44,15 @@ pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
 }
 
 /// ユーザー発言の添付のうち、中身をモデルへ渡していないもののidを、発言のidごとに返す
-/// (`docs/spec/architecture/attachments.md`「渡されなかった添付の印」)。渡し方は
-/// `attachments::delivery`に従う。
+/// (`docs/spec/architecture/attachments.md`「渡されなかった添付の印」)。示すのは、その発言に
+/// 答えた試行で渡したかで、今もモデルが見ているかではない。
 ///
-/// - テキストは本文を毎ターン送るので、渡している
-/// - その他の形式は中身を送らないので、渡していない
-/// - 画像は、その発言を入力に含めた試行のうち最後のものの保存(送った形)に載っているかで決める。
-///   保存が無いとき、返信のあるターンが答えていれば送った形を保存する前の会話で分からないので
-///   含めず、返信が無ければ(失敗・停止したターン)渡していない。応答を生成中の発言もこれに当たる
-///   ので、画面はその間の印を出さない
+/// - テキスト・その他は、モデルによらず渡し方が決まる(`attachments::delivery_without_model`)
+/// - 画像は、表示される返信のある試行のうち、その発言を入力に含めたものの送った形の保存に載って
+///   いるかで決める。そうした保存が無いとき、返信があれば送った形を保存する前の会話で分からない
+///   ので含めず、返信が無ければ(失敗・停止したターン)渡していない。応答を生成中の発言もこれに
+///   当たるので、画面はその間の印を出さない
 fn undelivered(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<HashMap<i64, Vec<i64>>> {
-    let users = rows
-        .iter()
-        .filter(|m| m.role == Role::User && !m.attachments.is_empty());
-    let mut out: HashMap<i64, Vec<i64>> = HashMap::new();
     let has_images = rows
         .iter()
         .flat_map(|m| &m.attachments)
@@ -67,14 +63,14 @@ fn undelivered(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<HashMa
     } else {
         None
     };
-    for message in users {
+    let mut out: HashMap<i64, Vec<i64>> = HashMap::new();
+    for message in rows.iter().filter(|m| m.role == Role::User) {
         let ids: Vec<i64> = message
             .attachments
             .iter()
-            .filter(|a| match a.kind {
-                AttachmentKind::Text => false,
-                AttachmentKind::Other => true,
-                AttachmentKind::Image => images
+            .filter(|a| match delivery_without_model(a.kind) {
+                Some(delivery) => delivery == Delivery::NameOnly,
+                None => images
                     .as_ref()
                     .and_then(|images| images.delivered(message.id, a.id))
                     .is_some_and(|delivered| !delivered),
@@ -90,8 +86,9 @@ fn undelivered(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<HashMa
 
 /// 画像の添付を渡したかを決める材料。
 struct SentImages {
-    /// 行のidから、その行を入力に含めた最後の保存の、ユーザー発言に載せた画像の実体のハッシュ。
-    last_input: HashMap<i64, HashSet<String>>,
+    /// 行のidから、その行を入力に含めた保存の、ユーザー発言に載せた画像の実体のハッシュ。
+    /// 表示される返信のある試行の保存だけを使うので、1つの行を含む保存は1つまで。
+    inputs: HashMap<i64, HashSet<String>>,
     /// 添付のidから実体のハッシュ。
     hashes: HashMap<i64, String>,
     /// 返信のあるターンが答えたユーザー発言。
@@ -100,17 +97,27 @@ struct SentImages {
 
 impl SentImages {
     fn load(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<Self> {
-        let mut last_input = HashMap::new();
-        for input in transcripts::inputs_for_chat(conn, chat)? {
+        // 捨てた試行・削除したターンの保存は、以後モデルへ並べないので見ない
+        // (`orchestration::history`が並べる保存と同じ範囲)。
+        let replied_attempts: HashSet<(&str, i64)> = rows
+            .iter()
+            .filter(|m| m.kind == Kind::Normal && m.role == Role::Assistant)
+            .filter_map(|m| Some((m.turn_id.as_deref()?, m.attempt_no?)))
+            .collect();
+        let mut inputs = HashMap::new();
+        for (turn_id, attempt_no, input) in transcripts::inputs_for_chat(conn, chat)? {
+            if !replied_attempts.contains(&(turn_id.as_str(), attempt_no)) {
+                continue;
+            }
             let Some(sent) = SentInput::read(&input) else {
                 continue;
             };
             for row in sent.rows {
-                last_input.insert(row, sent.images.clone());
+                inputs.insert(row, sent.images.clone());
             }
         }
         Ok(Self {
-            last_input,
+            inputs,
             hashes: attachments::file_hashes_in_chat(conn, chat)?,
             replied: replied_users(rows),
         })
@@ -118,7 +125,7 @@ impl SentImages {
 
     /// 発言`message`の画像`attachment`を渡したか。分からなければ`None`。
     fn delivered(&self, message: i64, attachment: i64) -> Option<bool> {
-        match self.last_input.get(&message) {
+        match self.inputs.get(&message) {
             Some(images) => Some(
                 self.hashes
                     .get(&attachment)
@@ -211,23 +218,23 @@ mod tests {
             (id, ids)
         }
 
-        fn reply(&self, turn_id: &str) {
+        fn reply(&self, turn_id: &str, attempt_no: i64) -> i64 {
             self.insert(
                 Role::Assistant,
                 Origin::Turn {
                     turn_id,
-                    attempt_no: 1,
+                    attempt_no,
                 },
                 None,
-            );
+            )
         }
 
-        fn fail(&self, turn_id: &str) {
+        fn fail(&self, turn_id: &str, attempt_no: i64) {
             self.insert(
                 Role::Error,
                 Origin::Turn {
                     turn_id,
-                    attempt_no: 1,
+                    attempt_no,
                 },
                 Some("server_error"),
             );
@@ -277,18 +284,19 @@ mod tests {
     fn text_is_always_delivered_and_other_files_never_are() {
         let f = Fixture::new();
         let (u, ids) = f.user(&[(AttachmentKind::Text, ""), (AttachmentKind::Other, "z")]);
-        f.reply("t1");
+        f.reply("t1", 1);
         assert_eq!(f.undelivered(), HashMap::from([(u, vec![ids[1]])]));
     }
 
     #[test]
-    fn an_image_is_delivered_when_the_last_attempt_taking_its_message_sent_it() {
+    fn an_image_is_delivered_when_the_shown_attempt_sent_it() {
         let f = Fixture::new();
         let (u, ids) = f.user(&[(AttachmentKind::Image, "h1"), (AttachmentKind::Image, "h2")]);
-        f.reply("t1");
         // 画像を読めないモデルへ送ったあと、読めるモデルで1枚だけ送れた試行で作り直した。
+        f.reply("t1", 1);
         f.save("t1", 1, vec![u], &[]);
         assert_eq!(f.undelivered(), HashMap::from([(u, ids.clone())]));
+        f.reply("t1", 2);
         f.save("t1", 2, vec![u], &["h1"]);
         assert_eq!(f.undelivered(), HashMap::from([(u, vec![ids[1]])]));
     }
@@ -297,7 +305,7 @@ mod tests {
     fn an_image_of_a_failed_turn_is_not_delivered_even_after_the_next_message() {
         let f = Fixture::new();
         let (failed, failed_ids) = f.user(&[(AttachmentKind::Image, "h1")]);
-        f.fail("t1");
+        f.fail("t1", 1);
         assert_eq!(
             f.undelivered(),
             HashMap::from([(failed, failed_ids.clone())])
@@ -305,16 +313,35 @@ mod tests {
 
         // 次の発言の試行は、失敗した発言も入力に含めるが、画像は直近の発言の分だけを載せる。
         let (next, _) = f.user(&[(AttachmentKind::Image, "h2")]);
-        f.reply("t2");
+        f.reply("t2", 1);
         f.save("t2", 1, vec![failed, next], &["h2"]);
         assert_eq!(f.undelivered(), HashMap::from([(failed, failed_ids)]));
+    }
+
+    /// 送れた試行を作り直して失敗した・返信を消したら、その保存はもう並べないので渡していない。
+    #[test]
+    fn a_saved_attempt_that_is_no_longer_shown_does_not_count() {
+        let f = Fixture::new();
+        let (u, ids) = f.user(&[(AttachmentKind::Image, "h1")]);
+        f.reply("t1", 1);
+        f.save("t1", 1, vec![u], &["h1"]);
+        assert_eq!(f.undelivered(), HashMap::new());
+        f.fail("t1", 2);
+        assert_eq!(f.undelivered(), HashMap::from([(u, ids.clone())]));
+
+        let g = Fixture::new();
+        let (u, ids) = g.user(&[(AttachmentKind::Image, "h1")]);
+        let reply = g.reply("t1", 1);
+        g.save("t1", 1, vec![u], &["h1"]);
+        messages::soft_delete_message(&g.conn, reply).unwrap();
+        assert_eq!(g.undelivered(), HashMap::from([(u, ids)]));
     }
 
     #[test]
     fn an_image_answered_before_attempts_were_saved_is_left_unknown() {
         let f = Fixture::new();
         f.user(&[(AttachmentKind::Image, "h1")]);
-        f.reply("t1");
+        f.reply("t1", 1);
         assert_eq!(f.undelivered(), HashMap::new());
     }
 }
