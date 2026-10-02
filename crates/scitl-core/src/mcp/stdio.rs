@@ -140,8 +140,9 @@ impl ChildWrapper for KillGroupAfterExitChild {
         Box::pin(async {
             #[cfg(unix)]
             let status = self.0.wait().await;
-            // `JobObjectChild`の`wait`は、ジョブの成員が全員終了するまで返らない。孫が残っていると
-            // `rmcp`が待ちを打ち切るまで閉じられないので、その内側(起動した子そのもの)の終了だけを待つ。
+            // `JobObjectChild`の`wait`は、ジョブの成員全員の終了を待つものとされている(10.0.0では
+            // 孫が残っていても返るが、文書どおりになると孫が居る間は返らなくなる)。それに依らず、
+            // その内側(起動した子そのもの)の終了だけを待つ。
             #[cfg(windows)]
             let status = self.0.inner_mut().wait().await;
             // 内側は`ProcessGroupChild`(Windowsでは`JobObjectChild`)なので、`start_kill`は
@@ -221,12 +222,15 @@ mod tests {
     /// `initialize`にだけ応答する偽のMCPサーバー。受け取った環境変数と、自分が起動した
     /// 孫プロセスのPIDを、第1引数のディレクトリに書き出す。第2引数が`linger`なら、
     /// 標準入力が閉じられても終了せずに居座る。
+    ///
+    /// Windows版は、孫に標準入出力を引き継がせない(孫の出力が応答に混ざるため)。スクリプトは
+    /// ASCIIだけで書く。Windows PowerShellはBOMの無いスクリプトをOSの既定の文字コードで読むので、
+    /// 日本語のコメントを置くと、環境によっては次の行まで巻き込んで読まれる。
     #[cfg(windows)]
     const FAKE_SERVER: &str = r#"
 param($out, $mode)
 $vars = Get-ChildItem env: | ForEach-Object { "$($_.Name)=$($_.Value)" }
 [IO.File]::WriteAllLines("$out\env", [string[]]$vars)
-# 孫には標準入出力を引き継がせない(孫の出力が応答に混ざるため)。
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = "$env:SYSTEMROOT\System32\ping.exe"
 $psi.Arguments = '-n 60 127.0.0.1'
@@ -416,8 +420,9 @@ if [ "$2" = linger ]; then sleep 60; fi
         );
     }
 
-    /// 子が標準入力の終了を受けて自分で終了すると`rmcp`は`kill()`を呼ばないので、
-    /// グループの残りを止めるのは`KillGroupAfterExit`だけになる。
+    /// 子が標準入力の終了を受けて自分で終了すると`rmcp`は`kill()`を呼ばないので、Unixでは
+    /// グループの残りを止めるのは`KillGroupAfterExit`だけになる(Windowsでは、子を落とした
+    /// ときにジョブのハンドルが閉じることでも止まる)。
     #[tokio::test]
     async fn closing_kills_the_grandchildren_of_a_server_that_exits_on_its_own() {
         let scratch = Scratch::new();
