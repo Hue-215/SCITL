@@ -263,7 +263,7 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 | model | TEXT | NOT NULL。送ったモデル名(記録として持つ) |
 | server | TEXT | NULL可。送った要求URLのオリジン(スキーム・ホスト・ポート)。思考を同じ送り先にだけ送り返すために見る。パスは持たない(鍵を置くゲートウェイがあるため)。NULL=列を足す前の行で、使わない |
 | system_digest | TEXT | NOT NULL。先頭に置いたシステムプロンプト(`transcript_blobs`) |
-| settings_system_digest | TEXT | NOT NULL。そのとき設定から作ったシステムプロンプト(`transcript_blobs`)。先頭と違えば入力に変更の通知を置いた |
+| settings_system_digest | TEXT | NOT NULL。そのとき設定から作ったシステムプロンプト(`transcript_blobs`)。記録として残し、変更の通知を置くかの判断には使わない(並びに残った通知で決める。`architecture/transcript.md`「通知を置く条件」) |
 | tools_digest | TEXT | NOT NULL。渡したツール定義の一覧(`transcript_blobs`) |
 | prefix_digest | TEXT | NOT NULL。入力より前(system・ツール定義・それまでの発言列)の指紋 |
 | history_start | INTEGER | NULL可。最初に並べたユーザー発言の`messages.id`(間引きの位置。その発言に置いた操作の記録も一緒に並ぶ)。NULL=会話の最初から |
