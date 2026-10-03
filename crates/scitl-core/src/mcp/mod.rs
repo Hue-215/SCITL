@@ -1,9 +1,10 @@
 //! 外部ツールサーバー(MCP)クライアント。サーバーへの接続・ツール一覧の取得と、応答生成
 //! 1ターンの中でのツール呼び出しを担う。
 //!
-//! 接続は1ターンの間だけ張り、ターンが終われば切断する([`McpSessions`])。設定画面からの
-//! ツール一覧取得は1回ごとに開いて閉じる。取得したツール一覧はアプリ起動中だけ
-//! [`ToolCatalog`]に持ち、config.tomlには書かない(サーバー側の更新に追従できないため)。
+//! 接続は1ターンの間だけ張り、ターンが終われば切断する([`McpSessions`])。ターンの始めの
+//! ツール一覧取得は、サーバーごとに並行して接続する。設定画面からのツール一覧取得は1回ごとに
+//! 開いて閉じる。取得したツール一覧はアプリ起動中だけ[`ToolCatalog`]に持ち、config.tomlには
+//! 書かない(サーバー側の更新に追従できないため)。
 //!
 //! 接続方式はstreamable_httpだけ。サーバーを子プロセスとして起動する方式(stdio)は持たない
 //! (`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
@@ -41,6 +42,18 @@ const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(30);
 /// (`orchestration::ToolLimits`)、ターン側は呼び出しの区切りで判定するだけで、実行中の
 /// 呼び出しは打ち切らない。1回の呼び出しが長居しないよう、ここで上限を掛ける。
 const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+/// ターンの始めのツール一覧取得が、続けてこの回数だけ待たされた末に失敗した([`SLOW_FAILURE`])
+/// サーバーは、アプリ起動中はターンで試さない([`ToolCatalog::gave_up`])。応答しないサーバー1台の
+/// ために、毎ターン待たないため。すぐ失敗するもの(接続の拒否・オフライン等)はターンを待たせない
+/// ので数えない(数え直しもしない。回線やサーバーが戻れば次のターンで使える)。設定画面でサーバーを
+/// 有効にし直すか、ツール一覧の取得に成功すると数え直す。
+/// 今は固定値で、数値の設定から変えられるようにする余地を残してここに置く。
+pub const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+/// 失敗までにこれ以上かかったら、待たされた末の失敗として[`MAX_CONSECUTIVE_FAILURES`]に数える。
+/// 失敗の種類ではなく時間で見るのは、待たされ方が経路によって違うため(こちらのタイムアウトの
+/// ほか、HTTPクライアントの接続のタイムアウト(`net`、10秒)や名前解決のタイムアウト)。拒否された
+/// SYNを送り直すOS(約2秒)は、すぐ失敗する側に入る。秘密情報の読み出し(承認を待ちうる)は測らない。
+const SLOW_FAILURE: Duration = Duration::from_secs(5);
 /// 切断の上限。ここに上限が無いと、graceful shutdownに応じないサーバーが1台あるだけで、
 /// 応答を保存し終えたあとのターンが切断待ちのまま返らなくなる。
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -72,10 +85,12 @@ pub struct McpToolInfo {
 }
 
 /// 取得済みツール一覧のメモリキャッシュ。設定画面の表示と、ターン開始時のツール公開の
-/// 両方がここを読む。
+/// 両方がここを読む。ターンでの一覧取得が続けて待たされた末に失敗した回数も、アプリ起動中だけ
+/// ここに持つ。
 #[derive(Debug, Default)]
 pub struct ToolCatalog {
     by_server: Mutex<HashMap<String, Vec<McpToolInfo>>>,
+    failures: Mutex<HashMap<String, u32>>,
 }
 
 impl ToolCatalog {
@@ -87,17 +102,44 @@ impl ToolCatalog {
         self.lock().get(server_id).cloned()
     }
 
+    /// 取得できた一覧を載せる。続けて失敗した回数は数え直す。
     pub fn store(&self, server_id: &str, tools: Vec<McpToolInfo>) {
         self.lock().insert(server_id.to_string(), tools);
+        self.failures().remove(server_id);
     }
 
     /// サーバーの削除・接続先の変更でキャッシュを捨てる。
     pub fn forget(&self, server_id: &str) {
         self.lock().remove(server_id);
+        self.failures().remove(server_id);
+    }
+
+    /// ターンでの一覧取得が待たされた末に失敗したことを数える。試すのをやめる回数に達したら`true`。
+    pub fn record_failure(&self, server_id: &str) -> bool {
+        let mut failures = self.failures();
+        let count = failures.entry(server_id.to_string()).or_default();
+        *count = count.saturating_add(1);
+        *count >= MAX_CONSECUTIVE_FAILURES
+    }
+
+    /// 続けて待たされた末に失敗したので、ターンでは試さないサーバーか([`MAX_CONSECUTIVE_FAILURES`])。
+    pub fn gave_up(&self, server_id: &str) -> bool {
+        self.failures()
+            .get(server_id)
+            .is_some_and(|count| *count >= MAX_CONSECUTIVE_FAILURES)
+    }
+
+    /// 失敗の回数を数え直し、次のターンでまた試す(設定画面でサーバーを有効にし直したとき)。
+    pub fn retry(&self, server_id: &str) {
+        self.failures().remove(server_id);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Vec<McpToolInfo>>> {
         self.by_server.lock().expect("tool catalog mutex poisoned")
+    }
+
+    fn failures(&self) -> std::sync::MutexGuard<'_, HashMap<String, u32>> {
+        self.failures.lock().expect("tool catalog mutex poisoned")
     }
 }
 
@@ -120,16 +162,82 @@ impl McpSessions {
         server: &McpServerConfig,
     ) -> Result<Vec<McpToolInfo>, CoreError> {
         let service = self.session(server).await?;
-        let result = tokio::time::timeout(LIST_TOOLS_TIMEOUT, service.list_tools(None))
-            .await
-            .map_err(|_| CoreError::Mcp("timed out listing tools".to_string()))?
-            .map_err(|e| {
-                CoreError::Mcp(format!(
-                    "failed to list tools: {}",
-                    describe_server_error(&e)
-                ))
-            })?;
-        Ok(result.tools.into_iter().map(to_tool_info).collect())
+        list_tools_of(service).await
+    }
+
+    /// 複数のサーバーのツール一覧を、サーバーごとに並行して接続して取得する。待つのは
+    /// 一番遅い1台の分になる。結果は渡した順に返す。繋がった接続は、一覧の取得に失敗しても
+    /// このターンの間は残す(呼び出しに使い回し、[`Self::close`]で閉じる)。
+    ///
+    /// まだ接続していないサーバーだけを渡すこと(ターンの始めに呼ぶ)。返る前にこのfutureを
+    /// 捨てると(停止の指示)、待つのをやめて結果を捨てる。一覧の取得の途中の接続はその場で
+    /// 切れるが、接続の途中(`initialize`の応答待ち)のものは、rmcpの内部のタスクがサーバーが
+    /// 閉じるまで残る(rmcp 3.4.0。タイムアウトで捨てるときも同じ)。
+    pub async fn list_tools_all(
+        &mut self,
+        servers: &[&McpServerConfig],
+    ) -> Vec<Result<Vec<McpToolInfo>, McpFailure>> {
+        let mut tasks = tokio::task::JoinSet::new();
+        for (index, server) in servers.iter().enumerate() {
+            let server = (*server).clone();
+            tasks.spawn(async move {
+                // 秘密情報の読み出し(資格情報ストアのロック解除の承認を待ちうる)は、サーバーに
+                // 待たされた時間に入れない。
+                let headers = match endpoint_headers(&server).await {
+                    Ok(headers) => headers,
+                    Err(error) => {
+                        let failure = McpFailure {
+                            error,
+                            waited: false,
+                        };
+                        return (index, server.id, None, Err(failure));
+                    }
+                };
+                // 止めた時間で進めるテストでも測れるよう、tokioの時計で測る。
+                let started = tokio::time::Instant::now();
+                let (service, listed) = match connect_with(&server, headers).await {
+                    Ok(service) => {
+                        let listed = list_tools_of(&service).await;
+                        (Some(service), listed)
+                    }
+                    Err(e) => (None, Err(e)),
+                };
+                let listed = listed.map_err(|error| McpFailure {
+                    error,
+                    waited: started.elapsed() >= SLOW_FAILURE,
+                });
+                (index, server.id, service, listed)
+            });
+        }
+        let mut results: Vec<Option<Result<Vec<McpToolInfo>, McpFailure>>> =
+            servers.iter().map(|_| None).collect();
+        while let Some(joined) = tasks.join_next().await {
+            // 中断(パニック)したタスクは、どのサーバーの分か分からないので下で失敗にする。
+            let (index, server_id, service, listed) = match joined {
+                Ok(joined) => joined,
+                Err(e) => {
+                    crate::diagnostics::report(format_args!(
+                        "a task listing MCP tools stopped unexpectedly: {e}"
+                    ));
+                    continue;
+                }
+            };
+            if let Some(service) = service {
+                self.by_server.insert(server_id, service);
+            }
+            results[index] = Some(listed);
+        }
+        results
+            .into_iter()
+            .map(|listed| {
+                listed.unwrap_or_else(|| {
+                    Err(McpFailure {
+                        error: CoreError::Mcp("listing tools stopped unexpectedly".to_string()),
+                        waited: false,
+                    })
+                })
+            })
+            .collect()
     }
 
     /// ツールを1件呼び出し、結果をモデルへ渡せるJSONに変換して返す。
@@ -213,11 +321,53 @@ fn call_params(tool_name: &str, arguments: Option<Map<String, Value>>) -> CallTo
     params
 }
 
+/// ターンの始めの接続・ツール一覧取得の失敗。待たされた末の失敗か([`SLOW_FAILURE`])を添える。
+/// ターンで試すのをやめるかの判断([`MAX_CONSECUTIVE_FAILURES`])は、待たされた失敗だけを数える。
+#[derive(Debug)]
+pub struct McpFailure {
+    pub error: CoreError,
+    pub waited: bool,
+}
+
+/// 接続済みのサーバーからツール一覧を取得する。
+async fn list_tools_of(service: &ClientService) -> Result<Vec<McpToolInfo>, CoreError> {
+    let result = tokio::time::timeout(LIST_TOOLS_TIMEOUT, service.list_tools(None))
+        .await
+        .map_err(|_| CoreError::Mcp("timed out listing tools".to_string()))?
+        .map_err(|e| {
+            CoreError::Mcp(format!(
+                "failed to list tools: {}",
+                describe_server_error(&e)
+            ))
+        })?;
+    Ok(result.tools.into_iter().map(to_tool_info).collect())
+}
+
 /// サーバーへ接続する。接続自体にもタイムアウトを設ける(応答しないサーバーで
 /// ターンが止まらないようにする)。
 async fn connect(server: &McpServerConfig) -> Result<ClientService, CoreError> {
-    let McpEndpoint::StreamableHttp { url, header_refs } = &server.endpoint;
-    tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, header_refs))
+    let headers = endpoint_headers(server).await?;
+    connect_with(server, headers).await
+}
+
+/// 登録したヘッダーの秘密情報を読む。資格情報ストアのロック解除の承認を待ちうるので、接続と
+/// 同じ上限を掛ける。
+async fn endpoint_headers(
+    server: &McpServerConfig,
+) -> Result<HashMap<reqwest::header::HeaderName, reqwest::header::HeaderValue>, CoreError> {
+    let McpEndpoint::StreamableHttp { header_refs, .. } = &server.endpoint;
+    tokio::time::timeout(CONNECT_TIMEOUT, http::headers(header_refs))
+        .await
+        .map_err(|_| CoreError::Mcp("timed out reading MCP server secrets".to_string()))?
+}
+
+/// 読み出したヘッダーを付けて接続する。
+async fn connect_with(
+    server: &McpServerConfig,
+    headers: HashMap<reqwest::header::HeaderName, reqwest::header::HeaderValue>,
+) -> Result<ClientService, CoreError> {
+    let McpEndpoint::StreamableHttp { url, .. } = &server.endpoint;
+    tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, headers))
         .await
         .map_err(|_| CoreError::Mcp("timed out connecting to MCP server".to_string()))?
 }
@@ -501,5 +651,224 @@ mod tests {
         assert!(validate_header_value("normal-value").is_ok());
         assert!(validate_header_value("bad\r\nX-Injected: 1").is_err());
         assert!(validate_header_value("Bearer\u{3000}token").is_err());
+    }
+
+    #[test]
+    fn the_catalog_gives_up_on_a_server_after_consecutive_failures_until_it_is_retried() {
+        let catalog = ToolCatalog::new();
+        for _ in 1..MAX_CONSECUTIVE_FAILURES {
+            assert!(!catalog.record_failure("s"));
+        }
+        assert!(!catalog.gave_up("s"));
+        assert!(catalog.record_failure("s"));
+        assert!(catalog.gave_up("s"));
+        assert!(!catalog.gave_up("other"));
+
+        catalog.retry("s");
+        assert!(!catalog.gave_up("s"));
+
+        // 間に成功を挟めば、続けての失敗ではない。
+        for _ in 1..MAX_CONSECUTIVE_FAILURES {
+            catalog.record_failure("s");
+        }
+        catalog.store("s", Vec::new());
+        assert!(!catalog.record_failure("s"));
+    }
+
+    /// `initialize`と`tools/list`に、それぞれ`initialize_delay`・`list_delay`だけ待ってから
+    /// 答える最小のサーバー。
+    async fn slow_server(initialize_delay: Duration, list_delay: Duration) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    // ヘッダーと、Content-Length分の本文を読む。
+                    let body = loop {
+                        let n = socket.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                        let text = String::from_utf8_lossy(&request).to_string();
+                        let Some(end) = text.find("\r\n\r\n") else {
+                            continue;
+                        };
+                        let length = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                let (name, value) = l.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())?
+                            })
+                            .unwrap_or(0);
+                        if text.len() >= end + 4 + length {
+                            break text[end + 4..end + 4 + length].to_string();
+                        }
+                    };
+                    let message: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                    let delay = match message["method"].as_str() {
+                        Some("tools/list") => list_delay,
+                        _ => initialize_delay,
+                    };
+                    let reply = match message["method"].as_str() {
+                        Some("initialize") => json!({
+                            "jsonrpc": "2.0", "id": message["id"],
+                            "result": {
+                                "protocolVersion": message["params"]["protocolVersion"],
+                                "capabilities": { "tools": {} },
+                                "serverInfo": { "name": "slow", "version": "1" },
+                            },
+                        }),
+                        Some("tools/list") => json!({
+                            "jsonrpc": "2.0", "id": message["id"],
+                            "result": { "tools": [
+                                { "name": "echo", "inputSchema": { "type": "object" } },
+                            ] },
+                        }),
+                        _ => Value::Null,
+                    };
+                    let response = if reply.is_null() {
+                        "HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                            .to_string()
+                    } else {
+                        tokio::time::sleep(delay).await;
+                        let reply = reply.to_string();
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                            reply.len()
+                        )
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/mcp")
+    }
+
+    fn server_at(id: &str, url: String) -> McpServerConfig {
+        McpServerConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            endpoint: McpEndpoint::StreamableHttp {
+                url,
+                header_refs: Vec::new(),
+            },
+            enabled_tools: Default::default(),
+        }
+    }
+
+    /// サーバーごとに並行して接続するので、待つのは一番遅い1台の分で済む。結果は渡した順。
+    #[tokio::test]
+    async fn listing_tools_of_several_servers_waits_only_for_the_slowest() {
+        let delay = Duration::from_millis(500);
+        let mut servers = Vec::new();
+        for id in ["a", "b", "c"] {
+            servers.push(server_at(id, slow_server(delay, delay).await));
+        }
+        // 接続を受けてすぐ閉じるサーバー。すぐ失敗する(listenしないポートだと、Windowsは
+        // 拒否されたSYNを送り直すので、失敗までに約2秒かかる)。
+        let closing = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closing_addr = closing.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = closing.accept().await {
+                drop(socket);
+            }
+        });
+        servers.insert(1, server_at("down", format!("http://{closing_addr}/mcp")));
+
+        let mut sessions = McpSessions::new();
+        let started = std::time::Instant::now();
+        let listed = sessions
+            .list_tools_all(&servers.iter().collect::<Vec<_>>())
+            .await;
+        let elapsed = started.elapsed();
+        sessions.close().await;
+
+        // 1台あたり、接続(initialize)と一覧で2回待つ。逐次なら3台で6回分になる。
+        assert!(elapsed < delay * 4, "took {elapsed:?}");
+        let names: Vec<_> = listed
+            .iter()
+            .map(|r| r.as_ref().map(|tools| tools[0].name.clone()).ok())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                Some("echo".to_string()),
+                None,
+                Some("echo".to_string()),
+                Some("echo".to_string())
+            ]
+        );
+    }
+
+    /// タイムアウトは、待たされた末の失敗になる。タイムアウトを実時間で待たないよう、時間を
+    /// 止めて進める(止めた時計はループバックの応答を待つ間にも進むので、どの段でタイムアウト
+    /// するかは決まらない。段によらないことは下の、タイムアウトでない遅い失敗で確かめる)。
+    #[tokio::test(start_paused = true)]
+    async fn a_failure_after_a_timeout_is_marked_as_waited() {
+        let hanging = server_at(
+            "hanging",
+            slow_server(Duration::ZERO, LIST_TOOLS_TIMEOUT * 2).await,
+        );
+        let mut sessions = McpSessions::new();
+        let listed = sessions.list_tools_all(&[&hanging]).await;
+        sessions.close().await;
+        let failure = listed[0].as_ref().unwrap_err();
+        assert!(failure.waited);
+        let error = failure.error.to_string();
+        assert!(error.contains("timed out"), "{error}");
+    }
+
+    /// タイムアウトでなくても、失敗までに待たされたら待たされた失敗になる(HTTPクライアントの
+    /// 接続のタイムアウトのように、こちらのタイムアウトより先に別の段で失敗する場合)。
+    /// ここではサーバーが黙ったまま6秒経ってから接続を閉じる。時間を止めて進める。
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_failure_is_marked_as_waited_even_without_a_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    tokio::time::sleep(SLOW_FAILURE + Duration::from_secs(1)).await;
+                    drop(socket);
+                });
+            }
+        });
+        let slow = server_at("slow", format!("http://{addr}/mcp"));
+
+        let mut sessions = McpSessions::new();
+        let listed = sessions.list_tools_all(&[&slow]).await;
+        sessions.close().await;
+        let failure = listed[0].as_ref().unwrap_err();
+        assert!(failure.waited);
+        assert!(
+            !failure.error.to_string().contains("timed out"),
+            "{}",
+            failure.error
+        );
+    }
+
+    /// すぐ閉じられた接続は、待たされていない失敗になる。かかった時間で見るので、実時間で試す
+    /// (時間を止めると、通信を待つ間に時計が次のタイマーまで進む)。
+    #[tokio::test]
+    async fn a_failure_that_comes_at_once_is_not_marked_as_waited() {
+        let closing = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closing_addr = closing.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = closing.accept().await {
+                drop(socket);
+            }
+        });
+        let closing = server_at("closing", format!("http://{closing_addr}/mcp"));
+        let mut sessions = McpSessions::new();
+        let listed = sessions.list_tools_all(&[&closing]).await;
+        sessions.close().await;
+        assert!(listed[0].as_ref().is_err_and(|f| !f.waited));
     }
 }

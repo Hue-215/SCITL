@@ -552,6 +552,20 @@ fn mcp_server_name_must_be_unique() {
     assert!(matches!(err, CoreError::InvalidSettings(_)));
 }
 
+/// 試すのをやめたサーバーも、有効にし直せば次のターンでまた試す。無効にしただけでは数え直さない。
+#[test]
+fn re_enabling_an_mcp_server_tries_it_again() {
+    let (settings, _, _dir) = temp_settings();
+    let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
+    let id = view.mcp_servers[0].id.clone();
+    while !settings.mcp_tools.record_failure(&id) {}
+
+    settings.set_mcp_server_enabled(&id, false).unwrap();
+    assert!(settings.mcp_tools.gave_up(&id));
+    settings.set_mcp_server_enabled(&id, true).unwrap();
+    assert!(!settings.mcp_tools.gave_up(&id));
+}
+
 #[test]
 fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
     let (settings, _, _dir) = temp_settings();
