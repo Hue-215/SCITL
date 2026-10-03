@@ -42,9 +42,11 @@ const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(30);
 /// (`orchestration::ToolLimits`)、ターン側は呼び出しの区切りで判定するだけで、実行中の
 /// 呼び出しは打ち切らない。1回の呼び出しが長居しないよう、ここで上限を掛ける。
 const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
-/// ターンの始めのツール一覧取得に、続けてこの回数だけ失敗したサーバーは、アプリ起動中は
+/// ターンの始めのツール一覧取得が、続けてこの回数だけタイムアウトしたサーバーは、アプリ起動中は
 /// ターンで試さない([`ToolCatalog::gave_up`])。応答しないサーバー1台のために、毎ターン
-/// 接続と一覧取得のタイムアウトを待たないため。設定画面でサーバーを有効にし直すと数え直す。
+/// 接続と一覧取得のタイムアウトを待たないため。すぐ失敗するもの(接続の拒否・オフライン等)は
+/// ターンを待たせないので数えない(数え直しもしない。回線やサーバーが戻れば次のターンで使える)。設定画面でサーバーを有効にし直すか、ツール一覧の
+/// 取得に成功すると数え直す。
 /// 今は固定値で、数値の設定から変えられるようにする余地を残してここに置く。
 pub const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// 切断の上限。ここに上限が無いと、graceful shutdownに応じないサーバーが1台あるだけで、
@@ -78,7 +80,7 @@ pub struct McpToolInfo {
 }
 
 /// 取得済みツール一覧のメモリキャッシュ。設定画面の表示と、ターン開始時のツール公開の
-/// 両方がここを読む。ターンでの一覧取得に続けて失敗した回数も、アプリ起動中だけここに持つ。
+/// 両方がここを読む。ターンでの一覧取得が続けてタイムアウトした回数も、アプリ起動中だけここに持つ。
 #[derive(Debug, Default)]
 pub struct ToolCatalog {
     by_server: Mutex<HashMap<String, Vec<McpToolInfo>>>,
@@ -106,7 +108,7 @@ impl ToolCatalog {
         self.failures().remove(server_id);
     }
 
-    /// ターンでの一覧取得に失敗したことを数える。試すのをやめる回数に達したら`true`。
+    /// ターンでの一覧取得がタイムアウトしたことを数える。試すのをやめる回数に達したら`true`。
     pub fn record_failure(&self, server_id: &str) -> bool {
         let mut failures = self.failures();
         let count = failures.entry(server_id.to_string()).or_default();
@@ -114,7 +116,7 @@ impl ToolCatalog {
         *count >= MAX_CONSECUTIVE_FAILURES
     }
 
-    /// 続けて失敗したので、ターンでは試さないサーバーか([`MAX_CONSECUTIVE_FAILURES`])。
+    /// 続けてタイムアウトしたので、ターンでは試さないサーバーか([`MAX_CONSECUTIVE_FAILURES`])。
     pub fn gave_up(&self, server_id: &str) -> bool {
         self.failures()
             .get(server_id)
@@ -154,7 +156,7 @@ impl McpSessions {
         server: &McpServerConfig,
     ) -> Result<Vec<McpToolInfo>, CoreError> {
         let service = self.session(server).await?;
-        list_tools_of(service).await
+        Ok(list_tools_of(service).await?)
     }
 
     /// 複数のサーバーのツール一覧を、サーバーごとに並行して接続して取得する。待つのは
@@ -162,11 +164,13 @@ impl McpSessions {
     /// このターンの間は残す(呼び出しに使い回し、[`Self::close`]で閉じる)。
     ///
     /// まだ接続していないサーバーだけを渡すこと(ターンの始めに呼ぶ)。返る前にこのfutureを
-    /// 捨てると(停止の指示)、接続の途中のものも打ち切って捨てる。
+    /// 捨てると(停止の指示)、待つのをやめて結果を捨てる。一覧の取得の途中の接続はその場で
+    /// 切れるが、接続の途中(`initialize`の応答待ち)のものは、rmcpの内部のタスクがサーバーが
+    /// 閉じるまで残る(rmcp 3.4.0。タイムアウトで捨てるときも同じ)。
     pub async fn list_tools_all(
         &mut self,
         servers: &[&McpServerConfig],
-    ) -> Vec<Result<Vec<McpToolInfo>, CoreError>> {
+    ) -> Vec<Result<Vec<McpToolInfo>, McpFailure>> {
         let mut tasks = tokio::task::JoinSet::new();
         for (index, server) in servers.iter().enumerate() {
             let server = (*server).clone();
@@ -181,12 +185,18 @@ impl McpSessions {
                 (index, server.id, service, listed)
             });
         }
-        let mut results: Vec<Option<Result<Vec<McpToolInfo>, CoreError>>> =
+        let mut results: Vec<Option<Result<Vec<McpToolInfo>, McpFailure>>> =
             servers.iter().map(|_| None).collect();
         while let Some(joined) = tasks.join_next().await {
             // 中断(パニック)したタスクは、どのサーバーの分か分からないので下で失敗にする。
-            let Ok((index, server_id, service, listed)) = joined else {
-                continue;
+            let (index, server_id, service, listed) = match joined {
+                Ok(joined) => joined,
+                Err(e) => {
+                    crate::diagnostics::report(format_args!(
+                        "a task listing MCP tools stopped unexpectedly: {e}"
+                    ));
+                    continue;
+                }
             };
             if let Some(service) = service {
                 self.by_server.insert(server_id, service);
@@ -197,9 +207,9 @@ impl McpSessions {
             .into_iter()
             .map(|listed| {
                 listed.unwrap_or_else(|| {
-                    Err(CoreError::Mcp(
+                    Err(McpFailure::failed(CoreError::Mcp(
                         "listing tools stopped unexpectedly".to_string(),
-                    ))
+                    )))
                 })
             })
             .collect()
@@ -286,27 +296,58 @@ fn call_params(tool_name: &str, arguments: Option<Map<String, Value>>) -> CallTo
     params
 }
 
+/// 接続・ツール一覧取得の失敗。応答を待ちきれずに諦めた(タイムアウトした)かを添える。
+/// ターンで試すのをやめるかの判断([`MAX_CONSECUTIVE_FAILURES`])は、タイムアウトだけを数える。
+#[derive(Debug)]
+pub struct McpFailure {
+    pub error: CoreError,
+    pub timed_out: bool,
+}
+
+impl McpFailure {
+    fn failed(error: CoreError) -> Self {
+        Self {
+            error,
+            timed_out: false,
+        }
+    }
+
+    fn timed_out(message: &str) -> Self {
+        Self {
+            error: CoreError::Mcp(message.to_string()),
+            timed_out: true,
+        }
+    }
+}
+
+impl From<McpFailure> for CoreError {
+    fn from(failure: McpFailure) -> Self {
+        failure.error
+    }
+}
+
 /// 接続済みのサーバーからツール一覧を取得する。
-async fn list_tools_of(service: &ClientService) -> Result<Vec<McpToolInfo>, CoreError> {
+async fn list_tools_of(service: &ClientService) -> Result<Vec<McpToolInfo>, McpFailure> {
     let result = tokio::time::timeout(LIST_TOOLS_TIMEOUT, service.list_tools(None))
         .await
-        .map_err(|_| CoreError::Mcp("timed out listing tools".to_string()))?
+        .map_err(|_| McpFailure::timed_out("timed out listing tools"))?
         .map_err(|e| {
-            CoreError::Mcp(format!(
+            McpFailure::failed(CoreError::Mcp(format!(
                 "failed to list tools: {}",
                 describe_server_error(&e)
-            ))
+            )))
         })?;
     Ok(result.tools.into_iter().map(to_tool_info).collect())
 }
 
 /// サーバーへ接続する。接続自体にもタイムアウトを設ける(応答しないサーバーで
 /// ターンが止まらないようにする)。
-async fn connect(server: &McpServerConfig) -> Result<ClientService, CoreError> {
+async fn connect(server: &McpServerConfig) -> Result<ClientService, McpFailure> {
     let McpEndpoint::StreamableHttp { url, header_refs } = &server.endpoint;
     tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, header_refs))
         .await
-        .map_err(|_| CoreError::Mcp("timed out connecting to MCP server".to_string()))?
+        .map_err(|_| McpFailure::timed_out("timed out connecting to MCP server"))?
+        .map_err(McpFailure::failed)
 }
 
 /// サーバーへ接続し、ツール一覧を取得して切断する(設定画面からの1回限りの取得)。
@@ -703,16 +744,16 @@ mod tests {
         for id in ["a", "b", "c"] {
             servers.push(server_at(id, slow_server(delay).await));
         }
-        // bindしたままlistenしないソケット。接続はすぐ拒否される。
-        let refusing = tokio::net::TcpSocket::new_v4().unwrap();
-        refusing.bind(([127, 0, 0, 1], 0).into()).unwrap();
-        servers.insert(
-            1,
-            server_at(
-                "down",
-                format!("http://{}/mcp", refusing.local_addr().unwrap()),
-            ),
-        );
+        // 接続を受けてすぐ閉じるサーバー。すぐ失敗する(listenしないポートだと、Windowsは
+        // 拒否されたSYNを送り直すので、失敗までに約2秒かかる)。
+        let closing = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closing_addr = closing.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = closing.accept().await {
+                drop(socket);
+            }
+        });
+        servers.insert(1, server_at("down", format!("http://{closing_addr}/mcp")));
 
         let mut sessions = McpSessions::new();
         let started = std::time::Instant::now();

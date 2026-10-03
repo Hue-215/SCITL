@@ -595,10 +595,31 @@ fn mcp_server_at(addr: std::net::SocketAddr) -> Vec<McpServerConfig> {
     }]
 }
 
-/// 続けて一覧を取得できなかったサーバーには、以後のターンで接続しに行かない
-/// (`mcp::MAX_CONSECUTIVE_FAILURES`)。
+/// 1ターン送る(外部ツールは`servers`、キャッシュは`catalog`)。
+async fn turn_with_mcp(
+    db: &SharedConnection,
+    task_id: i64,
+    servers: &[McpServerConfig],
+    catalog: &ToolCatalog,
+) {
+    let adapter = sets_the_title();
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            mcp: McpAccess::new(servers, catalog),
+            ..context(&adapter)
+        },
+        Chat::Task(task_id),
+        "タイトルを「買い物」にして".to_string(),
+    )
+    .await
+    .unwrap();
+}
+
+/// すぐ失敗するサーバー(接続の拒否・オフライン等)はターンを待たせないので、何度失敗しても
+/// 試し続ける(戻れば次のターンで使える)。
 #[tokio::test]
-async fn run_turn_stops_trying_an_mcp_server_that_keeps_failing() {
+async fn run_turn_keeps_trying_an_mcp_server_that_fails_at_once() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
@@ -621,23 +642,42 @@ async fn run_turn_stops_trying_an_mcp_server_that_keeps_failing() {
         if turn == scitl_core::mcp::MAX_CONSECUTIVE_FAILURES + 1 {
             accepted_before_last = accepted.load(Ordering::SeqCst);
         }
-        let adapter = sets_the_title();
-        run_turn(
-            db.clone(),
-            &TurnContext {
-                mcp: McpAccess::new(&servers, &catalog),
-                ..context(&adapter)
-            },
-            Chat::Task(task_id),
-            "タイトルを「買い物」にして".to_string(),
-        )
-        .await
-        .unwrap();
+        turn_with_mcp(&db, task_id, &servers, &catalog).await;
     }
 
-    assert!(accepted_before_last > 0);
-    assert_eq!(accepted.load(Ordering::SeqCst), accepted_before_last);
+    assert!(accepted.load(Ordering::SeqCst) > accepted_before_last);
+    assert!(!catalog.gave_up("srv"));
+}
+
+/// 一覧の取得が続けてタイムアウトしたサーバーには、以後のターンで接続しに行かない
+/// (`mcp::MAX_CONSECUTIVE_FAILURES`)。タイムアウトを実時間で待たないよう、時間を止めて進める。
+#[tokio::test(start_paused = true)]
+async fn run_turn_stops_trying_an_mcp_server_that_keeps_timing_out() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    // 接続を受けたまま何も返さないサーバー。受けた回数を数える。
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let servers = mcp_server_at(listener.local_addr().unwrap());
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            held.push(socket);
+        }
+    });
+    let catalog = ToolCatalog::new();
+
+    for _ in 0..scitl_core::mcp::MAX_CONSECUTIVE_FAILURES {
+        turn_with_mcp(&db, task_id, &servers, &catalog).await;
+    }
     assert!(catalog.gave_up("srv"));
+    let accepted_before_last = accepted.load(Ordering::SeqCst);
+    turn_with_mcp(&db, task_id, &servers, &catalog).await;
+    assert_eq!(accepted.load(Ordering::SeqCst), accepted_before_last);
 }
 
 /// 外部サーバーの一覧の取得を待つ間も、止める指示で打ち切れる。
@@ -688,6 +728,10 @@ async fn run_turn_can_be_stopped_while_waiting_for_an_mcp_server() {
     stopped_reply(&messages);
     // 止めたターンでは、モデルを呼んでいない。
     assert!(adapter.sent_messages().is_empty());
+    // 止めたのは失敗ではないので数えない(あと1回足りない分だけ失敗しても、まだ試す)。
+    for _ in 1..scitl_core::mcp::MAX_CONSECUTIVE_FAILURES {
+        assert!(!catalog.record_failure("srv"));
+    }
 }
 
 #[tokio::test]

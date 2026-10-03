@@ -543,8 +543,8 @@ impl ReplyParts {
 /// 行う(待つのは一番遅い1台の分)。接続・取得に失敗したサーバーはこのターンでは公開しない。
 /// ここでターン全体を失敗させると、外部サーバーが1つ落ちているだけでチャットが使えなくなるため。
 /// 前に固定したツール定義には残し、呼ばれたら今は使えないという失敗を返す
-/// (`ExternalToolset::with_unavailable`)。続けて失敗したサーバーは、アプリ起動中は試さずに
-/// 同じ扱いにする(`mcp::MAX_CONSECUTIVE_FAILURES`。キャッシュを持たない経路では数えない)。
+/// (`ExternalToolset::with_unavailable`)。続けてタイムアウトしたサーバーは、アプリ起動中は
+/// 試さずに同じ扱いにする(`mcp::MAX_CONSECUTIVE_FAILURES`。キャッシュを持たない経路では数えない)。
 ///
 /// `stop`を渡すと、取得を待つ間も止める指示を見る。止められたら`None`。
 pub(super) async fn prepare_external_tools(
@@ -583,15 +583,17 @@ pub(super) async fn prepare_external_tools(
                 }
                 fetched.push((server, tools));
             }
-            Err(e) => {
+            Err(failure) => {
                 crate::diagnostics::report(format_args!(
-                    "failed to list tools from MCP server '{}': {e}",
-                    server.name
+                    "failed to list tools from MCP server '{}': {}",
+                    server.name, failure.error
                 ));
-                if mcp.catalog.is_some_and(|c| c.record_failure(&server.id)) {
+                let gave_up =
+                    failure.timed_out && mcp.catalog.is_some_and(|c| c.record_failure(&server.id));
+                if gave_up {
                     crate::diagnostics::report(format_args!(
-                        "not trying MCP server '{}' again until it is re-enabled in settings: \
-                         it failed {} times in a row",
+                        "not trying MCP server '{}' again until it is re-enabled or its tools \
+                         are fetched in settings: it timed out {} times in a row",
                         server.name,
                         crate::mcp::MAX_CONSECUTIVE_FAILURES
                     ));
