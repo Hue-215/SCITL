@@ -581,6 +581,115 @@ async fn run_turn_continues_when_an_mcp_server_cannot_be_reached() {
     assert!(catalog.get("srv").is_none());
 }
 
+/// 有効なサーバー1台(ツールを1つ有効化したもの)。
+fn mcp_server_at(addr: std::net::SocketAddr) -> Vec<McpServerConfig> {
+    vec![McpServerConfig {
+        id: "srv".to_string(),
+        name: "broken".to_string(),
+        enabled: true,
+        endpoint: McpEndpoint::StreamableHttp {
+            url: format!("http://{addr}/mcp"),
+            header_refs: Vec::new(),
+        },
+        enabled_tools: ["anything".to_string()].into_iter().collect(),
+    }]
+}
+
+/// 続けて一覧を取得できなかったサーバーには、以後のターンで接続しに行かない
+/// (`mcp::MAX_CONSECUTIVE_FAILURES`)。
+#[tokio::test]
+async fn run_turn_stops_trying_an_mcp_server_that_keeps_failing() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+
+    // 接続を受けてすぐ閉じるサーバー。受けた回数を数える。
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let servers = mcp_server_at(listener.local_addr().unwrap());
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            drop(socket);
+        }
+    });
+    let catalog = ToolCatalog::new();
+
+    let mut accepted_before_last = 0;
+    for turn in 1..=scitl_core::mcp::MAX_CONSECUTIVE_FAILURES + 1 {
+        if turn == scitl_core::mcp::MAX_CONSECUTIVE_FAILURES + 1 {
+            accepted_before_last = accepted.load(Ordering::SeqCst);
+        }
+        let adapter = sets_the_title();
+        run_turn(
+            db.clone(),
+            &TurnContext {
+                mcp: McpAccess::new(&servers, &catalog),
+                ..context(&adapter)
+            },
+            Chat::Task(task_id),
+            "タイトルを「買い物」にして".to_string(),
+        )
+        .await
+        .unwrap();
+    }
+
+    assert!(accepted_before_last > 0);
+    assert_eq!(accepted.load(Ordering::SeqCst), accepted_before_last);
+    assert!(catalog.gave_up("srv"));
+}
+
+/// 外部サーバーの一覧の取得を待つ間も、止める指示で打ち切れる。
+#[tokio::test]
+async fn run_turn_can_be_stopped_while_waiting_for_an_mcp_server() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let generating = InFlightSet::new();
+    let adapter = sets_the_title();
+
+    // 接続を受けたまま何も返さないサーバー。
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let servers = mcp_server_at(listener.local_addr().unwrap());
+    let accepted = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+            notify.notify_one();
+        }
+    });
+    let catalog = ToolCatalog::new();
+
+    let ctx = TurnContext {
+        mcp: McpAccess::new(&servers, &catalog),
+        generating: &generating,
+        ..context(&adapter)
+    };
+    let started = std::time::Instant::now();
+    let turn = run_turn(
+        db.clone(),
+        &ctx,
+        chat,
+        "タイトルを「買い物」にして".to_string(),
+    );
+    let stop = async {
+        accepted.notified().await;
+        assert!(stop_response(&generating, chat));
+    };
+    let (turn, ()) = tokio::join!(turn, stop);
+    turn.unwrap();
+
+    // 接続のタイムアウト(30秒)を待たずに終わる。
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), chat).unwrap();
+    stopped_reply(&messages);
+    // 止めたターンでは、モデルを呼んでいない。
+    assert!(adapter.sent_messages().is_empty());
+}
+
 #[tokio::test]
 async fn run_turn_executes_tool_then_persists_final_reply() {
     let conn = db::open_in_memory().unwrap();

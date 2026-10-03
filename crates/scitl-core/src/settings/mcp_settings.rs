@@ -70,10 +70,16 @@ impl Settings {
         Ok(view)
     }
 
+    /// 有効にし直したら、ターンでの一覧取得に続けて失敗した回数を数え直す(試すのをやめていた
+    /// サーバーも、次のターンでまた試す。`mcp::MAX_CONSECUTIVE_FAILURES`)。
     pub fn set_mcp_server_enabled(&self, server_id: &str, enabled: bool) -> Result<SettingsView> {
         let mut draft = self.edit();
         find_mcp_server_mut(&mut draft.config, server_id)?.enabled = enabled;
-        draft.commit()
+        let view = draft.commit()?;
+        if enabled {
+            self.mcp_tools.retry(server_id);
+        }
+        Ok(view)
     }
 
     pub fn set_mcp_tool_enabled(

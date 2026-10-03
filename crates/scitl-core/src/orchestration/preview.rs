@@ -70,7 +70,9 @@ pub async fn preview_request(
 
     let external = if options.external_tools {
         let mut sessions = McpSessions::new();
-        let external = prepare_external_tools(&ctx.mcp, chat, &mut sessions).await;
+        let external = prepare_external_tools(&ctx.mcp, chat, &mut sessions, None)
+            .await
+            .expect("not stopped without a stop signal");
         sessions.close().await;
         external
     } else {

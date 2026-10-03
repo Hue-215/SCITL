@@ -397,17 +397,22 @@ async fn generate_turn_response(
     };
 
     let mut sessions = McpSessions::new();
-    let external = prepare_external_tools(&ctx.mcp, attempt.chat, &mut sessions).await;
-    let result = run_tool_rounds(
-        db.clone(),
-        adapter,
-        ctx,
-        &attempt,
-        &external,
-        &mut sessions,
-        stop,
-    )
-    .await;
+    let result =
+        match prepare_external_tools(&ctx.mcp, attempt.chat, &mut sessions, Some(stop)).await {
+            Some(external) => {
+                run_tool_rounds(
+                    db.clone(),
+                    adapter,
+                    ctx,
+                    &attempt,
+                    &external,
+                    &mut sessions,
+                    stop,
+                )
+                .await
+            }
+            None => fail_turn(db, &attempt, TurnFailure::Stopped, &ReplyParts::default()).await,
+        };
     sessions.close().await;
     result
 }
@@ -534,17 +539,23 @@ impl ReplyParts {
 /// 接続しない。総合チャットにも公開する(総合チャットで絞るのはSCITL自身のタスクへの書き込み
 /// だけ)。
 ///
-/// 一覧はキャッシュを優先し、無ければ取得してキャッシュに載せる。接続・取得に失敗した
-/// サーバーはこのターンでは公開しない。ここでターン全体を失敗させると、外部サーバーが1つ
-/// 落ちているだけでチャットが使えなくなるため。前に固定したツール定義には残し、呼ばれたら
-/// 今は使えないという失敗を返す(`ExternalToolset::with_unavailable`)。
+/// 一覧はキャッシュを優先し、無ければ取得してキャッシュに載せる。取得はサーバーごとに並行して
+/// 行う(待つのは一番遅い1台の分)。接続・取得に失敗したサーバーはこのターンでは公開しない。
+/// ここでターン全体を失敗させると、外部サーバーが1つ落ちているだけでチャットが使えなくなるため。
+/// 前に固定したツール定義には残し、呼ばれたら今は使えないという失敗を返す
+/// (`ExternalToolset::with_unavailable`)。続けて失敗したサーバーは、アプリ起動中は試さずに
+/// 同じ扱いにする(`mcp::MAX_CONSECUTIVE_FAILURES`。キャッシュを持たない経路では数えない)。
+///
+/// `stop`を渡すと、取得を待つ間も止める指示を見る。止められたら`None`。
 pub(super) async fn prepare_external_tools(
     mcp: &McpAccess<'_>,
     chat: Chat,
     sessions: &mut McpSessions,
-) -> ExternalToolset {
+    stop: Option<&StopSignal>,
+) -> Option<ExternalToolset> {
     let mut fetched = Vec::new();
     let mut unavailable = Vec::new();
+    let mut to_fetch = Vec::new();
     for server in mcp
         .servers
         .iter()
@@ -552,9 +563,20 @@ pub(super) async fn prepare_external_tools(
     {
         if let Some(cached) = mcp.catalog.and_then(|c| c.get(&server.id)) {
             fetched.push((server, cached));
-            continue;
+        } else if mcp.catalog.is_some_and(|c| c.gave_up(&server.id)) {
+            unavailable.push(server);
+        } else {
+            to_fetch.push(server);
         }
-        match sessions.list_tools(server).await {
+    }
+
+    let listing = sessions.list_tools_all(&to_fetch);
+    let listed = match stop {
+        Some(stop) => stop.unless_requested(listing).await?,
+        None => listing.await,
+    };
+    for (server, result) in to_fetch.into_iter().zip(listed) {
+        match result {
             Ok(tools) => {
                 if let Some(catalog) = mcp.catalog {
                     catalog.store(&server.id, tools.clone());
@@ -566,12 +588,20 @@ pub(super) async fn prepare_external_tools(
                     "failed to list tools from MCP server '{}': {e}",
                     server.name
                 ));
+                if mcp.catalog.is_some_and(|c| c.record_failure(&server.id)) {
+                    crate::diagnostics::report(format_args!(
+                        "not trying MCP server '{}' again until it is re-enabled in settings: \
+                         it failed {} times in a row",
+                        server.name,
+                        crate::mcp::MAX_CONSECUTIVE_FAILURES
+                    ));
+                }
                 unavailable.push(server);
             }
         }
     }
     let reserved = tools::names(chat);
-    ExternalToolset::build(fetched, &reserved).with_unavailable(unavailable, &reserved)
+    Some(ExternalToolset::build(fetched, &reserved).with_unavailable(unavailable, &reserved))
 }
 
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
