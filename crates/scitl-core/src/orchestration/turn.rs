@@ -632,31 +632,11 @@ async fn run_tool_rounds(
                 None => return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await,
             };
 
-            let mut text = String::new();
-            // このラウンドで生じた思考の断片。表示・保存専用で`round_trip`(モデルへの
-            // 再送信用)には載せない。送り返しが要る方言の分は、アダプタが返す`replay`に
-            // 入っている。
-            let mut reasoning = String::new();
-            let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
-            for event in &events {
-                match event {
-                    ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
-                    ResponseEvent::ReasoningDelta { text: delta } => reasoning.push_str(delta),
-                    ResponseEvent::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                    } => {
-                        tool_calls.push(ToolCallRequest {
-                            id: id.clone(),
-                            name: name.clone(),
-                            arguments: arguments.clone(),
-                        });
-                    }
-                    ResponseEvent::Done { .. } => {}
-                }
-            }
-            let reasoning_for_db = (!reasoning.is_empty()).then_some(reasoning);
+            let RoundResponse {
+                text,
+                reasoning: reasoning_for_db,
+                tool_calls,
+            } = RoundResponse::collect(&events);
             // 受け取り終えたラウンドの本文。このあとどの経路で終わっても、返信かエラー発言に残る。
             reply_parts.push(&text);
 
@@ -714,48 +694,20 @@ async fn run_tool_rounds(
                 return fail_turn(db, attempt, TurnFailure::ToolRoundLimit, reply_parts).await;
             }
 
-            // 1応答に複数のtool_callsが載る場合、すべて実行する(取りこぼさない)。
-            let mut executed: Vec<(ToolCallRequest, CallOutcome)> =
-                Vec::with_capacity(tool_calls.len());
-            for (i, call) in tool_calls.into_iter().enumerate() {
-                // 止める指示と合計時間は呼び出しの区切りで判定し、ターンを打ち切る(ほかの失敗と
-                // 違い、モデルに返して続けても意味が無い)。実行中の呼び出しを外から打ち切らないのは、
-                // 内部ツールのDB書き込みは待つのをやめても完走し、書き込みだけが済んで
-                // 実行記録が残らない状態を作るため(1回の呼び出しは`mcp`のタイムアウトで有界)。
-                // 外部ツールも、相手の側で済んだ操作の記録を残すため同じく待つ。
-                if stop.is_requested() {
-                    return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await;
-                }
-                if tool_time_used >= ctx.limits.total_timeout {
-                    return fail_turn(db, attempt, TurnFailure::ToolTimeout, reply_parts).await;
-                }
-                let started = Instant::now();
-                let outcome =
-                    execute_call(db.clone(), chat, ctx, external, sessions, &call).await?;
-                tool_time_used = tool_time_used.saturating_add(started.elapsed());
-
-                // このラウンドの思考は、ラウンド内最初のツール実行記録にだけ紐付ける(全呼び出しに
-                // 複製すると、画面の「思考・ツール」の件数が水増しされる)。
-                let reasoning_for_row = if i == 0 {
-                    reasoning_for_db.clone()
-                } else {
-                    None
-                };
-                let record = ToolExecutionRecord {
-                    tool: call.name.clone(),
-                    arguments: match &call.arguments {
-                        ToolArguments::Valid { value } => value.clone(),
-                        ToolArguments::Malformed { raw, .. } => {
-                            serde_json::Value::String(raw.clone())
-                        }
-                    },
-                    result: outcome.result.clone(),
-                    call_id: call.id.clone(),
-                };
-                save_tool_execution(db.clone(), attempt, record, reasoning_for_row, ctx.events)
-                    .await?;
-                executed.push((call, outcome));
-            }
+            let calls = RoundCalls {
+                db: db.clone(),
+                ctx,
+                attempt,
+                external,
+                stop,
+            };
+            let executed = match calls
+                .execute(sessions, tool_calls, reasoning_for_db, &mut tool_time_used)
+                .await?
+            {
+                Ok(executed) => executed,
+                Err(failure) => return fail_turn(db, attempt, failure, reply_parts).await,
+            };
 
             // モデルへの往復: assistant(tool_calls) 1件 + tool(結果) を呼び出し数ぶん。
             // OpenAI互換プロトコルの標準的な表現に合わせる。
@@ -781,6 +733,119 @@ async fn run_tool_rounds(
     match result {
         Err(e) => fail_turn(db, attempt, turn_error::classify(&e), &reply_parts).await,
         done => done,
+    }
+}
+
+/// 1ラウンドで受け取ったイベントをまとめたもの。
+struct RoundResponse {
+    text: String,
+    /// このラウンドで生じた思考。表示・保存専用でモデルへの再送信には載せない。送り返しが
+    /// 要る方言の分は、アダプタが返す`replay`に入っている。無ければ`None`。
+    reasoning: Option<String>,
+    tool_calls: Vec<ToolCallRequest>,
+}
+
+impl RoundResponse {
+    fn collect(events: &[ResponseEvent]) -> Self {
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        let mut tool_calls = Vec::new();
+        for event in events {
+            match event {
+                ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
+                ResponseEvent::ReasoningDelta { text: delta } => reasoning.push_str(delta),
+                ResponseEvent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    tool_calls.push(ToolCallRequest {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    });
+                }
+                ResponseEvent::Done { .. } => {}
+            }
+        }
+        Self {
+            text,
+            reasoning: (!reasoning.is_empty()).then_some(reasoning),
+            tool_calls,
+        }
+    }
+}
+
+/// 1ラウンドで呼ばれたツールの実行に要るもの。
+struct RoundCalls<'a, 'c> {
+    db: SharedConnection,
+    ctx: &'a TurnContext<'c>,
+    attempt: &'a Attempt,
+    external: &'a ExternalToolset,
+    stop: &'a StopSignal,
+}
+
+impl RoundCalls<'_, '_> {
+    /// 呼ばれたツールを順にすべて実行し(1応答に複数載っても取りこぼさない)、実行記録を書く。
+    /// `tool_time_used`はツール実行に使った時間の合計で、実行した分を足す。内側の`Err`は、
+    /// ターンを打ち切るときの失敗の種類(外側の`Err`はDBに書けない等の失敗)。
+    ///
+    /// 止める指示と合計時間は呼び出しの区切りで判定し、超えたらターンを打ち切る失敗を返す
+    /// (ほかの失敗と違い、モデルに返して続けても意味が無い)。実行中の呼び出しを外から
+    /// 打ち切らないのは、内部ツールのDB書き込みは待つのをやめても完走し、書き込みだけが済んで
+    /// 実行記録が残らない状態を作るため(1回の呼び出しは`mcp`のタイムアウトで有界)。外部
+    /// ツールも、相手の側で済んだ操作の記録を残すため同じく待つ。
+    async fn execute(
+        &self,
+        sessions: &mut McpSessions,
+        tool_calls: Vec<ToolCallRequest>,
+        reasoning: Option<String>,
+        tool_time_used: &mut Duration,
+    ) -> Result<std::result::Result<Vec<(ToolCallRequest, CallOutcome)>, TurnFailure>> {
+        let ctx = self.ctx;
+        let mut executed = Vec::with_capacity(tool_calls.len());
+        for (i, call) in tool_calls.into_iter().enumerate() {
+            if self.stop.is_requested() {
+                return Ok(Err(TurnFailure::Stopped));
+            }
+            if *tool_time_used >= ctx.limits.total_timeout {
+                return Ok(Err(TurnFailure::ToolTimeout));
+            }
+            let started = Instant::now();
+            let outcome = execute_call(
+                self.db.clone(),
+                self.attempt.chat,
+                ctx,
+                self.external,
+                sessions,
+                &call,
+            )
+            .await?;
+            *tool_time_used = tool_time_used.saturating_add(started.elapsed());
+
+            // このラウンドの思考は、ラウンド内最初のツール実行記録にだけ紐付ける(全呼び出しに
+            // 複製すると、画面の「思考・ツール」の件数が水増しされる)。
+            let reasoning_for_row = if i == 0 { reasoning.clone() } else { None };
+            let record = ToolExecutionRecord {
+                tool: call.name.clone(),
+                arguments: match &call.arguments {
+                    ToolArguments::Valid { value } => value.clone(),
+                    ToolArguments::Malformed { raw, .. } => serde_json::Value::String(raw.clone()),
+                },
+                result: outcome.result.clone(),
+                call_id: call.id.clone(),
+            };
+            save_tool_execution(
+                self.db.clone(),
+                self.attempt,
+                record,
+                reasoning_for_row,
+                ctx.events,
+            )
+            .await?;
+            executed.push((call, outcome));
+        }
+        Ok(Ok(executed))
     }
 }
 
