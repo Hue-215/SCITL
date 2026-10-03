@@ -51,7 +51,8 @@ const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// 失敗までにこれ以上かかったら、待たされた末の失敗として[`MAX_CONSECUTIVE_FAILURES`]に数える。
 /// 失敗の種類ではなく時間で見るのは、待たされ方が経路によって違うため(こちらのタイムアウトの
-/// ほか、HTTPクライアントの接続のタイムアウト(`net`、10秒)や、拒否されたSYNを送り直すOS)。
+/// ほか、HTTPクライアントの接続のタイムアウト(`net`、10秒)や名前解決のタイムアウト)。拒否された
+/// SYNを送り直すOS(約2秒)は、すぐ失敗する側に入る。秘密情報の読み出し(承認を待ちうる)は測らない。
 const SLOW_FAILURE: Duration = Duration::from_secs(5);
 /// 切断の上限。ここに上限が無いと、graceful shutdownに応じないサーバーが1台あるだけで、
 /// 応答を保存し終えたあとのターンが切断待ちのまま返らなくなる。
@@ -180,9 +181,21 @@ impl McpSessions {
         for (index, server) in servers.iter().enumerate() {
             let server = (*server).clone();
             tasks.spawn(async move {
+                // 秘密情報の読み出し(資格情報ストアのロック解除の承認を待ちうる)は、サーバーに
+                // 待たされた時間に入れない。
+                let headers = match endpoint_headers(&server).await {
+                    Ok(headers) => headers,
+                    Err(error) => {
+                        let failure = McpFailure {
+                            error,
+                            waited: false,
+                        };
+                        return (index, server.id, None, Err(failure));
+                    }
+                };
                 // 止めた時間で進めるテストでも測れるよう、tokioの時計で測る。
                 let started = tokio::time::Instant::now();
-                let (service, listed) = match connect(&server).await {
+                let (service, listed) = match connect_with(&server, headers).await {
                     Ok(service) => {
                         let listed = list_tools_of(&service).await;
                         (Some(service), listed)
@@ -333,8 +346,28 @@ async fn list_tools_of(service: &ClientService) -> Result<Vec<McpToolInfo>, Core
 /// サーバーへ接続する。接続自体にもタイムアウトを設ける(応答しないサーバーで
 /// ターンが止まらないようにする)。
 async fn connect(server: &McpServerConfig) -> Result<ClientService, CoreError> {
-    let McpEndpoint::StreamableHttp { url, header_refs } = &server.endpoint;
-    tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, header_refs))
+    let headers = endpoint_headers(server).await?;
+    connect_with(server, headers).await
+}
+
+/// 登録したヘッダーの秘密情報を読む。資格情報ストアのロック解除の承認を待ちうるので、接続と
+/// 同じ上限を掛ける。
+async fn endpoint_headers(
+    server: &McpServerConfig,
+) -> Result<HashMap<reqwest::header::HeaderName, reqwest::header::HeaderValue>, CoreError> {
+    let McpEndpoint::StreamableHttp { header_refs, .. } = &server.endpoint;
+    tokio::time::timeout(CONNECT_TIMEOUT, http::headers(header_refs))
+        .await
+        .map_err(|_| CoreError::Mcp("timed out reading MCP server secrets".to_string()))?
+}
+
+/// 読み出したヘッダーを付けて接続する。
+async fn connect_with(
+    server: &McpServerConfig,
+    headers: HashMap<reqwest::header::HeaderName, reqwest::header::HeaderValue>,
+) -> Result<ClientService, CoreError> {
+    let McpEndpoint::StreamableHttp { url, .. } = &server.endpoint;
+    tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, headers))
         .await
         .map_err(|_| CoreError::Mcp("timed out connecting to MCP server".to_string()))?
 }
@@ -774,8 +807,9 @@ mod tests {
         );
     }
 
-    /// 一覧の取得のタイムアウトは、待たされた末の失敗になる。タイムアウトを実時間で待たない
-    /// よう、時間を止めて進める。
+    /// タイムアウトは、待たされた末の失敗になる。タイムアウトを実時間で待たないよう、時間を
+    /// 止めて進める(止めた時計はループバックの応答を待つ間にも進むので、どの段でタイムアウト
+    /// するかは決まらない。段によらないことは下の、タイムアウトでない遅い失敗で確かめる)。
     #[tokio::test(start_paused = true)]
     async fn a_failure_after_a_timeout_is_marked_as_waited() {
         let hanging = server_at(
@@ -785,7 +819,39 @@ mod tests {
         let mut sessions = McpSessions::new();
         let listed = sessions.list_tools_all(&[&hanging]).await;
         sessions.close().await;
-        assert!(listed[0].as_ref().is_err_and(|f| f.waited));
+        let failure = listed[0].as_ref().unwrap_err();
+        assert!(failure.waited);
+        let error = failure.error.to_string();
+        assert!(error.contains("timed out"), "{error}");
+    }
+
+    /// タイムアウトでなくても、失敗までに待たされたら待たされた失敗になる(HTTPクライアントの
+    /// 接続のタイムアウトのように、こちらのタイムアウトより先に別の段で失敗する場合)。
+    /// ここではサーバーが黙ったまま6秒経ってから接続を閉じる。時間を止めて進める。
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_failure_is_marked_as_waited_even_without_a_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    tokio::time::sleep(SLOW_FAILURE + Duration::from_secs(1)).await;
+                    drop(socket);
+                });
+            }
+        });
+        let slow = server_at("slow", format!("http://{addr}/mcp"));
+
+        let mut sessions = McpSessions::new();
+        let listed = sessions.list_tools_all(&[&slow]).await;
+        sessions.close().await;
+        let failure = listed[0].as_ref().unwrap_err();
+        assert!(failure.waited);
+        assert!(
+            !failure.error.to_string().contains("timed out"),
+            "{}",
+            failure.error
+        );
     }
 
     /// すぐ閉じられた接続は、待たされていない失敗になる。かかった時間で見るので、実時間で試す
