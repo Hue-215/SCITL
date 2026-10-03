@@ -139,9 +139,13 @@ impl TurnFailure {
     }
 }
 
+/// エラー発言の文言のキーの前置き(後ろに種別コードを付ける)。画面も同じ前置きで引き直すので、
+/// 画面へ値を書き出す(`i18n`のテストが`frontend/src/bindings/SharedConstants.ts`に書く)。
+pub const MESSAGE_KEY_PREFIX: &str = "turn_error.";
+
 /// 種別コードに対応する言語ファイルのキー。
 fn message_key(kind: &str) -> String {
-    format!("turn_error.{kind}")
+    format!("{MESSAGE_KEY_PREFIX}{kind}")
 }
 
 /// アダプタが構成不足で呼び出しに進めない場合の分類。準備が整っていれば`None`。

@@ -1,5 +1,6 @@
 import en from '../../lang/en.json'
 import ja from '../../lang/ja.json'
+import { DEFAULT_LANGUAGE, TURN_ERROR_KEY_PREFIX } from './bindings/SharedConstants'
 import type { Language } from './types'
 
 // 画面の文言を言語ファイル(lang/*.json)から引く。
@@ -13,10 +14,10 @@ import type { Language } from './types'
 
 export type MessageKey = keyof typeof ja
 
-// 正本(すべてのキーを持つ)で、未設定のときの表示言語。core側の`Language::DEFAULT`と
-// 同じ言語を指す。キーと差し込む値の名前が言語間で揃っていることは、core側のテスト
-// (scitl_core::i18n)が確かめる。
-export const DEFAULT_LANGUAGE: Language = 'ja'
+// 正本(すべてのキーを持つ)で、未設定のときの表示言語。core側の`Language::DEFAULT`を
+// `cargo test`が書き出したもの(`bindings/SharedConstants.ts`)。キーと差し込む値の名前が
+// 言語間で揃っていることは、core側のテスト(scitl_core::i18n)が確かめる。
+export { DEFAULT_LANGUAGE }
 
 const CATALOGS: Record<Language, Record<string, string>> = { ja, en }
 
@@ -116,9 +117,9 @@ export function formatBytes(bytes: number): string {
 /**
  * エラー発言(role='error')の本文。保存された`content`は英語の定型文言なので、画面は種別
  * コードから表示言語の文言を引く。知らない種別の行(別の版で保存された等)は
- * `content`をそのまま出す。キーの組み立て方はcoreの`turn_error`と同じ。
+ * `content`をそのまま出す。キーの前置きはcoreの`turn_error`が書き出したもの。
  */
 export function turnErrorText(errorKind: string | null, content: string): string {
   if (errorKind === null) return content
-  return state().messages.get(`turn_error.${errorKind}`) ?? content
+  return state().messages.get(`${TURN_ERROR_KEY_PREFIX}${errorKind}`) ?? content
 }
