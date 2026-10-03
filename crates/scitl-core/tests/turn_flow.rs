@@ -649,10 +649,11 @@ async fn run_turn_keeps_trying_an_mcp_server_that_fails_at_once() {
     assert!(!catalog.gave_up("srv"));
 }
 
-/// 一覧の取得が続けてタイムアウトしたサーバーには、以後のターンで接続しに行かない
-/// (`mcp::MAX_CONSECUTIVE_FAILURES`)。タイムアウトを実時間で待たないよう、時間を止めて進める。
+/// 続けて待たされた末に失敗したサーバー(ここでは接続が応答を返さない)には、以後のターンで
+/// 接続しに行かない(`mcp::MAX_CONSECUTIVE_FAILURES`)。タイムアウトを実時間で待たないよう、
+/// 時間を止めて進める。
 #[tokio::test(start_paused = true)]
-async fn run_turn_stops_trying_an_mcp_server_that_keeps_timing_out() {
+async fn run_turn_stops_trying_an_mcp_server_that_keeps_failing_slowly() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
