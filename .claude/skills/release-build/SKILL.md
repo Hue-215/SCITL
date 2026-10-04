@@ -20,7 +20,8 @@ macOSは今は対象にしていない(資格情報の保存先が無い。`docs
 shはmacOSでも動く書き方にしてあるが、確かめていない。
 
 - 前提: Rust・Node.js(npm)と、Tauriのビルドに要るシステムの依存(CI`.github/workflows/ci.yml`の
-  「システム依存を入れる」と同じ)。npmの依存(`frontend/`と`crates/scitl-tauri/`)はスクリプトが入れる
+  「システム依存を入れる」と同じ)。npmの依存(`frontend/`と`crates/scitl-tauri/`)はスクリプトが入れる。
+  WindowsはMSVCのツールチェーン(Rustの既定)を前提にする
 - 引数はそのまま`tauri build`に渡る。束ね方を絞るなら`--bundles deb`・`--bundles msi`、バイナリ
   だけなら`--no-bundle`。`--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が
   変わる。検査の前に止まる)
@@ -51,6 +52,22 @@ shはmacOSでも動く書き方にしてあるが、確かめていない。
 - パスに空白があっても割れないよう、区切りが空白でない`CARGO_ENCODED_RUSTFLAGS`で渡す
 - rustcは後に書いた置き換えから当てはまるかを見るので、広いもの(ホーム)を先に書く
 - ホームがルート(`HOME=/`)・ドライブの直下なら止める(置き換えがすべてのパスに当たるため)
+
+### Cのソースの場所
+
+rustcの置き換えは、依存クレートがCのコンパイラに作らせる部分には届かない。今は`aws-lc-sys`(TLSの
+暗号ライブラリ)のCのソースが、自分の場所を`__FILE__`として焼き込む。
+
+- Linuxでは`aws-lc-sys`が自分で`-ffile-prefix-map`を付けるので、スクリプトは何もしない
+- Windows(MSVC)では付けないので、ps1が環境変数`CL`(コンパイラが引数の前に足して読む)で
+  `/d1trimfile:`を渡し、同じ3つの場所を取り除く。置き換えではないので、`registry\src\…`から
+  始まる形で残る
+- `aws-lc-sys`は、パスの長さの上限を避けるために、自分のソースの場所を8.3形式
+  (`…\CARGO~1\registry\…`)でコンパイラへ渡す。MSVCは`#include`されたファイルだけを長い形に直すので、
+  両方の形が焼き込まれる。ps1は3つの場所の8.3形式も、置き換え・取り除き・検査の対象にする
+- `/d1trimfile:`は文書に載っていないフラグ(MSVC 14.51で確認、2026-10)。効かなくなれば検査が失敗する
+- cargoは`CL`の変化を見ない。`CL`に渡すフラグを変えたら、`cargo clean --release -p aws-lc-sys`で
+  Cのソースを作り直させる
 
 ## 3. 確かめる
 
