@@ -76,8 +76,9 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
 ## 3. 確かめる
 
 スクリプトはビルドの後、GUIとCLIの実行ファイルの中身に3つのパスが残っていないかを調べ、残っていれば
-失敗で終わる。LinuxはAppImageも展開して、入っているファイル(同梱のライブラリ、束ねる道具が作る
-設定ファイル)をすべて調べる。調べるのは実行ファイルのバイト列だけで、Tauriが圧縮して埋め込む画面の資産の中は
+失敗で終わる。Linuxは、組み立てた配布物のフォルダと、AppImageを展開した中身(GUIの実行ファイル、
+同梱のライブラリ、束ねる道具が作る設定ファイル)のすべてのファイルと、シンボリックリンクの向き先を
+調べ、残っていれば配布物を消す。調べるのは実行ファイルのバイト列だけで、Tauriが圧縮して埋め込む画面の資産の中は
 見ない(今はVite側でsourcemapを出していないので、パスは入らない)。手で確かめるなら次のとおり。
 
 ```sh
@@ -92,8 +93,8 @@ LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていな
 許可を保つため)にする。出来るのは`target/dist/scitl-<版>-windows-x64.zip`と
 `target/dist/scitl-<版>-linux-x64.tar.gz`。版は`Cargo.toml`の`[workspace.package]`から取る。
 LinuxのGUIは、実行ファイルではなくAppImage(`scitl.AppImage`。Tauriが付ける名前は製品名の空白を
-含むので付け替える)を入れる。それ以外の中身は同じ。tarには、持ち主をroot(`0/0`)、権限をグループ・
-他人の書き込みを外した形にして記録する(そのままだと、ビルドした人のユーザー名とumaskが入る)。
+含むので付け替える)を入れる。それ以外の中身は同じ。tarには、持ち主をroot(`0/0`)、権限を
+`755`・`644`の形に揃えて記録する(そのままだと、ビルドした人のユーザー名とumaskが入る)。
 
 ```
 scitl-<版>-windows-x64/
@@ -123,6 +124,10 @@ scitl-<版>-windows-x64/
   それらのライセンスは、束ねる道具がDebianのパッケージの`copyright`ファイル(`usr/share/doc/<パッケージ>/`)
   をAppImageの中に入れる。ただし多くはLGPL・GPLの全文を`/usr/share/common-licenses/`に任せていて、
   その全文は入っていない。同梱するライブラリはビルドする環境(Ubuntuの版)で変わる
+- AppImageはglibcを同梱しないので、**ビルドした環境のglibcより古い環境では起動しない**。Ubuntu 26.04
+  (glibc 2.43)でビルドしたものは、Ubuntu 24.04・Debian 13・Fedora 43では同梱のWebKit・GLibの読み込みで
+  止まり、Fedora 44・Arch Linuxでは画面まで出た(2026-10、コンテナで確認)。GL・X11・fontconfig・
+  freetype・harfbuzz・fribidi等は同梱せず、利用者の環境のものを使う
 - AppImageの中身の展開・起動の確かめ方: `scitl.AppImage --appimage-extract`で`squashfs-root/`に
   展開される。起動を試すときは、`XDG_DATA_HOME`・`XDG_CONFIG_HOME`・`XDG_CACHE_HOME`を作業用の
   場所に向けて、利用者のデータ(`~/.local/share/net.niigo.scitl`)に触れないようにする

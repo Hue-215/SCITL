@@ -16,7 +16,7 @@ set -euo pipefail
 
 for arg in "$@"; do
   case "$arg" in
-    -b | -b* | --bundles | --bundles=* | --no-bundle)
+    -b* | --bundles | --bundles=* | --no-bundle)
       echo "束ね方はAppImageに固定しています。$arg を外してください" >&2
       exit 2
       ;;
@@ -81,36 +81,48 @@ fi
 appimage="$appimage_dir/scitl.AppImage"
 mv "${appimages[0]}" "$appimage"
 
-# 配布するバイナリに、置き換えたはずのパスが残っていないかを確かめる。AppImageは中を展開して、
-# 入っているファイルをすべて調べる(同梱のライブラリ・設定ファイルは、束ねる道具が作る)。
-binaries=("$root/target/release/scitl" "$root/target/release/scitl-cli")
-for binary in "${binaries[@]}"; do
-  if [[ ! -f "$binary" ]]; then
-    echo "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)" >&2
-    exit 1
-  fi
-done
+cli="$root/target/release/scitl-cli"
+if [[ ! -f "$cli" ]]; then
+  echo "CLIがありません: $cli(--target・CARGO_TARGET_DIRには対応していません)" >&2
+  exit 1
+fi
+
+# 配布物のフォルダを組み立てる。
+name="$(node "$root/scripts/assemble-dist.mjs" "$appimage" "$cli")"
+dist="$root/target/dist/$name"
+
+# 配布物に、置き換えたはずのパスが残っていないかを確かめる。AppImageは中を展開して、入っている
+# ファイル(GUIの実行ファイル、同梱のライブラリ、束ねる道具が作る設定ファイル)をすべて調べる。
+# シンボリックリンクはgrepが辿らないので、向き先を別に調べる。残っていれば配布物を消す。
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+# 展開した中には書き込みを許さないディレクトリがあり得るので、許してから消す。
+trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
 (cd "$work" && "$appimage" --appimage-extract >/dev/null)
 found=0
 for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root" "$root_physical"; do
   # grepは見つからないと1、読めないファイルがあると2で終わる。2は検査の漏れなので止める。
-  LC_ALL=C grep -r -l -Z -a -F -- "$path/" "${binaries[@]}" "$work/squashfs-root" >"$work/found" || [[ $? == 1 ]]
+  status=0
+  LC_ALL=C grep -r -l -Z -a -F -- "$path/" "$dist" "$work/squashfs-root" >"$work/found" || status=$?
+  if [[ "$status" -gt 1 ]]; then
+    echo "検査できないファイルがあります(上のgrepのエラー)" >&2
+    rm -rf "$dist"
+    exit 1
+  fi
+  find "$dist" "$work/squashfs-root" -type l -lname "$path/*" -print0 >>"$work/found"
   while IFS= read -r -d '' file; do
     echo "絶対パスが残っています: $path/(${file#"$work/"})" >&2
     found=1
   done <"$work/found"
 done
 if [[ "$found" != 0 ]]; then
+  rm -rf "$dist"
   exit 1
 fi
-echo "絶対パスは残っていません: ${binaries[*]} $appimage"
+echo "絶対パスは残っていません: $dist"
 
-# 配布物のフォルダを組み立てて、tar.gzにまとめる(実行の許可を保つため、zipではなくtarにする)。
-# tarはファイルの持ち主の名前と、ビルドした人のumaskで決まった権限を記録するので、持ち主は
-# rootに、権限はグループ・他人の書き込みを外した形に揃える。
-name="$(node "$root/scripts/assemble-dist.mjs" "$appimage" "$root/target/release/scitl-cli")"
-tar -C "$root/target/dist" --owner=0 --group=0 --numeric-owner --mode=go-w \
-  -czf "$root/target/dist/$name.tar.gz" "$name"
-echo "配布物: $root/target/dist/$name.tar.gz"
+# tar.gzにまとめる(実行の許可を保つため、zipではなくtarにする)。tarはファイルの持ち主の名前と、
+# ビルドした人のumaskで決まった権限を記録するので、持ち主はrootに、権限は所有者が読み書き、
+# グループ・他人が読める形(実行の許可は、元から実行できるものとディレクトリにだけ付ける)に揃える。
+tar -C "$root/target/dist" --owner=0 --group=0 --numeric-owner --mode='u+rwX,go+rX,go-w' \
+  -czf "$dist.tar.gz" "$name"
+echo "配布物: $dist.tar.gz"
