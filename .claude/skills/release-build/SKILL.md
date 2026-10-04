@@ -1,6 +1,6 @@
 ---
 name: release-build
-description: SCITLの配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、trim-pathsが安定版に入ったときの移し替え)。配布物を作るとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
+description: SCITLの配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物のzipと第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
 ---
 
 # 配布用のビルド
@@ -14,14 +14,15 @@ description: SCITLの配布用ビルドの手順(scripts/release-build.sh・rele
 | OS | コマンド |
 |---|---|
 | Linux | `scripts/release-build.sh` |
-| Windows | `pwsh scripts/release-build.ps1`(PowerShell 7.2以降。それより古いと最初の行で止まる) |
+| Windows | `pwsh scripts/release-build.ps1 --no-bundle`(PowerShell 7.2以降。それより古いと最初の行で止まる) |
 
 macOSは今は対象にしていない(資格情報の保存先が無い。`docs/spec/architecture/network-secrets.md`)。
 shはmacOSでも動く書き方にしてあるが、確かめていない。
 
 - 前提: Rust・Node.js(npm)と、Tauriのビルドに要るシステムの依存(CI`.github/workflows/ci.yml`の
   「システム依存を入れる」と同じ)。npmの依存(`frontend/`と`crates/scitl-tauri/`)はスクリプトが入れる。
-  WindowsはMSVCのツールチェーン(Rustの既定)を前提にする
+  WindowsはMSVCのツールチェーン(Rustの既定)と、`cargo-about`(CIの「第三者ライセンス」と同じ版・
+  同じコマンドで入れる)を前提にする
 - 引数はそのまま`tauri build`に渡る。束ね方を絞るなら`--bundles deb`・`--bundles msi`、バイナリ
   だけなら`--no-bundle`。`--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が
   変わる。検査の前に止まる)
@@ -73,8 +74,8 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
 
 ## 3. 確かめる
 
-スクリプトはビルドの後、`target/release/scitl`(Windowsは`scitl.exe`)の中身に3つのパスが残って
-いないかを調べ、残っていれば失敗で終わる。束ねた配布物(deb・msi等)は同じバイナリを入れるので、
+スクリプトはビルドの後、`target/release/scitl`(Windowsは`scitl.exe`と`scitl-cli.exe`)の中身に3つの
+パスが残っていないかを調べ、残っていれば失敗で終わる。束ねた配布物(deb・msi等)は同じバイナリを入れるので、
 別には調べない。調べるのは実行ファイルのバイト列だけで、Tauriが圧縮して埋め込む画面の資産の中は
 見ない(今はVite側でsourcemapを出していないので、パスは入らない)。手で確かめるなら次のとおり。
 
@@ -84,7 +85,38 @@ LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていな
 
 置き換えの対象を足したら(例えば別の場所に置いた依存)、スクリプトの検査にも足す。
 
-## 4. trim-pathsが安定版に入ったら
+## 4. 配布物にまとめる(Windows)
+
+ps1は検査の後、GUI(`scitl.exe`)とCLI(`scitl-cli.exe`)を配布物のフォルダにまとめ、zipにする。
+出来るのは`target/dist/scitl-<版>-windows-x64.zip`。版は`Cargo.toml`の`[workspace.package]`から取る。
+Linuxのshは、まだ実行ファイルを作って検査するところまでしか行わない(Issue #407)。
+
+```
+scitl-<版>-windows-x64/
+├── scitl.exe
+├── scitl-cli.exe
+├── LICENSE
+└── THIRD-PARTY-LICENSES/
+    ├── rust.txt              # Rustのクレート
+    ├── frontend.md           # 画面のバンドルに入ったnpmのパッケージ(Viteのbuild.license)
+    └── NotoJP-LICENSE.txt    # 同梱フォント
+```
+
+- `tauri build`はGUIしか作らないので、CLIはps1が同じ置き換えを付けて別にビルドし、検査にも掛ける
+- フォルダの組み立ては`scripts/assemble-dist.mjs`にある(圧縮だけがOSごと)
+- `rust.txt`に載せるクレートは、cargo-aboutに洗い出させる(`about.toml`の`targets`向けのもの。ビルド
+  スクリプトとテストにしか使わないものは除く)。配布しない`scitl-debug-cli`の依存や手続きマクロも入るので、
+  実行ファイルに入るものより広い。漏れが無ければよい
+- ライセンス文は、各クレートに入っているファイル(`LICENSE*`・`NOTICE*`等)をそのまま載せる。cargo-about
+  (0.9.2)が照合して選ぶ文面は、照合に外れると著作権者の名前が入っていないひな形に置き換わり、その
+  ことを失敗にもしない(約50クレートがそうなった)。ファイルを持たないクレート(13個)だけ、標準の文面を
+  その旨を添えて載せる。Rustの標準ライブラリはクレートの一覧に出ないので、冒頭に書いてある
+- `about.toml`の`accepted`に無いライセンスの依存があると、失敗する。ps1はビルドを始める前に、CIは
+  PRごとに、同じ確認を走らせる(`assemble-dist.mjs --check-licenses`)。足してよいライセンスかは
+  `docs/spec/architecture/tech-stack.md`「ライセンス」で判断する
+- cargo-aboutは、対象のOS向けにしか使わないクレートを取りに行くので、ネットワークが要る
+
+## 5. trim-pathsが安定版に入ったら
 
 Cargoの`trim-paths`が安定版に入ったら、`[profile.release]`に`trim-paths = true`を置き、スクリプトの
 `--remap-path-prefix`を外す(Rust 1.97では、まだ`-Z`の不安定な機能)。検査はそのまま残す。

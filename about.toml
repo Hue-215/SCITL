@@ -1,0 +1,28 @@
+# cargo-aboutの設定。配布物に同梱する第三者ライセンスの一覧(Rustのクレート)に載せるクレートを
+# 洗い出し、ライセンスが許容の範囲かを確かめる(`scripts/assemble-dist.mjs`)。
+# 方針は docs/spec/architecture/tech-stack.md「ライセンス」。
+
+# 許容するライセンス。ここに無いライセンスの依存があると、生成が失敗する。
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "Unlicense",
+    "0BSD",
+    "CC0-1.0",
+]
+
+# 配布する対象。ここに無いOS向けにしかビルドされないクレートは、一覧に入れない。
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+
+# ビルドスクリプトとテストにしか使わないクレートは、実行ファイルに入らないので一覧に入れない
+# (手続きマクロは外れない。一覧は実行ファイルに入るものより広くてよい)。
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

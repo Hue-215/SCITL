@@ -75,6 +75,24 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # 配布物に同梱する第三者ライセンスの一覧を作れるかを確かめる。許容していないライセンス
+      # (`about.toml`)の依存が入ると、ここで落ちる。配布物を作る段になってから気付くのを防ぐ。
+      # 道具(cargo-about)はソースからのビルドに数分かかるので、実行ファイルを版ごとにキャッシュする
+      # (上のcargoのキャッシュは、キーが一致した実行では保存し直さないので、そこには残らない)。
+      - name: cargo-aboutのキャッシュ
+        id: cargo-about
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about
+          key: cargo-about-0.9.2-${{ runner.os }}
+
+      - name: cargo-aboutを入れる
+        if: steps.cargo-about.outputs.cache-hit != 'true'
+        run: cargo install cargo-about --locked --version 0.9.2 --features cli
+
+      - name: 第三者ライセンス
+        run: node scripts/assemble-dist.mjs --check-licenses
+
       # 画面へ渡す型のTS定義(`frontend/src/bindings/`)は`cargo test`が生成する。消してから
       # 生成し直すので、生成し直し忘れも、もう無い型の定義が残っているのも次の段で拾える。
       - name: テスト
