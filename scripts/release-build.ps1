@@ -71,6 +71,9 @@ try {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         node node_modules\@tauri-apps\cli\tauri.js build @args
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        # `tauri build`はGUIしか作らない。配布物に入れるCLIも、同じ置き換えを付けて作る。
+        cargo build --release --locked -p scitl-cli
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         Pop-Location
     }
@@ -82,19 +85,28 @@ try {
 # 配布するバイナリに、置き換えたはずのパスが残っていないかを確かめる。パスはバイト列として
 # 埋め込まれるので、UTF-8として読んで探す。区切りは`\`と`/`の両方を見て、Windowsのパスは
 # 大文字・小文字を区別しないので区別せずに探す。
-$binary = Join-Path $rootPath 'target\release\scitl.exe'
-if (-not (Test-Path $binary)) {
-    throw "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)"
-}
-$text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($binary))
+$binaries = 'scitl.exe', 'scitl-cli.exe' | ForEach-Object { Join-Path $rootPath "target\release\$_" }
 $found = $false
-foreach ($path in @($userHome + $cargoHome + $root | Select-Object -Unique)) {
-    foreach ($form in @("$path\", ($path.Replace('\', '/') + '/'))) {
-        if ($text.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            Write-Host "バイナリに絶対パスが残っています: $form"
-            $found = $true
+foreach ($binary in $binaries) {
+    if (-not (Test-Path $binary)) {
+        throw "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)"
+    }
+    $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($binary))
+    foreach ($path in @($userHome + $cargoHome + $root | Select-Object -Unique)) {
+        foreach ($form in @("$path\", ($path.Replace('\', '/') + '/'))) {
+            if ($text.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                Write-Host "バイナリに絶対パスが残っています: $form($binary)"
+                $found = $true
+            }
         }
     }
 }
 if ($found) { exit 1 }
-Write-Host "絶対パスは残っていません: $binary"
+Write-Host "絶対パスは残っていません: $($binaries -join ', ')"
+
+# 配布物のフォルダを組み立てて、zipにまとめる。
+$name = node (Join-Path $rootPath 'scripts\assemble-dist.mjs') @binaries
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$dist = Join-Path $rootPath "target\dist\$name"
+Compress-Archive -Path $dist -DestinationPath "$dist.zip" -Force
+Write-Host "配布物: $dist.zip"
