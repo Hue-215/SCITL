@@ -36,14 +36,16 @@ $prefixes += $root | ForEach-Object { "--remap-path-prefix=$_=." }
 $env:CARGO_ENCODED_RUSTFLAGS = ($prefixes | Select-Object -Unique) -join [char]0x1f
 
 $rootPath = $root[-1]
+# npm・npxは`.cmd`を名指しする。拡張子を省くとPowerShellは`.ps1`の版を選び、その版は呼び出しの
+# 行を文字列として読み直して実行するので、`@args`が空になる。
 try {
-    npm --prefix (Join-Path $rootPath 'frontend') ci
+    npm.cmd --prefix (Join-Path $rootPath 'frontend') ci
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Push-Location (Join-Path $rootPath 'crates\scitl-tauri')
     try {
-        npm ci
+        npm.cmd ci
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        npx tauri build @args
+        npx.cmd tauri build @args
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         Pop-Location
