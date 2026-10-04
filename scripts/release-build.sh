@@ -2,7 +2,7 @@
 # 配布用のビルド(Linux)。手順と確かめ方は.claude/skills/release-build/SKILL.md。
 #
 # ビルドした人の絶対パス(ホームディレクトリ・CARGO_HOME・このリポジトリの場所)を、バイナリに
-# 焼き込まれるパス(依存クレートのパニックの位置等)から外す(Issue #380)。`strip = true`では
+# 焼き込まれるパス(依存クレートのパニックの位置等)から外す。`strip = true`では
 # シンボルとデバッグ情報しか消えない。Cargoの`trim-paths`が安定版に入ったら、
 # `[profile.release]`に置く形に替える。`.cargo/config.toml`の`rustflags`は環境変数を
 # 展開できないので、ここで渡す。

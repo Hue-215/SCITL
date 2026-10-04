@@ -1,9 +1,9 @@
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'Run this script with PowerShell 7 or later (pwsh).' }
+if ($PSVersionTable.PSVersion -lt [version] '7.2') { throw 'Run this script with PowerShell 7.2 or later (pwsh).' }
 # 配布用のビルド(Windows)。手順と確かめ方は.claude/skills/release-build/SKILL.md。
 # 1行目は、Windows PowerShell 5.1(BOMの無いUTF-8を読めない)で開いても読めるようASCIIで書く。
 #
 # ビルドした人の絶対パス(ユーザーフォルダ・CARGO_HOME・このリポジトリの場所)を、バイナリに
-# 焼き込まれるパス(依存クレートのパニックの位置、Cのソースの場所等)から外す(Issue #380)。
+# 焼き込まれるパス(依存クレートのパニックの位置、Cのソースの場所等)から外す。
 # 理由と、Cargoの`trim-paths`が安定版に入ったときの扱いは release-build.sh と同じ。
 #
 # 引数はそのまま`tauri build`に渡す(例: `--bundles msi`、`--no-bundle`)。`--target`と
@@ -14,13 +14,25 @@ if ($env:RUSTFLAGS -or $env:CARGO_ENCODED_RUSTFLAGS) {
     throw 'RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS を外してから実行してください(置き換えの指定を上書きしないため)'
 }
 
-# 置き換える場所は、書かれたままのパス、解決したパス、8.3形式のパスを持つ(同じなら1つ)。
-# 8.3形式は、パスの長さの上限を避けるために、依存クレートがCのコンパイラへ渡すことがある。
+# リンク(ジャンクション・シンボリックリンク)を辿った先のパスを求める。
+function Get-Physical([string] $path) {
+    $physical = [System.IO.Path]::GetPathRoot($path)
+    $names = $path.Substring($physical.Length).Split([char[]] '\/', [System.StringSplitOptions]::RemoveEmptyEntries)
+    foreach ($name in $names) {
+        $physical = [System.IO.Path]::Combine($physical, $name)
+        $target = [System.IO.Directory]::ResolveLinkTarget($physical, $true)
+        if ($target) { $physical = $target.FullName }
+    }
+    $physical
+}
+
+# 置き換える場所は、書かれたままのパス、リンクを辿ったパス、それぞれの8.3形式を持つ(同じなら1つ)。
+# cargoは書かれたままの形を使う。依存クレートは、リンクを辿り、パスの長さの上限を避けるために
+# 8.3形式にしてから、Cのコンパイラへ渡すことがある。
 $fileSystem = New-Object -ComObject Scripting.FileSystemObject
 function Get-Forms([string] $path) {
-    $resolved = (Resolve-Path $path).Path
-    @($path, $resolved, $fileSystem.GetFolder($resolved).ShortPath) |
-        ForEach-Object { $_.TrimEnd('\', '/') } | Select-Object -Unique
+    @($path, (Get-Physical $path)) | ForEach-Object { $_; $fileSystem.GetFolder($_).ShortPath } |
+        Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\', '/') } | Select-Object -Unique
 }
 $rootPath = Split-Path $PSScriptRoot -Parent
 # 1つだけでも配列として持つ(PowerShellは要素が1つの出力を配列にしない)。
@@ -47,8 +59,9 @@ $trims = $root + $cargoHome + $userHome | Select-Object -Unique | ForEach-Object
 $previousCl = $env:CL
 $env:CL = (@($previousCl) + $trims | Where-Object { $_ }) -join ' '
 
-# npm・npxは`.cmd`を名指しする。拡張子を省くとPowerShellは`.ps1`の版を選び、その版は呼び出しの
-# 行を文字列として読み直して実行するので、`@args`が空になる。
+# npmは`.cmd`を名指しし、tauriのCLIはnpxを通さずにnodeで動かす。拡張子を省くとPowerShellは
+# `.ps1`の版を選び、その版は呼び出しの行を文字列として読み直して実行するので、`@args`が空になる。
+# `npx.cmd`は、cmd.exeが引用符や`&`を解釈して引数を壊す。
 try {
     npm.cmd --prefix (Join-Path $rootPath 'frontend') ci
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -56,14 +69,14 @@ try {
     try {
         npm.cmd ci
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        npx.cmd tauri build @args
+        node node_modules\@tauri-apps\cli\tauri.js build @args
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         Pop-Location
     }
 } finally {
-    Remove-Item Env:CARGO_ENCODED_RUSTFLAGS
     $env:CL = $previousCl
+    Remove-Item Env:CARGO_ENCODED_RUSTFLAGS
 }
 
 # 配布するバイナリに、置き換えたはずのパスが残っていないかを確かめる。パスはバイト列として

@@ -14,7 +14,7 @@ description: SCITLの配布用ビルドの手順(scripts/release-build.sh・rele
 | OS | コマンド |
 |---|---|
 | Linux | `scripts/release-build.sh` |
-| Windows | `pwsh scripts/release-build.ps1`(PowerShell 7以降。5.1では最初の行で止まる) |
+| Windows | `pwsh scripts/release-build.ps1`(PowerShell 7.2以降。それより古いと最初の行で止まる) |
 
 macOSは今は対象にしていない(資格情報の保存先が無い。`docs/spec/architecture/network-secrets.md`)。
 shはmacOSでも動く書き方にしてあるが、確かめていない。
@@ -63,9 +63,10 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
 - Windows(MSVC)では付けないので、ps1が環境変数`CL`(コンパイラが引数の前に足して読む)で
   `/d1trimfile:`を渡し、同じ3つの場所を取り除く。置き換えではないので、`registry\src\…`から
   始まる形で残る
-- `aws-lc-sys`は、パスの長さの上限を避けるために、自分のソースの場所を8.3形式
-  (`…\CARGO~1\registry\…`)でコンパイラへ渡す。MSVCは`#include`されたファイルだけを長い形に直すので、
-  両方の形が焼き込まれる。ps1は3つの場所の8.3形式も、置き換え・取り除き・検査の対象にする
+- `aws-lc-sys`は、自分のソースの場所を、リンクを辿り、パスの長さの上限を避けるために8.3形式
+  (`…\CARGO~1\registry\…`)にしてからコンパイラへ渡す。MSVCは`#include`されたファイルだけを長い形に
+  直すので、両方の形が焼き込まれる。ps1は3つの場所それぞれの8.3形式も、置き換え・取り除き・検査の
+  対象にする
 - `/d1trimfile:`は文書に載っていないフラグ(MSVC 14.51で確認、2026-10)。効かなくなれば検査が失敗する
 - cargoは`CL`の変化を見ない。`CL`に渡すフラグを変えたら、`cargo clean --release -p aws-lc-sys`で
   Cのソースを作り直させる
@@ -87,3 +88,5 @@ LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていな
 
 Cargoの`trim-paths`が安定版に入ったら、`[profile.release]`に`trim-paths = true`を置き、スクリプトの
 `--remap-path-prefix`を外す(Rust 1.97では、まだ`-Z`の不安定な機能)。検査はそのまま残す。
+`trim-paths`が変えるのはrustcの出力なので、ps1の`CL`(Cのソースの場所)は、外しても検査が通ると
+確かめてから外す。
