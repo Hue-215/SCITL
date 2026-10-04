@@ -74,8 +74,8 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
 
 ## 3. 確かめる
 
-スクリプトはビルドの後、`target/release/scitl`(Windowsは`scitl.exe`)の中身に3つのパスが残って
-いないかを調べ、残っていれば失敗で終わる。束ねた配布物(deb・msi等)は同じバイナリを入れるので、
+スクリプトはビルドの後、`target/release/scitl`(Windowsは`scitl.exe`と`scitl-cli.exe`)の中身に3つの
+パスが残っていないかを調べ、残っていれば失敗で終わる。束ねた配布物(deb・msi等)は同じバイナリを入れるので、
 別には調べない。調べるのは実行ファイルのバイト列だけで、Tauriが圧縮して埋め込む画面の資産の中は
 見ない(今はVite側でsourcemapを出していないので、パスは入らない)。手で確かめるなら次のとおり。
 
@@ -97,19 +97,24 @@ scitl-<版>-windows-x64/
 ├── scitl-cli.exe
 ├── LICENSE
 └── THIRD-PARTY-LICENSES/
-    ├── rust.html             # Rustのクレート(cargo-about)
+    ├── rust.txt              # Rustのクレート
     ├── frontend.md           # 画面のバンドルに入ったnpmのパッケージ(Viteのbuild.license)
     └── NotoJP-LICENSE.txt    # 同梱フォント
 ```
 
 - `tauri build`はGUIしか作らないので、CLIはps1が同じ置き換えを付けて別にビルドし、検査にも掛ける
 - フォルダの組み立ては`scripts/assemble-dist.mjs`にある(圧縮だけがOSごと)
-- `rust.html`に載るのは、`about.toml`の`targets`向けに実行ファイルへ入るクレートだけ(ビルドスクリプト・
-  手続きマクロ・テスト用は入れない)。Rustの標準ライブラリはcargo-aboutの対象外なので、テンプレート
-  (`about.hbs`)に書いてある
-- `about.toml`の`accepted`に無いライセンスの依存があると、生成が失敗する。CIも同じ生成を走らせるので
-  (`assemble-dist.mjs --check-licenses`)、依存を足したPRの時点で落ちる。足してよいライセンスかは
+- `rust.txt`に載せるクレートは、cargo-aboutに洗い出させる(`about.toml`の`targets`向けのもの。ビルド
+  スクリプトとテストにしか使わないものは除く)。配布しない`scitl-debug-cli`の依存や手続きマクロも入るので、
+  実行ファイルに入るものより広い。漏れが無ければよい
+- ライセンス文は、各クレートに入っているファイル(`LICENSE*`・`NOTICE*`等)をそのまま載せる。cargo-about
+  (0.9.2)が照合して選ぶ文面は、照合に外れると著作権者の名前が入っていないひな形に置き換わり、その
+  ことを失敗にもしない(約50クレートがそうなった)。ファイルを持たないクレート(13個)だけ、標準の文面を
+  その旨を添えて載せる。Rustの標準ライブラリはクレートの一覧に出ないので、冒頭に書いてある
+- `about.toml`の`accepted`に無いライセンスの依存があると、失敗する。ps1はビルドを始める前に、CIは
+  PRごとに、同じ確認を走らせる(`assemble-dist.mjs --check-licenses`)。足してよいライセンスかは
   `docs/spec/architecture/tech-stack.md`「ライセンス」で判断する
+- cargo-aboutは、対象のOS向けにしか使わないクレートを取りに行くので、ネットワークが要る
 
 ## 5. trim-pathsが安定版に入ったら
 

@@ -6,6 +6,8 @@ if ($PSVersionTable.PSVersion -lt [version] '7.2') { throw 'Run this script with
 # 焼き込まれるパス(依存クレートのパニックの位置、Cのソースの場所等)から外す。
 # 理由と、Cargoの`trim-paths`が安定版に入ったときの扱いは release-build.sh と同じ。
 #
+# 続けて、CLIも同じ置き換えを付けてビルドし、GUI・CLI・ライセンス類を`target\dist`のzipにまとめる。
+#
 # 引数はそのまま`tauri build`に渡す(例: `--bundles msi`、`--no-bundle`)。`--target`と
 # `CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
 $ErrorActionPreference = 'Stop'
@@ -35,6 +37,13 @@ function Get-Forms([string] $path) {
         Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\', '/') } | Select-Object -Unique
 }
 $rootPath = Split-Path $PSScriptRoot -Parent
+
+# 第三者ライセンスの一覧を作れるか(道具の有無、許容していないライセンスの依存)を、時間のかかる
+# ビルドの前に確かめる。前の配布物は、失敗したときに今回のものと取り違えないよう先に消す。
+node (Join-Path $rootPath 'scripts\assemble-dist.mjs') --check-licenses
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Remove-Item -LiteralPath (Join-Path $rootPath 'target\dist') -Recurse -Force -ErrorAction SilentlyContinue
+
 # 1つだけでも配列として持つ(PowerShellは要素が1つの出力を配列にしない)。
 $root = @(Get-Forms $rootPath)
 $userHome = @(Get-Forms $env:USERPROFILE)
@@ -108,5 +117,5 @@ Write-Host "絶対パスは残っていません: $($binaries -join ', ')"
 $name = node (Join-Path $rootPath 'scripts\assemble-dist.mjs') @binaries
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $dist = Join-Path $rootPath "target\dist\$name"
-Compress-Archive -Path $dist -DestinationPath "$dist.zip" -Force
+Compress-Archive -LiteralPath $dist -DestinationPath "$dist.zip" -Force
 Write-Host "配布物: $dist.zip"

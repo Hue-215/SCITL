@@ -1,5 +1,6 @@
-# cargo-aboutの設定。配布物に同梱する第三者ライセンスの一覧(Rustのクレート)を作る
-# (`scripts/assemble-dist.mjs`)。方針は docs/spec/architecture/tech-stack.md「ライセンス」。
+# cargo-aboutの設定。配布物に同梱する第三者ライセンスの一覧(Rustのクレート)に載せるクレートを
+# 洗い出し、ライセンスが許容の範囲かを確かめる(`scripts/assemble-dist.mjs`)。
+# 方針は docs/spec/architecture/tech-stack.md「ライセンス」。
 
 # 許容するライセンス。ここに無いライセンスの依存があると、生成が失敗する。
 accepted = [
@@ -21,6 +22,7 @@ accepted = [
 # 配布する対象。ここに無いOS向けにしかビルドされないクレートは、一覧に入れない。
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 
-# 実行ファイルに入らないもの(ビルドスクリプト・手続きマクロ・テスト用)は一覧に入れない。
+# ビルドスクリプトとテストにしか使わないクレートは、実行ファイルに入らないので一覧に入れない
+# (手続きマクロは外れない。一覧は実行ファイルに入るものより広くてよい)。
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
