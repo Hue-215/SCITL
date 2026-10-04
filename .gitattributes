@@ -2,3 +2,7 @@
 # 変換されると、生成し直しただけで全ファイルが「変更あり」と出て、生成し直し忘れの検査
 # (CIの「型定義の生成物」)と区別が付かなくなる
 frontend/src/bindings/*.ts text eol=lf
+
+# `tauri build`はこのファイルをLFで書き直す。CRLFでチェックアウトされていると、内容が同じでも
+# 配布用のビルドのたびに「変更あり」と出る
+crates/scitl-tauri/Cargo.toml text eol=lf

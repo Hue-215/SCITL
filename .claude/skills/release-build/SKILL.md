@@ -14,13 +14,14 @@ description: SCITLの配布用ビルドの手順(scripts/release-build.sh・rele
 | OS | コマンド |
 |---|---|
 | Linux | `scripts/release-build.sh` |
-| Windows | `pwsh scripts/release-build.ps1`(PowerShell 7以降。5.1では最初の行で止まる) |
+| Windows | `pwsh scripts/release-build.ps1`(PowerShell 7.2以降。それより古いと最初の行で止まる) |
 
 macOSは今は対象にしていない(資格情報の保存先が無い。`docs/spec/architecture/network-secrets.md`)。
 shはmacOSでも動く書き方にしてあるが、確かめていない。
 
 - 前提: Rust・Node.js(npm)と、Tauriのビルドに要るシステムの依存(CI`.github/workflows/ci.yml`の
-  「システム依存を入れる」と同じ)。npmの依存(`frontend/`と`crates/scitl-tauri/`)はスクリプトが入れる
+  「システム依存を入れる」と同じ)。npmの依存(`frontend/`と`crates/scitl-tauri/`)はスクリプトが入れる。
+  WindowsはMSVCのツールチェーン(Rustの既定)を前提にする
 - 引数はそのまま`tauri build`に渡る。束ね方を絞るなら`--bundles deb`・`--bundles msi`、バイナリ
   だけなら`--no-bundle`。`--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が
   変わる。検査の前に止まる)
@@ -31,7 +32,8 @@ shはmacOSでも動く書き方にしてあるが、確かめていない。
 - フラグが開発時のビルドと違うので、`target/release`は全部作り直しになる
 - `tauri build`は`crates/scitl-tauri/Cargo.toml`の依存の書き方を自分の形(`{ version = "2",
   features = [] }`)に揃え直すので、リポジトリにはその形で置いてある。整理のつもりで短い形に戻すと、
-  ビルドのたびに作業ツリーが汚れる
+  ビルドのたびに作業ツリーが汚れる。書き直しはLFなので、`.gitattributes`でこのファイルをLFに
+  固定してある(CRLFでチェックアウトされると、内容が同じでも変更ありと出る)
 
 ## 2. 何をしているか
 
@@ -52,6 +54,23 @@ shはmacOSでも動く書き方にしてあるが、確かめていない。
 - rustcは後に書いた置き換えから当てはまるかを見るので、広いもの(ホーム)を先に書く
 - ホームがルート(`HOME=/`)・ドライブの直下なら止める(置き換えがすべてのパスに当たるため)
 
+### Cのソースの場所
+
+rustcの置き換えは、依存クレートがCのコンパイラに作らせる部分には届かない。今は`aws-lc-sys`(TLSの
+暗号ライブラリ)のCのソースが、自分の場所を`__FILE__`として焼き込む。
+
+- Linuxでは`aws-lc-sys`が自分で`-ffile-prefix-map`を付けるので、スクリプトは何もしない
+- Windows(MSVC)では付けないので、ps1が環境変数`CL`(コンパイラが引数の前に足して読む)で
+  `/d1trimfile:`を渡し、同じ3つの場所を取り除く。置き換えではないので、`registry\src\…`から
+  始まる形で残る
+- `aws-lc-sys`は、自分のソースの場所を、リンクを辿り、パスの長さの上限を避けるために8.3形式
+  (`…\CARGO~1\registry\…`)にしてからコンパイラへ渡す。MSVCは`#include`されたファイルだけを長い形に
+  直すので、両方の形が焼き込まれる。ps1は3つの場所それぞれの8.3形式も、置き換え・取り除き・検査の
+  対象にする
+- `/d1trimfile:`は文書に載っていないフラグ(MSVC 14.51で確認、2026-10)。効かなくなれば検査が失敗する
+- cargoは`CL`の変化を見ない。`CL`に渡すフラグを変えたら、`cargo clean --release -p aws-lc-sys`で
+  Cのソースを作り直させる
+
 ## 3. 確かめる
 
 スクリプトはビルドの後、`target/release/scitl`(Windowsは`scitl.exe`)の中身に3つのパスが残って
@@ -69,3 +88,5 @@ LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていな
 
 Cargoの`trim-paths`が安定版に入ったら、`[profile.release]`に`trim-paths = true`を置き、スクリプトの
 `--remap-path-prefix`を外す(Rust 1.97では、まだ`-Z`の不安定な機能)。検査はそのまま残す。
+`trim-paths`が変えるのはrustcの出力なので、ps1の`CL`(Cのソースの場所)は、外しても検査が通ると
+確かめてから外す。
