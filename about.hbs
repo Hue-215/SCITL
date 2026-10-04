@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Third-party licenses (Rust crates)</title>
+<style>
+body { font-family: sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+pre { white-space: pre-wrap; border: 1px solid #ccc; padding: 1rem; }
+</style>
+</head>
+<body>
+<h1>Third-party licenses (Rust crates)</h1>
+<p>SCITL Task Companion is built from the crates listed below. Each section gives a license
+text and the crates distributed under it; the link on a crate leads to its source code.</p>
+<p>It also links the Rust standard library, distributed under MIT OR Apache-2.0
+(<a href="https://www.rust-lang.org/policies/licenses">https://www.rust-lang.org/policies/licenses</a>).</p>
+
+<h2>Overview</h2>
+<ul>
+{{#each overview}}
+<li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<ul>
+{{#each used_by}}
+<li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>

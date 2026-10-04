@@ -7,6 +7,9 @@ import { defineConfig, searchForWorkspaceRoot } from 'vite'
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  // バンドルに入った依存のライセンスの一覧を`dist/.vite/license.md`に出す。配布物に同梱する
+  // (`scripts/assemble-dist.mjs`)。
+  build: { license: true },
   server: {
     port: 1420,
     strictPort: true,
