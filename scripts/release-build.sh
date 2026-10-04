@@ -7,9 +7,21 @@
 # `[profile.release]`に置く形に替える。`.cargo/config.toml`の`rustflags`は環境変数を
 # 展開できないので、ここで渡す。
 #
-# 引数はそのまま`tauri build`に渡す(例: `--bundles deb`、`--no-bundle`)。`--target`と
-# `CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
+# 続けて、CLIも同じ置き換えを付けてビルドし、AppImage・CLI・ライセンス類を`target/dist`の
+# tar.gzにまとめる。
+#
+# 引数はそのまま`tauri build`に渡す。束ね方はAppImageに固定するので、`--bundles`・`--no-bundle`は
+# 受け付けない。`--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
 set -euo pipefail
+
+for arg in "$@"; do
+  case "$arg" in
+    -b | -b* | --bundles | --bundles=* | --no-bundle)
+      echo "束ね方はAppImageに固定しています。$arg を外してください" >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ -n "${RUSTFLAGS:-}" || -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]]; then
   echo "RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS を外してから実行してください(置き換えの指定を上書きしないため)" >&2
@@ -30,6 +42,11 @@ if [[ "$home" != /?* || "$home_physical" == / ]]; then
   exit 1
 fi
 
+# 第三者ライセンスの一覧を作れるか(道具の有無、許容していないライセンスの依存)を、時間のかかる
+# ビルドの前に確かめる。前の配布物は、失敗したときに今回のものと取り違えないよう先に消す。
+node "$root/scripts/assemble-dist.mjs" --check-licenses
+rm -rf "$root/target/dist"
+
 # rustcは後に書いたものから当てはまるかを見るので、広いもの(ホーム)を先に置く。
 prefixes=()
 for pair in \
@@ -42,25 +59,58 @@ done
 CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; echo "${prefixes[*]}")"
 export CARGO_ENCODED_RUSTFLAGS
 
+# 前のビルドのAppImageを、今回のものと取り違えないよう先に消す(名前に版が入るので、版を
+# 変えると前のものが残る)。
+appimage_dir="$root/target/release/bundle/appimage"
+rm -rf "$appimage_dir"
+
 npm --prefix "$root/frontend" ci
 cd "$root/crates/scitl-tauri"
 npm ci
-npx tauri build "$@"
+npx tauri build --bundles appimage "$@"
+# `tauri build`はGUIしか作らない。配布物に入れるCLIも、同じ置き換えを付けて作る。
+cargo build --release --locked -p scitl-cli
+unset CARGO_ENCODED_RUSTFLAGS
 
-# 配布するバイナリに、置き換えたはずのパスが残っていないかを確かめる。
-binary="$root/target/release/scitl"
-if [[ ! -f "$binary" ]]; then
-  echo "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)" >&2
+# AppImageの名前は製品名(空白を含む)から付くので、配布物の中では短い名前にする。
+appimages=("$appimage_dir"/*.AppImage)
+if [[ ${#appimages[@]} != 1 || ! -f "${appimages[0]}" ]]; then
+  echo "AppImageが1つに定まりません: ${appimages[*]}" >&2
   exit 1
 fi
+appimage="$appimage_dir/scitl.AppImage"
+mv "${appimages[0]}" "$appimage"
+
+# 配布するバイナリに、置き換えたはずのパスが残っていないかを確かめる。AppImageは中を展開して、
+# 入っているファイルをすべて調べる(同梱のライブラリ・設定ファイルは、束ねる道具が作る)。
+binaries=("$root/target/release/scitl" "$root/target/release/scitl-cli")
+for binary in "${binaries[@]}"; do
+  if [[ ! -f "$binary" ]]; then
+    echo "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)" >&2
+    exit 1
+  fi
+done
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+(cd "$work" && "$appimage" --appimage-extract >/dev/null)
 found=0
 for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root" "$root_physical"; do
-  if LC_ALL=C grep -q -a -F -- "$path/" "$binary"; then
-    echo "バイナリに絶対パスが残っています: $path/" >&2
+  # grepは見つからないと1、読めないファイルがあると2で終わる。2は検査の漏れなので止める。
+  LC_ALL=C grep -r -l -Z -a -F -- "$path/" "${binaries[@]}" "$work/squashfs-root" >"$work/found" || [[ $? == 1 ]]
+  while IFS= read -r -d '' file; do
+    echo "絶対パスが残っています: $path/(${file#"$work/"})" >&2
     found=1
-  fi
+  done <"$work/found"
 done
 if [[ "$found" != 0 ]]; then
   exit 1
 fi
-echo "絶対パスは残っていません: $binary"
+echo "絶対パスは残っていません: ${binaries[*]} $appimage"
+
+# 配布物のフォルダを組み立てて、tar.gzにまとめる(実行の許可を保つため、zipではなくtarにする)。
+# tarはファイルの持ち主の名前と、ビルドした人のumaskで決まった権限を記録するので、持ち主は
+# rootに、権限はグループ・他人の書き込みを外した形に揃える。
+name="$(node "$root/scripts/assemble-dist.mjs" "$appimage" "$root/target/release/scitl-cli")"
+tar -C "$root/target/dist" --owner=0 --group=0 --numeric-owner --mode=go-w \
+  -czf "$root/target/dist/$name.tar.gz" "$name"
+echo "配布物: $root/target/dist/$name.tar.gz"
