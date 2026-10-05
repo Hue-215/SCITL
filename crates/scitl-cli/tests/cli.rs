@@ -50,6 +50,20 @@ fn operations_are_recorded_with_the_cli_source() {
     assert_eq!(detail["task"]["title"], "買い出し");
 }
 
+/// 接続を閉じて終わるので、SQLiteがWALを本体へ書き戻して消す。
+#[test]
+fn a_command_leaves_no_wal_behind() {
+    let data = DataDir::new();
+
+    assert!(data.run(&["task", "list"]).status.success());
+
+    let database = DataLayout::new(data.path()).database();
+    assert!(database.exists());
+    let mut wal = database.into_os_string();
+    wal.push("-wal");
+    assert!(!Path::new(&wal).exists());
+}
+
 #[test]
 fn invisible_characters_reach_the_terminal_escaped_with_the_same_value() {
     let data = DataDir::new();

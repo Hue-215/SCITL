@@ -13,7 +13,7 @@ use scitl_core::in_flight::InFlightSet;
 use scitl_core::paths::{self, DataDirError, DataLayout};
 use scitl_core::settings::Settings;
 use tauri::ipc::Channel;
-use tauri::{DragDropEvent, Manager, WindowEvent};
+use tauri::{DragDropEvent, Manager, RunEvent, WindowEvent};
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
 /// (DBは`db::with_conn`、設定は`settings::Settings`、生成中の会話は`in_flight`)。
@@ -118,8 +118,16 @@ fn main() {
             commands::link::inspect_link,
             commands::link::open_confirmed_link,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // このあとプロセスは接続を閉じずに終わるので、WALにだけある変更をここで本体へ書き戻す。
+            if let RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    scitl_core::db::checkpoint_wal(&state.db);
+                }
+            }
+        });
 }
 
 /// 実行ファイルの隣のデータディレクトリを開き、コマンド層の状態を作る。
@@ -131,6 +139,9 @@ fn open_app_state(revealed_attachments: PathBuf) -> Result<AppState, DataDirErro
     })?;
     let conn = scitl_core::db::open(data.database())
         .map_err(|e| DataDirError::from_database(data.root(), &e))?;
+    let db = Arc::new(Mutex::new(conn));
+    // 前回の終了時に書き戻せなかった分(強制終了など)を、ここで本体へ書き戻す。
+    scitl_core::db::checkpoint_wal(&db);
 
     let settings = Settings::load(data.config());
     let attachments = Arc::new(Attachments::new(AttachmentStore::new(
@@ -139,7 +150,7 @@ fn open_app_state(revealed_attachments: PathBuf) -> Result<AppState, DataDirErro
     )));
 
     Ok(AppState {
-        db: Arc::new(Mutex::new(conn)),
+        db,
         settings: Arc::new(settings),
         generating: InFlightSet::new(),
         attachments,
