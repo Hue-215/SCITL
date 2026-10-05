@@ -6,7 +6,7 @@
  * 発行される色トークンの一覧(theme.ts のROLES/DANGER_ROLESと対応):
  *   --color-bg, --color-surface, --color-surface-alt, --color-border,
  *   --color-text, --color-text-secondary,
- *   --color-primary, --color-primary-container, --color-on-primary-container,
+ *   --color-primary, --color-primary-container, --color-on-primary-container, --color-primary-button,
  *   --color-danger, --color-danger-container, --color-on-danger-container
  * 同じく theme.ts が発行する奥行きのトークン(buildElevationと対応):
  *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
