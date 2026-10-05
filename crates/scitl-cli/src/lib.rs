@@ -53,7 +53,7 @@ pub enum TaskCommand {
     Archive { id: i64 },
     /// Unarchive a task.
     Unarchive { id: i64 },
-    /// Delete a task. It stays in the database and can be restored.
+    /// Delete a task. It is hidden from the app and cannot be restored (the record stays in the database).
     Delete { id: i64 },
 }
 
