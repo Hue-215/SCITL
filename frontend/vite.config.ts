@@ -1,5 +1,5 @@
 import react from '@vitejs/plugin-react'
-import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin, searchForWorkspaceRoot } from 'vite'
 
@@ -11,6 +11,10 @@ function moveLicenseList(): Plugin {
   return {
     name: 'scitl-move-license-list',
     apply: 'build',
+    // 前のビルドの一覧を先に消す。今回のビルドが一覧を出さずに終わったとき、古い一覧が検査を通らないように。
+    buildStart() {
+      rmSync(to, { force: true })
+    },
     closeBundle() {
       if (!existsSync(from)) return
       mkdirSync(fileURLToPath(new URL('./dist-meta', import.meta.url)), { recursive: true })

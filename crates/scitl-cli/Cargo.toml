@@ -12,8 +12,5 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 
-[build-dependencies]
-static_vcruntime = { workspace = true }
-
 [dev-dependencies]
 tempfile = { workspace = true }

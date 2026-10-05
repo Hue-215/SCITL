@@ -147,11 +147,14 @@ const STANDARD_TEXT = new Set(['selectors'])
 
 // Rustの標準ライブラリと、それと一緒に実行ファイルに入るクレートのうち、依存の一覧に現れないもの
 // (cargo-aboutは標準ライブラリの中を見ない)。licenses/の下のフォルダの写しを載せる。標準ライブラリが
-// 使うほかのクレート(hashbrown・miniz_oxide)は、依存としても入っていて一覧に載る。
+// 使うほかのクレート(hashbrown・miniz_oxide・libc等)は、依存としても入っていて一覧に載る(版は違いうるが、
+// ライセンス文は同じ)。
 const STD = [
   ['Rust standard library', 'rust'],
   ['addr2line', 'addr2line'],
+  ['compiler_builtins', 'compiler_builtins'],
   ['gimli', 'gimli'],
+  ['object', 'object'],
   ['rustc-demangle', 'rustc-demangle'],
 ]
 
@@ -272,8 +275,9 @@ function rustLicenses() {
     'The source code of a crate is available at the address next to its name.',
     '',
     'The Rust standard library (https://github.com/rust-lang/rust, MIT OR Apache-2.0) is',
-    'also linked, together with the crates it is built from: addr2line, gimli,',
-    'rustc-demangle, hashbrown and miniz_oxide. Their license files are included below.',
+    'also linked, together with the crates it is built from. Of those, addr2line,',
+    'compiler_builtins, gimli, object and rustc-demangle are not in the list; their license',
+    'files are included below, after those of the listed crates.',
     '',
     ...index,
     '',

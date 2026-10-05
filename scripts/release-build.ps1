@@ -124,6 +124,13 @@ try {
     $found = $false
     foreach ($file in Get-ChildItem -LiteralPath $dist -Recurse -File -Force) {
         $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($file.FullName))
+        # 実行ファイルが、同梱していないVCランタイムのDLLを求めていないかも確かめる(GUIは`tauri build`が、
+        # CLIは`crates/scitl-cli/build.rs`が静的にリンクする)。求めるDLLの名前はそのまま埋め込まれる。
+        if ($file.Extension -eq '.exe' -and
+            $text.IndexOf('VCRUNTIME140', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            Write-Host "VCランタイムのDLL(VCRUNTIME140)を求めています: $($file.FullName)"
+            $found = $true
+        }
         foreach ($path in @($userHome + $cargoHome + $root | Select-Object -Unique)) {
             foreach ($form in @("$path\", ($path.Replace('\', '/') + '/'))) {
                 if ($text.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
@@ -134,7 +141,7 @@ try {
         }
     }
     if ($found) { exit 1 }
-    Write-Host "絶対パスは残っていません: $dist"
+    Write-Host "絶対パスは残っておらず、VCランタイムのDLLも求めていません: $dist"
 
     Compress-Archive -LiteralPath $dist -DestinationPath "$dist.zip" -Force
     $completed = $true

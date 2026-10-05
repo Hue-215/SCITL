@@ -109,8 +109,9 @@ scitl-<版>-windows-x64/
 - `tauri build`はGUIしか作らないので、CLIはスクリプトが同じ置き換えを付けて別にビルドし、検査にも掛ける
 - Windowsの実行ファイルは、VCランタイムを静的にリンクする(GUIは`tauri build`が、CLIは
   `crates/scitl-cli/build.rs`が`static_vcruntime`で行う)。既定のままだと`VCRUNTIME140.dll`
-  (Visual C++の再頒布可能パッケージ)を求め、入っていないPCで起動できない。確かめるなら
-  `objdump -p scitl-cli.exe | grep 'DLL Name'`に`VCRUNTIME140.dll`が出ないことを見る
+  (Visual C++の再頒布可能パッケージ)を求め、入っていないPCで起動できない。ps1は、配布物の
+  実行ファイルが`VCRUNTIME140`を求めていれば失敗にする。手で確かめるなら、`dumpbin /dependents`
+  (Linuxからは`objdump -p <exe> | grep 'DLL Name'`)に`VCRUNTIME140.dll`が出ないことを見る
 - フォルダの組み立ては`scripts/assemble-dist.mjs`にある(圧縮だけがOSごと)
 - `rust.txt`に載せるクレートは、cargo-aboutに洗い出させる(`about.toml`の`targets`向けのもの。ビルド
   スクリプトとテストにしか使わないものは除く)。配布しない`scitl-debug-cli`の依存や手続きマクロも入るので、
@@ -118,8 +119,9 @@ scitl-<版>-windows-x64/
 - ライセンス文は、各クレートに入っているファイル(`LICENSE*`・`NOTICE*`等)をそのまま載せる。cargo-about
   (0.9.2)が照合して選ぶ文面は、照合に外れると著作権者の名前が入っていないひな形に置き換わり、その
   ことを失敗にもしない(約50クレートがそうなった)。Rustの標準ライブラリと、それと一緒に実行ファイルに入って
-  依存の一覧に現れないクレート(addr2line・gimli・rustc-demangle)は、cargo-aboutが見ないので、
-  `licenses/`に写したファイルを載せる(`assemble-dist.mjs`の`STD`)
+  依存の一覧に現れないクレート(addr2line・compiler_builtins・gimli・object・rustc-demangle)は、
+  cargo-aboutが見ないので、`licenses/`に写したファイルを載せる(`assemble-dist.mjs`の`STD`。Rustを
+  更新したら`licenses/README.md`の手順で見直す)
 - パッケージにファイルを持たないクレートは、上流のリポジトリから`licenses/`に写したファイルを載せる
   (入手先は`licenses/README.md`)。写しの無いクレートが増えると失敗するので、写して`assemble-dist.mjs`の
   `SUPPLIED`に足す。上流にもファイルが無く、標準の文面で足りるもの(MPL-2.0の`selectors`)だけは
@@ -180,7 +182,8 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
    (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
 8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> --title "SCITL <版>" --notes-file <ノート>`。
    リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
-   READMEに書くまでの間は次も書く(配布物の`README.txt`にも同じことを書いてある。変えるときは両方を直す)
+   READMEに書くまでの間は次も書く(配布物の`README.txt`(`scripts/dist-README.txt`)にも同じことを書いてある。変えるときは両方を直す。
+   求めるglibcの版もそこに書いてあるので、ビルドする環境を変えたら直す)
    - Windowsの実行ファイルにコード署名が無く、初回の起動でSmartScreenの警告が出ること
    - Linuxは`libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)が要ること、求めるglibcの版(4節)
    - データは展開したフォルダの`data`に置かれること。版を上げるときは、古いフォルダの`data`を

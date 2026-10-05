@@ -15,7 +15,8 @@ LLMのAPI(OpenAI互換・Anthropic・Gemini)を自分で登録して使います
 
   Linux    WebKitGTK 4.1(Debian・Ubuntuは libwebkit2gtk-4.1-0、Fedoraは webkit2gtk4.1)と
            glibc 2.39以上。APIキーの保存にSecret Serviceを使います。
-  Windows  WebView2
+  Windows  WebView2。実行ファイルにコード署名が無いので、初回の起動で「WindowsによってPCが
+           保護されました」という警告が出ることがあります。「詳細情報」→「実行」で起動できます。
 
 ■ 使い方
 
