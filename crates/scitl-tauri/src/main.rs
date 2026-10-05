@@ -48,6 +48,7 @@ fn main() {
     builder
         .plugin(navigation::guard())
         .setup(|app| {
+            show_version_in_title(app);
             let revealed = paths::revealed_attachments(&paths::default_cache_dir()?);
             match open_app_state(revealed) {
                 Ok(state) => app.manage(state),
@@ -149,6 +150,18 @@ fn open_app_state(revealed_attachments: PathBuf) -> Result<AppState, DataDirErro
 
 /// `tauri.conf.json`で作るウィンドウのラベル。
 const MAIN_WINDOW: &str = "main";
+
+/// ウィンドウ名(`tauri.conf.json`の`title`)の後ろに版を付ける。版は`Cargo.toml`の
+/// ワークスペースの`version`で、版を書く場所を増やさないためここで組み立てる。
+fn show_version_in_title(app: &tauri::App) {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
+        return;
+    };
+    let Ok(title) = window.title() else {
+        return;
+    };
+    let _ = window.set_title(&format!("{title} {}", app.package_info().version));
+}
 
 /// 多重起動の防止を使えるか。Linuxのプラグインはセッションバスのアドレスを解釈できないと
 /// 起動ごとpanicするので、同じ解釈で先に確かめ、使えなければ防止なしで起動する。
