@@ -1,0 +1,165 @@
+/*
+ * デザイントークン(色以外)。色は theme.ts が実行時に --color-* として適用する。
+ *
+ * theme.ts はロール名(camelCase)を roleNameToCssVar() で --color-kebab-case に
+ * 変換して発行するため、変数名で theme.ts 内を検索しても定義に辿り着けない。
+ * 発行される色トークンの一覧(theme.ts のROLES/DANGER_ROLESと対応):
+ *   --color-bg, --color-surface, --color-surface-alt, --color-border,
+ *   --color-text, --color-text-secondary,
+ *   --color-primary, --color-primary-container, --color-on-primary-container, --color-primary-button,
+ *   --color-danger, --color-danger-container, --color-on-danger-container
+ * 同じく theme.ts が発行する奥行きのトークン(buildElevationと対応):
+ *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
+ */
+
+/* ウェイトを足し引きしたら、下の--font-weight-*とui.md「書体とウェイト」の表も直す。 */
+@font-face {
+  font-family: 'Noto Sans JP';
+  src: url('/fonts/NotoSansJP-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans JP';
+  src: url('/fonts/NotoSansJP-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Serif JP';
+  src: url('/fonts/NotoSerifJP-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Serif JP';
+  src: url('/fonts/NotoSerifJP-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  /* 画面の文字。発言本文(.markdown)だけが--font-family-proseを使う */
+  --font-family: 'Noto Sans JP', sans-serif;
+  --font-family-prose: 'Noto Serif JP', serif;
+  /* コマンド・JSON等、桁を揃えて読ませる箇所用。OSごとの等幅フォントに委ねる */
+  --font-family-mono: ui-monospace, monospace;
+
+  /* ウェイトは2段階(本文 / 強調)。強調の値は書体ごとに同梱したウェイトに合わせて決め、
+     .markdownが--font-weight-strongを-proseの値で上書きする。太字は要素に直値で書かず、
+     必ずこれを使う。 */
+  --font-weight-normal: 400;
+  --font-weight-strong: 500;
+  --font-weight-strong-prose: 700;
+
+  /* 文字サイズ: 3段階(補助文 / 本文 / 見出し)。sm/md/lgの差が視認できない刻みは置かない。
+     xlはMarkdown本文の見出し(.markdown h1)専用で、画面の見出しには使わない。 */
+  --font-size-sm: 0.85rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.5rem;
+
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+
+  /* アイコンサイズ: 将来のSVGアイコン導入時にwidth/heightとして使う箱寸法。
+     文字サイズとは独立の刻みにする(同値は一箇所集約の原則に反するため)。
+     現状のテキストグリフ流用箇所(⚙・←)は `font-size: var(--icon-size-*); line-height: 1;`
+     と明記し、SVG化時に box(width/height)へ移すことが分かるようにする。
+     sm/lgは現時点で未使用の予約段階。用法: sm=文中に混ぜるアイコン、
+     md=操作ボタン既定、lg=空状態・強調。 */
+  --icon-size-sm: 1rem;
+  --icon-size-md: 1.5rem;
+  --icon-size-lg: 2rem;
+
+  /* アイコンボタンの当たり判定(正方形の箱寸法)。グリフ/アイコンのサイズとは別軸。 */
+  --control-size-md: 2.25rem;
+
+  /* 値を入れる欄(入力欄・選択)の内側の余白。隣に並ぶボタンを欄と同じ高さにするときも
+     これを使う。 */
+  --field-padding: var(--space-2);
+
+  /* フォーカスの光(--shadow-focus。色はtheme.tsが付ける)が部品の外へ広がる幅。端の部品の
+     光を切らさないよう、スクロール領域の余白をこれから求める(ui.md「スクロール領域」)。 */
+  --focus-glow-spread: 0.5rem;
+
+  /* 窓の上端から各カラム(左カラム・会話欄・設定のメニューと本文)の中身までの余白。
+     どのカラムも同じ値にし、並んだカラムの先頭の行の頭を揃える。 */
+  --pane-padding: var(--space-4);
+
+  /* 余白: 1rem(--space-4)までは0.25rem(4px)刻みで部品の内側を刻み、その上は
+     倍の2rem(--space-5)へ飛ばす。--space-4までが「部品の中・部品どうし」の間隔、
+     --space-5が「塊と塊を切り分ける」間隔という役割の違いを、値の飛びで表す。
+     使う予定のない段階は置かない。余白は、配置する側ではなく中身が持つ。 */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 2rem;
+
+  /* 境界線の幅は1段階しか使わない。色は役割側(--color-border等)で決める。 */
+  --border-width: 1px;
+
+  /* 角丸は1段階だけ。塗りか枠で輪郭を持つ部品すべてに同じ半径を使う
+     (ui.md「OSネイティブ描画の扱い」)。半径は吹き出しの近い側マージンの半分で、
+     マージンを変えたときに一緒に追従させる。 */
+  --radius: calc(var(--bubble-margin-near) / 2);
+
+  /* チャット吹き出しの左右マージン。話者側(近い側)より反対側(遠い側)を2倍にする
+     (色だけに頼らない話者の判別)。2倍という関係そのものを式で持ち、片方だけ動いて
+     関係が崩れないようにする。近い側はスクロールバーに被らない幅が要る。 */
+  --bubble-margin-near: var(--space-4);
+  --bubble-margin-far: calc(var(--bubble-margin-near) * 2);
+
+  /* 入力欄とその下のモデル選択の間隔。モデル選択と窓の下端の間も同じ値にする
+     (上下の余白が揃っていないと、どちらかに寄って見えるため)。 */
+  --compose-bottom-gap: var(--space-1);
+
+  /* レスポンシブ計算の基準値。吹き出し・設定本文の幅は入れ物に追従させるため、CSSで直接
+     使うのは上限値(--content-max-width)だけで、--content-min-widthは下の最小幅の導出式の
+     入力として持つ。 */
+  --sidebar-width: 16rem;
+  --settings-rail-width: 12rem;
+  --content-min-width: 22rem;
+  --content-max-width: 42rem;
+
+  /* 複数行入力欄(textarea)が内容に応じて自動で伸びる範囲。全箇所で共通の
+     1組にする(欄ごとの上限は設けない。内容が長い欄ほど自然に上限まで伸びるだけで、
+     用途によって伸びられる量を変える理由が無いため)。
+
+     box-sizingがborder-boxのため、どちらもpadding(上下の--field-padding)と
+     border(--border-widthの上下で約0.125rem)を含んだ値である。1行の高さは
+     --line-height-normal × --font-size-md = 1.5rem。行数に換算すると:
+       min 3rem  → 3 − 1.125 = 1.875rem = 1.25行
+       max 10rem → 10 − 1.125 = 8.875rem ≒ 6行
+     min・maxとも行数から決めた値ではない。行数を基準に決め直す場合は、上の内訳の通り
+     paddingとborderの分を足すこと。 */
+  --textarea-min-height: 3rem;
+  --textarea-max-height: 10rem;
+
+  /* 選択肢の一覧が伸びる上限(開いた選択一覧、取得したモデルの候補欄)。候補欄では
+     検索欄と7行ほどが収まる。 */
+  --option-list-max-height: 20rem;
+}
+
+/*
+ * ウィンドウ最小幅(crates/scitl-tauri/tauri.conf.json の app.windows[].minWidth)の
+ * 導出式。この値はJSON側にコメントを書けないため、ここに残す。
+ *
+ *   --sidebar-width(16rem。box-sizing: border-boxのため仕切り線1pxはこの内側)
+ *   + --content-min-width(22rem)
+ *   + バブルのマージン合計(--bubble-margin-near + --bubble-margin-far = 3rem)
+ *   = 41rem = 656px(16px/rem換算)
+ *
+ * .layout main は左右paddingを持たない。持たせるとバブルのマージンに上乗せされて
+ * 近い側・遠い側の2倍の関係が窓端から見て崩れ、スクロールバーも窓の端から浮くため。
+ *
+ * トークンやマージン設計(.chat-log > * 等)を変えたときは、この式とminWidthの両方を
+ * 見直すこと。minHeightの480pxはこの式と独立した目視での妥当値。
+ *
+ * なお場所を取る形式のスクロールバーが出る環境では、その幅(15px前後)だけログ領域が
+ * 狭くなる。吹き出しは入れ物に追従するので縮むだけで、はみ出しはしない。
+ */

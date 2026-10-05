@@ -1,0 +1,210 @@
+use rusqlite::Connection;
+use serde_json::{json, Value};
+
+use crate::db::tasks::{
+    self, FieldChange, TaskStatus, TaskUpdate, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS,
+};
+use crate::error::{CoreError, Result};
+
+use super::args::Args;
+use super::get_current_task_detail::task_detail;
+use super::Run;
+
+/// `clear`で消せる項目。タイトルは未設定に戻す操作を持たないので含めない。
+const CLEARABLE: &[&str] = &["deadline", "description"];
+
+internal_tool! {
+    /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
+    name: "update_task",
+    run: Run::UpdateTask(execute),
+    "Update the currently open task.",
+    json!({
+        "type": "object",
+        "properties": {
+            // 上限を超える値は`db::tasks::update_task`が弾く。スキーマにも明示して、
+            // 書き直しの往復を減らす(`deadline`と同じ)。
+            "title": { "type": "string", "maxLength": MAX_TITLE_CHARS },
+            "description": {
+                "type": "string",
+                "maxLength": MAX_DESCRIPTION_CHARS,
+                "description": "Task description. Cannot be empty; use clear to remove it."
+            },
+            "deadline": {
+                "type": "string",
+                "format": "date",
+                // 形式を満たさない値は`db::tasks::update_task`が弾く。スキーマ側にも
+                // 明示しておき、モデルが日時形式を渡して往復を1回無駄にするのを減らす。
+                "description": "Deadline date (YYYY-MM-DD)."
+            },
+            "status": { "type": "string", "enum": ["archived", "unarchived"] },
+            "clear": {
+                "type": "array",
+                "items": { "type": "string", "enum": CLEARABLE },
+                "uniqueItems": true,
+                // 省略・nullは「変えない」。値を消すのはこの引数だけにする(nullを消去の
+                // 意味にすると、型に緩いモデルが変えないつもりの項目を消してしまう)。
+                "description": "Fields to remove. A field cannot be set and removed in the same call."
+            }
+        },
+        "additionalProperties": false
+    }),
+}
+
+pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
+    let args = Args::parse(arguments, schema())?;
+
+    let clear = args.optional_string_array("clear")?.unwrap_or_default();
+    for (i, field) in clear.iter().enumerate() {
+        let reason = if !CLEARABLE.contains(&field.as_str()) {
+            format!("cannot clear: {field}")
+        } else if clear[..i].contains(field) {
+            format!("duplicate item: {field}")
+        } else {
+            continue;
+        };
+        return Err(CoreError::InvalidArgument {
+            name: "clear".to_string(),
+            reason,
+        });
+    }
+    let change = |name: &str| -> Result<FieldChange> {
+        let value = args.optional_string(name)?;
+        let cleared = clear.iter().any(|c| c == name);
+        match (value, cleared) {
+            (Some(_), true) => Err(CoreError::InvalidArgument {
+                name: name.to_string(),
+                reason: "cannot both set and clear the same field".to_string(),
+            }),
+            (Some(value), false) => Ok(FieldChange::Set(value)),
+            (None, true) => Ok(FieldChange::Clear),
+            (None, false) => Ok(FieldChange::Keep),
+        }
+    };
+
+    let title = args.optional_string("title")?;
+    let description = change("description")?;
+    let deadline = change("deadline")?;
+    let status = args
+        .optional_string("status")?
+        .map(|s| TaskStatus::parse(&s))
+        .transpose()?;
+
+    tasks::update_task(
+        conn,
+        task_id,
+        TaskUpdate {
+            title,
+            description,
+            deadline,
+            status,
+        },
+    )?;
+
+    // 工程の書き込みと同じく、変更後のタスクと工程の全体を返す。
+    task_detail(conn, task_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    fn seed_task(conn: &Connection) -> i64 {
+        let now = db::now_iso8601();
+        conn.execute(
+            "INSERT INTO tasks (created_at, updated_at) VALUES (?1, ?1)",
+            [&now],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn rejects_unknown_argument() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let err = execute(&conn, task_id, &json!({ "task_id": 1 })).unwrap_err();
+        assert!(matches!(err, CoreError::UnknownArgument(_)));
+    }
+
+    #[test]
+    fn rejects_wrong_type_without_coercion() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let err = execute(&conn, task_id, &json!({ "title": 123 })).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn clear_removes_listed_fields() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        execute(
+            &conn,
+            task_id,
+            &json!({ "deadline": "2026-10-01", "description": "牛乳" }),
+        )
+        .unwrap();
+
+        // nullは「変えない」。
+        let result = execute(&conn, task_id, &json!({ "deadline": null })).unwrap();
+        assert_eq!(result["task"]["deadline"], "2026-10-01");
+
+        let result = execute(&conn, task_id, &json!({ "clear": ["deadline"] })).unwrap();
+        assert!(result["task"]["deadline"].is_null());
+        assert_eq!(result["task"]["description"], "牛乳");
+    }
+
+    #[test]
+    fn rejects_setting_and_clearing_the_same_field() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let err = execute(
+            &conn,
+            task_id,
+            &json!({ "deadline": "2026-10-01", "clear": ["deadline"] }),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn rejects_clearing_title_unknown_or_duplicate_field() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        for clear in [
+            json!(["title"]),
+            json!(["status"]),
+            json!(["deadline", "deadline"]),
+        ] {
+            let err = execute(&conn, task_id, &json!({ "clear": clear })).unwrap_err();
+            assert!(matches!(err, CoreError::InvalidArgument { .. }));
+        }
+    }
+
+    #[test]
+    fn a_rejected_title_leaves_the_other_fields_of_the_call_unwritten() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let too_long = "あ".repeat(tasks::MAX_TITLE_CHARS + 1);
+        for title in ["", too_long.as_str()] {
+            let err = execute(
+                &conn,
+                task_id,
+                &json!({ "title": title, "description": "牛乳", "deadline": "2026-10-01" }),
+            )
+            .unwrap_err();
+            assert!(matches!(&err, CoreError::InvalidArgument { name, .. } if name == "title"));
+        }
+        let task = tasks::get_task(&conn, task_id).unwrap();
+        assert!(task.description.is_none() && task.deadline.is_none());
+    }
+
+    #[test]
+    fn applies_valid_update() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let result = execute(&conn, task_id, &json!({ "title": "買い物" })).unwrap();
+        assert_eq!(result["task"]["title"], "買い物");
+    }
+}

@@ -1,0 +1,176 @@
+# PRチェック。
+#
+# 狙いは「行の衝突を起こさない食い違い」を止めること。並行する2つのPRがそれぞれ自分の側では
+# 整合していても、合わせるとコンパイルできないことがある。人の目では構造的に検出できないので、
+# 機械で毎回コンパイルする。
+name: CI
+
+on:
+  # PRはベースを問わず全部見る(feature/* → develop も release/* → main も同じ土俵)。
+  pull_request:
+  # PRチェックはその時点のベースとの合流結果を見るが、ベースが後から進んでも
+  # 自動では回り直さない。その隙間で壊れたことに気付けるよう、合流後のブランチ
+  # そのものでも回す。合流を受ける側のブランチ(Git Flowで他から取り込む4種)を
+  # すべて挙げる。
+  push:
+    branches:
+      - develop
+      - main
+      - 'release/**'
+      - 'hotfix/**'
+
+# 同じブランチに続けてpushしたときは古い実行を捨てる(結果を見るのは最後の実行だけで、
+# 古い実行はランナーを空けるのを遅らせるだけ)。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    # `ubuntu-latest` は実体が黙って上がる。webkit2gtkのパッケージ名は
+    # Ubuntuのバージョンで変わった実績があるため、明示的に固定する。
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # デバッグ情報を作らない。CIでは使わず、`target`とリンクの負荷の大半を占める。
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      # scitl-tauri のビルドには webkit2gtk 等のシステム依存が要る。
+      # scitl-core だけに絞れば資格情報ストア(Secret Service)のための libdbus だけで済むが、
+      # それでは scitl-core と scitl-tauri の境目で起きる食い違いが素通りする。ここが一番の
+      # 検出対象なのでワークスペース全体をコンパイルする。
+      #
+      # なおデバッグビルドは devUrl を読むため `frontend/dist` を必要としない。
+      # フロントのビルド成果物をこのジョブに持ち込む必要はない。
+      - name: システム依存を入れる(Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libdbus-1-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev
+
+      # 保存の前に、今のビルドで使わなかった成果物を`target`から捨てる。`target`を丸ごと
+      # 保存し直すと、古い版の依存の成果物が積み重なってランナーのディスクを使い切る。
+      # キーにはrustcの版・Cargo.lock・`CARGO`で始まる環境変数が入る(ツールチェーンは
+      # ピン留めしていないので、rustcが上がれば別のキャッシュになる)。
+      - name: cargoのキャッシュ
+        # 第三者のアクションなので、タグではなくコミットで固定する(タグは付け替えられる)。
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # 速い順に並べる。書式・lintで落ちるならテストの完走を待たせない。
+      # `--locked`: Cargo.lock を更新しないと通らない変更が、lockの更新漏れのまま
+      # 入るのを止める。
+      - name: 書式
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # 配布物に同梱する第三者ライセンスの一覧を作れるかを確かめる。許容していないライセンス
+      # (`about.toml`)の依存が入ると、ここで落ちる。配布物を作る段になってから気付くのを防ぐ。
+      # 道具(cargo-about)はソースからのビルドに数分かかるので、実行ファイルを版ごとにキャッシュする
+      # (上のcargoのキャッシュは、キーが一致した実行では保存し直さないので、そこには残らない)。
+      - name: cargo-aboutのキャッシュ
+        id: cargo-about
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-about
+          key: cargo-about-0.9.2-${{ runner.os }}
+
+      - name: cargo-aboutを入れる
+        if: steps.cargo-about.outputs.cache-hit != 'true'
+        run: cargo install cargo-about --locked --version 0.9.2 --features cli
+
+      - name: 第三者ライセンス
+        run: node scripts/assemble-dist.mjs --check-licenses
+
+      # 画面へ渡す型のTS定義(`frontend/src/bindings/`)は`cargo test`が生成する。消してから
+      # 生成し直すので、生成し直し忘れも、もう無い型の定義が残っているのも次の段で拾える。
+      - name: テスト
+        run: |
+          rm -rf frontend/src/bindings
+          cargo test --workspace --locked
+
+      - name: 型定義の生成物
+        run: |
+          git status --porcelain -- frontend/src/bindings | tee /tmp/bindings-diff
+          test ! -s /tmp/bindings-diff
+
+  # Windowsにしか無い経路(資格情報マネージャー等)は、Linuxのジョブではコンパイルもされない。
+  # Windowsのランナーはビルドに時間が掛かるので、PRごとには回さず、合流後のブランチでだけ
+  # 回す。壊れたことにはマージの直後に気付ける。
+  rust-windows:
+    if: github.event_name == 'push'
+    # `rust`ジョブと同じ理由で、版を明示的に固定する。
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargoのキャッシュ
+        # 第三者のアクションなので、タグではなくコミットで固定する(タグは付け替えられる)。
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # 書式とフロントエンドはOSに依らないので、Linuxのジョブに任せる。
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: テスト
+        run: |
+          rm -rf frontend/src/bindings
+          cargo test --workspace --locked
+
+      # 生成物はLFで書かれる。チェックアウト側をLFに揃えるのは`.gitattributes`。
+      - name: 型定義の生成物
+        run: |
+          git status --porcelain -- frontend/src/bindings | tee "$RUNNER_TEMP/bindings-diff"
+          test ! -s "$RUNNER_TEMP/bindings-diff"
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 依存を入れる
+        run: npm ci
+
+      # コマンドの実体は package.json に置き、手元とCIで同じものを走らせる。
+      - name: 型チェック
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
+
+      # 型チェックだけではバンドル時の失敗(import解決・Viteの設定)を拾えない。
+      # 本番ビルドはこの成果物を埋め込むので、同じコマンドで確かめる。
+      - name: ビルド
+        run: npm run build
+
+      # 画面のバンドルに入ったnpmのパッケージに、許容していないライセンス(`about.toml`)のものが
+      # 無いかを確かめる。一覧はビルドが出すので、その後に置く。
+      - name: 第三者ライセンス
+        run: node ../scripts/assemble-dist.mjs --check-frontend-licenses

@@ -1,0 +1,5 @@
+# ts-rsの出力先と、64bit整数の写し方。画面へ渡す整数(id・バイト数)はJSONの数値として
+# 届くので、TS側も`bigint`ではなく`number`で受ける
+[env]
+TS_RS_EXPORT_DIR = { value = "frontend/src/bindings", relative = true }
+TS_RS_LARGE_INT = "number"

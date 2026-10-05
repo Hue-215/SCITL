@@ -1,0 +1,89 @@
+import { t } from './i18n'
+import { operationSourceLabel, type ThoughtItem } from './thinking'
+import type { MessageView, ToolExecutionView } from './types'
+
+// 「思考・ツール」の折りたたみ表示。モデルの思考(reasoning)と内部ツール呼び出しを発生順に
+// 混在させて表示する。応答生成以外の経路(画面・MCP等)での操作の記録はここに含めず、独立した
+// 1行として扱う(`OperationLine`)。保存済みのターンも、応答待ちの間の途中経過もこれで描く。
+//
+// 思考・ツール引数・結果はすべてプレーンテキストとして描画する(dangerouslySetInnerHTMLも
+// Markdown描画も使わない)。モデルや外部ツールが出したものをそのまま確かめるための表示で、
+// ここからリンクや画像を作らせないため。引数・結果はRust側が整形し、見えない文字を見える形に
+// してある(`ToolExecutionView`)。
+
+/** ツール呼び出し1件の引数と結果。ターンの中の呼び出しと操作の記録のどちらでも同じ形で見せる。 */
+function ToolCallDetail({ execution }: { execution: ToolExecutionView }) {
+  return (
+    <div className="tool-call-detail">
+      <p className="tool-call-label">{t('chat.tool_detail_args')}</p>
+      <pre>{execution.arguments}</pre>
+      <p className="tool-call-label">{t('chat.tool_detail_result')}</p>
+      <pre>{execution.result}</pre>
+    </div>
+  )
+}
+
+// ツール名はモデルが書いたものなので、続く「()」や失敗の印の並びを入れ替えないよう閉じ込める。
+function ToolName({ execution }: { execution: ToolExecutionView }) {
+  return <bdi>{execution.tool ?? t('chat.tool_unknown')}</bdi>
+}
+
+export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
+  if (items.length === 0) return null
+
+  const hasError = items.some((item) => item.kind === 'tool' && item.execution.is_error)
+
+  return (
+    <details className="thinking-tools">
+      <summary>
+        {t('chat.thinking_tools_count', { count: items.length })}
+        {hasError && (
+          <span className="thinking-tools-error">{t('chat.thinking_tools_has_error')}</span>
+        )}
+      </summary>
+      <ol className="thinking-tools-list">
+        {items.map((item) =>
+          item.kind === 'reasoning' ? (
+            <li key={`reasoning-${item.id}`} className="thinking-item">
+              {item.text}
+            </li>
+          ) : (
+            <li key={`tool-${item.id}`}>
+              <details className="tool-call">
+                <summary>
+                  <ToolName execution={item.execution} />()
+                  {item.execution.is_error && (
+                    <span className="thinking-tools-error">{t('chat.tool_error')}</span>
+                  )}
+                </summary>
+                <ToolCallDetail execution={item.execution} />
+              </details>
+            </li>
+          ),
+        )}
+      </ol>
+    </details>
+  )
+}
+
+/**
+ * 応答生成以外の経路(画面・MCP等)での操作の記録1件を、「思考・ツール」折りたたみとは
+ * 独立した1行として表示する。行末に経路のラベルを出し、ターンの中の呼び出しと
+ * 見分けられるようにする。
+ */
+export function OperationLine({ message }: { message: MessageView }) {
+  const execution = message.tool_execution
+  if (!execution) return null
+  return (
+    <details className="operation-line">
+      <summary>
+        <span className="operation-name">
+          <ToolName execution={execution} />()
+        </span>
+        {execution.is_error && <span className="thinking-tools-error">{t('chat.tool_error')}</span>}
+        <span className="operation-label">{t(operationSourceLabel(message.source))}</span>
+      </summary>
+      <ToolCallDetail execution={execution} />
+    </details>
+  )
+}

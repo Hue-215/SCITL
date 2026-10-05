@@ -1,0 +1,123 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/scitl-core",
+    "crates/scitl-tauri",
+    "crates/scitl-cli",
+    "crates/scitl-debug-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# LLMアダプタとMCPクライアントの双方が使う唯一のHTTPクライアント。バージョンはrmcpの
+# 要求(0.13.2以上)に合わせてある。`rustls` featureはaws-lc-rs + rustls-platform-verifier
+# (信頼ルートはOSの証明書ストア)を選ぶ。ハードニング設定は`scitl-core/src/net.rs`の
+# `hardened_client`1箇所に集約する
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+thiserror = "2"
+secrecy = { version = "0.10", features = ["serde"] }
+url = "2"
+# URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、添付のファイル名の
+# ヘッダー)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
+# (`cargo tree -d -i percent-encoding`で確認)
+percent-encoding = "2.3.2"
+# UTC日時の文字列化と、締切の日付が実在するかの確認(`scitl-core/src/db/`)、モデルへ渡す送信日時を
+# OSのタイムゾーンで表す(`scitl-core/src/llm/prompt.rs`の`SentAt`)。同じ版と`clock`(OSの
+# タイムゾーンを調べる`iana-time-zone`等を引き込む)がrmcpの依存として既にビルドされている。
+# 上流の版が上がったら合わせて上げる(`cargo tree -e features -i chrono`で確認)
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+ulid = "1"
+# 予約タグの照合で、全角・数学用英字などの見た目の似た偽装を互換分解(NFKC)で畳む
+# (`scitl-core/src/llm/prompt.rs`)。同じ版と`compiled_data`が`url` → `idna`の依存として既に
+# ビルドされている。上流の版が上がったら合わせて上げる(`cargo tree -e features -i icu_normalizer`
+# で確認)。既定のfeatureは別のクレート(`utf8_iter`等)を引き込むので外す
+icu_normalizer = { version = "2.3.0", default-features = false, features = ["compiled_data"] }
+async-trait = "0.1"
+# 秘密情報の保存先(OSの資格情報ストア)。本体と、secrets.rsが設定するOSごとの保存先。
+# 選んだ保存先と理由はdocs/spec/architecture/network-secrets.md「秘密情報」。
+keyring-core = "1"
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+windows-native-keyring-store = "1"
+toml = "1"
+# scitl-cli・scitl-debug-cliの引数の解析。出力に色の制御文字を混ぜないよう、既定のfeatureから色付け(と、
+# 打ち間違いの候補の提示)を外す
+clap = { version = "4", default-features = false, features = [
+    "std",
+    "help",
+    "usage",
+    "error-context",
+    "derive",
+] }
+# 添付を開くときの書き出し先を、OSごとのキャッシュの場所に置く(`scitl-core/src/paths.rs`)。
+# Tauriと同じ`dirs::cache_dir()`で決める。同じ版がTauriの依存として既にビルドされている。
+# 上流の版が上がったら合わせて上げる(`cargo tree -d -i dirs`で確認)
+dirs = "6"
+# チャット本文中のリンクをOSの既定アプリで開く(`scitl-core/src/link.rs`)。Windowsでは
+# `cmd /c start`を経由させず、URLがシェルに解釈されないようShellExecuteWを使う
+open = { version = "5", features = ["shellexecute-on-windows"] }
+# 添付ファイルの実体を内容のハッシュ(SHA-256)で名付けて重複排除する(`scitl-core/src/attachments/`)。
+# 同じ版がwryの依存として既にビルドされている。上流の版が上がったら合わせて上げる
+# (`cargo tree -d -i sha2`で確認)
+sha2 = "0.10"
+# 添付画像をdata URLにする(画面のサムネイルと、モデルへの埋め込み)。同じ版がhyper-utilの依存として
+# 既にビルドされている。上流の版が上がったら合わせて上げる(`cargo tree -d -i base64`で確認)
+base64 = "0.22"
+# 添付画像の正規化(向きの補正・縮小・形式の統一。`scitl-core/src/attachments/normalize.rs`)。
+# 受け付ける画像形式(PNG・JPEG・GIF・WebP)のデコーダーだけを有効にする。既定のfeatureは
+# 使わない形式のデコーダーと並列化(rayon)を引き込むため切る
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# MCPクライアント。`default-features = false`にした上で必要なfeatureだけを明示する。
+# OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない先へ通信しうるので
+# 有効にしない。
+# `client`(素朴なクライアント)・`transport-streamable-http-client-reqwest`(streamable_http、
+# 内部でreqwestを使う)のみ。サーバーを子プロセスとして起動するstdio方式は持たない
+# (`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
+rmcp = { version = "=3.4.0", default-features = false, features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+] }
+
+# テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
+tempfile = "3"
+# 画面へ渡す型のTypeScript定義を生成する(開発時のみ。`frontend/src/bindings/`)。Rust側の型を
+# 正本にし、TS側に写しを手で持たない。生成は`cargo test`が行い、CIが生成物との差分を検査する
+ts-rs = "12"
+
+# 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
+# デコード・縮小・エンコードに関わるクレートだけは最適化する
+[profile.dev.package]
+image = { opt-level = 3 }
+zune-jpeg = { opt-level = 3 }
+png = { opt-level = 3 }
+fdeflate = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
+gif = { opt-level = 3 }
+weezl = { opt-level = 3 }
+image-webp = { opt-level = 3 }
+
+# 配布物の大きさを優先する。`panic = "abort"`は入れない(コマンドやタスク内のpanicで
+# アプリ全体が落ちる挙動に変わるため)
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"
+
+# 添付画像の正規化は速度が要るので、[profile.dev.package]と同じクレートは速度優先に戻す
+[profile.release.package]
+image = { opt-level = 3 }
+zune-jpeg = { opt-level = 3 }
+png = { opt-level = 3 }
+fdeflate = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
+gif = { opt-level = 3 }
+weezl = { opt-level = 3 }
+image-webp = { opt-level = 3 }

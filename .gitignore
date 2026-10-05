@@ -1,0 +1,24 @@
+# ビルド生成物
+/target/
+node_modules/
+frontend/dist/
+crates/scitl-tauri/gen/
+
+# 秘密情報
+.env
+.env.*
+
+# ローカルのデータベース(通常は実行ファイルの隣の`data`に置かれるが、リポジトリ内に作った場合の保険)
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# エディタ・OS
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code のローカル作業領域(サブエージェント用worktreeなど)。スキルだけは管理する
+.claude/*
+!.claude/skills/
+.mcp.json
