@@ -4,4 +4,4 @@
  * データディレクトリを決められない・使えない理由。GUIは起動時に開けなかった理由として
  * 画面へ渡し、画面は種類で文言を選ぶ。パスは利用者が置き場所を直すのに要るので載せる。
  */
-export type DataDirError = { "kind": "no_executable", reason: string, } | { "kind": "temporary_dir", dir: string, } | { "kind": "unusable", dir: string, reason: string, };
+export type DataDirError = { "kind": "no_executable", reason: string, } | { "kind": "temporary_dir", dir: string, } | { "kind": "unusable", dir: string, reason: string, } | { "kind": "database", dir: string, reason: string, };

@@ -56,8 +56,8 @@ clap = { version = "4", default-features = false, features = [
     "error-context",
     "derive",
 ] }
-# GUIとCLIが同じデータディレクトリを求める(`scitl-core/src/paths.rs`)。TauriはOSごとの場所を
-# `dirs::data_dir()`で決めるので同じ関数を使う。同じ版がTauriの依存として既にビルドされている。
+# 添付を開くときの書き出し先を、OSごとのキャッシュの場所に置く(`scitl-core/src/paths.rs`)。
+# Tauriと同じ`dirs::cache_dir()`で決める。同じ版がTauriの依存として既にビルドされている。
 # 上流の版が上がったら合わせて上げる(`cargo tree -d -i dirs`で確認)
 dirs = "6"
 # チャット本文中のリンクをOSの既定アプリで開く(`scitl-core/src/link.rs`)。Windowsでは

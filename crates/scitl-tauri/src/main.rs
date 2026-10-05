@@ -124,12 +124,12 @@ fn main() {
 /// 実行ファイルの隣のデータディレクトリを開き、コマンド層の状態を作る。
 fn open_app_state(revealed_attachments: PathBuf) -> Result<AppState, DataDirError> {
     let data = DataLayout::new(paths::data_dir_beside_executable()?);
-    let unusable = |reason: String| DataDirError::Unusable {
+    paths::create_private_dir(data.root()).map_err(|e| DataDirError::Unusable {
         dir: data.root().display().to_string(),
-        reason,
-    };
-    paths::create_private_dir(data.root()).map_err(|e| unusable(e.to_string()))?;
-    let conn = scitl_core::db::open(data.database()).map_err(|e| unusable(e.to_string()))?;
+        reason: e.to_string(),
+    })?;
+    let conn = scitl_core::db::open(data.database())
+        .map_err(|e| DataDirError::from_database(data.root(), &e))?;
 
     let settings = Settings::load(data.config());
     let attachments = Arc::new(Attachments::new(AttachmentStore::new(

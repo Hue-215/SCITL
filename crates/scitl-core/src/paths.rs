@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::APP_IDENTIFIER;
+use crate::{CoreError, APP_IDENTIFIER};
 
 /// OSがアプリのキャッシュの置き場所を持たない。
 #[derive(Debug, thiserror::Error)]
@@ -28,9 +28,26 @@ pub enum DataDirError {
         "this executable is in a temporary directory ({dir}); extract it to a permanent location"
     )]
     TemporaryDir { dir: String },
-    /// データディレクトリを作れない・開けない(書き込めない場所に置いた等)。
+    /// データディレクトリを作れない・書き込めない(書き込めない場所に置いた等)。
     #[error("could not open the data directory {dir}: {reason}")]
     Unusable { dir: String, reason: String },
+    /// データディレクトリには書けるが、DBを開けない(新しい版で使ったDB、壊れたDB等)。
+    #[error("could not open the database in {dir}: {reason}")]
+    Database { dir: String, reason: String },
+}
+
+impl DataDirError {
+    /// `dir`の中のDBを開けなかった失敗。書き込めないための失敗は置き場所の問題として
+    /// [`Self::Unusable`]、それ以外は[`Self::Database`]にする。
+    pub fn from_database(dir: &Path, e: &CoreError) -> Self {
+        let dir = dir.display().to_string();
+        let reason = e.to_string();
+        if crate::db::is_read_only_error(e) || crate::db::is_cannot_open_error(e) {
+            Self::Unusable { dir, reason }
+        } else {
+            Self::Database { dir, reason }
+        }
+    }
 }
 
 /// 既定のデータディレクトリ。実行ファイルと同じフォルダの`data`で、フォルダごと持ち運べる。
@@ -204,6 +221,43 @@ mod data_dir_tests {
 
         let result = data_dir_beside(&extracted.join("scitl.exe"), temp.path());
         assert!(matches!(result, Err(DataDirError::TemporaryDir { .. })));
+    }
+
+    #[test]
+    fn a_database_that_cannot_be_read_is_not_blamed_on_the_location() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = DataLayout::new(temp.path());
+        std::fs::write(
+            data.database(),
+            b"not a database, but long enough to have a header",
+        )
+        .unwrap();
+
+        let e = crate::db::open(data.database()).unwrap_err();
+        let failure = DataDirError::from_database(data.root(), &e);
+        assert!(matches!(failure, DataDirError::Database { .. }));
+    }
+
+    /// 書き込めないディレクトリでは、DBを作れずに失敗する。root権限では書けてしまうので確かめない。
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_cannot_be_written_is_blamed_on_the_location() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let data = DataLayout::new(temp.path().join("data"));
+        std::fs::create_dir(data.root()).unwrap();
+        std::fs::set_permissions(data.root(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        if std::fs::write(data.root().join("probe"), b"").is_ok() {
+            return;
+        }
+
+        let e = crate::db::open(data.database()).unwrap_err();
+        let failure = DataDirError::from_database(data.root(), &e);
+        std::fs::set_permissions(data.root(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            matches!(failure, DataDirError::Unusable { .. }),
+            "{failure:?}"
+        );
     }
 
     /// 一時ディレクトリがルートを指していても、すべてを断らない。

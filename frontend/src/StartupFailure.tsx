@@ -2,6 +2,7 @@ import { isolated, t, type MessageKey } from './i18n'
 import type { DataDirError } from './types'
 
 const MESSAGES: Record<DataDirError['kind'], MessageKey> = {
+  database: 'startup.database',
   no_executable: 'startup.no_executable',
   temporary_dir: 'startup.temporary_dir',
   unusable: 'startup.unusable',

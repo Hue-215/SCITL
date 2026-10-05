@@ -214,10 +214,18 @@ fn enable_wal(conn: &Connection) -> Result<()> {
 
 /// DBのファイルか、それを置くディレクトリに書き込めないための失敗か。
 pub fn is_read_only_error(e: &CoreError) -> bool {
+    has_error_code(e, rusqlite::ErrorCode::ReadOnly)
+}
+
+/// DBのファイルを開けも作れもしなかった失敗か(置いたディレクトリに書き込めない等)。
+pub fn is_cannot_open_error(e: &CoreError) -> bool {
+    has_error_code(e, rusqlite::ErrorCode::CannotOpen)
+}
+
+fn has_error_code(e: &CoreError, code: rusqlite::ErrorCode) -> bool {
     matches!(
         e,
-        CoreError::Db(rusqlite::Error::SqliteFailure(failure, _))
-            if failure.code == rusqlite::ErrorCode::ReadOnly
+        CoreError::Db(rusqlite::Error::SqliteFailure(failure, _)) if failure.code == code
     )
 }
 
