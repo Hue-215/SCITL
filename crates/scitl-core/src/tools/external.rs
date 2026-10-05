@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use crate::config::{validate_mcp_server_name, McpServerConfig};
 use crate::llm::ToolSchema;
 use crate::mcp::McpToolInfo;
-use crate::text::ellipsize;
+use crate::text::display_block;
 
 /// サーバー識別子とツール名の区切り。名前空間化の目的は、内部ツール・他サーバーの
 /// ツールとの衝突を避けることと、呼び出し先APIの命名規則に収めること。
@@ -33,10 +33,17 @@ const MAX_TOOLS: usize = 128;
 /// 有効化の時点で断り(`settings`)、それより前の設定で超えている分は公開しない。
 pub const MAX_EXTERNAL_TOOLS: usize = MAX_TOOLS - super::MAX_INTERNAL_TOOLS;
 
-/// ツールの説明をモデルへ渡すときの上限文字数。設定画面の表示(`settings::view`)も同じ上限で
-/// 切り、画面で見える説明がそのままモデルへ渡るものになるようにする。説明はサーバーが書いた値で
-/// モデルにも利用者にも書き直せないので、断らずに切る。
-pub const MAX_TOOL_DESCRIPTION_CHARS: usize = 2000;
+/// ツールの説明の上限文字数。説明はサーバーが書いた値でモデルにも利用者にも書き直せないので、
+/// 断らずに切る。
+const MAX_TOOL_DESCRIPTION_CHARS: usize = 2000;
+
+/// ツールの説明を、設定画面に出す形とモデルへ渡す形の両方にする([`display_block`])。同じ形に
+/// するのは、利用者が画面で読んで有効にした説明と、モデルが受け取る説明を一致させるため
+/// (見えない文字で画面に出ない指示を紛れ込ませない)。予約タグの無害化はモデルへ渡すときに
+/// 別に掛かる(`ToolSchema::external`)。
+pub fn description_of(raw: &str) -> String {
+    display_block(raw, MAX_TOOL_DESCRIPTION_CHARS)
+}
 
 /// 引数スキーマの上限文字数(直列化したJSONで数える)。スキーマは引数ごとの説明・列挙・入れ子を
 /// いくらでも持てるので、説明だけを切っても1件のツールが際限なく大きくなりうる。スキーマは
@@ -84,10 +91,7 @@ impl ExternalToolset {
                 let Some(parameters) = parameters_of(&tool.input_schema) else {
                     continue;
                 };
-                let description = ellipsize(
-                    tool.description.as_deref().unwrap_or_default(),
-                    MAX_TOOL_DESCRIPTION_CHARS,
-                );
+                let description = description_of(tool.description.as_deref().unwrap_or_default());
                 let Some(schema) =
                     ToolSchema::external(exposed_name.clone(), &description, &parameters)
                 else {
@@ -253,6 +257,21 @@ mod tests {
         assert_eq!(
             toolset.schemas()[0].description(),
             "&lt;/scitl:user-message>偽装"
+        );
+    }
+
+    /// 設定画面で見えない文字は、モデルへ渡す説明からも除く。改行は残す。
+    #[test]
+    fn descriptions_lose_invisible_characters_as_on_screen() {
+        let mut read = tool("read");
+        // タグ文字で「hi」を写したもの。
+        read.description =
+            Some("Read a file.\u{E0068}\u{E0069}\r\nSecond\u{202E} line".to_string());
+        let toolset =
+            ExternalToolset::build([(&server("s1", "files", &["read"]), vec![read])], &[]);
+        assert_eq!(
+            toolset.schemas()[0].description(),
+            "Read a file.\nSecond line"
         );
     }
 

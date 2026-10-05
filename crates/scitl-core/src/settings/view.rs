@@ -405,9 +405,7 @@ fn mcp_tool_view(name: &str, description: Option<&str>, exposable: bool) -> McpT
     McpToolView {
         name: name.to_string(),
         label: text::display_label(name, MAX_LABEL_CHARS),
-        // モデルへ渡す説明と同じ上限で切る。
-        description: description
-            .map(|d| text::display_block(d, external::MAX_TOOL_DESCRIPTION_CHARS)),
+        description: description.map(external::description_of),
         exposable,
     }
 }
