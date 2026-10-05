@@ -1270,8 +1270,8 @@ option {
   gap: var(--space-5);
 }
 
-/* 主ボタン(タスクを追加・送信)。濃いアクセント色では影が塗りに溶けるため、ユーザーの
-   吹き出しと同じ明度の薄い塗りにし、彩度だけを上げる(ui.md「塗りと奥行き」)。 */
+/* 主ボタン(タスクを追加・送信)。濃いアクセント色では影が塗りに溶けるため、アクセント色より
+   淡く、ユーザーの吹き出しより濃い専用の塗りにする(ui.md「塗りと奥行き」)。 */
 button.primary {
   background: var(--color-primary-button);
   color: var(--color-on-primary-container);
