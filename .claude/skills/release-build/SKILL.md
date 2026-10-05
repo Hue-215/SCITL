@@ -155,10 +155,10 @@ Cargoの`trim-paths`が安定版に入ったら、`[profile.release]`に`trim-pa
 Claudeは頼まれた段だけを手伝う。版はセマンティックバージョニングで、最初の版は`0.1.0`。
 
 1. **`release/<版>`を切る**: `develop`から切る(例: `release/0.1.0`)
-2. **版を上げる**: `Cargo.toml`の`[workspace.package]`の`version`を書き換え、`cargo check --workspace`で
-   `Cargo.lock`を更新して、両方をコミットする。版はここ1箇所で、GUI・CLI・配布物の名前はここから取る
-   (`tauri.conf.json`には`version`を置かない。`package.json`の`0.0.0`は配布物に出ない)。最初の版は
-   今の`0.1.0`のままなので、この段は無い
+2. **版を上げる**: `Cargo.toml`の`[workspace.package]`の`version`が`release/<版>`の版と違えば書き換え、
+   `cargo check --workspace`で`Cargo.lock`を更新して、両方をコミットする。版はここ1箇所で、GUI・CLI・
+   配布物の名前はここから取る(`tauri.conf.json`には`version`を置かない。`package.json`の`0.0.0`は
+   配布物に出ない)
 3. **確かめる**: `release/*`へのpushでCIが回る(Windowsのジョブを含む)。すべて通ることと、Dependabotの
    開いているアラートが無いことを確かめる(`gh api 'repos/{owner}/{repo}/dependabot/alerts?state=open' --jq length`。
    扱いは`docs/spec/architecture/tech-stack.md`「依存の脆弱性」)。直すものがあれば`release/*`の上で直す

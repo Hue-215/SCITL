@@ -8,8 +8,8 @@ if ($PSVersionTable.PSVersion -lt [version] '7.2') { throw 'Run this script with
 #
 # 続けて、CLIも同じ置き換えを付けてビルドし、GUI・CLI・ライセンス類を`target\dist`のzipにまとめる。
 #
-# 引数はそのまま`tauri build`に渡す(例: `--bundles msi`、`--no-bundle`)。`--target`と
-# `CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
+# 引数はそのまま`tauri build`に渡す。配布物は実行ファイルだけなので、`--no-bundle`を付けて実行する。
+# `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
 $ErrorActionPreference = 'Stop'
 
 if ($env:RUSTFLAGS -or $env:CARGO_ENCODED_RUSTFLAGS) {
