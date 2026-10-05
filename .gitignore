@@ -8,7 +8,7 @@ crates/scitl-tauri/gen/
 .env
 .env.*
 
-# ローカルのデータベース(通常はapp_data_dir配下だが、リポジトリ内に作った場合の保険)
+# ローカルのデータベース(通常は実行ファイルの隣の`data`に置かれるが、リポジトリ内に作った場合の保険)
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
