@@ -8,9 +8,16 @@ if ($PSVersionTable.PSVersion -lt [version] '7.2') { throw 'Run this script with
 #
 # 続けて、CLIも同じ置き換えを付けてビルドし、GUI・CLI・ライセンス類を`target\dist`のzipにまとめる。
 #
-# 引数はそのまま`tauri build`に渡す。配布物は実行ファイルだけなので、`--no-bundle`を付けて実行する。
-# `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
+# 引数はそのまま`tauri build`に渡す。束ねずに実行ファイルだけを作るので、`--bundles`・`--no-bundle`は
+# 受け付けない。`--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
 $ErrorActionPreference = 'Stop'
+
+foreach ($arg in $args) {
+    if ($arg -clike '-b*' -or $arg -ceq '--bundles' -or $arg -clike '--bundles=*' -or $arg -ceq '--no-bundle') {
+        Write-Host "束ねずに実行ファイルだけを作ります。$arg を外してください"
+        exit 2
+    }
+}
 
 if ($env:RUSTFLAGS -or $env:CARGO_ENCODED_RUSTFLAGS) {
     throw 'RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS を外してから実行してください(置き換えの指定を上書きしないため)'
@@ -83,7 +90,7 @@ try {
     try {
         npm.cmd ci
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        node node_modules\@tauri-apps\cli\tauri.js build @args
+        node node_modules\@tauri-apps\cli\tauri.js build --no-bundle @args
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         # `tauri build`はGUIしか作らない。配布物に入れるCLIも、同じ置き換えを付けて作る。
         cargo build --release --locked -p scitl-cli
@@ -96,30 +103,43 @@ try {
     Remove-Item Env:CARGO_ENCODED_RUSTFLAGS
 }
 
-# 配布するバイナリに、置き換えたはずのパスが残っていないかを確かめる。パスはバイト列として
-# 埋め込まれるので、UTF-8として読んで探す。区切りは`\`と`/`の両方を見て、Windowsのパスは
-# 大文字・小文字を区別しないので区別せずに探す。
-$found = $false
 foreach ($binary in $binaries) {
     if (-not (Test-Path $binary)) {
         throw "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)"
     }
-    $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($binary))
-    foreach ($path in @($userHome + $cargoHome + $root | Select-Object -Unique)) {
-        foreach ($form in @("$path\", ($path.Replace('\', '/') + '/'))) {
-            if ($text.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                Write-Host "バイナリに絶対パスが残っています: $form($binary)"
-                $found = $true
+}
+
+# 配布物のフォルダを組み立てる。zipまで作り終えずに抜けたら(検査に落ちた・中断した)、
+# 検査していないものが残らないようフォルダを消す。
+$name = node (Join-Path $rootPath 'scripts\assemble-dist.mjs') @binaries
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not $name) { throw '配布物のフォルダの名前を受け取れませんでした' }
+$dist = Join-Path $rootPath "target\dist\$name"
+$completed = $false
+try {
+    # 組み立てた配布物のすべてのファイル(実行ファイルとライセンス類)に、置き換えたはずのパスが
+    # 残っていないかを確かめる。パスはバイト列として埋め込まれるので、UTF-8として読んで探す。
+    # 区切りは`\`と`/`の両方を見て、Windowsのパスは大文字・小文字を区別しないので区別せずに探す。
+    $found = $false
+    foreach ($file in Get-ChildItem -LiteralPath $dist -Recurse -File) {
+        $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($file.FullName))
+        foreach ($path in @($userHome + $cargoHome + $root | Select-Object -Unique)) {
+            foreach ($form in @("$path\", ($path.Replace('\', '/') + '/'))) {
+                if ($text.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    Write-Host "絶対パスが残っています: $form($($file.FullName))"
+                    $found = $true
+                }
             }
         }
     }
-}
-if ($found) { exit 1 }
-Write-Host "絶対パスは残っていません: $($binaries -join ', ')"
+    if ($found) { exit 1 }
+    Write-Host "絶対パスは残っていません: $dist"
 
-# 配布物のフォルダを組み立てて、zipにまとめる。
-$name = node (Join-Path $rootPath 'scripts\assemble-dist.mjs') @binaries
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$dist = Join-Path $rootPath "target\dist\$name"
-Compress-Archive -LiteralPath $dist -DestinationPath "$dist.zip" -Force
-Write-Host "配布物: $dist.zip"
+    Compress-Archive -LiteralPath $dist -DestinationPath "$dist.zip" -Force
+    $completed = $true
+    Write-Host "配布物: $dist.zip"
+} finally {
+    if (-not $completed) {
+        Remove-Item -LiteralPath $dist, "$dist.zip" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

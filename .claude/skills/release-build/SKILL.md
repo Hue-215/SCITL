@@ -14,7 +14,7 @@ description: SCITLのリリースの流れ(release/*を切る→版を上げる�
 | OS | コマンド |
 |---|---|
 | Linux | `scripts/release-build.sh` |
-| Windows | `pwsh scripts/release-build.ps1 --no-bundle`(PowerShell 7.2以降。それより古いと最初の行で止まる) |
+| Windows | `pwsh scripts/release-build.ps1`(PowerShell 7.2以降。それより古いと最初の行で止まる) |
 
 macOSは今は対象にしていない(資格情報の保存先が無い。`docs/spec/architecture/network-secrets.md`)。
 shはGNU tarのオプションを使うので、Linux向け。
@@ -23,9 +23,9 @@ shはGNU tarのオプションを使うので、Linux向け。
   「システム依存を入れる」と同じ)。npmの依存(`frontend/`と`crates/scitl-tauri/`)はスクリプトが入れる。
   `cargo-about`(CIの「第三者ライセンス」と同じ版・同じコマンドで入れる)も前提にする。Windowsは
   MSVCのツールチェーン(Rustの既定)を使う
-- 引数はそのまま`tauri build`に渡る。配布物はインストーラーを使わず実行ファイルだけなので、Windowsは
-  `--no-bundle`を付ける。Linuxはshが`--no-bundle`を付けるので、`--bundles`・`--no-bundle`を渡すと止まる。
-  `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わる。shは前のビルドの
+- 引数はそのまま`tauri build`に渡る。配布物はインストーラーを使わず実行ファイルだけなので、
+  スクリプトが`--no-bundle`を付け、`--bundles`・`--no-bundle`を渡すと止まる。
+  `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わる。スクリプトは前のビルドの
   実行ファイルを先に消すので、検査の前に止まる)
 - `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`を設定したままだと止まる。外してから実行する。スクリプトが渡す
   `CARGO_ENCODED_RUSTFLAGS`は、ほかの場所のrustflags(`~/.cargo/config.toml`の`build.rustflags`・
@@ -75,10 +75,10 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
 
 ## 3. 確かめる
 
-スクリプトはビルドの後、GUIとCLIの実行ファイルの中身に3つのパスが残っていないかを調べ、残っていれば
-失敗で終わる。Linuxは、組み立てた配布物のフォルダのすべてのファイル(実行ファイルとライセンス類)を
-調べ、残っていれば配布物を消す。ファイルのバイト列をそのまま探すので、Tauriが圧縮して埋め込む画面の資産の
-中は見ない(今はVite側でsourcemapを出していないので、パスは入らない)。手で確かめるなら次のとおり。
+スクリプトはビルドの後、組み立てた配布物のフォルダのすべてのファイル(実行ファイルとライセンス類)に
+3つのパスが残っていないかを調べ、残っていれば配布物を消して失敗で終わる。ファイルのバイト列をそのまま
+探すので、Tauriが圧縮して埋め込む画面の資産の中は見ない(今はVite側でsourcemapを出していないので、
+パスは入らない)。手で確かめるなら次のとおり。
 
 ```sh
 LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていない
@@ -88,8 +88,8 @@ LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていな
 
 ## 4. 配布物にまとめる
 
-スクリプトは検査の後、GUIとCLIを配布物のフォルダにまとめ、Windowsはzip、Linuxはtar.gz(実行の
-許可を保つため)にする。出来るのは`target/dist/scitl-<版>-windows-x64.zip`と
+スクリプトはGUIとCLIを配布物のフォルダにまとめ、3節の検査を通したら、Windowsはzip、Linuxは
+tar.gz(実行の許可を保つため)にする。出来るのは`target/dist/scitl-<版>-windows-x64.zip`と
 `target/dist/scitl-<版>-linux-x64.tar.gz`。版は`Cargo.toml`の`[workspace.package]`から取る。
 Linuxの中身は、実行ファイルに拡張子が無いほかは同じ。tarには、持ち主をroot(`0/0`)、権限を
 `755`・`644`の形に揃えて記録する(そのままだと、ビルドした人のユーザー名とumaskが入る)。
