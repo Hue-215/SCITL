@@ -62,9 +62,13 @@ function run(command, commandArgs) {
 
 // ---- 許容するライセンス ----
 
-// about.tomlの`accepted`。npmのパッケージもRustのクレートと同じ範囲で許容する。
+// about.tomlの`accepted`。npmのパッケージもRustのクレートと同じ範囲で許容する。コメント(`#`以降)を
+// 先に除くので、コメントアウトしたライセンスは許容に入らない。
 function acceptedLicenses() {
   const toml = readFileSync(join(root, 'about.toml'), 'utf8')
+    .split('\n')
+    .map((line) => line.replace(/#.*/, ''))
+    .join('\n')
   const list = toml.match(/^accepted\s*=\s*\[([^\]]*)\]/m)
   if (!list) fail('about.toml: accepted = [...] not found')
   return new Set([...list[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]))
@@ -155,6 +159,14 @@ function licenseFiles(dir) {
     .sort()
 }
 
+// licenses/の下のフォルダの、ライセンスファイル。写し忘れ・名前の打ち間違いで空なら止める。
+function suppliedFiles(name) {
+  const dir = join(root, 'licenses', name)
+  const files = existsSync(dir) ? licenseFiles(dir) : []
+  if (files.length === 0) fail(`no license files in licenses/${name}`)
+  return files.map((file) => [file, readFileSync(join(dir, file), 'utf8')])
+}
+
 // 配布する対象(about.tomlの`targets`)に入るクレートを、cargo-aboutに洗い出させる。許容していない
 // ライセンスの依存があると、ここで失敗する。配布しないクレートの依存も見るので、一覧は実行ファイルに
 // 入るものより広い(漏れが無ければよい)。結果はファイルに書かせて読む(cargo-aboutは、PowerShellから
@@ -194,6 +206,7 @@ function rustLicenses() {
   const index = []
   const unsupplied = []
   const stale = new Set(Object.keys(SUPPLIED))
+  const unbundled = new Set(Object.keys(BUNDLED))
   for (const { crate, fallback } of rustCrates()) {
     const label = `${crate.name} ${crate.version}`
     const dir = dirname(crate.manifest_path)
@@ -205,9 +218,8 @@ function rustLicenses() {
     }
     if (files.length === 0 && SUPPLIED[crate.name]) {
       stale.delete(crate.name)
-      const supplied = join(root, 'licenses', SUPPLIED[crate.name])
-      for (const name of licenseFiles(supplied)) {
-        add(readFileSync(join(supplied, name), 'utf8'), `${label}: ${name} (from the upstream repository)`)
+      for (const [name, text] of suppliedFiles(SUPPLIED[crate.name])) {
+        add(text, `${label}: ${name} (from the upstream repository)`)
       }
     } else if (files.length === 0) {
       if (!STANDARD_TEXT.has(crate.name)) unsupplied.push(label)
@@ -215,9 +227,9 @@ function rustLicenses() {
     }
     const bundled = BUNDLED[crate.name]
     if (bundled) {
-      const from = join(root, 'licenses', bundled.dir)
-      for (const name of licenseFiles(from)) {
-        add(readFileSync(join(from, name), 'utf8'), `${label}: ${name} of the ${bundled.what}`)
+      unbundled.delete(crate.name)
+      for (const [name, text] of suppliedFiles(bundled.dir)) {
+        add(text, `${label}: ${name} of the ${bundled.what}`)
       }
     }
   }
@@ -231,6 +243,9 @@ function rustLicenses() {
   }
   if (stale.size > 0) {
     fail(`SUPPLIED lists crates that no longer need it: ${[...stale].join(', ')}`)
+  }
+  if (unbundled.size > 0) {
+    fail(`BUNDLED lists crates that are no longer dependencies: ${[...unbundled].join(', ')}`)
   }
   const rule = '='.repeat(78)
   const sections = [...texts.values()].map(({ text, labels }) => [rule, ...labels, rule, '', text, ''].join('\n'))

@@ -1,6 +1,6 @@
 ---
 name: release-build
-description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→mainへ取り込む→タグ→配布物を作る→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
+description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→配布物を作って起動を確かめる→mainへ取り込む→タグ→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
 ---
 
 # 配布用のビルド
@@ -162,13 +162,15 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
 3. **確かめる**: `release/*`へのpushでCIが回る(Windowsのジョブを含む)。すべて通ることと、Dependabotの
    開いているアラートが無いことを確かめる(`gh api 'repos/{owner}/{repo}/dependabot/alerts?state=open' --jq length`。
    扱いは`docs/spec/architecture/tech-stack.md`「依存の脆弱性」)。直すものがあれば`release/*`の上で直す
-4. **`main`へ取り込む**: `release/<版>` → `main`のPRを作り、メンテナがマージする
-5. **タグを打つ**: `main`のマージコミットに注釈付きタグ`v<版>`を打ってpushする
+4. **配布物を作る**: `release/<版>`の先頭で、LinuxとWindowsのそれぞれで1節のスクリプトを走らせる。
+   出来るのは`target/dist/scitl-<版>-linux-x64.tar.gz`と`target/dist/scitl-<版>-windows-x64.zip`。
+   版はCargo.tomlから取り、コミットの情報は焼き込まないので、`main`へ取り込んだ後のものと中身は同じ
+5. **起動を確かめる**: 一時ディレクトリの外(`target/`の下など)に展開して起動し、画面が出ることと、
+   展開したフォルダに`data`ができることを見る。直すものがあれば`release/*`の上で直し、手順4から
+   やり直す(タグを打つ前に済ませ、打ち直しを避ける)
+6. **`main`へ取り込む**: `release/<版>` → `main`のPRを作り、メンテナがマージする
+7. **タグを打つ**: `main`のマージコミットに注釈付きタグ`v<版>`を打ってpushする
    (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
-6. **配布物を作る**: タグをチェックアウトし、LinuxとWindowsのそれぞれで1節のスクリプトを走らせる。
-   出来るのは`target/dist/scitl-<版>-linux-x64.tar.gz`と`target/dist/scitl-<版>-windows-x64.zip`
-7. **起動を確かめる**: 一時ディレクトリの外(`target/`の下など)に展開して起動し、画面が出ることと、
-   展開したフォルダに`data`ができることを見る
 8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> --title "SCITL <版>" --notes-file <ノート>`。
    リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
    READMEに書くまでの間は次も書く
@@ -177,5 +179,5 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
      新しいフォルダへ移すこと
    - ユーザーのフォルダの下に置くこと。同時に開かないこと。同期するフォルダ・ネットワークドライブに
      置かないこと(`docs/spec/data-model/tables.md`「データディレクトリの場所」)
-9. **`develop`へ戻す**: `release/<版>` → `develop`のPRを作り(`release/*`の上で直したものを戻すため)、
-   メンテナがマージする
+9. **`develop`へ戻す**: `release/*`の上で版を上げた・直したものがあれば、`release/<版>` → `develop`の
+   PRを作り、メンテナがマージする。何も無ければ省く
