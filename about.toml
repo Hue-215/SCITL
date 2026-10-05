@@ -2,7 +2,8 @@
 # 洗い出し、ライセンスが許容の範囲かを確かめる(`scripts/assemble-dist.mjs`)。
 # 方針は docs/spec/architecture/tech-stack.md「ライセンス」。
 
-# 許容するライセンス。ここに無いライセンスの依存があると、生成が失敗する。
+# 許容するライセンス。ここに無いライセンスの依存があると、生成が失敗する。画面のバンドルに入る
+# npmのパッケージも、この一覧で確かめる(`scripts/assemble-dist.mjs --check-frontend-licenses`)。
 accepted = [
     "MIT",
     "Apache-2.0",

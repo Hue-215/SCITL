@@ -27,3 +27,7 @@
   `dtoa-short`はビルド時のみ。npmのMPL-2.0は開発依存の`lightningcss`だけ。GPL・LGPL・AGPLは無い。
   同梱フォントはSIL OFL 1.1(同梱は可、フォント自体はOFLのまま)。ライセンスはMIT予定なので、
   コピーレフトのライブラリは使わない
+- **Windowsの実行ファイルには、MicrosoftのWebView2 SDKのローダーが入る**(`webview2-com-sys`が
+  `WebView2LoaderStatic.lib`を静的にリンクする)。SDKのライセンスはBSD-3-Clauseと同じ形の条項で、
+  バイナリでの配布にも著作権表示とライセンス文の同梱を求める。クレートのライセンス(MIT)とは別に、
+  配布物の第三者ライセンスの一覧に載せる(`licenses/README.md`)

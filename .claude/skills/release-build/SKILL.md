@@ -101,7 +101,7 @@ scitl-<版>-windows-x64/
 ├── LICENSE
 └── THIRD-PARTY-LICENSES/
     ├── rust.txt              # Rustのクレート
-    ├── frontend.md           # 画面のバンドルに入ったnpmのパッケージ(Viteのbuild.license)
+    ├── frontend.txt          # 画面のバンドルに入ったnpmのパッケージ(Viteのbuild.licenseが出す一覧から作る)
     └── NotoJP-LICENSE.txt    # 同梱フォント
 ```
 
@@ -112,11 +112,22 @@ scitl-<版>-windows-x64/
   実行ファイルに入るものより広い。漏れが無ければよい
 - ライセンス文は、各クレートに入っているファイル(`LICENSE*`・`NOTICE*`等)をそのまま載せる。cargo-about
   (0.9.2)が照合して選ぶ文面は、照合に外れると著作権者の名前が入っていないひな形に置き換わり、その
-  ことを失敗にもしない(約50クレートがそうなった)。ファイルを持たないクレート(13個)だけ、標準の文面を
-  その旨を添えて載せる。Rustの標準ライブラリはクレートの一覧に出ないので、冒頭に書いてある
+  ことを失敗にもしない(約50クレートがそうなった)。Rustの標準ライブラリはクレートの一覧に出ないので、
+  冒頭に書いてある
+- パッケージにファイルを持たないクレートは、上流のリポジトリから`licenses/`に写したファイルを載せる
+  (入手先は`licenses/README.md`)。写しの無いクレートが増えると失敗するので、写して`assemble-dist.mjs`の
+  `SUPPLIED`に足す。上流にもファイルが無く、標準の文面で足りるもの(MPL-2.0の`selectors`)だけは
+  `STANDARD_TEXT`に置き、標準の文面をその旨を添えて載せる
+- クレートのライセンスとは別に実行ファイルに入るもの(`webview2-com-sys`が静的にリンクする、Microsoftの
+  WebView2 SDKのローダー)は、`BUNDLED`でそのクレートの項に足す。SDKの`LICENSE.txt`はバイナリでの
+  配布にも著作権表示とライセンス文の同梱を求める
 - `about.toml`の`accepted`に無いライセンスの依存があると、失敗する。スクリプトはビルドを始める前に、CIは
   PRごとに、同じ確認を走らせる(`assemble-dist.mjs --check-licenses`)。足してよいライセンスかは
   `docs/spec/architecture/tech-stack.md`「ライセンス」で判断する
+- npmのパッケージも同じ`accepted`で確かめる。Viteがビルドのときに出す一覧(`frontend/dist/.vite/license.json`)の
+  SPDXの式を読み、許容外か、ライセンスの無いパッケージがあれば失敗する。ライセンスファイルを持たない
+  パッケージも、著作権者の名前を載せられないので失敗にする。CIはフロントエンドのビルドの後に
+  走らせる(`assemble-dist.mjs --check-frontend-licenses`)
 - cargo-aboutは、対象のOS向けにしか使わないクレートを取りに行くので、ネットワークが要る
 - Linuxの実行ファイルは、WebKitGTK 4.1・GTK3・libsoup3・GLib等を利用者の環境から読み込む。利用者は
   `libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)を入れておく必要がある(GTK等は依存として入る)。
