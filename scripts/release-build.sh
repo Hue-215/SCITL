@@ -79,17 +79,17 @@ for binary in "${binaries[@]}"; do
   fi
 done
 
-# 配布物のフォルダを組み立てる。tar.gzまで作り終えずに抜けたら(検査に落ちた・中断した)、
-# 検査していないものが残らないようフォルダを消す。
+# 配布物のフォルダを組み立てる。tar.gzまで作り終えずに抜けたら(組み立て・検査に落ちた・中断した)、
+# 検査していないものが残らないよう、配布物の置き場所ごと消す(前の配布物はビルドの前に消してある)。
+found_list=""
+completed=""
+trap 'rm -f "$found_list"; [[ -n "$completed" ]] || rm -rf "$root/target/dist"' EXIT
 name="$(node "$root/scripts/assemble-dist.mjs" "${binaries[@]}")"
 if [[ -z "$name" ]]; then
   echo "配布物のフォルダの名前を受け取れませんでした" >&2
   exit 1
 fi
 dist="$root/target/dist/$name"
-found_list=""
-completed=""
-trap 'rm -f "$found_list"; [[ -n "$completed" ]] || rm -rf "$dist" "$dist.tar.gz"' EXIT
 found_list="$(mktemp)"
 
 # 組み立てた配布物に、置き換えたはずのパスが残っていないかを確かめる。

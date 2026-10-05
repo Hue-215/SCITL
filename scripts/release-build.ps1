@@ -104,24 +104,25 @@ try {
 }
 
 foreach ($binary in $binaries) {
-    if (-not (Test-Path $binary)) {
+    if (-not (Test-Path -LiteralPath $binary)) {
         throw "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)"
     }
 }
 
-# 配布物のフォルダを組み立てる。zipまで作り終えずに抜けたら(検査に落ちた・中断した)、
-# 検査していないものが残らないようフォルダを消す。
-$name = node (Join-Path $rootPath 'scripts\assemble-dist.mjs') @binaries
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if (-not $name) { throw '配布物のフォルダの名前を受け取れませんでした' }
-$dist = Join-Path $rootPath "target\dist\$name"
+# 配布物のフォルダを組み立てる。zipまで作り終えずに抜けたら(組み立て・検査に落ちた・中断した)、
+# 検査していないものが残らないよう、配布物の置き場所ごと消す(前の配布物はビルドの前に消してある)。
 $completed = $false
 try {
+    $name = node (Join-Path $rootPath 'scripts\assemble-dist.mjs') @binaries
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if (-not $name) { throw '配布物のフォルダの名前を受け取れませんでした' }
+    $dist = Join-Path $rootPath "target\dist\$name"
+
     # 組み立てた配布物のすべてのファイル(実行ファイルとライセンス類)に、置き換えたはずのパスが
     # 残っていないかを確かめる。パスはバイト列として埋め込まれるので、UTF-8として読んで探す。
     # 区切りは`\`と`/`の両方を見て、Windowsのパスは大文字・小文字を区別しないので区別せずに探す。
     $found = $false
-    foreach ($file in Get-ChildItem -LiteralPath $dist -Recurse -File) {
+    foreach ($file in Get-ChildItem -LiteralPath $dist -Recurse -File -Force) {
         $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($file.FullName))
         foreach ($path in @($userHome + $cargoHome + $root | Select-Object -Unique)) {
             foreach ($form in @("$path\", ($path.Replace('\', '/') + '/'))) {
@@ -140,6 +141,6 @@ try {
     Write-Host "配布物: $dist.zip"
 } finally {
     if (-not $completed) {
-        Remove-Item -LiteralPath $dist, "$dist.zip" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $rootPath 'target\dist') -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
