@@ -51,7 +51,8 @@ const ROLES = {
     dark: { saturationFactor: 0.4, lightness: 28 },
   },
   // 主ボタン(タスクを追加・送信)の塗り。押せる所が目に付くよう、ユーザーの吹き出し
-  // (primaryContainer)より彩度を上げ、明度を50%に寄せて色を濃くする。文字はonPrimaryContainerを使う。
+  // (primaryContainer)より彩度を上げ、明度をHSLで最も鮮やかな50%の側へ寄せる。文字は
+  // onPrimaryContainerを使う。
   primaryButton: {
     light: { saturationFactor: 1, lightness: 82 },
     dark: { saturationFactor: 0.8, lightness: 38 },
