@@ -4,7 +4,7 @@ import type { FormEvent } from 'react'
 import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import { isolated, t } from './i18n'
-import { CollapseToggle, NumberField } from './settingsFields'
+import { CollapseToggle, NumberField, ServerNotice } from './settingsFields'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
 
@@ -62,6 +62,7 @@ export function McpTab({
 }: McpTabProps) {
   return (
     <div className="settings-panel">
+      <ServerNotice />
       <ul className="provider-list">
         {settings.mcp_servers.map((server) => (
           <McpServerCard

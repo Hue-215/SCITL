@@ -38,3 +38,14 @@ export function CollapseToggle({ showLabel, expanded, onToggle }: CollapseToggle
     </button>
   )
 }
+
+// 通信先を登録するタブ(APIプロバイダー・外部ツール)の先頭に置く、通信先と信頼についての知らせ。
+// 1文ずつ行を分けて出す。
+export function ServerNotice() {
+  return (
+    <div>
+      <p>{t('settings.server_notice.destination')}</p>
+      <p>{t('settings.server_notice.trust')}</p>
+    </div>
+  )
+}

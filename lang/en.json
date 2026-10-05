@@ -142,6 +142,8 @@
   "settings.provider.meta": "{url} · {api_key}",
   "settings.provider.none_registered": "No providers registered.",
   "settings.provider.unusable": "This provider can't be used. Delete it, or switch to a model from another provider in the chat. ({error})",
+  "settings.server_notice.destination": "SCITL communicates with the servers you set up in this tab.",
+  "settings.server_notice.trust": "Set up only servers you trust, and connect to external servers over https if you can.",
   "settings.tools.add_server_heading": "Add server",
   "settings.tools.delete_server_dialog_message": "This unregisters \"{id}\" along with its saved secrets (HTTP header values). This can't be undone.",
   "settings.tools.delete_server_dialog_title": "Unregister this MCP server?",

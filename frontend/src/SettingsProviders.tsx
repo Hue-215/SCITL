@@ -22,7 +22,7 @@ import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
-import { CollapseToggle } from './settingsFields'
+import { CollapseToggle, ServerNotice } from './settingsFields'
 import { usePositiveIntegerInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
@@ -92,6 +92,7 @@ export function ProvidersTab({
 
   return (
     <div className="settings-panel">
+      <ServerNotice />
       <ul className="provider-list">
         {settings.providers.map((provider) => (
           <ProviderCard
