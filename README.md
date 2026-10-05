@@ -31,7 +31,9 @@ SCITLは **S**tandalone **C**hat **I**nterface for **T**asks with **L**Ms の略
 | Windows(x64) | 対応。APIキーは資格情報マネージャーに保存します |
 | macOS | 非対応。秘密情報の保存先を用意していません |
 
-<!-- TODO: Linuxで動作を確かめたディストリビューションと、配布物が求めるglibcの版(配布物をビルドした環境で決まる) -->
+Linuxで動作を確かめているのはKubuntu 26.04(KDE Plasma 6・Wayland、資格情報ストアはKWallet)です。
+配布物はglibc 2.39以上(アプリ。CLIは2.34以上)を求めます。Ubuntu 24.04・Debian 13・Fedora 40より
+古いディストリビューションでは起動しません。
 
 ## 使い始める
 
@@ -165,7 +167,7 @@ Windowsでは`.\scitl-cli.exe task list`のように実行します。
 
 ### 前提
 
-- Rust(stable。CIはピン留めせず最新のstableを使っています)
+- Rust 1.88以上(依存が求める最低の版。CIは最新のstableを使っています)
 - Node.js 22
 - Tauri 2のシステム依存([Tauriの案内](https://v2.tauri.app/start/prerequisites/))。
   Ubuntu 24.04では次のとおりです(CIの「システム依存を入れる」と同じ。`libdbus-1-dev`は資格情報ストアへの
@@ -177,8 +179,6 @@ Windowsでは`.\scitl-cli.exe task list`のように実行します。
   ```
 
   WindowsではMSVCのツールチェーン(Rustの既定)を使います
-
-<!-- TODO: Rustの最低バージョンを決めるか(今はピン留めしていない) -->
 
 ### 開発用に起動する
 
@@ -242,12 +242,11 @@ npm run build
 
 ## 開発の進め方
 
-- ブランチはGit Flow(`main` / `develop` / `feature/*` / `release/*` / `hotfix/*`)です。
-  `develop`から`feature/*`を切ってPRを出してください
-- 作業項目はGitHub Issuesで管理しています
+- 不具合の報告・要望は[GitHub Issues](https://github.com/Hue-215/SCITL/issues)で受け付けています。
+  今のところ、外部からのPRは受け付けていません
+- ブランチはGit Flow(`main` / `develop` / `feature/*` / `release/*` / `hotfix/*`)で、
+  `develop`から`feature/*`を切ってPRで取り込みます
 - `CLAUDE.md`・`.claude/skills/`はClaude Code向けの運用の決まりです
-
-<!-- TODO: 外部からのコントリビュートを受け付けるか -->
 
 ## セキュリティ
 
