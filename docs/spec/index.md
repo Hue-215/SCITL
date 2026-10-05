@@ -13,7 +13,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 | 文書 | 読む場面 | Opus |
 |---|---|---|
 | `principles.md` | 設計判断をするとき(該当する節だけ)。コード・コメント・コミットを書くとき(5節・8節) | 節による |
-| `architecture/tech-stack.md` | 依存の追加・技術の置き換え、ライセンスの判断 | 実行時依存の追加は当たる |
+| `architecture/tech-stack.md` | 依存の追加・技術の置き換え、ライセンスの判断、依存の脆弱性 | 実行時依存の追加は当たる |
 | `architecture/cli.md` | `scitl-cli`・`scitl-debug-cli`のコマンドを触る | 秘密情報の受け取り方を変えるなら当たる |
 | `architecture/llm-adapter.md` | プロバイダーのアダプタ、モデルの能力、イベント列、失敗の種類 | 通信先・通信方式を変えるなら当たる |
 | `architecture/prompt-shape.md` | システムプロンプト、ユーザー発言の囲み、日時・状態の伝え方、操作の記録、固定文言 | 囲み・予約タグの形を変えるなら当たる |

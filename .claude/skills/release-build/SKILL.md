@@ -1,11 +1,11 @@
 ---
 name: release-build
-description: SCITLの配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
+description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→mainへ取り込む→タグ→配布物を作る→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
 ---
 
 # 配布用のビルド
 
-配布物は`scripts/`のスクリプトで作る。`cargo build --release`や`npx tauri build`を直接叩くと、
+リリース全体の流れは6節。配布物は`scripts/`のスクリプトで作る。`cargo build --release`や`npx tauri build`を直接叩くと、
 ビルドした人の絶対パスがバイナリに残る(下の「何をしているか」)。`release/*`への移行と
 配布はメンテナが行う(CLAUDE.md「進行中の作業」)。
 
@@ -148,3 +148,34 @@ Cargoの`trim-paths`が安定版に入ったら、`[profile.release]`に`trim-pa
 `--remap-path-prefix`を外す(Rust 1.97では、まだ`-Z`の不安定な機能)。検査はそのまま残す。
 `trim-paths`が変えるのはrustcの出力なので、ps1の`CL`(Cのソースの場所)は、外しても検査が通ると
 確かめてから外す。
+
+## 6. リリースの流れ
+
+`release/*`を切るところから、`main`への取り込み・タグ・配布までは、メンテナが行う(CLAUDE.md)。
+Claudeは頼まれた段だけを手伝う。版はセマンティックバージョニングで、最初の版は`0.1.0`。
+
+1. **`release/<版>`を切る**: `develop`から切る(例: `release/0.1.0`)
+2. **版を上げる**: `Cargo.toml`の`[workspace.package]`の`version`を書き換え、`cargo check --workspace`で
+   `Cargo.lock`を更新して、両方をコミットする。版はここ1箇所で、GUI・CLI・配布物の名前はここから取る
+   (`tauri.conf.json`には`version`を置かない。`package.json`の`0.0.0`は配布物に出ない)。最初の版は
+   今の`0.1.0`のままなので、この段は無い
+3. **確かめる**: `release/*`へのpushでCIが回る(Windowsのジョブを含む)。すべて通ることと、Dependabotの
+   開いているアラートが無いことを確かめる(`gh api 'repos/{owner}/{repo}/dependabot/alerts?state=open' --jq length`。
+   扱いは`docs/spec/architecture/tech-stack.md`「依存の脆弱性」)。直すものがあれば`release/*`の上で直す
+4. **`main`へ取り込む**: `release/<版>` → `main`のPRを作り、メンテナがマージする
+5. **タグを打つ**: `main`のマージコミットに注釈付きタグ`v<版>`を打ってpushする
+   (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
+6. **配布物を作る**: タグをチェックアウトし、LinuxとWindowsのそれぞれで1節のスクリプトを走らせる。
+   出来るのは`target/dist/scitl-<版>-linux-x64.tar.gz`と`target/dist/scitl-<版>-windows-x64.zip`
+7. **起動を確かめる**: 一時ディレクトリの外(`target/`の下など)に展開して起動し、画面が出ることと、
+   展開したフォルダに`data`ができることを見る
+8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> --title "SCITL <版>" --notes-file <ノート>`。
+   リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
+   READMEに書くまでの間は次も書く
+   - Linuxは`libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)が要ること、求めるglibcの版(4節)
+   - データは展開したフォルダの`data`に置かれること。版を上げるときは、古いフォルダの`data`を
+     新しいフォルダへ移すこと
+   - ユーザーのフォルダの下に置くこと。同時に開かないこと。同期するフォルダ・ネットワークドライブに
+     置かないこと(`docs/spec/data-model/tables.md`「データディレクトリの場所」)
+9. **`develop`へ戻す**: `release/<版>` → `develop`のPRを作り(`release/*`の上で直したものを戻すため)、
+   メンテナがマージする
