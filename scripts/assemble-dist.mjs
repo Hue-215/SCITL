@@ -3,8 +3,8 @@
 //
 //   node scripts/assemble-dist.mjs <実行ファイル>...
 //
-// `target/dist/scitl-<版>-<OS>-<CPU>/`を作り直し、渡された実行ファイル、このリポジトリのLICENSE、
-// 第三者ライセンスの一覧(THIRD-PARTY-LICENSES/)を入れて、フォルダの名前を標準出力に書く
+// `target/dist/scitl-<版>-<OS>-<CPU>/`を作り直し、渡された実行ファイル、利用者向けの案内(README.txt)、
+// このリポジトリのLICENSE、第三者ライセンスの一覧(THIRD-PARTY-LICENSES/)を入れて、フォルダの名前を標準出力に書く
 // (名前はASCIIだけなので、呼び出し側の文字コードに左右されない)。圧縮は呼び出し側が行う。
 //
 //   node scripts/assemble-dist.mjs --check-licenses
@@ -145,6 +145,16 @@ const SUPPLIED = {
 // 著作権者を含まない)。
 const STANDARD_TEXT = new Set(['selectors'])
 
+// Rustの標準ライブラリと、それと一緒に実行ファイルに入るクレートのうち、依存の一覧に現れないもの
+// (cargo-aboutは標準ライブラリの中を見ない)。licenses/の下のフォルダの写しを載せる。標準ライブラリが
+// 使うほかのクレート(hashbrown・miniz_oxide)は、依存としても入っていて一覧に載る。
+const STD = [
+  ['Rust standard library', 'rust'],
+  ['addr2line', 'addr2line'],
+  ['gimli', 'gimli'],
+  ['rustc-demangle', 'rustc-demangle'],
+]
+
 // クレートのライセンスとは別に、そのクレートが実行ファイルに入れる第三者のもの。
 const BUNDLED = {
   'webview2-com-sys': {
@@ -247,6 +257,11 @@ function rustLicenses() {
   if (unbundled.size > 0) {
     fail(`BUNDLED lists crates that are no longer dependencies: ${[...unbundled].join(', ')}`)
   }
+  for (const [what, dir] of STD) {
+    for (const [name, text] of suppliedFiles(dir)) {
+      add(text, `${what} (linked as part of the Rust standard library): ${name}`)
+    }
+  }
   const rule = '='.repeat(78)
   const sections = [...texts.values()].map(({ text, labels }) => [rule, ...labels, rule, '', text, ''].join('\n'))
   return [
@@ -256,8 +271,9 @@ function rustLicenses() {
     'files shipped in each crate follow the list, each headed by the crates it comes from.',
     'The source code of a crate is available at the address next to its name.',
     '',
-    'The Rust standard library is also linked. It is distributed under MIT OR Apache-2.0',
-    '(https://www.rust-lang.org/policies/licenses).',
+    'The Rust standard library (https://github.com/rust-lang/rust, MIT OR Apache-2.0) is',
+    'also linked, together with the crates it is built from: addr2line, gimli,',
+    'rustc-demangle, hashbrown and miniz_oxide. Their license files are included below.',
     '',
     ...index,
     '',
@@ -268,10 +284,10 @@ function rustLicenses() {
 // ---- npmのパッケージのライセンス ----
 
 // 画面のバンドルに入ったnpmのパッケージの一覧の本文を作る。フロントエンドのビルド(Viteの
-// `build.license`)が出した一覧を読み、許容していないライセンスのパッケージか、ライセンスファイルを
+// `build.license`が出し、`vite.config.ts`が`dist`の外へ移したもの)の一覧を読み、許容していないライセンスのパッケージか、ライセンスファイルを
 // 持たない(著作権者の名前を載せられない)パッケージがあれば失敗する。
 function frontendLicenses() {
-  const file = join(root, 'frontend', 'dist', '.vite', 'license.json')
+  const file = join(root, 'frontend', 'dist-meta', 'license.json')
   if (!existsSync(file)) fail(`missing: ${file} (build the frontend first)`)
   const accepted = acceptedLicenses()
   const packages = JSON.parse(readFileSync(file, 'utf8'))
@@ -327,6 +343,7 @@ const dist = join(root, 'target', 'dist', name)
 // 前の配布物を消す前に、要るものが揃っているかを確かめる(一覧の生成もここで済ませる)。
 const copies = [
   ...args.map((binary) => [binary, basename(binary)]),
+  [join(root, 'scripts', 'dist-README.txt'), 'README.txt'],
   [join(root, 'LICENSE'), 'LICENSE'],
   // 同梱フォント。
   [join(root, 'frontend', 'public', 'fonts', 'NotoJP-LICENSE.txt'), join('THIRD-PARTY-LICENSES', 'NotoJP-LICENSE.txt')],
