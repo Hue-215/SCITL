@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ClientCapabilities, ClientConfig,
-    ContentBlock, Implementation,
+    ContentBlock, Implementation, PaginatedRequestParams,
 };
 use rmcp::service::{ClientInitializeError, RunningService, ServiceError};
 use rmcp::transport::DynamicTransportError;
@@ -37,7 +37,10 @@ use crate::text;
 /// 接続・ツール一覧取得・ツール呼び出しそれぞれに設ける固定タイムアウト。応答しない
 /// サーバーで設定画面やターンが固まらないようにする。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// ツール一覧の取得の上限。ページに分けて返すサーバーでは、全ページの取得に掛かる。
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(30);
+/// ツール一覧を辿るページ数の上限。ページが終わらないサーバーでも、取得を打ち切るため。
+const MAX_TOOL_PAGES: usize = 20;
 /// 1回のツール呼び出しの上限。ターン全体で使える時間の合計は設定から決まるが
 /// (`orchestration::ToolLimits`)、ターン側は呼び出しの区切りで判定するだけで、実行中の
 /// 呼び出しは打ち切らない。1回の呼び出しが長居しないよう、ここで上限を掛ける。
@@ -331,16 +334,42 @@ pub struct McpFailure {
 
 /// 接続済みのサーバーからツール一覧を取得する。
 async fn list_tools_of(service: &ClientService) -> Result<Vec<McpToolInfo>, CoreError> {
-    let result = tokio::time::timeout(LIST_TOOLS_TIMEOUT, service.list_tools(None))
+    tokio::time::timeout(LIST_TOOLS_TIMEOUT, list_tool_pages(service))
         .await
         .map_err(|_| CoreError::Mcp("timed out listing tools".to_string()))?
-        .map_err(|e| {
+}
+
+/// 次のページ(`nextCursor`)を辿ってツール一覧を集める。同じカーソルが続けて返る・
+/// [`MAX_TOOL_PAGES`]に達したら、それまでに取れた分で打ち切って診断に書く。
+async fn list_tool_pages(service: &ClientService) -> Result<Vec<McpToolInfo>, CoreError> {
+    let mut tools = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..MAX_TOOL_PAGES {
+        let params = cursor
+            .clone()
+            .map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
+        let page = service.list_tools(params).await.map_err(|e| {
             CoreError::Mcp(format!(
                 "failed to list tools: {}",
                 describe_server_error(&e)
             ))
         })?;
-    Ok(result.tools.into_iter().map(to_tool_info).collect())
+        tools.extend(page.tools.into_iter().map(to_tool_info));
+        match page.next_cursor {
+            None => return Ok(tools),
+            Some(next) if cursor.as_ref() == Some(&next) => {
+                crate::diagnostics::report(
+                    "stopped listing MCP tools: the server returned the same page cursor again",
+                );
+                return Ok(tools);
+            }
+            Some(next) => cursor = Some(next),
+        }
+    }
+    crate::diagnostics::report(format_args!(
+        "stopped listing MCP tools after {MAX_TOOL_PAGES} pages"
+    ));
+    Ok(tools)
 }
 
 /// サーバーへ接続する。接続自体にもタイムアウトを設ける(応答しないサーバーで
@@ -676,8 +705,22 @@ mod tests {
     }
 
     /// `initialize`と`tools/list`に、それぞれ`initialize_delay`・`list_delay`だけ待ってから
-    /// 答える最小のサーバー。
+    /// 答える最小のサーバー。ツールは1つだけを返す。
     async fn slow_server(initialize_delay: Duration, list_delay: Duration) -> String {
+        fake_server(
+            initialize_delay,
+            list_delay,
+            |_| json!({ "tools": [{ "name": "echo", "inputSchema": { "type": "object" } }] }),
+        )
+        .await
+    }
+
+    /// [`slow_server`]の、`tools/list`の`result`を`list`が決める形。`list`には要求のカーソルを渡す。
+    async fn fake_server(
+        initialize_delay: Duration,
+        list_delay: Duration,
+        list: fn(Option<&str>) -> Value,
+    ) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -726,9 +769,7 @@ mod tests {
                         }),
                         Some("tools/list") => json!({
                             "jsonrpc": "2.0", "id": message["id"],
-                            "result": { "tools": [
-                                { "name": "echo", "inputSchema": { "type": "object" } },
-                            ] },
+                            "result": list(message["params"]["cursor"].as_str()),
                         }),
                         _ => Value::Null,
                     };
@@ -761,6 +802,52 @@ mod tests {
             },
             enabled_tools: Default::default(),
         }
+    }
+
+    /// `name`のツール1つと、次のページのカーソルを載せた一覧の1ページ。
+    fn page(name: &str, next: Option<String>) -> Value {
+        let mut page = json!({ "tools": [{ "name": name, "inputSchema": { "type": "object" } }] });
+        if let Some(next) = next {
+            page["nextCursor"] = json!(next);
+        }
+        page
+    }
+
+    async fn listed_names(list: fn(Option<&str>) -> Value) -> Vec<String> {
+        let url = fake_server(Duration::ZERO, Duration::ZERO, list).await;
+        let tools = list_tools(&server_at("paged", url)).await.unwrap();
+        tools.into_iter().map(|t| t.name).collect()
+    }
+
+    /// 次のページのカーソルを辿り、すべてのページのツールを集める。
+    #[tokio::test]
+    async fn tools_on_later_pages_are_listed() {
+        let names = listed_names(|cursor| match cursor {
+            None => page("a", Some("p2".to_string())),
+            Some("p2") => page("b", Some("p3".to_string())),
+            _ => page("c", None),
+        })
+        .await;
+        assert_eq!(names, ["a", "b", "c"]);
+    }
+
+    /// ページが終わらないサーバーでも、上限のページ数で打ち切って取れた分を返す。
+    #[tokio::test]
+    async fn listing_stops_at_the_page_limit() {
+        let names = listed_names(|cursor| {
+            let n: usize = cursor.map_or(0, |c| c.parse().unwrap());
+            page(&format!("t{n}"), Some((n + 1).to_string()))
+        })
+        .await;
+        assert_eq!(names.len(), MAX_TOOL_PAGES);
+    }
+
+    /// 同じカーソルが続けて返ったら、そこで打ち切る。
+    #[tokio::test]
+    async fn listing_stops_when_the_cursor_repeats() {
+        let names =
+            listed_names(|cursor| page(cursor.unwrap_or("first"), Some("same".to_string()))).await;
+        assert_eq!(names, ["first", "same"]);
     }
 
     /// サーバーごとに並行して接続するので、待つのは一番遅い1台の分で済む。結果は渡した順。
