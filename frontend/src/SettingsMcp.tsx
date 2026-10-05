@@ -275,7 +275,7 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
   }
 
   return (
-    <form className="provider-add-form settings-section-break" onSubmit={submit}>
+    <form className="settings-section settings-section-break" onSubmit={submit}>
       <h2>{t('settings.tools.add_server_heading')}</h2>
       <label className="settings-field">
         <span>{t('settings.tools.server_id_hint', { max: nameMaxChars })}</span>

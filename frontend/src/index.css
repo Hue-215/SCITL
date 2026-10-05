@@ -1255,15 +1255,8 @@ option {
   padding-top: var(--space-4);
 }
 
-/* こちらは項目数が多く縦に積む。model-add-formとはgap以外は共通点がない。 */
-.provider-add-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-/* 入力欄が独立して並ぶ節。密に積む追加フォームと違い、タブ本文(.settings-panel)と
-   同じ間隔で並べる。 */
+/* 入力欄が並ぶ節(高度な設定の中・追加フォーム・ツールの上限)。タブ本文(.settings-panel)と
+   同じ間隔で並べ、設定画面の欄の間隔をどこでも揃える。 */
 .settings-section {
   display: flex;
   flex-direction: column;

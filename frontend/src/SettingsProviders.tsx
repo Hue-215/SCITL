@@ -539,7 +539,7 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
 
   return (
     <form
-      className="provider-add-form settings-section-break"
+      className="settings-section settings-section-break"
       onSubmit={(e) => {
         e.preventDefault()
         if (submission.running || !name.trim() || !baseUrl.trim()) return
