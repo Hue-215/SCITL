@@ -62,7 +62,7 @@ enum AdapterState {
     /// アクティブなプロバイダーが無い(未登録・全プロバイダーを削除した等)。
     NoProvider,
     /// アクティブなプロバイダーの鍵を資格情報ストアから読めない。理由を持つ。
-    /// ターンの開始と設定の変更のたびに読み直す。
+    /// ターンの開始・タスクの追加と設定の変更のたびに読み直す。
     KeyUnavailable(String),
     /// アクティブなプロバイダーを組み立てられない。理由を持つ。
     Broken(String),
@@ -220,6 +220,13 @@ impl Settings {
     pub async fn snapshot_for_turn(&self) -> Snapshot {
         self.reload_unavailable_key().await;
         self.detect_active_model_once().await;
+        self.snapshot()
+    }
+
+    /// 鍵だけを読み直す[`Self::snapshot`]。チャットを使えるかを確かめるだけで、ターンを
+    /// 始めない入口(タスクの追加)に使う。推論サーバーへは問い合わせない。
+    pub async fn snapshot_reloading_key(&self) -> Snapshot {
+        self.reload_unavailable_key().await;
         self.snapshot()
     }
 

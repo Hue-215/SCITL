@@ -22,7 +22,7 @@ impl Settings {
     /// (アプリ起動後、モデルごとに最初の1回)。失敗は覚えないので、次の機会に問い合わせ直す。
     ///
     /// 鍵を読めていない間は問い合わせない(問い合わせのたびに資格情報ストアを読みに行かない。
-    /// 読み直すのはターンの開始と設定の変更だけ)。
+    /// 読み直すのはターンの開始・タスクの追加と設定の変更だけ)。
     pub(super) async fn detect_active_model_once(&self) {
         let current = self.current();
         if current.adapter.key_error().is_some() {
