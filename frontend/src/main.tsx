@@ -10,7 +10,7 @@ import StartupFailure from './StartupFailure'
 import { applyTheme } from './theme.ts'
 
 // シード色はユーザー設定を持たないため固定値。
-applyTheme('#2563eb')
+applyTheme('#0c6cf2')
 
 // データフォルダを開けなかったら、アプリの代わりに理由だけを描く。
 const failure = await getStartupFailure().catch(() => null)
