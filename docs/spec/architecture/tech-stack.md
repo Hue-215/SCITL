@@ -27,3 +27,18 @@
   `dtoa-short`はビルド時のみ。npmのMPL-2.0は開発依存の`lightningcss`だけ。GPL・LGPL・AGPLは無い。
   同梱フォントはSIL OFL 1.1(同梱は可、フォント自体はOFLのまま)。ライセンスはMIT予定なので、
   コピーレフトのライブラリは使わない
+- **Windowsの実行ファイルには、MicrosoftのWebView2 SDKのローダーが入る**(`webview2-com-sys`が
+  `WebView2LoaderStatic.lib`を静的にリンクする)。SDKのライセンスはBSD-3-Clauseと同じ形の条項で、
+  バイナリでの配布にも著作権表示とライセンス文の同梱を求める。クレートのライセンス(MIT)とは別に、
+  配布物の第三者ライセンスの一覧に載せる(`licenses/README.md`)
+
+## 依存の脆弱性
+
+- **GitHubのDependabotアラートで知らせる**。`Cargo.lock`と`frontend/package-lock.json`の依存に既知の
+  脆弱性が公開されると通知が来る。自動でPRを作る機能(security updates)は使わない。依存の更新は、
+  実行時依存の変化をOpusで見る条件(CLAUDE.md)や、版を留めている依存
+  (`concurrency.md`「多重起動の防止」のプラグイン)があり、機械的には上げられない
+- CIでは走らせない。PRと関係なく新しい脆弱性が公開されただけで落ち、無関係な変更を止めるため
+- リリースの前に、開いているアラートが無いことを確かめる(`.claude/skills/release-build`「リリースの流れ」)。
+  上げられないもの(GTK3のRustバインディングが0.18系で止まっているため、Linuxの`glib`は0.18系に留まる等)は、
+  影響する箇所が呼ばれないことを確かめ、理由を添えて閉じる(dismiss)

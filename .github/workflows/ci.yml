@@ -169,3 +169,8 @@ jobs:
       # 本番ビルドはこの成果物を埋め込むので、同じコマンドで確かめる。
       - name: ビルド
         run: npm run build
+
+      # 画面のバンドルに入ったnpmのパッケージに、許容していないライセンス(`about.toml`)のものが
+      # 無いかを確かめる。一覧はビルドが出すので、その後に置く。
+      - name: 第三者ライセンス
+        run: node ../scripts/assemble-dist.mjs --check-frontend-licenses

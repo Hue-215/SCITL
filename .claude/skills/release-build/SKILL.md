@@ -1,11 +1,11 @@
 ---
 name: release-build
-description: SCITLの配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
+description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→配布物を作って起動を確かめる→mainへ取り込む→タグ→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
 ---
 
 # 配布用のビルド
 
-配布物は`scripts/`のスクリプトで作る。`cargo build --release`や`npx tauri build`を直接叩くと、
+リリース全体の流れは6節。配布物は`scripts/`のスクリプトで作る。`cargo build --release`や`npx tauri build`を直接叩くと、
 ビルドした人の絶対パスがバイナリに残る(下の「何をしているか」)。`release/*`への移行と
 配布はメンテナが行う(CLAUDE.md「進行中の作業」)。
 
@@ -101,7 +101,7 @@ scitl-<版>-windows-x64/
 ├── LICENSE
 └── THIRD-PARTY-LICENSES/
     ├── rust.txt              # Rustのクレート
-    ├── frontend.md           # 画面のバンドルに入ったnpmのパッケージ(Viteのbuild.license)
+    ├── frontend.txt          # 画面のバンドルに入ったnpmのパッケージ(Viteのbuild.licenseが出す一覧から作る)
     └── NotoJP-LICENSE.txt    # 同梱フォント
 ```
 
@@ -112,11 +112,22 @@ scitl-<版>-windows-x64/
   実行ファイルに入るものより広い。漏れが無ければよい
 - ライセンス文は、各クレートに入っているファイル(`LICENSE*`・`NOTICE*`等)をそのまま載せる。cargo-about
   (0.9.2)が照合して選ぶ文面は、照合に外れると著作権者の名前が入っていないひな形に置き換わり、その
-  ことを失敗にもしない(約50クレートがそうなった)。ファイルを持たないクレート(13個)だけ、標準の文面を
-  その旨を添えて載せる。Rustの標準ライブラリはクレートの一覧に出ないので、冒頭に書いてある
+  ことを失敗にもしない(約50クレートがそうなった)。Rustの標準ライブラリはクレートの一覧に出ないので、
+  冒頭に書いてある
+- パッケージにファイルを持たないクレートは、上流のリポジトリから`licenses/`に写したファイルを載せる
+  (入手先は`licenses/README.md`)。写しの無いクレートが増えると失敗するので、写して`assemble-dist.mjs`の
+  `SUPPLIED`に足す。上流にもファイルが無く、標準の文面で足りるもの(MPL-2.0の`selectors`)だけは
+  `STANDARD_TEXT`に置き、標準の文面をその旨を添えて載せる
+- クレートのライセンスとは別に実行ファイルに入るもの(`webview2-com-sys`が静的にリンクする、Microsoftの
+  WebView2 SDKのローダー)は、`BUNDLED`でそのクレートの項に足す。SDKの`LICENSE.txt`はバイナリでの
+  配布にも著作権表示とライセンス文の同梱を求める
 - `about.toml`の`accepted`に無いライセンスの依存があると、失敗する。スクリプトはビルドを始める前に、CIは
   PRごとに、同じ確認を走らせる(`assemble-dist.mjs --check-licenses`)。足してよいライセンスかは
   `docs/spec/architecture/tech-stack.md`「ライセンス」で判断する
+- npmのパッケージも同じ`accepted`で確かめる。Viteがビルドのときに出す一覧(`frontend/dist/.vite/license.json`)の
+  SPDXの式を読み、許容外か、ライセンスの無いパッケージがあれば失敗する。ライセンスファイルを持たない
+  パッケージも、著作権者の名前を載せられないので失敗にする。CIはフロントエンドのビルドの後に
+  走らせる(`assemble-dist.mjs --check-frontend-licenses`)
 - cargo-aboutは、対象のOS向けにしか使わないクレートを取りに行くので、ネットワークが要る
 - Linuxの実行ファイルは、WebKitGTK 4.1・GTK3・libsoup3・GLib等を利用者の環境から読み込む。利用者は
   `libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)を入れておく必要がある(GTK等は依存として入る)。
@@ -137,3 +148,36 @@ Cargoの`trim-paths`が安定版に入ったら、`[profile.release]`に`trim-pa
 `--remap-path-prefix`を外す(Rust 1.97では、まだ`-Z`の不安定な機能)。検査はそのまま残す。
 `trim-paths`が変えるのはrustcの出力なので、ps1の`CL`(Cのソースの場所)は、外しても検査が通ると
 確かめてから外す。
+
+## 6. リリースの流れ
+
+`release/*`を切るところから、`main`への取り込み・タグ・配布までは、メンテナが行う(CLAUDE.md)。
+Claudeは頼まれた段だけを手伝う。版はセマンティックバージョニングで、最初の版は`0.1.0`。
+
+1. **`release/<版>`を切る**: `develop`から切る(例: `release/0.1.0`)
+2. **版を上げる**: `Cargo.toml`の`[workspace.package]`の`version`が`release/<版>`の版と違えば書き換え、
+   `cargo check --workspace`で`Cargo.lock`を更新して、両方をコミットする。版はここ1箇所で、GUI・CLI・
+   配布物の名前はここから取る(`tauri.conf.json`には`version`を置かない。`package.json`の`0.0.0`は
+   配布物に出ない)
+3. **確かめる**: `release/*`へのpushでCIが回る(Windowsのジョブを含む)。すべて通ることと、Dependabotの
+   開いているアラートが無いことを確かめる(`gh api 'repos/{owner}/{repo}/dependabot/alerts?state=open' --jq length`。
+   扱いは`docs/spec/architecture/tech-stack.md`「依存の脆弱性」)。直すものがあれば`release/*`の上で直す
+4. **配布物を作る**: `release/<版>`の先頭で、LinuxとWindowsのそれぞれで1節のスクリプトを走らせる。
+   出来るのは`target/dist/scitl-<版>-linux-x64.tar.gz`と`target/dist/scitl-<版>-windows-x64.zip`。
+   版はCargo.tomlから取り、コミットの情報は焼き込まないので、`main`へ取り込んだ後のものと中身は同じ
+5. **起動を確かめる**: 一時ディレクトリの外(`target/`の下など)に展開して起動し、画面が出ることと、
+   展開したフォルダに`data`ができることを見る。直すものがあれば`release/*`の上で直し、手順4から
+   やり直す(タグを打つ前に済ませ、打ち直しを避ける)
+6. **`main`へ取り込む**: `release/<版>` → `main`のPRを作り、メンテナがマージする
+7. **タグを打つ**: `main`のマージコミットに注釈付きタグ`v<版>`を打ってpushする
+   (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
+8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> --title "SCITL <版>" --notes-file <ノート>`。
+   リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
+   READMEに書くまでの間は次も書く
+   - Linuxは`libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)が要ること、求めるglibcの版(4節)
+   - データは展開したフォルダの`data`に置かれること。版を上げるときは、古いフォルダの`data`を
+     新しいフォルダへ移すこと
+   - ユーザーのフォルダの下に置くこと。同時に開かないこと。同期するフォルダ・ネットワークドライブに
+     置かないこと(`docs/spec/data-model/tables.md`「データディレクトリの場所」)
+9. **`develop`へ戻す**: `release/*`の上で版を上げた・直したものがあれば、`release/<版>` → `develop`の
+   PRを作り、メンテナがマージする。何も無ければ省く

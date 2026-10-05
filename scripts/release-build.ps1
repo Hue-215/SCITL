@@ -8,8 +8,8 @@ if ($PSVersionTable.PSVersion -lt [version] '7.2') { throw 'Run this script with
 #
 # 続けて、CLIも同じ置き換えを付けてビルドし、GUI・CLI・ライセンス類を`target\dist`のzipにまとめる。
 #
-# 引数はそのまま`tauri build`に渡す(例: `--bundles msi`、`--no-bundle`)。`--target`と
-# `CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
+# 引数はそのまま`tauri build`に渡す。配布物は実行ファイルだけなので、`--no-bundle`を付けて実行する。
+# `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
 $ErrorActionPreference = 'Stop'
 
 if ($env:RUSTFLAGS -or $env:CARGO_ENCODED_RUSTFLAGS) {
@@ -68,6 +68,11 @@ $trims = $root + $cargoHome + $userHome | Select-Object -Unique | ForEach-Object
 $previousCl = $env:CL
 $env:CL = (@($previousCl) + $trims | Where-Object { $_ }) -join ' '
 
+# 前のビルドの実行ファイルを、今回のものと取り違えないよう先に消す(`--target`等で出力先が
+# 変わると、前のものが残ったまま検査を通る)。
+$binaries = 'scitl.exe', 'scitl-cli.exe' | ForEach-Object { Join-Path $rootPath "target\release\$_" }
+Remove-Item -LiteralPath $binaries -Force -ErrorAction SilentlyContinue
+
 # npmは`.cmd`を名指しし、tauriのCLIはnpxを通さずにnodeで動かす。拡張子を省くとPowerShellは
 # `.ps1`の版を選び、その版は呼び出しの行を文字列として読み直して実行するので、`@args`が空になる。
 # `npx.cmd`は、cmd.exeが引用符や`&`を解釈して引数を壊す。
@@ -94,7 +99,6 @@ try {
 # 配布するバイナリに、置き換えたはずのパスが残っていないかを確かめる。パスはバイト列として
 # 埋め込まれるので、UTF-8として読んで探す。区切りは`\`と`/`の両方を見て、Windowsのパスは
 # 大文字・小文字を区別しないので区別せずに探す。
-$binaries = 'scitl.exe', 'scitl-cli.exe' | ForEach-Object { Join-Path $rootPath "target\release\$_" }
 $found = $false
 foreach ($binary in $binaries) {
     if (-not (Test-Path $binary)) {
