@@ -145,7 +145,7 @@ impl Attachments {
         let attachment = with_conn(db, move |conn| attachments::get(conn, id)).await?;
         let hash = file_hash(attachment.content, id, AttachmentKind::Other)?;
         let store = self.store.clone();
-        blocking::run(move || store.reveal(id, &attachment.view.original_name, &hash)).await
+        blocking::run(move || store.reveal(&attachment.view.original_name, &hash)).await
     }
 
     /// どの添付の行からも指されていない実体(`docs/spec/data-model/tables.md` attachments)。

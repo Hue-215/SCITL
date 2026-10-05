@@ -72,8 +72,18 @@ impl AttachmentStore {
 
     /// 添付を元の名前(安全にした形)で書き出し、入っているフォルダをOSで開く。
     /// ファイルそのものは開かない。実行形式の添付が確認なしに起動されないようにするため。
-    pub fn reveal(&self, attachment_id: i64, original_name: &str, hash: &str) -> Result<()> {
-        let dir = self.revealed.join(attachment_id.to_string());
+    ///
+    /// フォルダは実体のハッシュで分ける。書き出し先はデータフォルダによらずOSユーザーで
+    /// 1つなので、データごとに振られる添付IDで分けると、別のデータの同じIDの添付が開く。
+    pub fn reveal(&self, original_name: &str, hash: &str) -> Result<()> {
+        let dir = self.write_for_reveal(original_name, hash)?;
+        open::that_detached(&dir).map_err(io_error("open the folder"))
+    }
+
+    /// [`Self::reveal`]で開くフォルダへ書き出し、そのフォルダを返す。
+    fn write_for_reveal(&self, original_name: &str, hash: &str) -> Result<PathBuf> {
+        self.blob_path(hash)?;
+        let dir = self.revealed.join(hash);
         let path = dir.join(safe_file_name(original_name));
         crate::paths::create_private_dir(&self.revealed)
             .map_err(io_error("create the reveal directory"))?;
@@ -81,7 +91,7 @@ impl AttachmentStore {
             fs::create_dir_all(&dir).map_err(io_error("create the reveal directory"))?;
             self.copy_to(hash, &path)?;
         }
-        open::that_detached(&dir).map_err(io_error("open the folder"))
+        Ok(dir)
     }
 
     /// 置き場所にある実体。置き場所がまだ無ければ空。実体の名前の形をしていないファイル
@@ -254,6 +264,20 @@ mod tests {
         // 一時ファイルは残らず、実体は1つだけ。
         let entries: Vec<_> = fs::read_dir(t.root().join("blobs")).unwrap().collect();
         assert_eq!(entries.len(), 1);
+    }
+
+    /// 同じ名前でも中身が違えば別のフォルダに書き出す(別のデータの添付と取り違えない)。
+    #[test]
+    fn reveals_each_content_in_its_own_folder() {
+        let t = TempStore::new();
+        let first = t.store.put(b"first").unwrap();
+        let second = t.store.put(b"second").unwrap();
+        let first_dir = t.store.write_for_reveal("memo.bin", &first).unwrap();
+        let second_dir = t.store.write_for_reveal("memo.bin", &second).unwrap();
+        assert_ne!(first_dir, second_dir);
+        assert_eq!(fs::read(first_dir.join("memo.bin")).unwrap(), b"first");
+        assert_eq!(fs::read(second_dir.join("memo.bin")).unwrap(), b"second");
+        assert!(t.store.write_for_reveal("memo.bin", "../secret").is_err());
     }
 
     #[test]
