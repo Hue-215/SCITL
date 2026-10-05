@@ -75,6 +75,7 @@ impl AttachmentStore {
     ///
     /// フォルダは実体のハッシュで分ける。書き出し先はデータフォルダによらずOSユーザーで
     /// 1つなので、データごとに振られる添付IDで分けると、別のデータの同じIDの添付が開く。
+    /// 同じ中身を別の名前で添付したものは、同じフォルダに並ぶ。
     pub fn reveal(&self, original_name: &str, hash: &str) -> Result<()> {
         let dir = self.write_for_reveal(original_name, hash)?;
         open::that_detached(&dir).map_err(io_error("open the folder"))
@@ -82,12 +83,19 @@ impl AttachmentStore {
 
     /// [`Self::reveal`]で開くフォルダへ書き出し、そのフォルダを返す。
     fn write_for_reveal(&self, original_name: &str, hash: &str) -> Result<PathBuf> {
-        self.blob_path(hash)?;
-        let dir = self.revealed.join(hash);
+        let blob = self.blob_path(hash)?;
+        // ハッシュの先頭半分(128ビット)で足りる。全桁にすると、Windowsでパスの長さの上限
+        // (260文字)に届きやすくなる。
+        let dir = self.revealed.join(&hash[..32]);
         let path = dir.join(safe_file_name(original_name));
         crate::paths::create_private_dir(&self.revealed)
             .map_err(io_error("create the reveal directory"))?;
-        if !path.exists() {
+        // 書き出しが途中で失敗したもの・開いた先で書き換えられたものは、大きさが変わるので
+        // 書き直す。
+        let blob_len = fs::metadata(&blob)
+            .map_err(io_error("inspect an attachment"))?
+            .len();
+        if fs::metadata(&path).map(|m| m.len()).ok() != Some(blob_len) {
             fs::create_dir_all(&dir).map_err(io_error("create the reveal directory"))?;
             self.copy_to(hash, &path)?;
         }
@@ -278,6 +286,11 @@ mod tests {
         assert_eq!(fs::read(first_dir.join("memo.bin")).unwrap(), b"first");
         assert_eq!(fs::read(second_dir.join("memo.bin")).unwrap(), b"second");
         assert!(t.store.write_for_reveal("memo.bin", "../secret").is_err());
+
+        // 途中で切れたものは書き直す。
+        fs::write(first_dir.join("memo.bin"), b"fir").unwrap();
+        t.store.write_for_reveal("memo.bin", &first).unwrap();
+        assert_eq!(fs::read(first_dir.join("memo.bin")).unwrap(), b"first");
     }
 
     #[test]
