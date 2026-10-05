@@ -98,22 +98,30 @@ Linuxの中身は、実行ファイルに拡張子が無いほかは同じ。tar
 scitl-<版>-windows-x64/
 ├── scitl.exe
 ├── scitl-cli.exe
+├── README.txt                # 利用者向けの案内(必要なもの・データの置き場所)。元は scripts/dist-README.txt
 ├── LICENSE
 └── THIRD-PARTY-LICENSES/
     ├── rust.txt              # Rustのクレート
     ├── frontend.txt          # 画面のバンドルに入ったnpmのパッケージ(Viteのbuild.licenseが出す一覧から作る)
-    └── NotoJP-LICENSE.txt    # 同梱フォント
+    └── NotoJP-LICENSE.txt    # 同梱フォント(先頭に、フォントファイルに記録された著作権表示を書いてある)
 ```
 
 - `tauri build`はGUIしか作らないので、CLIはスクリプトが同じ置き換えを付けて別にビルドし、検査にも掛ける
+- Windowsの実行ファイルは、VCランタイムを静的にリンクする(GUIは`tauri build`が、CLIは
+  `crates/scitl-cli/build.rs`が`static_vcruntime`で行う)。既定のままだと`VCRUNTIME140.dll`
+  (Visual C++の再頒布可能パッケージ)を求め、入っていないPCで起動できない。ps1は、配布物の
+  実行ファイルが`VCRUNTIME140`を求めていれば失敗にする。手で確かめるなら、`dumpbin /dependents`
+  (Linuxからは`objdump -p <exe> | grep 'DLL Name'`)に`VCRUNTIME140.dll`が出ないことを見る
 - フォルダの組み立ては`scripts/assemble-dist.mjs`にある(圧縮だけがOSごと)
 - `rust.txt`に載せるクレートは、cargo-aboutに洗い出させる(`about.toml`の`targets`向けのもの。ビルド
   スクリプトとテストにしか使わないものは除く)。配布しない`scitl-debug-cli`の依存や手続きマクロも入るので、
   実行ファイルに入るものより広い。漏れが無ければよい
 - ライセンス文は、各クレートに入っているファイル(`LICENSE*`・`NOTICE*`等)をそのまま載せる。cargo-about
   (0.9.2)が照合して選ぶ文面は、照合に外れると著作権者の名前が入っていないひな形に置き換わり、その
-  ことを失敗にもしない(約50クレートがそうなった)。Rustの標準ライブラリはクレートの一覧に出ないので、
-  冒頭に書いてある
+  ことを失敗にもしない(約50クレートがそうなった)。Rustの標準ライブラリと、それと一緒に実行ファイルに入って
+  依存の一覧に現れないクレート(addr2line・compiler_builtins・gimli・object・rustc-demangle)は、
+  cargo-aboutが見ないので、`licenses/`に写したファイルを載せる(`assemble-dist.mjs`の`STD`。Rustを
+  更新したら`licenses/README.md`の手順で見直す)
 - パッケージにファイルを持たないクレートは、上流のリポジトリから`licenses/`に写したファイルを載せる
   (入手先は`licenses/README.md`)。写しの無いクレートが増えると失敗するので、写して`assemble-dist.mjs`の
   `SUPPLIED`に足す。上流にもファイルが無く、標準の文面で足りるもの(MPL-2.0の`selectors`)だけは
@@ -124,7 +132,8 @@ scitl-<版>-windows-x64/
 - `about.toml`の`accepted`に無いライセンスの依存があると、失敗する。スクリプトはビルドを始める前に、CIは
   PRごとに、同じ確認を走らせる(`assemble-dist.mjs --check-licenses`)。足してよいライセンスかは
   `docs/spec/architecture/tech-stack.md`「ライセンス」で判断する
-- npmのパッケージも同じ`accepted`で確かめる。Viteがビルドのときに出す一覧(`frontend/dist/.vite/license.json`)の
+- npmのパッケージも同じ`accepted`で確かめる。Viteがビルドのときに出す一覧(`frontend/dist-meta/license.json`。`vite.config.ts`が`dist`の外へ
+  移す。`dist`に残すと`tauri build`が画面の資産として埋め込むため)の
   SPDXの式を読み、許容外か、ライセンスの無いパッケージがあれば失敗する。ライセンスファイルを持たない
   パッケージも、著作権者の名前を載せられないので失敗にする。CIはフロントエンドのビルドの後に
   走らせる(`assemble-dist.mjs --check-frontend-licenses`)
@@ -173,7 +182,9 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
    (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
 8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> --title "SCITL <版>" --notes-file <ノート>`。
    リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
-   READMEに書くまでの間は次も書く
+   READMEに書くまでの間は次も書く(配布物の`README.txt`(`scripts/dist-README.txt`)にも同じことを書いてある。変えるときは両方を直す。
+   求めるglibcの版もそこに書いてあるので、ビルドする環境を変えたら直す)
+   - Windowsの実行ファイルにコード署名が無く、初回の起動でSmartScreenの警告が出ること
    - Linuxは`libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)が要ること、求めるglibcの版(4節)
    - データは展開したフォルダの`data`に置かれること。版を上げるときは、古いフォルダの`data`を
      新しいフォルダへ移すこと

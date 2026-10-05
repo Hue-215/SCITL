@@ -1,3 +1,17 @@
+Noto Sans JP (NotoSansJP-Regular.woff2, NotoSansJP-Medium.woff2)
+© 2014-2021 Adobe (http://www.adobe.com/).
+
+Noto Serif JP (NotoSerifJP-Regular.woff2, NotoSerifJP-Bold.woff2)
+© 2017-2024 Adobe (http://www.adobe.com/).
+
+Noto is a trademark of Google Inc.
+
+The copyright and trademark notices above are the ones recorded in the font
+files. The fonts are the Japanese subset of Noto CJK
+(https://github.com/notofonts/noto-cjk), converted to WOFF2.
+
+-----------------------------------------------------------
+
 This Font Software is licensed under the SIL Open Font License,
 Version 1.1.
 
