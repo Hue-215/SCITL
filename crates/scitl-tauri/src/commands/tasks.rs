@@ -31,9 +31,9 @@ pub async fn list_tasks(
 /// チャットを使えない間は作らずに理由を返す。
 #[tauri::command]
 pub async fn create_task(state: State<'_, AppState>) -> CommandResult<TaskCreation> {
-    // 使えるかどうかは設定だけで決まるので、推論サーバーへ問い合わせる`snapshot_for_turn`は
-    // 使わない。
-    let snapshot = state.settings.snapshot();
+    // 使えるかどうかは設定と鍵だけで決まるので、推論サーバーへ問い合わせる`snapshot_for_turn`は
+    // 使わない。鍵は読み直す(読めずにいたままだと、解錠しても送信するまで追加できない)。
+    let snapshot = state.settings.snapshot_reloading_key().await;
     Ok(orchestration::create_task(
         state.db.clone(),
         &snapshot.turn_context(&state.generating, &state.attachments, &discard_events),

@@ -89,6 +89,16 @@ async fn an_unreadable_key_fails_the_turn_and_is_reloaded_at_the_next_turn() {
     assert_eq!(settings.view().providers[0].key_error, None);
 }
 
+/// タスクの追加のように、ターンを始めずに使えるかだけを確かめる入口でも読み直す。
+#[tokio::test]
+async fn checking_availability_reloads_an_unreadable_key() {
+    let (settings, _path, _dir) = temp_settings();
+    add_local_provider(&settings, "local");
+    make_key_unavailable(&settings);
+
+    assert!(settings.snapshot_reloading_key().await.adapter.is_ok());
+}
+
 /// 鍵を読めない間も、鍵と無関係な設定は変えられ、変えたときに読み直す。
 #[test]
 fn a_settings_change_reloads_an_unreadable_key() {

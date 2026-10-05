@@ -223,6 +223,13 @@ impl Settings {
         self.snapshot()
     }
 
+    /// 鍵だけを読み直す[`Self::snapshot`]。チャットを使えるかを確かめるだけで、ターンを
+    /// 始めない入口(タスクの追加)に使う。推論サーバーへは問い合わせない。
+    pub async fn snapshot_reloading_key(&self) -> Snapshot {
+        self.reload_unavailable_key().await;
+        self.snapshot()
+    }
+
     /// 鍵を読めずにいたら、資格情報ストアから読み直してアダプタを組み立て直す。GUIは
     /// 起動したまま使い続けるので、ここで読み直さないと、設定を変えるまで直らない。
     ///
