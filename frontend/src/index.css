@@ -1428,3 +1428,21 @@ button.danger {
   gap: var(--space-1);
   color: var(--color-danger);
 }
+
+/* データフォルダを開けなかったときに、アプリの代わりに出す画面。本文は設定画面と同じく
+   --content-max-widthで頭打ちにして中央に置く。 */
+.startup-failure {
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding: var(--pane-padding) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* 場所と理由は利用者が写して調べるので、選べるようにし、長いパスは記号の途中でも折り返す。 */
+.startup-failure-detail {
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}

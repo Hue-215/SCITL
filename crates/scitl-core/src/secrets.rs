@@ -17,8 +17,8 @@ const SERVICE: &str = "scitl-task-companion";
 
 /// 保存先のエラーを、画面に出してよい文に変える。`Ambiguous`の表示文だけは保存先の
 /// 内部識別子を含むので、件数だけの文に置き換える。`NoEntry`は、設定が指す秘密情報が
-/// アプリの外で消された場合に読み出しで起きる。一時的な失敗と違い登録し直すしかないので、
-/// そう分かる文にする。
+/// この端末のストアに無い(別の端末で登録した設定をフォルダごと持ってきた、アプリの外で
+/// 消された)場合に読み出しで起きる。一時的な失敗と違い登録し直すしかないので、そう分かる文にする。
 fn store_error(e: keyring_core::Error) -> CoreError {
     match e {
         keyring_core::Error::Ambiguous(items) => CoreError::Secrets(format!(
@@ -26,7 +26,7 @@ fn store_error(e: keyring_core::Error) -> CoreError {
             items.len()
         )),
         keyring_core::Error::NoEntry => CoreError::Secrets(
-            "the secret is not in the secret store (it may have been removed outside the app)"
+            "the secret is not in the secret store on this device (it may have been registered on another device or removed outside the app)"
                 .to_string(),
         ),
         e => CoreError::Secrets(e.to_string()),

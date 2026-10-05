@@ -4,6 +4,7 @@ pub mod export;
 pub mod link;
 pub mod mcp;
 pub mod settings;
+pub mod startup;
 pub mod tasks;
 
 use std::sync::Arc;

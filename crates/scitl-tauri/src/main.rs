@@ -10,7 +10,7 @@ use scitl_core::attachments::{AttachmentStore, Attachments, DropNotice};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::SharedConnection;
 use scitl_core::in_flight::InFlightSet;
-use scitl_core::paths::{self, DataLayout};
+use scitl_core::paths::{self, DataDirError, DataLayout};
 use scitl_core::settings::Settings;
 use tauri::ipc::Channel;
 use tauri::{DragDropEvent, Manager, WindowEvent};
@@ -30,6 +30,10 @@ pub struct AppState {
     pub dropped: Mutex<Option<Channel<DropNotice>>>,
 }
 
+/// データディレクトリを開けなかった理由。このときは`AppState`を置かず、画面はこれだけを表示する
+/// (`commands::startup::get_startup_failure`)。
+pub struct StartupFailure(pub DataDirError);
+
 fn main() {
     let builder = tauri::Builder::default();
     // 2つ目の起動を、DBと設定を開く`setup`より前にここで終わらせる。そのため他の
@@ -44,24 +48,14 @@ fn main() {
     builder
         .plugin(navigation::guard())
         .setup(|app| {
-            let data = DataLayout::new(paths::default_data_dir()?);
-            paths::create_private_dir(data.root())?;
-            let conn = scitl_core::db::open(data.database())?;
-
-            let settings = Settings::load(data.config());
-            let attachments = Arc::new(Attachments::new(AttachmentStore::new(
-                data.attachments(),
-                paths::revealed_attachments(&paths::default_cache_dir()?),
-            )));
-
-            app.manage(AppState {
-                db: Arc::new(Mutex::new(conn)),
-                settings: Arc::new(settings),
-                generating: InFlightSet::new(),
-                attachments,
-                export_dir: data.export(),
-                dropped: Mutex::new(None),
-            });
+            let revealed = paths::revealed_attachments(&paths::default_cache_dir()?);
+            match open_app_state(revealed) {
+                Ok(state) => app.manage(state),
+                Err(failure) => {
+                    scitl_core::diagnostics::report(format_args!("could not start: {failure}"));
+                    app.manage(StartupFailure(failure))
+                }
+            };
             Ok(())
         })
         // 窓に落としたファイルのパスは、OSのドロップからここへ直接届く(WebViewを通らない)。
@@ -71,6 +65,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::startup::get_startup_failure,
             commands::tasks::get_task_detail,
             commands::tasks::list_tasks,
             commands::tasks::create_task,
@@ -126,6 +121,32 @@ fn main() {
         .expect("error while running tauri application");
 }
 
+/// 実行ファイルの隣のデータディレクトリを開き、コマンド層の状態を作る。
+fn open_app_state(revealed_attachments: PathBuf) -> Result<AppState, DataDirError> {
+    let data = DataLayout::new(paths::data_dir_beside_executable()?);
+    paths::create_private_dir(data.root()).map_err(|e| DataDirError::Unusable {
+        dir: data.root().display().to_string(),
+        reason: e.to_string(),
+    })?;
+    let conn = scitl_core::db::open(data.database())
+        .map_err(|e| DataDirError::from_database(data.root(), &e))?;
+
+    let settings = Settings::load(data.config());
+    let attachments = Arc::new(Attachments::new(AttachmentStore::new(
+        data.attachments(),
+        revealed_attachments,
+    )));
+
+    Ok(AppState {
+        db: Arc::new(Mutex::new(conn)),
+        settings: Arc::new(settings),
+        generating: InFlightSet::new(),
+        attachments,
+        export_dir: data.export(),
+        dropped: Mutex::new(None),
+    })
+}
+
 /// `tauri.conf.json`で作るウィンドウのラベル。
 const MAIN_WINDOW: &str = "main";
 
@@ -162,8 +183,7 @@ fn focus_main_window(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    /// GUIとCLIが同じデータディレクトリを開くよう、coreの識別子をTauriの設定と照合する
-    /// (`scitl_core::APP_IDENTIFIER`)。
+    /// coreの識別子をTauriの設定と照合する(`scitl_core::APP_IDENTIFIER`)。
     #[test]
     fn core_identifier_matches_tauri_config() {
         let conf: serde_json::Value =
