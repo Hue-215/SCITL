@@ -85,6 +85,11 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
     "transport-streamable-http-client-reqwest",
 ] }
 
+# Windowsの配布用ビルドで、scitl-cliにVCランタイムを静的にリンクする(ビルドスクリプトだけが使う)。
+# 既定では`VCRUNTIME140.dll`(Visual C++の再頒布可能パッケージ)を求め、入っていないPCで起動できない。
+# GUIは`tauri build`が同じことをしている
+static_vcruntime = "3"
+
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"
 # 画面へ渡す型のTypeScript定義を生成する(開発時のみ。`frontend/src/bindings/`)。Rust側の型を
