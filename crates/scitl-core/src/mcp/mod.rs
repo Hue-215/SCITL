@@ -14,7 +14,7 @@
 
 mod http;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -165,7 +165,7 @@ impl McpSessions {
         server: &McpServerConfig,
     ) -> Result<Vec<McpToolInfo>, CoreError> {
         let service = self.session(server).await?;
-        list_tools_of(service).await
+        list_tools_of(service, &server.name).await
     }
 
     /// 複数のサーバーのツール一覧を、サーバーごとに並行して接続して取得する。待つのは
@@ -200,7 +200,7 @@ impl McpSessions {
                 let started = tokio::time::Instant::now();
                 let (service, listed) = match connect_with(&server, headers).await {
                     Ok(service) => {
-                        let listed = list_tools_of(&service).await;
+                        let listed = list_tools_of(&service, &server.name).await;
                         (Some(service), listed)
                     }
                     Err(e) => (None, Err(e)),
@@ -333,16 +333,27 @@ pub struct McpFailure {
 }
 
 /// 接続済みのサーバーからツール一覧を取得する。
-async fn list_tools_of(service: &ClientService) -> Result<Vec<McpToolInfo>, CoreError> {
-    tokio::time::timeout(LIST_TOOLS_TIMEOUT, list_tool_pages(service))
+/// `server_name`は診断に書くサーバーの名前。
+async fn list_tools_of(
+    service: &ClientService,
+    server_name: &str,
+) -> Result<Vec<McpToolInfo>, CoreError> {
+    tokio::time::timeout(LIST_TOOLS_TIMEOUT, list_tool_pages(service, server_name))
         .await
         .map_err(|_| CoreError::Mcp("timed out listing tools".to_string()))?
 }
 
-/// 次のページ(`nextCursor`)を辿ってツール一覧を集める。同じカーソルが続けて返る・
-/// [`MAX_TOOL_PAGES`]に達したら、それまでに取れた分で打ち切って診断に書く。
-async fn list_tool_pages(service: &ClientService) -> Result<Vec<McpToolInfo>, CoreError> {
-    let mut tools = Vec::new();
+/// 次のページ(`nextCursor`)を辿ってツール一覧を集める。前に辿ったカーソルがまた返る・
+/// [`MAX_TOOL_PAGES`]に達したら、それまでに取れた分で打ち切って診断に書く。同じ名前のツールは
+/// 最初のものだけを残す(名前は有効化の照合と呼び出しの鍵なので、2つあると画面とモデルで
+/// 別のものを指しうる)。
+async fn list_tool_pages(
+    service: &ClientService,
+    server_name: &str,
+) -> Result<Vec<McpToolInfo>, CoreError> {
+    let mut tools: Vec<McpToolInfo> = Vec::new();
+    let mut names = HashSet::new();
+    let mut seen_cursors = HashSet::new();
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_TOOL_PAGES {
         let params = cursor
@@ -354,20 +365,26 @@ async fn list_tool_pages(service: &ClientService) -> Result<Vec<McpToolInfo>, Co
                 describe_server_error(&e)
             ))
         })?;
-        tools.extend(page.tools.into_iter().map(to_tool_info));
+        tools.extend(
+            page.tools
+                .into_iter()
+                .map(to_tool_info)
+                .filter(|tool| names.insert(tool.name.clone())),
+        );
         match page.next_cursor {
             None => return Ok(tools),
-            Some(next) if cursor.as_ref() == Some(&next) => {
-                crate::diagnostics::report(
-                    "stopped listing MCP tools: the server returned the same page cursor again",
-                );
+            Some(next) if !seen_cursors.insert(next.clone()) => {
+                crate::diagnostics::report(format_args!(
+                    "stopped listing tools from MCP server '{server_name}': it returned a page \
+                     cursor it had returned before"
+                ));
                 return Ok(tools);
             }
             Some(next) => cursor = Some(next),
         }
     }
     crate::diagnostics::report(format_args!(
-        "stopped listing MCP tools after {MAX_TOOL_PAGES} pages"
+        "stopped listing tools from MCP server '{server_name}' after {MAX_TOOL_PAGES} pages"
     ));
     Ok(tools)
 }
@@ -842,12 +859,46 @@ mod tests {
         assert_eq!(names.len(), MAX_TOOL_PAGES);
     }
 
-    /// 同じカーソルが続けて返ったら、そこで打ち切る。
+    /// 前に辿ったカーソルがまた返ったら、そこで打ち切る。続けて同じものも、周回するものも。
     #[tokio::test]
-    async fn listing_stops_when_the_cursor_repeats() {
+    async fn listing_stops_when_a_cursor_comes_back() {
         let names =
             listed_names(|cursor| page(cursor.unwrap_or("first"), Some("same".to_string()))).await;
         assert_eq!(names, ["first", "same"]);
+
+        let names = listed_names(|cursor| match cursor {
+            None => page("first", Some("a".to_string())),
+            Some("a") => page("a", Some("b".to_string())),
+            _ => page("b", Some("a".to_string())),
+        })
+        .await;
+        assert_eq!(names, ["first", "a", "b"]);
+    }
+
+    /// 同じ名前のツールが複数のページに出たら、最初のものだけを残す。
+    #[tokio::test]
+    async fn a_tool_listed_twice_is_kept_once() {
+        let url = fake_server(Duration::ZERO, Duration::ZERO, |cursor| {
+            let mut listed = page("dup", cursor.is_none().then(|| "p2".to_string()));
+            listed["tools"][0]["description"] = json!(cursor.unwrap_or("first"));
+            listed
+        })
+        .await;
+        let tools = list_tools(&server_at("paged", url)).await.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].description.as_deref(), Some("first"));
+    }
+
+    /// 一覧取得のタイムアウトは、1ページごとではなく全ページの取得に掛かる。1ページずつなら
+    /// 間に合う遅さのサーバーでも、全ページでは超えて失敗する。時間を止めて進める。
+    #[tokio::test(start_paused = true)]
+    async fn the_listing_timeout_covers_all_pages() {
+        let url = fake_server(Duration::ZERO, LIST_TOOLS_TIMEOUT * 2 / 3, |cursor| {
+            page("t", cursor.is_none().then(|| "p2".to_string()))
+        })
+        .await;
+        let error = list_tools(&server_at("slow_pages", url)).await.unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error}");
     }
 
     /// サーバーごとに並行して接続するので、待つのは一番遅い1台の分で済む。結果は渡した順。

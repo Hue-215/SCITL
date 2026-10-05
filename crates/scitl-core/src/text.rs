@@ -92,7 +92,8 @@ pub fn display_label(s: &str, max: usize) -> String {
     ellipsize(&visible_line(s), max)
 }
 
-/// 外部から来た文字列を、改行を保ったまま画面に出す形にする(ツールの説明・stderr等)。
+/// 外部から来た文字列を、改行を保ったまま画面に出す形にする(ツールの説明・stderr等)。外部ツールの
+/// 説明は、この形のままモデルへも渡す(`tools::external::description_of`)。
 /// [`display_label`]との違いは、改行・タブを残し、空白を畳まないことだけ。
 /// CRLFの改行はLFにそろえる(`\r`を他の制御文字と同じく空白にすると、行末に空白が残る)。
 pub fn display_block(s: &str, max: usize) -> String {
