@@ -22,8 +22,8 @@ import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
-import { CollapseToggle } from './settingsFields'
-import { httpPlainTextHint, usePositiveIntegerInput } from './settingsInput'
+import { CollapseToggle, ServerNotice } from './settingsFields'
+import { usePositiveIntegerInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
 
@@ -92,6 +92,7 @@ export function ProvidersTab({
 
   return (
     <div className="settings-panel">
+      <ServerNotice />
       <ul className="provider-list">
         {settings.providers.map((provider) => (
           <ProviderCard
@@ -539,7 +540,7 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
 
   return (
     <form
-      className="provider-add-form settings-section-break"
+      className="settings-section settings-section-break"
       onSubmit={(e) => {
         e.preventDefault()
         if (submission.running || !name.trim() || !baseUrl.trim()) return
@@ -577,9 +578,6 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
         <span>{t('settings.provider.base_url_label')}</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
         {pathHint && <p className="settings-hint">{t(pathHint)}</p>}
-        <p className="settings-hint">
-          {httpPlainTextHint(t('settings.provider.api_key_secret'))}
-        </p>
       </label>
       <label className="settings-field">
         <span>{t('settings.provider.api_key_hint')}</span>

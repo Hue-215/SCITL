@@ -8,18 +8,16 @@ interface NumberFieldProps {
   value: number | null
   // 未設定のときに使われる値。プレースホルダに出す。
   defaultValue: number
-  hint?: string
   onSave: (value: number | null) => void
 }
 
-export function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldProps) {
+export function NumberField({ label, value, defaultValue, onSave }: NumberFieldProps) {
   const { invalid, inputProps } = usePositiveIntegerInput(value, onSave)
 
   return (
     <label className="settings-field">
       <span>{label}</span>
       <input {...inputProps} placeholder={t('settings.unset_default_hint', { value: defaultValue })} />
-      {hint && <p className="settings-hint">{hint}</p>}
       {invalid && <p className="error">{t('errors.positive_integer')}</p>}
     </label>
   )
@@ -38,5 +36,16 @@ export function CollapseToggle({ showLabel, expanded, onToggle }: CollapseToggle
     <button type="button" onClick={onToggle} aria-expanded={expanded}>
       {expanded ? t('common.collapse') : showLabel}
     </button>
+  )
+}
+
+// 通信先を登録するタブ(APIプロバイダー・外部ツール)の先頭に置く、通信先と信頼についての知らせ。
+// 1文ずつ行を分けて出す。
+export function ServerNotice() {
+  return (
+    <div>
+      <p>{t('settings.server_notice.destination')}</p>
+      <p>{t('settings.server_notice.trust')}</p>
+    </div>
   )
 }

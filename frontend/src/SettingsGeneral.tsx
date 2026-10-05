@@ -20,15 +20,13 @@ interface PromptFieldProps {
   value: string
   onChange: (value: string) => void
   onBlur: () => void
-  caption?: string
 }
 
-function PromptField({ label, value, onChange, onBlur, caption }: PromptFieldProps) {
+function PromptField({ label, value, onChange, onBlur }: PromptFieldProps) {
   return (
     <label className="settings-field">
       <span>{label}</span>
       <textarea value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} />
-      {caption && <p className="settings-hint">{caption}</p>}
     </label>
   )
 }
@@ -118,14 +116,12 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
             value={taskChatSystemPrompt}
             onChange={setTaskChatSystemPrompt}
             onBlur={() => onSave(current())}
-            caption={t('settings.general.task_chat_prompt_caption')}
           />
           <PromptField
             label={t('settings.general.task_opening_label')}
             value={taskOpeningMessage}
             onChange={setTaskOpeningMessage}
             onBlur={() => onSave(current())}
-            caption={t('settings.general.task_opening_caption')}
           />
         </div>
       </details>
@@ -160,7 +156,6 @@ function ExportSection() {
   return (
     <div className="settings-field settings-section-break">
       <span>{t('settings.general.export_label')}</span>
-      <p className="settings-hint">{t('settings.general.export_caption')}</p>
       <div className="button-row">
         <button type="button" onClick={runExport} disabled={exporting.running}>
           {exporting.running

@@ -4,8 +4,7 @@ import type { FormEvent } from 'react'
 import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import { isolated, t } from './i18n'
-import { CollapseToggle, NumberField } from './settingsFields'
-import { httpPlainTextHint } from './settingsInput'
+import { CollapseToggle, NumberField, ServerNotice } from './settingsFields'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
 
@@ -63,8 +62,7 @@ export function McpTab({
 }: McpTabProps) {
   return (
     <div className="settings-panel">
-      <p className="settings-hint">{t('settings.tools.intro')}</p>
-
+      <ServerNotice />
       <ul className="provider-list">
         {settings.mcp_servers.map((server) => (
           <McpServerCard
@@ -97,7 +95,6 @@ export function McpTab({
           label={t('settings.tools.max_rounds_label')}
           value={settings.tools.max_rounds_per_turn}
           defaultValue={settings.tools.default_max_rounds_per_turn}
-          hint={t('settings.tools.max_rounds_caption')}
           onSave={(rounds) => onSaveLimits(rounds, settings.tools.total_timeout_secs)}
         />
 
@@ -105,7 +102,6 @@ export function McpTab({
           label={t('settings.tools.timeout_label')}
           value={settings.tools.total_timeout_secs}
           defaultValue={settings.tools.default_total_timeout_secs}
-          hint={t('settings.tools.timeout_caption')}
           onSave={(secs) => onSaveLimits(settings.tools.max_rounds_per_turn, secs)}
         />
       </section>
@@ -275,7 +271,7 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
   }
 
   return (
-    <form className="provider-add-form settings-section-break" onSubmit={submit}>
+    <form className="settings-section settings-section-break" onSubmit={submit}>
       <h2>{t('settings.tools.add_server_heading')}</h2>
       <label className="settings-field">
         <span>{t('settings.tools.server_id_hint', { max: nameMaxChars })}</span>
@@ -289,20 +285,22 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
       <label className="settings-field">
         <span>{t('settings.tools.url_hint')}</span>
         <input value={url} onChange={(e) => setUrl(e.target.value)} required />
-        <p className="settings-hint">{httpPlainTextHint(t('settings.tools.header_secret'))}</p>
-        <p className="settings-hint">{t('settings.tools.stdio_bridge_hint')}</p>
       </label>
       <label className="settings-field">
         <span>{t('settings.tools.headers_hint', { sample: t('settings.tools.kv_sample') })}</span>
         <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
-        <p className="settings-hint">{t('settings.tools.secret_helper')}</p>
       </label>
 
-      {errors.map((e) => (
-        <p key={e} className="error">
-          {e}
-        </p>
-      ))}
+      {/* 入力の誤りは、欄の間隔で離さずにまとめて出す */}
+      {errors.length > 0 && (
+        <div>
+          {errors.map((e) => (
+            <p key={e} className="error">
+              {e}
+            </p>
+          ))}
+        </div>
+      )}
       {submission.error && <p className="error">{submission.error}</p>}
       <button type="submit" disabled={submission.running}>
         {submission.running ? t('common.adding') : t('common.add')}
