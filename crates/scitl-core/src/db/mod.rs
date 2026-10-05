@@ -7,7 +7,7 @@ pub mod transcripts;
 pub use rusqlite::Connection;
 use rusqlite::{Transaction, TransactionBehavior};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::error::{CoreError, Result};
@@ -212,6 +212,34 @@ fn enable_wal(conn: &Connection) -> Result<()> {
     }
 }
 
+/// WALにだけある変更を本体のファイルへ書き戻し、WALを空にする。接続を閉じずに終わる
+/// プロセス(GUI)では、SQLiteが最後の接続を閉じるときの書き戻しが走らないので、これを呼ぶ。
+/// 別プロセスが同じDBを使っていて書き戻しきれなくても、待たず、失敗にもしない
+/// (`docs/spec/data-model/tables.md`「WALから本体への書き戻し」)。
+pub fn checkpoint_wal(db: &SharedConnection) {
+    let conn = db.lock().unwrap_or_else(PoisonError::into_inner);
+    match try_checkpoint_wal(&conn) {
+        Ok(true) => {}
+        Ok(false) => crate::diagnostics::report(
+            "left changes in the WAL: another process is using the database",
+        ),
+        Err(e) => crate::diagnostics::report(format_args!("left changes in the WAL: {e}")),
+    }
+}
+
+/// WALにあった変更をすべて本体へ書き戻せたかを返す。他プロセスのロックは待たない。
+/// 読み手がいてWALを空にできなかっただけなら、書き戻せたものとする。
+fn try_checkpoint_wal(conn: &Connection) -> Result<bool> {
+    conn.busy_timeout(Duration::ZERO)?;
+    // 2列目はWALにあるページ数、3列目はそのうち書き戻せた数。数えられなかったときは-1。
+    let counts = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+        Ok((row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+    });
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    let (in_wal, written_back) = counts?;
+    Ok(in_wal >= 0 && in_wal == written_back)
+}
+
 /// DBのファイルか、それを置くディレクトリに書き込めないための失敗か。
 pub fn is_read_only_error(e: &CoreError) -> bool {
     has_error_code(e, rusqlite::ErrorCode::ReadOnly)
@@ -361,6 +389,64 @@ mod tests {
                 .unwrap();
             assert_eq!(mode, "wal");
         }
+    }
+
+    #[test]
+    fn after_a_checkpoint_the_main_file_alone_holds_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scitl.sqlite3");
+        let db: SharedConnection = Arc::new(Mutex::new(open(&path).unwrap()));
+        let task_id = tasks::create_task(&db.lock().unwrap()).unwrap().id;
+
+        checkpoint_wal(&db);
+
+        let copied = dir.path().join("copied.sqlite3");
+        std::fs::copy(&path, &copied).unwrap();
+        let copy = open(&copied).unwrap();
+        assert!(tasks::get_task(&copy, task_id).is_ok());
+        assert_eq!(std::fs::metadata(wal_of(&path)).unwrap().len(), 0);
+    }
+
+    /// 読み手が見ている時点より後の変更は、読み手が終わるまで本体へ書き戻せない。
+    #[test]
+    fn a_checkpoint_gives_up_without_waiting_while_another_process_reads_an_older_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scitl.sqlite3");
+        let conn = open(&path).unwrap();
+        let other_process = open(&path).unwrap();
+        other_process
+            .execute_batch("BEGIN; SELECT count(*) FROM tasks;")
+            .unwrap();
+        tasks::create_task(&conn).unwrap();
+
+        let started = std::time::Instant::now();
+        let finished = try_checkpoint_wal(&conn);
+
+        assert!(matches!(finished, Ok(false)), "{finished:?}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(std::fs::metadata(wal_of(&path)).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn a_reader_of_the_latest_state_does_not_keep_changes_out_of_the_main_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scitl.sqlite3");
+        let conn = open(&path).unwrap();
+        tasks::create_task(&conn).unwrap();
+        let other_process = open(&path).unwrap();
+        other_process
+            .execute_batch("BEGIN; SELECT count(*) FROM tasks;")
+            .unwrap();
+
+        let finished = try_checkpoint_wal(&conn);
+
+        assert!(matches!(finished, Ok(true)), "{finished:?}");
+    }
+
+    fn wal_of(database: &Path) -> std::path::PathBuf {
+        let mut name = database.as_os_str().to_owned();
+        name.push("-wal");
+        name.into()
     }
 
     /// 辞書順が時系列順になる固定幅の形。秒未満は書かず、UTCは`Z`で書く。
