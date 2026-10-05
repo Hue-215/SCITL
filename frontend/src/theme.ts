@@ -30,7 +30,8 @@ type DangerRoleSet = Record<string, { light: DangerRole; dark: DangerRole }>
 const DANGER_HUE = 4
 
 const ROLES = {
-  bg: { light: { saturationFactor: 0.08, lightness: 98 }, dark: { saturationFactor: 0.12, lightness: 9 } },
+  // ダークの背景は、有機ELの画面で黒の画素を消灯させるため純黒にする。
+  bg: { light: { saturationFactor: 0.08, lightness: 98 }, dark: { saturationFactor: 0, lightness: 0 } },
   // surfaceは沈んだ部品(入力欄・選択中の項目)、surfaceAltは浮いた部品(ボタン)の塗り。
   // どちらも背景(bg)との差で部品の輪郭を作り、影は奥行きの補助に留める(ui.md「塗りと奥行き」)。
   surface: { light: { saturationFactor: 0.1, lightness: 94 }, dark: { saturationFactor: 0.14, lightness: 14 } },
