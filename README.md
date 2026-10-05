@@ -7,7 +7,7 @@
 チャットでタスクの内容・締切を聞き取り、進捗の報告もチャットで行うタスク管理アプリです。
 SCITLは **S**tandalone **C**hat **I**nterface for **T**asks with **L**Ms の略です。
 
-<!-- TODO: スクリーンショット -->
+![タスクの会話の画面。進捗の報告を受けて、モデルが工程を済みにしたところ](docs/images/screenshot.png)
 
 ## 特徴
 
