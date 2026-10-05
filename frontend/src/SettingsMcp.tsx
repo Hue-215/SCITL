@@ -291,11 +291,16 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
         <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
       </label>
 
-      {errors.map((e) => (
-        <p key={e} className="error">
-          {e}
-        </p>
-      ))}
+      {/* 入力の誤りは、欄の間隔で離さずにまとめて出す */}
+      {errors.length > 0 && (
+        <div>
+          {errors.map((e) => (
+            <p key={e} className="error">
+              {e}
+            </p>
+          ))}
+        </div>
+      )}
       {submission.error && <p className="error">{submission.error}</p>}
       <button type="submit" disabled={submission.running}>
         {submission.running ? t('common.adding') : t('common.add')}
