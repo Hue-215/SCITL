@@ -1,4 +1,4 @@
-// 配布物のフォルダを組み立てる。release-build.ps1が、ビルドと検査の後に呼ぶ。
+// 配布物のフォルダを組み立てる。release-build.ps1・release-build.shが、ビルドと検査の後に呼ぶ。
 // 手順は.claude/skills/release-build/SKILL.md。
 //
 //   node scripts/assemble-dist.mjs <実行ファイル>...
@@ -9,7 +9,7 @@
 //
 //   node scripts/assemble-dist.mjs --check-licenses
 //
-// Rustのクレートの一覧を作れるかだけを確かめる(CIと、ビルドを始める前のps1が使う)。何も残さない。
+// Rustのクレートの一覧を作れるかだけを確かめる(CIと、ビルドを始める前のスクリプトが使う)。何も残さない。
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
