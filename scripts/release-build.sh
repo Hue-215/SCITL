@@ -7,17 +7,17 @@
 # `[profile.release]`に置く形に替える。`.cargo/config.toml`の`rustflags`は環境変数を
 # 展開できないので、ここで渡す。
 #
-# 続けて、CLIも同じ置き換えを付けてビルドし、AppImage・CLI・ライセンス類を`target/dist`の
-# tar.gzにまとめる。
+# 続けて、CLIも同じ置き換えを付けてビルドし、GUI・CLI・ライセンス類を`target/dist`の
+# tar.gzにまとめる。配布物は実行ファイルだけで、WebKitGTK等は利用者の環境のものを使う。
 #
-# 引数はそのまま`tauri build`に渡す。束ね方はAppImageに固定するので、`--bundles`・`--no-bundle`は
+# 引数はそのまま`tauri build`に渡す。束ねずに実行ファイルだけを作るので、`--bundles`・`--no-bundle`は
 # 受け付けない。`--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わるため)。
 set -euo pipefail
 
 for arg in "$@"; do
   case "$arg" in
     -b* | --bundles | --bundles=* | --no-bundle)
-      echo "束ね方はAppImageに固定しています。$arg を外してください" >&2
+      echo "束ねずに実行ファイルだけを作ります。$arg を外してください" >&2
       exit 2
       ;;
   esac
@@ -59,60 +59,43 @@ done
 CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; echo "${prefixes[*]}")"
 export CARGO_ENCODED_RUSTFLAGS
 
-# 前のビルドのAppImageを、今回のものと取り違えないよう先に消す(名前に版が入るので、版を
-# 変えると前のものが残る)。
-appimage_dir="$root/target/release/bundle/appimage"
-rm -rf "$appimage_dir"
-
 npm --prefix "$root/frontend" ci
 cd "$root/crates/scitl-tauri"
 npm ci
-npx tauri build --bundles appimage "$@"
+npx tauri build --no-bundle "$@"
 # `tauri build`はGUIしか作らない。配布物に入れるCLIも、同じ置き換えを付けて作る。
 cargo build --release --locked -p scitl-cli
 unset CARGO_ENCODED_RUSTFLAGS
 
-# AppImageの名前は製品名(空白を含む)から付くので、配布物の中では短い名前にする。
-appimages=("$appimage_dir"/*.AppImage)
-if [[ ${#appimages[@]} != 1 || ! -f "${appimages[0]}" ]]; then
-  echo "AppImageが1つに定まりません: ${appimages[*]}" >&2
-  exit 1
-fi
-appimage="$appimage_dir/scitl.AppImage"
-mv "${appimages[0]}" "$appimage"
-
-cli="$root/target/release/scitl-cli"
-if [[ ! -f "$cli" ]]; then
-  echo "CLIがありません: $cli(--target・CARGO_TARGET_DIRには対応していません)" >&2
-  exit 1
-fi
+binaries=("$root/target/release/scitl" "$root/target/release/scitl-cli")
+for binary in "${binaries[@]}"; do
+  if [[ ! -f "$binary" ]]; then
+    echo "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)" >&2
+    exit 1
+  fi
+done
 
 # 配布物のフォルダを組み立てる。
-name="$(node "$root/scripts/assemble-dist.mjs" "$appimage" "$cli")"
+name="$(node "$root/scripts/assemble-dist.mjs" "${binaries[@]}")"
 dist="$root/target/dist/$name"
 
-# 配布物に、置き換えたはずのパスが残っていないかを確かめる。AppImageは中を展開して、入っている
-# ファイル(GUIの実行ファイル、同梱のライブラリ、束ねる道具が作る設定ファイル)をすべて調べる。
-# シンボリックリンクはgrepが辿らないので、向き先を別に調べる。残っていれば配布物を消す。
-work="$(mktemp -d)"
-# 展開した中には書き込みを許さないディレクトリがあり得るので、許してから消す。
-trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
-(cd "$work" && "$appimage" --appimage-extract >/dev/null)
+# 組み立てた配布物に、置き換えたはずのパスが残っていないかを確かめる。残っていれば配布物を消す。
+found_list="$(mktemp)"
+trap 'rm -f "$found_list"' EXIT
 found=0
 for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root" "$root_physical"; do
   # grepは見つからないと1、読めないファイルがあると2で終わる。2は検査の漏れなので止める。
   status=0
-  LC_ALL=C grep -r -l -Z -a -F -- "$path/" "$dist" "$work/squashfs-root" >"$work/found" || status=$?
+  LC_ALL=C grep -r -l -Z -a -F -- "$path/" "$dist" >"$found_list" || status=$?
   if [[ "$status" -gt 1 ]]; then
     echo "検査できないファイルがあります(上のgrepのエラー)" >&2
     rm -rf "$dist"
     exit 1
   fi
-  find "$dist" "$work/squashfs-root" -type l -lname "$path/*" -print0 >>"$work/found"
   while IFS= read -r -d '' file; do
-    echo "絶対パスが残っています: $path/(${file#"$work/"})" >&2
+    echo "絶対パスが残っています: $path/($file)" >&2
     found=1
-  done <"$work/found"
+  done <"$found_list"
 done
 if [[ "$found" != 0 ]]; then
   rm -rf "$dist"

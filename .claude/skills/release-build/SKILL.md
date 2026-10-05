@@ -1,6 +1,6 @@
 ---
 name: release-build
-description: SCITLの配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・AppImageを入れたtar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
+description: SCITLの配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
 ---
 
 # 配布用のビルド
@@ -17,15 +17,14 @@ description: SCITLの配布用ビルドの手順(scripts/release-build.sh・rele
 | Windows | `pwsh scripts/release-build.ps1 --no-bundle`(PowerShell 7.2以降。それより古いと最初の行で止まる) |
 
 macOSは今は対象にしていない(資格情報の保存先が無い。`docs/spec/architecture/network-secrets.md`)。
-shはAppImageを作るので、Linuxでしか動かない。
+shはGNU tarのオプションを使うので、Linux向け。
 
 - 前提: Rust・Node.js(npm)と、Tauriのビルドに要るシステムの依存(CI`.github/workflows/ci.yml`の
   「システム依存を入れる」と同じ)。npmの依存(`frontend/`と`crates/scitl-tauri/`)はスクリプトが入れる。
   `cargo-about`(CIの「第三者ライセンス」と同じ版・同じコマンドで入れる)も前提にする。Windowsは
-  MSVCのツールチェーン(Rustの既定)を使う。LinuxのAppImageは、Tauriが束ねる道具(linuxdeploy)を
-  初回に取りに行くので、ネットワークが要る
-- 引数はそのまま`tauri build`に渡る。Windowsは配布物にインストーラーを使わないので`--no-bundle`を
-  付ける。Linuxは束ね方をAppImageに固定するので、`--bundles`・`--no-bundle`を渡すと止まる。
+  MSVCのツールチェーン(Rustの既定)を使う
+- 引数はそのまま`tauri build`に渡る。配布物はインストーラーを使わず実行ファイルだけなので、Windowsは
+  `--no-bundle`を付ける。Linuxはshが`--no-bundle`を付けるので、`--bundles`・`--no-bundle`を渡すと止まる。
   `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わる。検査の前に止まる)
 - `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`を設定したままだと止まる。外してから実行する。スクリプトが渡す
   `CARGO_ENCODED_RUSTFLAGS`は、ほかの場所のrustflags(`~/.cargo/config.toml`の`build.rustflags`・
@@ -76,8 +75,7 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
 ## 3. 確かめる
 
 スクリプトはビルドの後、GUIとCLIの実行ファイルの中身に3つのパスが残っていないかを調べ、残っていれば
-失敗で終わる。Linuxは、組み立てた配布物のフォルダと、AppImageを展開した中身(GUIの実行ファイル、
-同梱のライブラリ、束ねる道具が作る設定ファイル)のすべてのファイルと、シンボリックリンクの向き先を
+失敗で終わる。Linuxは、組み立てた配布物のフォルダのすべてのファイル(実行ファイルとライセンス類)を
 調べ、残っていれば配布物を消す。調べるのは実行ファイルのバイト列だけで、Tauriが圧縮して埋め込む画面の資産の中は
 見ない(今はVite側でsourcemapを出していないので、パスは入らない)。手で確かめるなら次のとおり。
 
@@ -92,8 +90,7 @@ LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていな
 スクリプトは検査の後、GUIとCLIを配布物のフォルダにまとめ、Windowsはzip、Linuxはtar.gz(実行の
 許可を保つため)にする。出来るのは`target/dist/scitl-<版>-windows-x64.zip`と
 `target/dist/scitl-<版>-linux-x64.tar.gz`。版は`Cargo.toml`の`[workspace.package]`から取る。
-LinuxのGUIは、実行ファイルではなくAppImage(`scitl.AppImage`。Tauriが付ける名前は製品名の空白を
-含むので付け替える)を入れる。それ以外の中身は同じ。tarには、持ち主をroot(`0/0`)、権限を
+Linuxの中身は、実行ファイルに拡張子が無いほかは同じ。tarには、持ち主をroot(`0/0`)、権限を
 `755`・`644`の形に揃えて記録する(そのままだと、ビルドした人のユーザー名とumaskが入る)。
 
 ```
@@ -120,17 +117,16 @@ scitl-<版>-windows-x64/
   PRごとに、同じ確認を走らせる(`assemble-dist.mjs --check-licenses`)。足してよいライセンスかは
   `docs/spec/architecture/tech-stack.md`「ライセンス」で判断する
 - cargo-aboutは、対象のOS向けにしか使わないクレートを取りに行くので、ネットワークが要る
-- AppImageは、WebKitGTK・GTKほか、ビルドした環境のライブラリを約150個同梱する(展開すると約270MB)。
-  それらのライセンスは、束ねる道具がDebianのパッケージの`copyright`ファイル(`usr/share/doc/<パッケージ>/`)
-  をAppImageの中に入れる。ただし多くはLGPL・GPLの全文を`/usr/share/common-licenses/`に任せていて、
-  その全文は入っていない。同梱するライブラリはビルドする環境(Ubuntuの版)で変わる
-- AppImageはglibcを同梱しないので、**ビルドした環境のglibcより古い環境では起動しない**。Ubuntu 26.04
-  (glibc 2.43)でビルドしたものは、Ubuntu 24.04・Debian 13・Fedora 43では同梱のWebKit・GLibの読み込みで
-  止まり、Fedora 44・Arch Linuxでは画面まで出た(2026-10、コンテナで確認)。GL・X11・fontconfig・
-  freetype・harfbuzz・fribidi等は同梱せず、利用者の環境のものを使う
-- AppImageの中身の展開・起動の確かめ方: `scitl.AppImage --appimage-extract`で`squashfs-root/`に
-  展開される。起動を試すときは、`XDG_DATA_HOME`・`XDG_CONFIG_HOME`・`XDG_CACHE_HOME`を作業用の
-  場所に向けて、利用者のデータ(`~/.local/share/net.niigo.scitl`)に触れないようにする
+- Linuxの実行ファイルは、WebKitGTK 4.1・GTK3・libsoup3・GLib等を利用者の環境から読み込む。利用者は
+  `libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)を入れておく必要がある(GTK等は依存として入る)。
+  無いと、起動時にライブラリが見つからないというエラーで止まる
+- 求めるglibcの版は、ビルドした環境で決まる。Ubuntu 26.04でビルドすると、GUIはglibc 2.39以上、CLIは
+  2.34以上(`objdump -T <実行ファイル> | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`で確かめる)
+- AppImageにしないのは、大きさ(tar.gzが約98MB。実行ファイルだけなら約22MB)、同梱したWebKit・GLibが
+  ビルドした環境のglibcを求めて古いディストリビューションで動かないこと、LGPLのライブラリを再配布する
+  ことになるため(Issue #407)
+- 起動を試すときは、`XDG_DATA_HOME`・`XDG_CONFIG_HOME`・`XDG_CACHE_HOME`を作業用の場所に向けて、
+  利用者のデータ(`~/.local/share/net.niigo.scitl`)に触れないようにする
 
 ## 5. trim-pathsが安定版に入ったら
 
