@@ -25,7 +25,8 @@ shはGNU tarのオプションを使うので、Linux向け。
   MSVCのツールチェーン(Rustの既定)を使う
 - 引数はそのまま`tauri build`に渡る。配布物はインストーラーを使わず実行ファイルだけなので、Windowsは
   `--no-bundle`を付ける。Linuxはshが`--no-bundle`を付けるので、`--bundles`・`--no-bundle`を渡すと止まる。
-  `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わる。検査の前に止まる)
+  `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わる。shは前のビルドの
+  実行ファイルを先に消すので、検査の前に止まる)
 - `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`を設定したままだと止まる。外してから実行する。スクリプトが渡す
   `CARGO_ENCODED_RUSTFLAGS`は、ほかの場所のrustflags(`~/.cargo/config.toml`の`build.rustflags`・
   `[target.*].rustflags`、`CARGO_BUILD_RUSTFLAGS`等)より優先され、それらは**黙って効かなくなる**
@@ -76,8 +77,8 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
 
 スクリプトはビルドの後、GUIとCLIの実行ファイルの中身に3つのパスが残っていないかを調べ、残っていれば
 失敗で終わる。Linuxは、組み立てた配布物のフォルダのすべてのファイル(実行ファイルとライセンス類)を
-調べ、残っていれば配布物を消す。調べるのは実行ファイルのバイト列だけで、Tauriが圧縮して埋め込む画面の資産の中は
-見ない(今はVite側でsourcemapを出していないので、パスは入らない)。手で確かめるなら次のとおり。
+調べ、残っていれば配布物を消す。ファイルのバイト列をそのまま探すので、Tauriが圧縮して埋め込む画面の資産の
+中は見ない(今はVite側でsourcemapを出していないので、パスは入らない)。手で確かめるなら次のとおり。
 
 ```sh
 LC_ALL=C grep -c -a -F "$HOME/" target/release/scitl   # 0 なら残っていない

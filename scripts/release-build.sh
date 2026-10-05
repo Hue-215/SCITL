@@ -59,6 +59,11 @@ done
 CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; echo "${prefixes[*]}")"
 export CARGO_ENCODED_RUSTFLAGS
 
+# 前のビルドの実行ファイルを、今回のものと取り違えないよう先に消す(`--target`等で出力先が
+# 変わると、前のものが残ったまま検査を通る)。
+binaries=("$root/target/release/scitl" "$root/target/release/scitl-cli")
+rm -f "${binaries[@]}"
+
 npm --prefix "$root/frontend" ci
 cd "$root/crates/scitl-tauri"
 npm ci
@@ -67,7 +72,6 @@ npx tauri build --no-bundle "$@"
 cargo build --release --locked -p scitl-cli
 unset CARGO_ENCODED_RUSTFLAGS
 
-binaries=("$root/target/release/scitl" "$root/target/release/scitl-cli")
 for binary in "${binaries[@]}"; do
   if [[ ! -f "$binary" ]]; then
     echo "検査するバイナリがありません: $binary(--target・CARGO_TARGET_DIRには対応していません)" >&2
@@ -75,13 +79,20 @@ for binary in "${binaries[@]}"; do
   fi
 done
 
-# 配布物のフォルダを組み立てる。
+# 配布物のフォルダを組み立てる。tar.gzまで作り終えずに抜けたら(検査に落ちた・中断した)、
+# 検査していないものが残らないようフォルダを消す。
 name="$(node "$root/scripts/assemble-dist.mjs" "${binaries[@]}")"
+if [[ -z "$name" ]]; then
+  echo "配布物のフォルダの名前を受け取れませんでした" >&2
+  exit 1
+fi
 dist="$root/target/dist/$name"
-
-# 組み立てた配布物に、置き換えたはずのパスが残っていないかを確かめる。残っていれば配布物を消す。
+found_list=""
+completed=""
+trap 'rm -f "$found_list"; [[ -n "$completed" ]] || rm -rf "$dist" "$dist.tar.gz"' EXIT
 found_list="$(mktemp)"
-trap 'rm -f "$found_list"' EXIT
+
+# 組み立てた配布物に、置き換えたはずのパスが残っていないかを確かめる。
 found=0
 for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root" "$root_physical"; do
   # grepは見つからないと1、読めないファイルがあると2で終わる。2は検査の漏れなので止める。
@@ -89,7 +100,6 @@ for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root
   LC_ALL=C grep -r -l -Z -a -F -- "$path/" "$dist" >"$found_list" || status=$?
   if [[ "$status" -gt 1 ]]; then
     echo "検査できないファイルがあります(上のgrepのエラー)" >&2
-    rm -rf "$dist"
     exit 1
   fi
   while IFS= read -r -d '' file; do
@@ -98,7 +108,6 @@ for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root
   done <"$found_list"
 done
 if [[ "$found" != 0 ]]; then
-  rm -rf "$dist"
   exit 1
 fi
 echo "絶対パスは残っていません: $dist"
@@ -108,4 +117,5 @@ echo "絶対パスは残っていません: $dist"
 # グループ・他人が読める形(実行の許可は、元から実行できるものとディレクトリにだけ付ける)に揃える。
 tar -C "$root/target/dist" --owner=0 --group=0 --numeric-owner --mode='u+rwX,go+rX,go-w' \
   -czf "$dist.tar.gz" "$name"
+completed=1
 echo "配布物: $dist.tar.gz"
