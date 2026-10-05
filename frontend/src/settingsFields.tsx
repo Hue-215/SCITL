@@ -8,18 +8,16 @@ interface NumberFieldProps {
   value: number | null
   // 未設定のときに使われる値。プレースホルダに出す。
   defaultValue: number
-  hint?: string
   onSave: (value: number | null) => void
 }
 
-export function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldProps) {
+export function NumberField({ label, value, defaultValue, onSave }: NumberFieldProps) {
   const { invalid, inputProps } = usePositiveIntegerInput(value, onSave)
 
   return (
     <label className="settings-field">
       <span>{label}</span>
       <input {...inputProps} placeholder={t('settings.unset_default_hint', { value: defaultValue })} />
-      {hint && <p className="settings-hint">{hint}</p>}
       {invalid && <p className="error">{t('errors.positive_integer')}</p>}
     </label>
   )

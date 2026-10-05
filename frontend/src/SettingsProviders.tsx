@@ -23,7 +23,7 @@ import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
 import { CollapseToggle } from './settingsFields'
-import { httpPlainTextHint, usePositiveIntegerInput } from './settingsInput'
+import { usePositiveIntegerInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
 
@@ -577,9 +577,6 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
         <span>{t('settings.provider.base_url_label')}</span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required />
         {pathHint && <p className="settings-hint">{t(pathHint)}</p>}
-        <p className="settings-hint">
-          {httpPlainTextHint(t('settings.provider.api_key_secret'))}
-        </p>
       </label>
       <label className="settings-field">
         <span>{t('settings.provider.api_key_hint')}</span>

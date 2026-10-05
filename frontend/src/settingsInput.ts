@@ -1,13 +1,6 @@
 // 設定画面の複数のタブが共有する入力の扱い。
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { t } from './i18n'
-
-// httpの許可範囲(crates/scitl-core/src/net.rsのclassify_host)が変わったときに
-// 片方だけ直し忘れないよう、URLを入力させる箇所で共通のヒント文を使う。
-export function httpPlainTextHint(secret: string): string {
-  return t('settings.http_warning', { secret })
-}
 
 // フォーカスを外すと自動保存する数値入力。入力中は自身のstateだけを更新し、blur時にのみ親へ
 // 確定した値を渡す。入力チェック(空欄は未設定、それ以外は1以上の整数)をこの1箇所に閉じ、
