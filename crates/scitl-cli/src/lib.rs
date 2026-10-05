@@ -22,7 +22,7 @@ use terminal::print_json;
 
 #[derive(Args)]
 pub struct DataDirArg {
-    /// Data directory to open. Defaults to the one the desktop app uses.
+    /// Data directory to open. Defaults to the `data` folder next to this executable, shared with the desktop app in the same folder.
     #[arg(long, value_name = "DIR")]
     pub data_dir: Option<PathBuf>,
 }
@@ -75,7 +75,7 @@ pub struct Session {
 }
 
 impl Session {
-    /// `data_dir`が無ければ、GUIと同じ既定の場所を開く。
+    /// `data_dir`が無ければ、実行ファイルの隣の既定の場所(同じフォルダのGUIが使う場所)を開く。
     ///
     /// 無い場所を開くと空のDBを作ってしまう。打ち間違えた`--data-dir`で黙って空の一覧を
     /// 返さないよう、ディレクトリが無ければ断る。既定の場所もGUIを一度起動するまでは無いが、
@@ -86,7 +86,7 @@ impl Session {
     pub fn open(arg: DataDirArg) -> Result<Self, CliError> {
         let data = DataLayout::new(match arg.data_dir {
             Some(dir) => dir,
-            None => paths::default_data_dir()?,
+            None => paths::data_dir_beside_executable()?,
         });
         let root = data.root();
         if !root.is_dir() {
@@ -155,7 +155,7 @@ pub async fn run_chat(session: &Session, command: ChatCommand) -> Result<(), Cli
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error("{0}; pass --data-dir")]
-    NoDataDir(#[from] paths::NoAppDir),
+    NoDataDir(#[from] paths::DataDirError),
     #[error("data directory {} does not exist", .0.display())]
     MissingDataDir(PathBuf),
     #[error("data directory {} is not a directory", .0.display())]

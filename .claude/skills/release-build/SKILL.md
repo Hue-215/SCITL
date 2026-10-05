@@ -126,8 +126,10 @@ scitl-<版>-windows-x64/
 - AppImageにしないのは、大きさ(tar.gzが約98MB。実行ファイルだけなら約22MB)、同梱したWebKit・GLibが
   ビルドした環境のglibcを求めて古いディストリビューションで動かないこと、LGPLのライブラリを再配布する
   ことになるため(Issue #407)
-- 起動を試すときは、`XDG_DATA_HOME`・`XDG_CONFIG_HOME`・`XDG_CACHE_HOME`を作業用の場所に向けて、
-  利用者のデータ(`~/.local/share/net.niigo.scitl`)に触れないようにする
+- 起動を試すときは、展開したフォルダの`data`にデータが書かれる(`docs/spec/data-model/tables.md`
+  「データディレクトリの場所」)。一時ディレクトリの中では起動を断るので、`target/`の下などに展開する。
+  WebViewのプロファイルはOSごとのアプリの場所に書かれるので、それも分けるなら`XDG_DATA_HOME`・
+  `XDG_CACHE_HOME`を作業用の場所に向ける
 
 ## 5. trim-pathsが安定版に入ったら
 

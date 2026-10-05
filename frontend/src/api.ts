@@ -6,6 +6,7 @@ import type {
   Capability,
   Chat,
   ChatModelsView,
+  DataDirError,
   DropNotice,
   ExportSummary,
   Language,
@@ -180,6 +181,11 @@ export function deleteChatMessage(chat: Chat, messageId: number): Promise<void> 
 
 export function getSettings(): Promise<SettingsView> {
   return invoke('get_settings')
+}
+
+// 起動時にデータフォルダを開けなかった理由。開けていればnull。このときは他のコマンドを呼ばない。
+export function getStartupFailure(): Promise<DataDirError | null> {
+  return invoke('get_startup_failure')
 }
 
 // 起動時に1度だけ読む(切り替えは再起動で反映する)。

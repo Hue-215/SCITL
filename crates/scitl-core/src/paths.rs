@@ -5,17 +5,63 @@ use std::path::{Path, PathBuf};
 
 use crate::APP_IDENTIFIER;
 
-/// OSがアプリのデータ・キャッシュの置き場所を持たない。
+/// OSがアプリのキャッシュの置き場所を持たない。
 #[derive(Debug, thiserror::Error)]
-#[error("this OS has no directory for application data")]
+#[error("this OS has no directory for application cache")]
 pub struct NoAppDir;
 
-/// 既定のデータディレクトリ。Tauriの`app_data_dir`と同じく、OSごとの場所(`dirs::data_dir`)に
-/// 識別子を繋ぐ。
-pub fn default_data_dir() -> Result<PathBuf, NoAppDir> {
-    dirs::data_dir()
-        .map(|dir| dir.join(APP_IDENTIFIER))
-        .ok_or(NoAppDir)
+/// 実行ファイルのフォルダの中の、データディレクトリの名前。
+const DATA_DIR_NAME: &str = "data";
+
+/// データディレクトリを決められない・使えない理由。GUIは起動時に開けなかった理由として
+/// 画面へ渡し、画面は種類で文言を選ぶ。パスは利用者が置き場所を直すのに要るので載せる。
+#[derive(Debug, Clone, serde::Serialize, thiserror::Error)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DataDirError {
+    /// 実行ファイルの場所が分からない。
+    #[error("could not locate this executable: {reason}")]
+    NoExecutable { reason: String },
+    /// 実行ファイルが一時ディレクトリの中にある(アーカイブを展開せずに中から起動した等)。
+    /// そこに書いたデータは消されうるので使わない。
+    #[error(
+        "this executable is in a temporary directory ({dir}); extract it to a permanent location"
+    )]
+    TemporaryDir { dir: String },
+    /// データディレクトリを作れない・開けない(書き込めない場所に置いた等)。
+    #[error("could not open the data directory {dir}: {reason}")]
+    Unusable { dir: String, reason: String },
+}
+
+/// 既定のデータディレクトリ。実行ファイルと同じフォルダの`data`で、フォルダごと持ち運べる。
+/// GUIとCLIは同じフォルダに置くので、同じデータを開く。
+pub fn data_dir_beside_executable() -> Result<PathBuf, DataDirError> {
+    let exe = std::env::current_exe().map_err(|e| DataDirError::NoExecutable {
+        reason: e.to_string(),
+    })?;
+    data_dir_beside(&exe, &std::env::temp_dir())
+}
+
+fn data_dir_beside(exe: &Path, temp_dir: &Path) -> Result<PathBuf, DataDirError> {
+    let dir = exe.parent().ok_or_else(|| DataDirError::NoExecutable {
+        reason: "the executable has no parent directory".to_string(),
+    })?;
+    if is_within(dir, temp_dir) {
+        return Err(DataDirError::TemporaryDir {
+            dir: dir.display().to_string(),
+        });
+    }
+    Ok(dir.join(DATA_DIR_NAME))
+}
+
+/// `dir`が`temp_dir`の中にあるか。どちらもリンクと短い形の名前(Windowsの8.3形式)を
+/// 解決してから比べる。解決できなければ中に無いものとする。一時ディレクトリがルートなら
+/// すべてが中に入るので、中に無いものとする。
+fn is_within(dir: &Path, temp_dir: &Path) -> bool {
+    match (dir.canonicalize(), temp_dir.canonicalize()) {
+        (Ok(dir), Ok(temp_dir)) => temp_dir.parent().is_some() && dir.starts_with(temp_dir),
+        _ => false,
+    }
 }
 
 /// 既定のキャッシュディレクトリ。Tauriの`app_cache_dir`と同じ決め方。
@@ -61,8 +107,8 @@ impl DataLayout {
 
 /// アプリのデータを置くディレクトリを作る。Unixでは持ち主だけが入れる権限(0700)にし、
 /// 既にあれば権限をそれに揃える(会話や添付を、同じマシンの他のアカウントに読ませないため)。
-/// 親のディレクトリは通常の権限で作り、変えない。Windowsはユーザーごとの`AppData`が初めから
-/// 本人だけのものなので、作るだけにする。
+/// 親のディレクトリは通常の権限で作り、変えない。Windowsでは作るだけにし、権限は置いた
+/// 場所のものを引き継ぐ。
 ///
 /// 同じ名前のディレクトリでないものがあれば失敗にする。既にあるディレクトリの権限を変えられない
 /// (権限を持たないファイルシステム、持ち主が別のディレクトリ等)ときは、診断に書いて先へ進む。
@@ -131,5 +177,41 @@ mod tests {
 
         assert!(create_private_dir(&file).is_err());
         assert_eq!(mode(&file), mode_before);
+    }
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    #[test]
+    fn data_dir_is_beside_the_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        let elsewhere = temp.path().join("tmp");
+        std::fs::create_dir(&app).unwrap();
+        std::fs::create_dir(&elsewhere).unwrap();
+
+        let dir = data_dir_beside(&app.join("scitl"), &elsewhere).unwrap();
+        assert_eq!(dir, app.join("data"));
+    }
+
+    #[test]
+    fn an_executable_in_the_temporary_directory_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let extracted = temp.path().join("Temp1_scitl.zip").join("scitl");
+        std::fs::create_dir_all(&extracted).unwrap();
+
+        let result = data_dir_beside(&extracted.join("scitl.exe"), temp.path());
+        assert!(matches!(result, Err(DataDirError::TemporaryDir { .. })));
+    }
+
+    /// 一時ディレクトリがルートを指していても、すべてを断らない。
+    #[test]
+    fn a_temporary_directory_at_the_root_refuses_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().ancestors().last().unwrap();
+
+        assert!(data_dir_beside(&temp.path().join("scitl"), root).is_ok());
     }
 }
