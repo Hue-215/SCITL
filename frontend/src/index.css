@@ -869,6 +869,8 @@ option {
 /* ツール呼び出し1件の1行。枠を持たず、名前と引数の要約を等幅で並べる。summaryは既定の
    list-itemのままにして開閉の印を残し、行内の間隔はmarginで持つ。 */
 .tool-call {
+  /* 操作の記録の行(.entry-toolの中)でも、押せる範囲を文字の幅に留める。 */
+  align-self: flex-start;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   max-width: 100%;

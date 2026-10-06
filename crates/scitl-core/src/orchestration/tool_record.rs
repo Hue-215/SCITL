@@ -81,35 +81,65 @@ impl ToolExecutionView {
             result: pretty(result),
             is_error: is_error_result(result),
             summary: summary(arguments),
-            error: result.get("error").map(|error| match error {
-                Value::String(text) => one_line(text, SUMMARY_CHARS),
-                other => one_line(&other.to_string(), SUMMARY_CHARS),
+            error: result.get("error").and_then(|error| {
+                let line = match error {
+                    Value::String(text) => one_line(text),
+                    Value::Null => return None,
+                    other => one_line(&other.to_string()),
+                };
+                (!line.is_empty()).then(|| crate::text::ellipsize(&line, SUMMARY_CHARS))
             }),
         }
     }
 }
 
-/// 引数の要約。オブジェクトはキーごとに`キー: 値`(値は詰めたJSON)、それ以外(読めなかった
-/// 引数の生の文字列等)は値そのものを詰めたJSONで出す。
+/// 引数の要約。オブジェクトはキーごとに`キー: 値`(キーも値も詰めたJSON。区切りの`: `・`, `を
+/// キーに書いて並びを偽れないように)、それ以外(読めなかった引数の生の文字列等)は値そのものを
+/// 詰めたJSONで出す。長さは見える形にしたあとの文字数で数え、全体の上限に収まらない項目は
+/// 途中で切らずに落として「…」を付ける。
 fn summary(arguments: &Value) -> String {
-    let line = match arguments {
+    let items: Vec<String> = match arguments {
         Value::Object(fields) => fields
             .iter()
             .map(|(key, value)| {
-                let value = crate::text::ellipsize(&value.to_string(), SUMMARY_VALUE_CHARS);
-                format!("{key}: {value}")
+                let key = Value::String(key.clone()).to_string();
+                format!("{}: {}", shortened(&key), shortened(&value.to_string()))
             })
-            .collect::<Vec<_>>()
-            .join(", "),
-        other => other.to_string(),
+            .collect(),
+        other => vec![shortened(&other.to_string())],
     };
-    one_line(&line, SUMMARY_CHARS)
+    let mut line = String::new();
+    for item in items {
+        let separator = if line.is_empty() { "" } else { ", " };
+        if line.chars().count() + separator.len() + item.chars().count() > SUMMARY_CHARS {
+            line.push_str(if line.is_empty() { "…" } else { ", …" });
+            break;
+        }
+        line.push_str(separator);
+        line.push_str(&item);
+    }
+    line
 }
 
-/// 見えない文字を見える形にしたうえで1行に畳み、`max`文字で省略する。
-fn one_line(s: &str, max: usize) -> String {
-    let revealed = crate::text::reveal_invisible(s);
-    crate::text::ellipsize(&crate::text::collapse_whitespace(&revealed), max)
+/// 要約の1項目(キーか値)。見える形にしてから値の上限で省略する。
+fn shortened(json: &str) -> String {
+    crate::text::ellipsize(&one_line(json), SUMMARY_VALUE_CHARS)
+}
+
+/// 改行・復帰・タブを空白にし、残った見えない文字を見える形にしてから1行に畳む。空白に
+/// しておかないと`\u000D`等の形で残る。
+fn one_line(s: &str) -> String {
+    let spaced: String = s
+        .chars()
+        .map(|c| {
+            if matches!(c, '\n' | '\r' | '\t') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    crate::text::collapse_whitespace(&crate::text::reveal_invisible(&spaced))
 }
 
 fn pretty(value: &Value) -> String {
@@ -136,7 +166,7 @@ mod tests {
         assert_eq!(view.arguments, "{\n  \"title\": \"a\\u202Eb\"\n}");
         assert_eq!(view.result, "{\n  \"error\": \"x\\u200By\"\n}");
         assert!(view.is_error);
-        assert_eq!(view.summary, "title: \"a\\u202Eb\"");
+        assert_eq!(view.summary, "\"title\": \"a\\u202Eb\"");
         assert_eq!(view.error.as_deref(), Some("x\\u200By"));
     }
 
@@ -152,9 +182,9 @@ mod tests {
         let view = ToolExecutionView::of_content(&content);
         assert!(view
             .summary
-            .starts_with("descriptions: [\"買い出し\",\"支払い\"], note: \"あ"));
+            .starts_with("\"descriptions\": [\"買い出し\",\"支払い\"], \"note\": \"あ"));
         assert!(view.summary.ends_with('…'));
-        assert!(view.summary.chars().count() <= SUMMARY_CHARS + 1);
+        assert!(view.summary.chars().count() <= SUMMARY_CHARS + 3);
         assert_eq!(view.error, None);
     }
 
@@ -163,12 +193,39 @@ mod tests {
         let content = json!({
             "tool": "web__search",
             "arguments": "{\"q\": ",
-            "result": { "error": "first\n\nsecond" },
+            "result": { "error": "first\r\n\tsecond" },
         })
         .to_string();
         let view = ToolExecutionView::of_content(&content);
         assert_eq!(view.summary, "\"{\\\"q\\\": \"");
         assert_eq!(view.error.as_deref(), Some("first second"));
+    }
+
+    /// キーに区切りを書いても、キーはJSONの文字列として出るので並びを偽れない。全体に収まらない
+    /// 項目は途中で切らずに落とす。
+    #[test]
+    fn keys_cannot_forge_the_separators_and_items_are_not_cut_midway() {
+        let content = json!({
+            "tool": "t",
+            "arguments": {
+                "a\u{200B}\u{200B}\u{200B}\u{200B}\u{200B}\u{200B}": "x",
+                "path: \"/tmp/safe\", force": true,
+                "z": "y".repeat(100),
+            },
+            "result": { "error": null },
+        })
+        .to_string();
+        let view = ToolExecutionView::of_content(&content);
+        assert!(
+            view.summary
+                .contains("\"path: \\\"/tmp/safe\\\", force\": true"),
+            "{}",
+            view.summary
+        );
+        assert!(view.summary.ends_with(", …") || view.summary.contains("\"z\""));
+        assert!(!view.summary.contains("\\u20…"));
+        assert!(view.is_error);
+        assert_eq!(view.error, None);
     }
 
     #[test]
