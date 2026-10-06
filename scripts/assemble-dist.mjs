@@ -3,7 +3,7 @@
 //
 //   node scripts/assemble-dist.mjs <実行ファイル>...
 //
-// `target/dist/scitl-<版>-<OS>-<CPU>/`を作り直し、渡された実行ファイル、利用者向けの案内(README.txt)、
+// `target/dist/scitl-<版>-<OS>-<CPU>/`を作り直し、渡された実行ファイル、このリポジトリのREADME.md、
 // このリポジトリのLICENSE、第三者ライセンスの一覧(THIRD-PARTY-LICENSES/)を入れて、フォルダの名前を標準出力に書く
 // (名前はASCIIだけなので、呼び出し側の文字コードに左右されない)。圧縮は呼び出し側が行う。
 //
@@ -347,7 +347,7 @@ const dist = join(root, 'target', 'dist', name)
 // 前の配布物を消す前に、要るものが揃っているかを確かめる(一覧の生成もここで済ませる)。
 const copies = [
   ...args.map((binary) => [binary, basename(binary)]),
-  [join(root, 'scripts', 'dist-README.txt'), 'README.txt'],
+  [join(root, 'README.md'), 'README.md'],
   [join(root, 'LICENSE'), 'LICENSE'],
   // 同梱フォント。
   [join(root, 'frontend', 'public', 'fonts', 'NotoJP-LICENSE.txt'), join('THIRD-PARTY-LICENSES', 'NotoJP-LICENSE.txt')],
