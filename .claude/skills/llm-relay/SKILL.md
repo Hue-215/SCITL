@@ -138,7 +138,9 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
   - `task_created`: 作られたタスク(`task create`のみ、最初の行)
   - `response`: モデルの応答の途中経過。`event.type`が`reasoning_delta`・`text_delta`・`tool_call`・`done`
   - `tool_executed`: アプリがツールを実行した結果
-  - `last_message`: 最後の行。会話の最後の発言
+  - `last_message`: 最後の行。会話の最後の発言。返信(アシスタント発言・エラー発言)の中身は`parts`に起きた順で
+    入る(`type`が`reasoning`・`text`・`tool`)。アシスタント発言の`content`は空なので、本文は`parts`の`text`を読む。
+    ターンの中で実行したツールも、独立した発言ではなく`parts`の`tool`として入る(`chat show`も同じ)
 - **ターンの失敗は終了コード0**で、エラー発言として保存される。`last_message`の`message.role`が`"error"`になり、
   `error_kind`(`rate_limit`・`no_provider`等)と`error_detail`が入る
 - コマンド自体の失敗(存在しないID等)は終了コード1で、標準エラーに`error: …`を出す

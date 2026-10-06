@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use scitl_core::attachments::{AttachmentStore, Attachments, StageOutcome};
 use scitl_core::config::{ApiFormat, McpEndpoint, McpServerConfig, ReasoningEffort};
-use scitl_core::db::messages::{Chat, Kind, Role};
+use scitl_core::db::messages::{Chat, Kind, ReplyPart, Role};
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
@@ -16,7 +16,7 @@ use scitl_core::llm::{
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     create_task, delete_message, discard_events, edit_user_message, generate_reply, lacks_reply,
-    open_task_chat, preview_request, retry_reply, run_turn, stop_response, McpAccess,
+    open_task_chat, preview_request, retry_reply, run_turn, stop_response, McpAccess, PartView,
     PreviewOptions, SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure,
     UserInput,
 };
@@ -514,10 +514,30 @@ fn recording(sink: &Mutex<Vec<TurnEvent>>) -> impl Fn(TurnEvent) + Send + Sync +
 }
 
 /// 保存された返信(ターンの最終行)の本文。
-fn reply_of(messages: &[db::messages::Message]) -> &str {
+fn reply_of(messages: &[db::messages::Message]) -> String {
     let last = messages.last().unwrap();
     assert_eq!(last.role, Role::Assistant);
-    &last.content
+    text_of(last)
+}
+
+/// 行の本文。ターンの返信の行は中身の本文をラウンドの順に空行でつなぐ。
+fn text_of(message: &db::messages::Message) -> String {
+    if message.role == Role::User || message.kind == Kind::ToolExecution {
+        return message.content.clone();
+    }
+    texts_of(message).join("\n\n")
+}
+
+/// ターンの返信の行の中身のうち、本文だけをラウンドの順に。
+fn texts_of(message: &db::messages::Message) -> Vec<&str> {
+    message
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            ReplyPart::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// アダプタだけを差し替えた文脈。
@@ -812,18 +832,25 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
         vec!["tool_call", "done", "tool_executed", "text_delta", "done"]
     );
 
-    // 知らせた表示は、保存した行を会話の一覧で読んだときと同じ。
+    // 知らせた表示は、保存した記録を会話の一覧(返信の中身)で読んだときと同じ。
     let views =
         scitl_core::orchestration::list_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    assert!(views.iter().all(|v| v.message.kind != Kind::ToolExecution));
     let saved = views
+        .last()
+        .unwrap()
+        .parts
         .iter()
-        .find(|v| v.message.kind == Kind::ToolExecution)
+        .find_map(|p| match p {
+            PartView::Tool { id, execution, .. } => Some((*id, execution)),
+            _ => None,
+        })
         .unwrap();
     let executed = &events[2];
-    assert_eq!(executed["id"], saved.message.id);
+    assert_eq!(executed["id"], saved.0);
     assert_eq!(
         executed["execution"],
-        serde_json::to_value(saved.tool_execution.as_ref().unwrap()).unwrap()
+        serde_json::to_value(saved.1).unwrap()
     );
 }
 
@@ -1243,7 +1270,80 @@ async fn text_written_alongside_tool_calls_is_kept_in_the_reply() {
             ("assistant", "normal"),
         ]
     );
-    assert_eq!(messages[2].content, "工程を追加しますね\n\n追加しました");
+    assert_eq!(text_of(&messages[2]), "工程を追加しますね\n\n追加しました");
+    let text = |round, text: &str| ReplyPart::Text {
+        round,
+        text: text.to_string(),
+    };
+    assert_eq!(
+        messages[2].parts,
+        vec![
+            text(1, "工程を追加しますね"),
+            ReplyPart::Tool {
+                round: 1,
+                record: messages[1].id
+            },
+            text(2, "追加しました"),
+        ]
+    );
+}
+
+/// 送った形の保存が無いターンも、ラウンドごとの本文と呼び出しを起きた順に送る。
+#[tokio::test]
+async fn a_turn_without_its_saved_form_is_sent_round_by_round() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let chat = Chat::Task(task_id);
+    let narrating = narrates_a_tool_call(Some("追加しました"));
+    run_turn(
+        db.clone(),
+        &context(&narrating),
+        chat,
+        "工程を追加して".to_string(),
+    )
+    .await
+    .unwrap();
+    db.lock()
+        .unwrap()
+        .execute("DELETE FROM turn_transcripts", [])
+        .unwrap();
+
+    let next = ScriptedAdapter::texts(&["はい"]);
+    run_turn(db.clone(), &context(&next), chat, "ありがとう".to_string())
+        .await
+        .unwrap();
+
+    let sent = &next.sent_messages()[0];
+    let replayed: Vec<_> = sent
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+                ..
+            } => Some((
+                content.clone(),
+                tool_calls
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            ChatMessage::Tool { .. } => Some((Some("(result)".to_string()), Vec::new())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        replayed,
+        vec![
+            (
+                Some("工程を追加しますね".to_string()),
+                vec!["add_steps".to_string()]
+            ),
+            (Some("(result)".to_string()), Vec::new()),
+            (Some("追加しました".to_string()), Vec::new()),
+        ]
+    );
 }
 
 /// 最後のラウンドが本文を返さなくても、それまでに書いた本文があれば空応答ではない。
@@ -1252,7 +1352,7 @@ async fn earlier_text_counts_as_the_reply_when_the_last_round_is_empty() {
     let messages = run_narrating_turn(None).await;
     let last = messages.last().unwrap();
     assert_eq!(last.role, Role::Assistant);
-    assert_eq!(last.content, "工程を追加しますね");
+    assert_eq!(text_of(last), "工程を追加しますね");
 }
 
 /// LLM呼び出しの失敗はErrで落とさず、エラー発言として保存される。
@@ -1388,10 +1488,14 @@ async fn a_turn_that_fails_after_a_tool_round_keeps_the_text_it_received() {
         messages.into_iter().last().unwrap()
     };
     assert_eq!(error_message.role, Role::Error);
-    assert_eq!(
-        error_message.partial_reply.as_deref(),
-        Some("工程を足します")
-    );
+    assert_eq!(texts_of(&error_message), ["工程を足します"]);
+    assert!(matches!(
+        error_message.parts.as_slice(),
+        [
+            ReplyPart::Text { round: 1, .. },
+            ReplyPart::Tool { round: 1, .. }
+        ]
+    ));
 
     let next = ScriptedAdapter::texts(&["はい"]);
     run_turn(
@@ -1437,10 +1541,19 @@ async fn stopping_between_tool_calls_keeps_the_text_of_that_round() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, chat).unwrap();
-    assert_eq!(
-        stopped_reply(&messages).partial_reply.as_deref(),
-        Some("工程を足します")
-    );
+    // 止める前に実行した呼び出しも、ターンの中身に残る。
+    let stopped = stopped_reply(&messages);
+    assert_eq!(texts_of(stopped), ["工程を足します"]);
+    let tools = stopped
+        .parts
+        .iter()
+        .filter(|p| matches!(p, ReplyPart::Tool { round: 1, .. }))
+        .count();
+    let executed = messages
+        .iter()
+        .filter(|m| m.kind == Kind::ToolExecution)
+        .count();
+    assert_eq!(tools, executed);
 }
 
 /// 本文を流している途中で失敗したラウンドの本文は、断片なので残さない。
@@ -1484,7 +1597,7 @@ async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
     let messages = db::messages::list_for_chat(&conn, chat).unwrap();
     let last = messages.last().unwrap();
     assert_eq!(last.role, Role::Error);
-    assert_eq!(last.partial_reply, None);
+    assert!(texts_of(last).is_empty());
 }
 
 /// 最初のラウンドで失敗したターンには、残す本文が無い。
@@ -1505,7 +1618,7 @@ async fn a_turn_that_fails_at_once_keeps_no_text() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    assert_eq!(messages.last().unwrap().partial_reply, None);
+    assert!(texts_of(messages.last().unwrap()).is_empty());
 }
 
 /// 上限のあとの最後の呼び出し(ツールを渡さない)でもツールを呼んできたら、実行せずに
@@ -1633,6 +1746,11 @@ async fn run_turn_stops_before_the_next_tool_call_once_the_budget_is_used_up() {
     assert_eq!(error_message.error_kind.as_deref(), Some("tool_timeout"));
     // 1回目は最後まで走る(途中で打ち切らないので、実行記録が必ず残る)。
     assert_eq!(tool_execution_count(&messages), 1);
+    // 打ち切ったターンの中身にも、実行した呼び出しが残る。
+    assert!(matches!(
+        error_message.parts.as_slice(),
+        [ReplyPart::Tool { round: 1, .. }]
+    ));
 }
 
 fn tool_execution_count(messages: &[db::messages::Message]) -> usize {
@@ -1857,7 +1975,7 @@ async fn edit_user_message_truncates_and_regenerates() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    let contents: Vec<_> = messages.iter().map(text_of).collect();
     assert_eq!(contents, vec!["編集後の質問", "応答B"]);
 
     // 旧ユーザー発言は物理削除ではなく論理削除(deleted_atが立つだけ)。
@@ -1912,7 +2030,7 @@ async fn failed_edit_leaves_the_conversation_untouched() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    let contents: Vec<_> = messages.iter().map(text_of).collect();
     assert_eq!(contents, vec!["元の質問", "応答A"]);
 }
 
@@ -1968,7 +2086,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    let contents: Vec<_> = messages.iter().map(text_of).collect();
 
     // 編集後の発言は「応答A」の直後、つまり編集前と同じ位置。破棄されたターンの
     // ツール実行記録が間に挟まらない(これが挟まると新規送信と見分けが付かなくなる)。
@@ -1989,7 +2107,7 @@ async fn editing_a_turn_that_ran_tools_keeps_the_message_in_place() {
     assert_eq!(tool_rows, 1);
 }
 
-/// 思考(reasoning)は該当する行の`reasoning`列に保存され、モデルへの再送信には
+/// 思考(reasoning)は返信の行の中身に、ラウンドの順で保存され、モデルへの再送信には
 /// 一切含まれないことを検証する。
 #[tokio::test]
 async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
@@ -2009,16 +2127,25 @@ async fn run_turn_persists_reasoning_per_row_without_sending_it_back() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let by_kind: Vec<_> = messages
+    let record = messages
         .iter()
-        .map(|m| (m.role.as_str(), m.kind.as_str(), m.reasoning.as_deref()))
-        .collect();
+        .find(|m| m.kind == Kind::ToolExecution)
+        .unwrap()
+        .id;
+    let reasoning = |round: u32, text: &str| ReplyPart::Reasoning {
+        round,
+        text: text.to_string(),
+    };
     assert_eq!(
-        by_kind,
+        messages.last().unwrap().parts,
         vec![
-            ("user", "normal", None),
-            ("tool", "tool_execution", Some("工程を追加すべきか考える")),
-            ("assistant", "normal", Some("結果を報告する文面を考える")),
+            reasoning(1, "工程を追加すべきか考える"),
+            ReplyPart::Tool { round: 1, record },
+            reasoning(2, "結果を報告する文面を考える"),
+            ReplyPart::Text {
+                round: 2,
+                text: "工程を追加しました".to_string(),
+            },
         ]
     );
 
@@ -2117,7 +2244,7 @@ async fn retry_reply_keeps_turn_id_and_increments_attempt_no() {
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, Role::User);
-    assert_eq!(messages[1].content, "応答B");
+    assert_eq!(text_of(&messages[1]), "応答B");
     assert_eq!(
         messages[1].turn_id.as_deref(),
         Some(original_turn_id.as_str())
@@ -3039,7 +3166,7 @@ async fn generating_a_reply_answers_a_conversation_left_without_one() {
     let messages = db::messages::list_for_chat(&conn, chat).unwrap();
     let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
     assert_eq!(roles, vec!["user", "assistant"]);
-    assert_eq!(messages[1].content, "お待たせしました");
+    assert_eq!(text_of(&messages[1]), "お待たせしました");
     assert_ne!(messages[1].turn_id.as_deref(), Some(old_turn.as_str()));
     assert!(!lacks_reply(&conn, chat).unwrap());
 }
@@ -3208,7 +3335,7 @@ async fn retry_reply_replaces_an_error_reply_within_the_same_turn() {
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
     let roles: Vec<_> = messages.iter().map(|m| m.role.as_str()).collect();
     assert_eq!(roles, vec!["user", "assistant"]);
-    assert_eq!(messages[1].content, "応答B");
+    assert_eq!(text_of(&messages[1]), "応答B");
     assert_eq!(
         messages[1].turn_id.as_deref(),
         Some(original_turn_id.as_str())
@@ -3375,7 +3502,7 @@ async fn delete_message_removes_an_error_reply() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    let contents: Vec<_> = messages.iter().map(text_of).collect();
     assert_eq!(contents, vec!["質問"]);
 }
 
@@ -3425,7 +3552,7 @@ async fn delete_message_removes_the_target_and_everything_after_it() {
 
     let conn = db.lock().unwrap();
     let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
-    let contents: Vec<_> = messages.iter().map(|m| m.content.as_str()).collect();
+    let contents: Vec<_> = messages.iter().map(text_of).collect();
     assert_eq!(contents, vec!["1回目"]);
 }
 
@@ -3847,7 +3974,7 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     assert_eq!(tool_execution_count(&messages), 2);
     let reply = messages.last().unwrap();
     assert_eq!(reply.role, Role::Assistant);
-    assert_eq!(reply.content, "ここまでの結果でお答えします");
+    assert_eq!(text_of(reply), "ここまでの結果でお答えします");
 
     // 上限の一節も送ったものなので、最後の応答の前に保存する。
     let saved = db::transcripts::find(&conn, reply.turn_id.as_deref().unwrap(), 1)

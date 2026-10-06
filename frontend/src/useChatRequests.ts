@@ -3,7 +3,7 @@ import { failureText } from './api'
 import { chatKey } from './chat'
 import { isolated, t } from './i18n'
 import { without } from './record'
-import { appendTurnEvent, NO_LIVE_THOUGHTS, type LiveThoughts, type ThoughtItem } from './thinking'
+import { appendTurnEvent, NO_LIVE_TURN, type LiveTurn } from './thinking'
 import type { Chat, PendingEntry, TurnEvent } from './types'
 
 // 会話に対するコマンド(聞き取りの開始・送信・編集・再試行・削除と、ヘッダーからのタスク操作)
@@ -16,8 +16,8 @@ export interface ChatRequests {
    * 文言が停止中のものに変わる。
    */
   pendingOf: (chat: Chat) => PendingEntry[]
-  /** 応答待ちの間に届いた思考・ツールの項目。 */
-  liveOf: (chat: Chat) => ThoughtItem[]
+  /** 応答待ちの間に届いたターンの中身(思考・ツールの折りたたみと本文)。届いた順。 */
+  liveOf: (chat: Chat) => LiveTurn
   isBusy: (chat: Chat) => boolean
   /** 応答を生成するコマンドの実行中(楽観表示に応答待ちがある)。削除・タスク操作の実行中は偽。 */
   isGenerating: (chat: Chat) => boolean
@@ -54,7 +54,7 @@ export interface ChatRequests {
 
 export function useChatRequests(): ChatRequests {
   const [pending, setPending] = useState<Record<string, PendingEntry[]>>({})
-  const [live, setLive] = useState<Record<string, LiveThoughts>>({})
+  const [live, setLive] = useState<Record<string, LiveTurn>>({})
   const [failures, setFailures] = useState<Record<string, string>>({})
   const [stopping, setStopping] = useState<Record<string, true>>({})
   // 実行中のコマンドの印。途中経過はコマンドの完了より後に届きうるので、完了した
@@ -102,7 +102,7 @@ export function useChatRequests(): ChatRequests {
       if (running.current[key] !== token) return
       setLive((prev) => ({
         ...prev,
-        [key]: appendTurnEvent(prev[key] ?? NO_LIVE_THOUGHTS, event),
+        [key]: appendTurnEvent(prev[key] ?? NO_LIVE_TURN, event),
       }))
     }
     try {
@@ -143,10 +143,12 @@ export function useChatRequests(): ChatRequests {
       const entries = pending[chatKey(chat)] ?? []
       if (!isStopping(chat)) return entries
       return entries.map((entry) =>
-        entry.role === 'pending' ? { ...entry, content: t('chat.stopping_reply') } : entry,
+        entry.role === 'pending'
+          ? { ...entry, content: t('chat.stopping_reply'), stopping: true }
+          : entry,
       )
     },
-    liveOf: (chat) => live[chatKey(chat)]?.items ?? [],
+    liveOf: (chat) => live[chatKey(chat)] ?? NO_LIVE_TURN,
     isBusy: (chat) => pending[chatKey(chat)] !== undefined,
     isGenerating: (chat) =>
       pending[chatKey(chat)]?.some((entry) => entry.role === 'pending') ?? false,

@@ -46,8 +46,8 @@ export function groupMessages(messages: MessageView[]): DisplayItem[] {
 }
 
 /**
- * 1ターン分のentriesのうち、実際に見える返信の吹き出しになる行(最終行)。
- * 内部ツール実行を除く最後の行(通常応答 or エラー発言)。
+ * 1ターン分のentriesのうち、返信の行(最終行。通常応答 or エラー発言)。ターンの中身(`parts`)を持ち、
+ * 再試行・削除の対象になる。
  *
  * 最終行が`kind='normal'`であることは`list_for_chat`が保証する(破棄されたターンは
  * ここへ届かないので、表示側では判定しない)。
@@ -67,63 +67,120 @@ export function operationSourceLabel(source: string | null): MessageKey {
   return 'chat.source_unknown'
 }
 
-/** `id`は描画のキー。保存済みの項目では行のid、応答待ちの間の思考では項目の位置。 */
+/** `id`は描画のキー。保存済みのツールでは実行記録の行のid、ほかは項目の位置。 */
 export type ThoughtItem =
   | { kind: 'reasoning'; id: number; text: string }
   | { kind: 'tool'; id: number; execution: ToolExecutionView }
 
+/** ターンの中身を、起きた順に「思考・ツール」の折りたたみと本文の吹き出しに分けたもの。 */
+export type TurnSegment =
+  | { kind: 'thoughts'; items: ThoughtItem[] }
+  | { kind: 'text'; id: number; text: string }
+
 /**
- * 1ターン分のentriesから、発生順の思考・ツール項目列を組み立てる。各行の`reasoning`は
- * そのラウンド(または最終応答)より前に生じた思考なので、同じ行のツール実行より先に並べる
- * (`orchestration::turn`がラウンドの思考を最初のツール実行記録に紐付けるのと対応する)。
+ * 1ターン分のentriesから、起きた順の折りたたみと本文の列を組み立てる。返信の行(最終行)の
+ * 中身(`parts`)を順に読み、続く思考・ツールは1つの折りたたみにまとめ、本文はラウンドごとの
+ * 吹き出しにする。前置き→ツール→本題の順がそのまま残る。
+ *
+ * 最終行より前の行(返信の中身から指されていない実行記録。別の版で書かれた行等)は、先頭の
+ * 折りたたみに入れる。
  */
-export function buildThoughtItems(entries: MessageView[]): ThoughtItem[] {
-  const items: ThoughtItem[] = []
-  for (const entry of entries) {
-    if (entry.reasoning) {
-      items.push({ kind: 'reasoning', id: entry.id, text: entry.reasoning })
-    }
+export function buildTurnSegments(entries: MessageView[]): TurnSegment[] {
+  const segments: TurnSegment[] = []
+  const thought = (item: ThoughtItem) => {
+    const last = segments[segments.length - 1]
+    if (last?.kind === 'thoughts') last.items.push(item)
+    else segments.push({ kind: 'thoughts', items: [item] })
+  }
+  for (const entry of entries.slice(0, -1)) {
     if (entry.tool_execution) {
-      items.push({ kind: 'tool', id: entry.id, execution: entry.tool_execution })
+      thought({ kind: 'tool', id: entry.id, execution: entry.tool_execution })
     }
   }
-  return items
+  finalEntryOf(entries).parts.forEach((part, index) => {
+    switch (part.type) {
+      case 'reasoning':
+        thought({ kind: 'reasoning', id: index, text: part.text })
+        return
+      case 'tool':
+        thought({ kind: 'tool', id: part.id, execution: part.execution })
+        return
+      case 'text':
+        segments.push({ kind: 'text', id: index, text: part.text })
+    }
+  })
+  return segments
 }
-
-/** 応答待ちの間に届いたイベントから組み立てる思考・ツールの項目。 */
-export interface LiveThoughts {
-  items: ThoughtItem[]
-  /** 最後の項目が、続きの届きうる思考か。ラウンドの区切り(`done`)とツールの実行で閉じる。 */
-  reasoningOpen: boolean
-}
-
-export const NO_LIVE_THOUGHTS: LiveThoughts = { items: [], reasoningOpen: false }
 
 /**
- * 届いたイベントを1件積む。保存済みのターンと同じく、1ラウンドの思考は1項目にまとめる。
- * 本文は描かない(完了後に読み直した返信で出す)。実行前のツール呼び出しも描かず、実行の
- * 知らせ(`tool_executed`)で結果と一緒に出す。
+ * 応答待ちの間に届いたイベントから組み立てるターンの中身。保存済みのターンと同じ区切り
+ * (`TurnSegment`)で、届いた順に並べる。
  */
-// TODO(#204): 本文もライブ表示する。
-export function appendTurnEvent(live: LiveThoughts, event: TurnEvent): LiveThoughts {
+export interface LiveTurn {
+  segments: TurnSegment[]
+  /**
+   * 最後の項目が、続きの届きうる思考か本文か。ラウンドの区切り(`done`)とツールの実行で閉じる。
+   * 閉じたあとに届いた思考・本文は、次のラウンドの新しい項目にする。
+   */
+  open: 'reasoning' | 'text' | null
+}
+
+export const NO_LIVE_TURN: LiveTurn = { segments: [], open: null }
+
+/** 思考・ツールの項目を、末尾の折りたたみに足す(末尾が本文なら新しい折りたたみを開く)。 */
+function withThought(segments: TurnSegment[], item: ThoughtItem): TurnSegment[] {
+  const last = segments[segments.length - 1]
+  if (last?.kind === 'thoughts') {
+    return [...segments.slice(0, -1), { kind: 'thoughts', items: [...last.items, item] }]
+  }
+  return [...segments, { kind: 'thoughts', items: [item] }]
+}
+
+/**
+ * 届いたイベントを1件積む。保存済みのターンと同じく、1ラウンドの思考と本文はそれぞれ1項目に
+ * まとめる。実行前のツール呼び出しは描かず、実行の知らせ(`tool_executed`)で結果と一緒に出す。
+ *
+ * 受け取りの途中で失敗したラウンドの本文も流れたまま見えるが、保存はされない(断片なので。
+ * `docs/spec/principles.md` 3節)。完了後に読み直した返信に置き換わる。
+ */
+export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
+  const { segments, open } = live
   if (event.type === 'tool_executed') {
     const item: ThoughtItem = { kind: 'tool', id: event.id, execution: event.execution }
-    return { items: [...live.items, item], reasoningOpen: false }
+    return { segments: withThought(segments, item), open: null }
   }
   const response = event.event
+  const last = segments[segments.length - 1]
   switch (response.type) {
     case 'reasoning_delta': {
-      const last = live.items[live.items.length - 1]
-      if (live.reasoningOpen && last?.kind === 'reasoning') {
-        const merged = { ...last, text: last.text + response.text }
-        return { items: [...live.items.slice(0, -1), merged], reasoningOpen: true }
+      const lastItem = last?.kind === 'thoughts' ? last.items[last.items.length - 1] : undefined
+      if (open === 'reasoning' && last?.kind === 'thoughts' && lastItem?.kind === 'reasoning') {
+        const merged: ThoughtItem = { ...lastItem, text: lastItem.text + response.text }
+        const thoughts: TurnSegment = { kind: 'thoughts', items: [...last.items.slice(0, -1), merged] }
+        return { segments: [...segments.slice(0, -1), thoughts], open }
       }
-      const opened: ThoughtItem = { kind: 'reasoning', id: live.items.length, text: response.text }
-      return { items: [...live.items, opened], reasoningOpen: true }
+      // 描画のキー。届いた思考の数で振る(ツールの項目は記録のidをキーにするので重ならない)。
+      const count = segments.reduce(
+        (n, segment) =>
+          n + (segment.kind === 'thoughts' ? segment.items.filter((i) => i.kind === 'reasoning').length : 0),
+        0,
+      )
+      const item: ThoughtItem = { kind: 'reasoning', id: count, text: response.text }
+      return { segments: withThought(segments, item), open: 'reasoning' }
+    }
+    case 'text_delta': {
+      if (open === 'text' && last?.kind === 'text') {
+        const merged: TurnSegment = { ...last, text: last.text + response.text }
+        return { segments: [...segments.slice(0, -1), merged], open }
+      }
+      // 空白だけで始まる本文(呼び出しの前に改行だけを流すサーバーがある)は吹き出しにしない。
+      // 保存側も空白だけの本文を捨てる。
+      if (response.text.trim() === '') return live
+      const opened: TurnSegment = { kind: 'text', id: segments.length, text: response.text }
+      return { segments: [...segments, opened], open: 'text' }
     }
     case 'done':
-      return { ...live, reasoningOpen: false }
-    case 'text_delta':
+      return { ...live, open: null }
     case 'tool_call':
       return live
   }

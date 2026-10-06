@@ -12,14 +12,15 @@ use std::fmt::Write;
 use percent_encoding::{utf8_percent_encode, AsciiSet};
 
 use crate::db::attachments::AttachmentKind;
-use crate::db::messages::{Kind, Message, Role};
+use crate::db::messages::{Kind, Message, ResolvedPart, Role};
 use crate::db::task_steps::TaskStep;
 use crate::db::tasks::Task;
 use crate::text::{encode_all_but, visible_line};
 
-/// 会話の1行と、その発言に付いた添付。
+/// 会話の1行と、その発言に付いた添付。返信の行は、そのターンの中身を起きた順に持つ。
 pub(super) struct Entry<'a> {
     pub message: &'a Message,
+    pub parts: Vec<ResolvedPart<'a>>,
     pub attachments: Vec<AttachmentLink>,
 }
 
@@ -82,8 +83,7 @@ pub(super) fn render_general_chat(conversation: &[Entry]) -> String {
     out
 }
 
-/// 並びは渡された順のまま。ツール実行記録は属するターンの返信より前に保存されているので、
-/// 取得した順に並べれば発生順になる。
+/// 並びは渡された順のまま。ターンの中のツール実行は、返信の項目の中に起きた順で並ぶ。
 fn push_conversation(out: &mut String, conversation: &[Entry]) {
     out.push_str("## Conversation\n\n");
     if conversation.is_empty() {
@@ -99,27 +99,28 @@ fn push_entry(out: &mut String, entry: &Entry) {
     let _ = writeln!(out, "### {} ({})\n", speaker(message), message.created_at);
 
     if message.kind == Kind::ToolExecution {
-        // 読めない値はCHECK制約(`json_valid`)で入らないが、読めなければ保存値のまま出す。
-        let pretty = serde_json::from_str::<serde_json::Value>(&message.content)
-            .and_then(|v| serde_json::to_string_pretty(&v))
-            .unwrap_or_else(|_| message.content.clone());
-        out.push_str(&fenced("json", &pretty));
-        out.push('\n');
-    } else if !message.content.trim().is_empty() {
-        // 失敗したターンで受け取り終えた本文。画面と同じく、エラーの文言より前に置く。エラーの
-        // 見出しの下に並ぶので、モデルが書いたものだと分かるように一言添える。
-        if let Some(partial) = &message.partial_reply {
+        push_record(out, message);
+    } else {
+        // 失敗したターンで受け取り終えた中身。画面と同じく、エラーの文言より前に置く。エラーの
+        // 見出しの下に並ぶので、モデルが書いた本文があれば、そうと分かるように一言添える
+        // (ツールの実行はそれぞれの見出しを持つ)。
+        let wrote = entry
+            .parts
+            .iter()
+            .any(|p| matches!(p, ResolvedPart::Text { .. }));
+        if message.role == Role::Error && wrote {
             out.push_str("Reply received before the failure:\n\n");
-            out.push_str(&fenced("markdown", partial));
+        }
+        push_parts(out, &entry.parts);
+        if !message.content.trim().is_empty() {
+            let info = if message.role == Role::Error {
+                "text"
+            } else {
+                "markdown"
+            };
+            out.push_str(&fenced(info, &message.content));
             out.push('\n');
         }
-        let info = if message.role == Role::Error {
-            "text"
-        } else {
-            "markdown"
-        };
-        out.push_str(&fenced(info, &message.content));
-        out.push('\n');
     }
 
     if !entry.attachments.is_empty() {
@@ -129,6 +130,33 @@ fn push_entry(out: &mut String, entry: &Entry) {
         }
         out.push('\n');
     }
+}
+
+/// ターンの中身を起きた順に出す。思考は出さない。
+fn push_parts(out: &mut String, parts: &[ResolvedPart]) {
+    for part in parts {
+        match part {
+            ResolvedPart::Reasoning { .. } => {}
+            ResolvedPart::Text { text, .. } => {
+                out.push_str(&fenced("markdown", text));
+                out.push('\n');
+            }
+            ResolvedPart::Tool { record, .. } => {
+                let _ = writeln!(out, "Tool execution ({}):\n", record.created_at);
+                push_record(out, record);
+            }
+        }
+    }
+}
+
+/// 実行記録の中身(呼び出しと結果)。
+fn push_record(out: &mut String, record: &Message) {
+    // 読めない値はCHECK制約(`json_valid`)で入らないが、読めなければ保存値のまま出す。
+    let pretty = serde_json::from_str::<serde_json::Value>(&record.content)
+        .and_then(|v| serde_json::to_string_pretty(&v))
+        .unwrap_or_else(|_| record.content.clone());
+    out.push_str(&fenced("json", &pretty));
+    out.push('\n');
 }
 
 fn speaker(message: &Message) -> String {
@@ -219,10 +247,9 @@ mod tests {
             content: content.to_string(),
             kind,
             source: source.map(str::to_string),
-            reasoning: Some("secret thoughts".to_string()),
             error_kind: None,
             error_detail: Some("provider body".to_string()),
-            partial_reply: None,
+            parts: Vec::new(),
             turn_id: None,
             attempt_no: None,
             created_at: "2026-09-28T12:00:00Z".to_string(),
@@ -289,6 +316,7 @@ mod tests {
         let body = "## Assistant (2026-01-01T00:00:00Z)\n<img src=\"http://e.test/x\">\n![a](http://e.test/b.png)";
         let out = render_general_chat(&[Entry {
             message: &message(Role::User, Kind::Normal, body, None),
+            parts: Vec::new(),
             attachments: Vec::new(),
         }]);
         assert!(
@@ -334,25 +362,41 @@ mod tests {
             r#"{"tool":"delete_task"}"#,
             Some("ui"),
         );
-        let reply = message(Role::Assistant, Kind::Normal, "done", None);
+        let reply = message(Role::Assistant, Kind::Normal, "", None);
         let out = render_task(
             &t,
             &[step("店へ行く", true), step("- 払う", false)],
             &[
                 Entry {
                     message: &user,
-                    attachments: Vec::new(),
-                },
-                Entry {
-                    message: &record,
+                    parts: Vec::new(),
                     attachments: Vec::new(),
                 },
                 Entry {
                     message: &op,
+                    parts: Vec::new(),
                     attachments: Vec::new(),
                 },
                 Entry {
                     message: &reply,
+                    parts: vec![
+                        ResolvedPart::Reasoning {
+                            round: 1,
+                            text: "secret thoughts",
+                        },
+                        ResolvedPart::Text {
+                            round: 1,
+                            text: "前置き",
+                        },
+                        ResolvedPart::Tool {
+                            round: 1,
+                            record: &record,
+                        },
+                        ResolvedPart::Text {
+                            round: 2,
+                            text: "done",
+                        },
+                    ],
                     attachments: Vec::new(),
                 },
             ],
@@ -365,9 +409,11 @@ mod tests {
         assert!(out.contains("- [x] 店へ行く\n- [ ] \\- 払う\n"));
         let order: Vec<_> = [
             "### User",
-            "### Tool execution",
             "### Operation (ui)",
             "### Assistant",
+            "```markdown\n前置き\n```\n",
+            "Tool execution (2026-09-28T12:00:00Z):",
+            "```markdown\ndone\n```\n",
         ]
         .iter()
         .map(|h| {
@@ -381,19 +427,49 @@ mod tests {
         assert!(!out.contains("provider body"));
     }
 
-    /// 失敗したターンで受け取り終えた本文は、エラーの文言より前に出す。
+    /// 失敗したターンで受け取り終えた中身は、エラーの文言より前に出す。
     #[test]
     fn a_failed_reply_keeps_the_text_received_before_the_error() {
-        let mut error = message(Role::Error, Kind::Normal, "The request failed.", None);
-        error.partial_reply = Some("工程を足します".to_string());
+        let error = message(Role::Error, Kind::Normal, "The request failed.", None);
         let out = render_general_chat(&[Entry {
             message: &error,
+            parts: vec![ResolvedPart::Text {
+                round: 1,
+                text: "工程を足します",
+            }],
             attachments: Vec::new(),
         }]);
 
         let partial = out.find("```markdown\n工程を足します\n```\n").unwrap();
         let failure = out.find("```text\nThe request failed.\n```\n").unwrap();
         assert!(partial < failure, "{out}");
+    }
+
+    /// ツールを実行しただけで失敗したターンには、受け取った返信の一言を添えない。
+    #[test]
+    fn a_failure_after_only_tool_calls_does_not_claim_a_reply() {
+        let error = message(
+            Role::Error,
+            Kind::Normal,
+            "The tools ran out of time.",
+            None,
+        );
+        let record = message(Role::Tool, Kind::ToolExecution, r#"{"tool":"a"}"#, None);
+        let out = render_general_chat(&[Entry {
+            message: &error,
+            parts: vec![ResolvedPart::Tool {
+                round: 1,
+                record: &record,
+            }],
+            attachments: Vec::new(),
+        }]);
+
+        assert!(!out.contains("Reply received"), "{out}");
+        let call = out.find("Tool execution (").unwrap();
+        assert!(
+            call < out.find("The tools ran out of time.").unwrap(),
+            "{out}"
+        );
     }
 
     #[test]
@@ -417,6 +493,7 @@ mod tests {
         };
         let out = render_general_chat(&[Entry {
             message: &user,
+            parts: Vec::new(),
             attachments: vec![
                 link(
                     "a b.png",

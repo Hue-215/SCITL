@@ -131,8 +131,7 @@ fn record(
             origin: Origin::Operation(source),
             error_kind: None,
             error_detail: None,
-            partial_reply: None,
-            reasoning: None,
+            parts: None,
         },
     )?;
     Ok(())
