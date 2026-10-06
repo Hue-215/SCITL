@@ -3670,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "scitl-core",
@@ -3683,7 +3683,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-debug-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "scitl-cli",
@@ -3729,7 +3729,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-tauri"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "percent-encoding",
  "scitl-core",
