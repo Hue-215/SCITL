@@ -98,7 +98,7 @@ Linuxの中身は、実行ファイルに拡張子が無いほかは同じ。tar
 scitl-<版>-windows-x64/
 ├── scitl.exe
 ├── scitl-cli.exe
-├── README.txt                # 利用者向けの案内(必要なもの・データの置き場所)。元は scripts/dist-README.txt
+├── README.md                 # リポジトリのREADME.mdをそのまま入れる
 ├── LICENSE
 └── THIRD-PARTY-LICENSES/
     ├── rust.txt              # Rustのクレート
@@ -182,8 +182,8 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
    (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
 8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> --title "SCITL <版>" --notes-file <ノート>`。
    リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
-   READMEに書くまでの間は次も書く(配布物の`README.txt`(`scripts/dist-README.txt`)にも同じことを書いてある。変えるときは両方を直す。
-   求めるglibcの版もそこに書いてあるので、ビルドする環境を変えたら直す)
+   次も書く(`README.md`は内容を意図して少なくしてあり、配布物に入るのもそれなので、利用者が
+   これらを読めるのはノートだけになる。ビルドする環境を変えたら、求めるglibcの版を直す)
    - Windowsの実行ファイルにコード署名が無く、初回の起動でSmartScreenの警告が出ること
    - Linuxは`libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)が要ること、求めるglibcの版(4節)
    - データは展開したフォルダの`data`に置かれること。版を上げるときは、古いフォルダの`data`を
