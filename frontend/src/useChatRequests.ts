@@ -16,7 +16,7 @@ export interface ChatRequests {
    * 文言が停止中のものに変わる。
    */
   pendingOf: (chat: Chat) => PendingEntry[]
-  /** 応答待ちの間に届いたターンの中身(思考・ツールの折りたたみと本文)。届いた順。 */
+  /** 応答待ちの間に届いたターンの中身(思考・ツールの並びと本文)。届いた順。 */
   liveOf: (chat: Chat) => LiveTurn
   isBusy: (chat: Chat) => boolean
   /** 応答を生成するコマンドの実行中(楽観表示に応答待ちがある)。削除・タスク操作の実行中は偽。 */

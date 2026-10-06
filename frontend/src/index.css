@@ -721,7 +721,7 @@ option {
   color: var(--color-text);
 }
 
-/* ツール実行行と送信待ち行は、どちらも「本文ではない補助的な発言」として同じ見た目。 */
+/* 操作の記録の行と送信待ち行は、どちらも「本文ではない補助的な発言」として同じ見た目。 */
 .entry-tool,
 .entry-pending {
   font-style: italic;
@@ -842,25 +842,65 @@ option {
 
 /* <details>はflexコンテナにしない(summaryの開閉描画がエンジンごとに崩れるため)。
    そのため中身の間隔だけは入れ物のgapではなくmarginで持つ。 */
-.thinking-tools {
+
+/* 続いた思考の折りたたみ。本文の吹き出しより控えめにし、枠線だけを持つ。 */
+.thinking {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   border: var(--border-width) solid var(--color-border);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
   max-width: 100%;
   border-radius: var(--radius);
 }
 
-.thinking-tools-list {
-  margin: var(--space-2) 0 0;
-  padding-left: var(--space-4);
+.thinking-list {
+  margin-top: var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
 
 .thinking-item {
+  margin: 0;
   font-style: italic;
+  white-space: pre-wrap;
+}
+
+/* ツール呼び出し1件の1行。枠を持たず、名前と引数の要約を等幅で並べる。summaryは既定の
+   list-itemのままにして開閉の印を残し、行内の間隔はmarginで持つ。 */
+.tool-call {
+  /* 操作の記録の行(.entry-toolの中)でも、押せる範囲を文字の幅に留める。 */
+  align-self: flex-start;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  max-width: 100%;
+}
+
+/* 閉じた行は1行に収め、はみ出す分は省略する(折り返すと要約が開閉の印の下へ回り込む)。
+   全文は開いた引数・結果で見る。 */
+.tool-call summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-call-name {
+  font-family: var(--font-family-mono);
+  color: var(--color-text);
+}
+
+.tool-call-summary {
+  font-family: var(--font-family-mono);
+}
+
+.tool-call-summary,
+.tool-call-error,
+.tool-call .operation-label {
+  margin-inline-start: var(--space-2);
+}
+
+.tool-call-error {
+  color: var(--color-danger);
 }
 
 .tool-call-detail {
@@ -875,7 +915,6 @@ option {
 }
 
 .tool-call-detail pre,
-.operation-line pre,
 .entry-error-detail pre {
   padding: var(--space-2);
   border-radius: var(--radius);
@@ -884,26 +923,6 @@ option {
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.thinking-tools-error {
-  color: var(--color-danger);
-}
-
-.operation-line {
-  align-self: flex-start;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-
-.operation-line summary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.operation-name {
-  font-family: var(--font-family-mono);
 }
 
 .operation-label {
@@ -1017,7 +1036,7 @@ option {
   font-weight: var(--font-weight-strong);
 }
 
-/* .thinking-toolsと同じ理由で<details>はflexコンテナにしないため、
+/* .thinkingと同じ理由で<details>はflexコンテナにしないため、
    開いたときの本文との間隔だけmarginで持つ。 */
 .settings-advanced[open] summary {
   margin-bottom: var(--space-4);

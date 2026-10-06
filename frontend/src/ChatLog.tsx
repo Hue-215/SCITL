@@ -155,8 +155,8 @@ export default function ChatLog({
       {items.map((item, index) => {
         if (item.kind === 'plain') {
           const message = item.message
-          // 応答生成以外の経路(画面・MCP等)での操作の記録は「思考・ツール」の
-          // 折りたたみに含めず、独立した1行として表示する。
+          // 応答生成以外の経路(画面・MCP等)での操作の記録はターンに含めず、経路のラベルを
+          // 付けた独立した1行として表示する。
           if (message.kind === 'tool_execution') {
             return (
               <li key={message.id} className="entry entry-tool">
@@ -229,7 +229,7 @@ export default function ChatLog({
           )
         }
 
-        // 応答生成1ターン分。中身(思考・ツールの折りたたみと、ラウンドごとの本文)を起きた順に
+        // 応答生成1ターン分。中身(思考・ツールの並びと、ラウンドごとの本文)を起きた順に
         // 並べる。再試行・削除の対象は返信の行(最終行。エラー発言を含む)。
         const finalMessage = finalEntryOf(item.entries)
         const segments = buildTurnSegments(item.entries)
