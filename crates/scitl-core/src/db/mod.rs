@@ -21,6 +21,7 @@ const TURN_TRANSCRIPTS_SQL: &str = include_str!("../../../../migrations/0005_tur
 const TRANSCRIPT_SERVER_SQL: &str =
     include_str!("../../../../migrations/0006_transcript_server.sql");
 const PARTIAL_REPLY_SQL: &str = include_str!("../../../../migrations/0007_partial_reply.sql");
+const REPLY_PARTS_SQL: &str = include_str!("../../../../migrations/0008_reply_parts.sql");
 
 /// DBの列に文字列で持つ列挙。列の値との対応をここに1度だけ書き、書き込み(`ToSql`)と
 /// 読み出し(`FromSql`)を同じ対応から作る。値は列のCHECK制約と揃える。
@@ -124,6 +125,7 @@ const MIGRATIONS: &[&str] = &[
     TURN_TRANSCRIPTS_SQL,
     TRANSCRIPT_SERVER_SQL,
     PARTIAL_REPLY_SQL,
+    REPLY_PARTS_SQL,
 ];
 
 /// 先頭から`target`個目までのマイグレーションを適用する。適用済みの版の読み取りから
@@ -286,6 +288,107 @@ mod tests {
             .query_row("SELECT role FROM messages", [], |row| row.get(0))
             .unwrap();
         assert_eq!(role, "tool");
+    }
+
+    /// 実行記録と、本文をつないだ返信の行で持っていたターンを、返信の行の中身へ移す
+    /// (`0008_reply_parts.sql`)。記録は記録ごとに1ラウンドとし、消した記録は指さない。
+    #[test]
+    fn existing_replies_move_into_their_parts() {
+        use crate::db::messages::{find_message, ReplyPart};
+
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_to(&conn, 7).unwrap();
+        // 0007の版の列で書く。`turn`は`turn_id`(試行は1)、`extra`は思考と受け取り終えた本文。
+        let insert =
+            |role: &str, turn: Option<&str>, content: &str, extra: (Option<&str>, Option<&str>)| {
+                let kind = if role == "tool" {
+                    "tool_execution"
+                } else {
+                    "normal"
+                };
+                let error_kind = (role == "error").then_some("stopped");
+                conn.execute(
+                "INSERT INTO messages (role, content, kind, reasoning, partial_reply, error_kind,
+                                       turn_id, attempt_no, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '2026-01-01T00:00:00Z')",
+                rusqlite::params![
+                    role,
+                    content,
+                    kind,
+                    extra.0,
+                    extra.1,
+                    error_kind,
+                    turn,
+                    turn.map(|_| 1),
+                ],
+            )
+            .unwrap();
+                conn.last_insert_rowid()
+            };
+        let none = (None, None);
+        insert("user", None, "質問", none);
+        let first = insert("tool", Some("t1"), "{}", (Some("考える"), None));
+        let deleted = insert("tool", Some("t1"), "{}", none);
+        conn.execute(
+            "UPDATE messages SET deleted_at = '2026-01-01T00:00:00Z' WHERE id = ?1",
+            [deleted],
+        )
+        .unwrap();
+        let second = insert("tool", Some("t1"), "{}", none);
+        let reply = insert(
+            "assistant",
+            Some("t1"),
+            "前置き\n\n本題",
+            (Some("まとめる"), None),
+        );
+        let failed_record = insert("tool", Some("t2"), "{}", none);
+        let stopped = insert("error", Some("t2"), "Stopped.", (None, Some("途中")));
+
+        migrate_to(&conn, MIGRATIONS.len()).unwrap();
+
+        let text = |round, text: &str| ReplyPart::Text {
+            round,
+            text: text.to_string(),
+        };
+        let reasoning = |round, text: &str| ReplyPart::Reasoning {
+            round,
+            text: text.to_string(),
+        };
+        let reply = find_message(&conn, reply).unwrap().unwrap();
+        assert_eq!(reply.content, "");
+        assert_eq!(
+            reply.parts,
+            vec![
+                reasoning(1, "考える"),
+                ReplyPart::Tool {
+                    round: 1,
+                    record: first
+                },
+                ReplyPart::Tool {
+                    round: 2,
+                    record: second
+                },
+                reasoning(3, "まとめる"),
+                text(3, "前置き\n\n本題"),
+            ]
+        );
+        let stopped = find_message(&conn, stopped).unwrap().unwrap();
+        assert_eq!(stopped.content, "Stopped.");
+        assert_eq!(
+            stopped.parts,
+            vec![
+                ReplyPart::Tool {
+                    round: 1,
+                    record: failed_record
+                },
+                text(2, "途中"),
+            ]
+        );
+        assert!(find_message(&conn, first)
+            .unwrap()
+            .unwrap()
+            .parts
+            .is_empty());
     }
 
     #[test]

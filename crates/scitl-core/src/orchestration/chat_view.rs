@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::attachments::{delivery_without_model, Delivery};
 use crate::db::attachments::{self, AttachmentKind};
-use crate::db::messages::{self, Chat, Kind, Message, Role};
+use crate::db::messages::{self, Chat, Kind, Message, ReplyRecords, ResolvedPart, Role};
 use crate::db::transcripts;
 use crate::error::Result;
 use crate::orchestration::tool_record::ToolExecutionView;
@@ -20,23 +20,77 @@ use crate::orchestration::turn::require_chat;
 pub struct MessageView {
     #[serde(flatten)]
     pub message: Message,
-    /// ツール実行記録の行だけが持つ。
+    /// ツール実行記録の行(会話に独立して並ぶもの。操作の記録)だけが持つ。
     pub tool_execution: Option<ToolExecutionView>,
+    /// ターンの返信の行(アシスタント発言・エラー発言)だけが持つ、そのターンの中身。起きた順。
+    pub parts: Vec<PartView>,
     /// 添付のうち、中身(テキストの本文・画像)をモデルへ渡していないもののid([`undelivered`])。
     pub undelivered_attachments: Vec<i64>,
 }
 
+/// ターンの中身の1要素の表示。`round`は1始まりのラウンドの番号。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PartView {
+    Reasoning {
+        round: u32,
+        text: String,
+    },
+    Text {
+        round: u32,
+        text: String,
+    },
+    /// `id`は実行記録の行のid。
+    Tool {
+        round: u32,
+        id: i64,
+        execution: ToolExecutionView,
+    },
+}
+
+impl PartView {
+    fn of(part: ResolvedPart) -> Self {
+        match part {
+            ResolvedPart::Reasoning { round, text } => Self::Reasoning {
+                round,
+                text: text.to_string(),
+            },
+            ResolvedPart::Text { round, text } => Self::Text {
+                round,
+                text: text.to_string(),
+            },
+            ResolvedPart::Tool { round, record } => Self::Tool {
+                round,
+                id: record.id,
+                execution: ToolExecutionView::of_content(&record.content),
+            },
+        }
+    }
+}
+
 /// 1つの会話の行を、画面に出す形で返す。タスクが存在しない・削除済みなら`TaskNotFound`
-/// (行の無い会話と区別する)。
+/// (行の無い会話と区別する)。返信の中身が指す実行記録は、独立した行として返さず、返信の
+/// `parts`の中に起きた順で並べる。
 pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
     require_chat(conn, chat)?;
     let rows = messages::list_for_chat(conn, chat)?;
     let mut undelivered = undelivered(conn, chat, &rows)?;
+    let records = ReplyRecords::of(&rows);
+    let parts: Vec<Vec<PartView>> = rows
+        .iter()
+        .map(|m| records.resolve(m).into_iter().map(PartView::of).collect())
+        .collect();
+    let referenced: Vec<bool> = rows.iter().map(|m| records.contains(m.id)).collect();
     Ok(rows
         .into_iter()
-        .map(|message| MessageView {
+        .zip(parts)
+        .zip(referenced)
+        .filter(|(_, referenced)| !referenced)
+        .map(|((message, parts), _)| MessageView {
             tool_execution: (message.kind == Kind::ToolExecution)
                 .then(|| ToolExecutionView::of_content(&message.content)),
+            parts,
             undelivered_attachments: undelivered.remove(&message.id).unwrap_or_default(),
             message,
         })
@@ -157,7 +211,7 @@ mod tests {
     use super::*;
     use crate::db;
     use crate::db::attachments::{AttachmentContent, NewAttachment};
-    use crate::db::messages::{NewMessage, Origin};
+    use crate::db::messages::{NewMessage, OperationSource, Origin, ReplyPart};
     use crate::orchestration::transcript::{StoredInput, StoredMessage};
 
     struct Fixture {
@@ -182,8 +236,7 @@ mod tests {
                     origin,
                     error_kind,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: matches!(origin, Origin::Turn { .. }).then_some(&[]),
                 },
             )
             .unwrap()
@@ -278,6 +331,84 @@ mod tests {
                 .map(|v| (v.message.id, v.undelivered_attachments))
                 .collect()
         }
+    }
+
+    /// 返信の中身が指す実行記録は、独立した行として返さず、返信の中身の位置に起きた順で並ぶ。
+    /// 操作の記録は会話に並ぶ行のまま。
+    #[test]
+    fn records_of_a_reply_are_listed_inside_it_in_order() {
+        let f = Fixture::new();
+        let write = |role, content: &str, kind, origin, parts: Option<&[ReplyPart]>| {
+            messages::insert_message(
+                &f.conn,
+                NewMessage {
+                    chat: Chat::General,
+                    role,
+                    content,
+                    kind,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    parts,
+                },
+            )
+            .unwrap()
+        };
+        let turn = Origin::Turn {
+            turn_id: "t",
+            attempt_no: 1,
+        };
+        let record = r#"{"tool":"list_tasks","arguments":{},"result":{}}"#;
+        write(Role::User, "質問", Kind::Normal, Origin::User, None);
+        let called = write(Role::Tool, record, Kind::ToolExecution, turn, None);
+        let operation = write(
+            Role::Tool,
+            record,
+            Kind::ToolExecution,
+            Origin::Operation(OperationSource::Ui),
+            None,
+        );
+        let text = |round, text: &str| ReplyPart::Text {
+            round,
+            text: text.to_string(),
+        };
+        write(
+            Role::Assistant,
+            "",
+            Kind::Normal,
+            turn,
+            Some(&[
+                text(1, "調べます"),
+                ReplyPart::Tool {
+                    round: 1,
+                    record: called,
+                },
+                text(2, "本題"),
+            ]),
+        );
+
+        let views = list_chat(&f.conn, Chat::General).unwrap();
+
+        let ids: Vec<i64> = views.iter().map(|v| v.message.id).collect();
+        assert!(!ids.contains(&called));
+        assert!(ids.contains(&operation));
+        let reply = views.last().unwrap();
+        let parts: Vec<String> = reply
+            .parts
+            .iter()
+            .map(|p| match p {
+                PartView::Text { text, .. } => text.clone(),
+                PartView::Tool { id, execution, .. } => {
+                    assert_eq!(*id, called);
+                    serde_json::to_value(execution).unwrap()["tool"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                }
+                PartView::Reasoning { .. } => unreachable!(),
+            })
+            .collect();
+        assert_eq!(parts, ["調べます", "list_tasks", "本題"]);
     }
 
     #[test]

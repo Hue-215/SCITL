@@ -210,8 +210,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();

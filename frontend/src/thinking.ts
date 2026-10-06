@@ -46,8 +46,8 @@ export function groupMessages(messages: MessageView[]): DisplayItem[] {
 }
 
 /**
- * 1ターン分のentriesのうち、実際に見える返信の吹き出しになる行(最終行)。
- * 内部ツール実行を除く最後の行(通常応答 or エラー発言)。
+ * 1ターン分のentriesのうち、返信の行(最終行。通常応答 or エラー発言)。ターンの中身(`parts`)を持ち、
+ * 再試行・削除の対象になる。
  *
  * 最終行が`kind='normal'`であることは`list_for_chat`が保証する(破棄されたターンは
  * ここへ届かないので、表示側では判定しない)。
@@ -67,27 +67,49 @@ export function operationSourceLabel(source: string | null): MessageKey {
   return 'chat.source_unknown'
 }
 
-/** `id`は描画のキー。保存済みの項目では行のid、応答待ちの間の思考では項目の位置。 */
+/** `id`は描画のキー。保存済みのツールでは実行記録の行のid、ほかは項目の位置。 */
 export type ThoughtItem =
   | { kind: 'reasoning'; id: number; text: string }
   | { kind: 'tool'; id: number; execution: ToolExecutionView }
 
+/** ターンの中身を、起きた順に「思考・ツール」の折りたたみと本文の吹き出しに分けたもの。 */
+export type TurnSegment =
+  | { kind: 'thoughts'; items: ThoughtItem[] }
+  | { kind: 'text'; id: number; text: string }
+
 /**
- * 1ターン分のentriesから、発生順の思考・ツール項目列を組み立てる。各行の`reasoning`は
- * そのラウンド(または最終応答)より前に生じた思考なので、同じ行のツール実行より先に並べる
- * (`orchestration::turn`がラウンドの思考を最初のツール実行記録に紐付けるのと対応する)。
+ * 1ターン分のentriesから、起きた順の折りたたみと本文の列を組み立てる。返信の行(最終行)の
+ * 中身(`parts`)を順に読み、続く思考・ツールは1つの折りたたみにまとめ、本文はラウンドごとの
+ * 吹き出しにする。前置き→ツール→本題の順がそのまま残る。
+ *
+ * 最終行より前の行(返信の中身から指されていない実行記録。別の版で書かれた行等)は、先頭の
+ * 折りたたみに入れる。
  */
-export function buildThoughtItems(entries: MessageView[]): ThoughtItem[] {
-  const items: ThoughtItem[] = []
-  for (const entry of entries) {
-    if (entry.reasoning) {
-      items.push({ kind: 'reasoning', id: entry.id, text: entry.reasoning })
-    }
+export function buildTurnSegments(entries: MessageView[]): TurnSegment[] {
+  const segments: TurnSegment[] = []
+  const thought = (item: ThoughtItem) => {
+    const last = segments[segments.length - 1]
+    if (last?.kind === 'thoughts') last.items.push(item)
+    else segments.push({ kind: 'thoughts', items: [item] })
+  }
+  for (const entry of entries.slice(0, -1)) {
     if (entry.tool_execution) {
-      items.push({ kind: 'tool', id: entry.id, execution: entry.tool_execution })
+      thought({ kind: 'tool', id: entry.id, execution: entry.tool_execution })
     }
   }
-  return items
+  finalEntryOf(entries).parts.forEach((part, index) => {
+    switch (part.type) {
+      case 'reasoning':
+        thought({ kind: 'reasoning', id: index, text: part.text })
+        return
+      case 'tool':
+        thought({ kind: 'tool', id: part.id, execution: part.execution })
+        return
+      case 'text':
+        segments.push({ kind: 'text', id: index, text: part.text })
+    }
+  })
+  return segments
 }
 
 /** 応答待ちの間に届いたイベントから組み立てる思考・ツールの項目。 */

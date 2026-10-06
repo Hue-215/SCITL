@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::attachments::{self, AttachmentStore, Delivery};
 use crate::config::ApiFormat;
 use crate::db::attachments::{self as db_attachments, Attachment, AttachmentContent};
-use crate::db::messages::{self, Chat, Kind, Message, Opener, Role};
+use crate::db::messages::{self, Chat, Kind, Message, Opener, ReplyRecords, ResolvedPart, Role};
 use crate::db::transcripts::{self, Transcript};
 use crate::error::Result;
 use crate::llm::{
@@ -127,8 +127,8 @@ pub(super) struct HistoryOptions {
 /// (`llm::estimate_message`)ので、埋めても間引きの計算は変わらない。実体を読めない画像は
 /// 名前だけを送る。
 ///
-/// エラー発言は送らない。返信のある試行の実行記録は、失敗でない結果を呼び出しと結果の組にして
-/// 送る。それ以外の実行記録(会話の外での操作、失敗したターンと捨てた試行での実行)は、失敗で
+/// エラー発言は送らない。返信のある試行は、返信の行の中身(`messages.parts`)からラウンドごとの
+/// 本文と呼び出し・結果の組にして送る(失敗でない結果だけ。[`reply_messages`])。それ以外の実行記録(会話の外での操作、失敗したターンと捨てた試行での実行)は、失敗で
 /// ない結果を操作の記録にまとめ、行の並びだけで決まる位置に置く
 /// (`docs/spec/architecture/prompt-shape.md`「会話の外での操作の伝え方」)。位置が行の並びだけで
 /// 決まるので、次のターンでも同じ位置に並ぶ。
@@ -150,6 +150,7 @@ pub(super) fn build_history(
         .values()
         .flat_map(|saved| saved.input_rows.iter().copied())
         .collect();
+    let records = ReplyRecords::of(&stored.messages);
     let rows = in_order(&stored.messages, &stored.discarded_records);
     let mut history = History::with_capacity(rows.len() + 1);
     if stored.starts_with_opening {
@@ -190,12 +191,8 @@ pub(super) fn build_history(
         }
         match (m.kind, m.role) {
             (Kind::ToolExecution, _) => match replied {
-                Some(_) => {
-                    for message in round_trip(m).into_iter().flatten() {
-                        history.push(message, vec![m.id]);
-                    }
-                    history.input_from = history.messages.len();
-                }
+                // 返信の行の中身が、起きた順の位置に並べる。
+                Some(_) => {}
                 None => pending.extend(Operation::of(m, shown)),
             },
             // 試行の途中に挟まった記録も含め、待っている記録は次のユーザー発言の囲みの前に置く。
@@ -212,14 +209,9 @@ pub(super) fn build_history(
                 history.prepend_operations(message, m.id, &mut pending);
             }
             (Kind::Normal, Role::Assistant) => {
-                history.push(
-                    ChatMessage::Assistant {
-                        content: Some(m.content.clone()),
-                        tool_calls: Vec::new(),
-                        replay: Default::default(),
-                    },
-                    vec![m.id],
-                );
+                for message in reply_messages(&records.resolve(m)) {
+                    history.push(message, vec![m.id]);
+                }
                 history.input_from = history.messages.len();
             }
             // エラー発言は送らない。`role='tool'`は実行記録の行だけで、上で済んでいる
@@ -636,9 +628,58 @@ fn replied_turns(stored: &[Message]) -> HashSet<String> {
         .collect()
 }
 
-/// 返信のある試行の実行記録1行を、送るべきなら`assistant(tool_calls 1件)` + `tool(結果)`の
-/// 組にする。ラウンドの区切りは記録に無いので、1呼び出しにつき1組とする。
-fn round_trip(m: &Message) -> Option<[ChatMessage; 2]> {
+/// 返信のある試行の中身を、ラウンドごとに`assistant(本文・呼び出し)` + 呼び出しごとの
+/// `tool(結果)`の並びにする。思考は送らない(`docs/spec/principles.md` 3節「思考は受け取ったまま
+/// 送り返す」。送り返す思考は送った形の保存の側にある)。
+///
+/// 呼び出しがすべて送られず本文だけが残ったラウンドは、その本文を次のラウンドの本文の前に
+/// つなぐ(assistantの発言が続く並びを作らない)。最後のラウンドは本文が無くても置き、ツールの
+/// 結果で終わらせない。
+fn reply_messages(parts: &[ResolvedPart]) -> Vec<ChatMessage> {
+    let mut rounds: Vec<(u32, Vec<&ResolvedPart>)> = Vec::new();
+    for part in parts {
+        let round = part.round();
+        match rounds.last_mut() {
+            Some((r, members)) if *r == round => members.push(part),
+            _ => rounds.push((round, vec![part])),
+        }
+    }
+    let mut messages = Vec::new();
+    let mut texts: Vec<&str> = Vec::new();
+    let last = rounds.len().saturating_sub(1);
+    for (i, (_, members)) in rounds.iter().enumerate() {
+        let mut calls = Vec::new();
+        for part in members {
+            match part {
+                ResolvedPart::Text { text, .. } => texts.push(text),
+                ResolvedPart::Tool { record, .. } => calls.extend(call_and_result(record)),
+                ResolvedPart::Reasoning { .. } => {}
+            }
+        }
+        if calls.is_empty() && i != last {
+            continue;
+        }
+        let (tool_calls, results): (Vec<_>, Vec<_>) = calls.into_iter().unzip();
+        messages.push(ChatMessage::Assistant {
+            content: (!texts.is_empty()).then(|| texts.join("\n\n")),
+            tool_calls,
+            replay: Default::default(),
+        });
+        texts.clear();
+        messages.extend(results);
+    }
+    if messages.is_empty() {
+        messages.push(ChatMessage::Assistant {
+            content: None,
+            tool_calls: Vec::new(),
+            replay: Default::default(),
+        });
+    }
+    messages
+}
+
+/// 返信のある試行の実行記録1行を、送るべきなら呼び出しと`tool(結果)`の組にする。
+fn call_and_result(m: &Message) -> Option<(ToolCallRequest, ChatMessage)> {
     let record: ToolExecutionRecord = serde_json::from_str(&m.content).ok()?;
     // 失敗した結果は送らない。冪等でない結果との食い違いは起きず、打ち直させる方が自然。
     // 実行しなかった呼び出し(引数が読めない・公開していない名前・接続先が無い)も失敗になる。
@@ -649,18 +690,14 @@ fn round_trip(m: &Message) -> Option<[ChatMessage; 2]> {
     // 実行記録は往復で渡した中身(添付の本文・画像)を持たない。送った形の保存がある試行は、
     // 保存の側で中身ごと並べる。
     let result = tools::recorded_result(&record.tool, record.result);
-    Some([
-        ChatMessage::Assistant {
-            content: None,
-            tool_calls: vec![ToolCallRequest {
-                id: id.clone(),
-                name: record.tool,
-                // 失敗でない記録は実行済みで、引数は読めていた(`ToolExecutionRecord::arguments`)。
-                arguments: ToolArguments::Valid {
-                    value: record.arguments,
-                },
-            }],
-            replay: Default::default(),
+    Some((
+        ToolCallRequest {
+            id: id.clone(),
+            name: record.tool,
+            // 失敗でない記録は実行済みで、引数は読めていた(`ToolExecutionRecord::arguments`)。
+            arguments: ToolArguments::Valid {
+                value: record.arguments,
+            },
         },
         ChatMessage::Tool {
             tool_call_id: id,
@@ -668,7 +705,7 @@ fn round_trip(m: &Message) -> Option<[ChatMessage; 2]> {
             content: PromptText::json(&result),
             images: Vec::new(),
         },
-    ])
+    ))
 }
 
 /// 過去のターンの呼び出しを送り返すときのID。プロバイダーが払い出したIDは使わない
@@ -790,6 +827,18 @@ mod tests {
             turn: Option<(&str, i64)>,
         ) -> i64 {
             let error = matches!(role, Role::Error).then_some("provider");
+            // 返信の行は、本文を中身に持つ(`messages::parts_for_reply`)。
+            let parts = turn
+                .filter(|_| kind == Kind::Normal)
+                .map(|(turn_id, attempt_no)| {
+                    let text = (role == Role::Assistant).then_some(content);
+                    messages::parts_for_reply(&self.conn, turn_id, attempt_no, text)
+                });
+            let content = if role == Role::Assistant && kind == Kind::Normal {
+                ""
+            } else {
+                content
+            };
             messages::insert_message(
                 &self.conn,
                 NewMessage {
@@ -809,8 +858,7 @@ mod tests {
                     },
                     error_kind: error,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: parts.as_deref(),
                 },
             )
             .unwrap()
@@ -827,8 +875,7 @@ mod tests {
                     origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: None,
                 },
             )
             .unwrap()
@@ -990,6 +1037,66 @@ mod tests {
         f.record(Some("t1"), json!({ "error": "down" }));
         f.reply("t1", "a");
         assert!(tool_contents(&f.history()).is_empty());
+    }
+
+    /// 返信の中身はラウンドごとに、本文と呼び出しを1つのassistantの発言にして送る。呼び出しが
+    /// すべて送られないラウンドの本文は、次のラウンドの本文の前につなぐ。
+    #[test]
+    fn sends_each_round_of_a_reply_with_its_text() {
+        let f = Fixture::new();
+        f.user("u");
+        let failed = f.record(Some("t1"), json!({ "error": "down" }));
+        let found = f.record(Some("t1"), json!({ "hits": 1 }));
+        let text = |round, text: &str| messages::ReplyPart::Text {
+            round,
+            text: text.to_string(),
+        };
+        let tool = |round, record| messages::ReplyPart::Tool { round, record };
+        messages::insert_message(
+            &f.conn,
+            NewMessage {
+                chat: Chat::Task(f.task_id),
+                role: Role::Assistant,
+                content: "",
+                kind: Kind::Normal,
+                origin: Origin::Turn {
+                    turn_id: "t1",
+                    attempt_no: 1,
+                },
+                error_kind: None,
+                error_detail: None,
+                parts: Some(&[
+                    text(1, "調べます"),
+                    tool(1, failed),
+                    text(2, "もう一度"),
+                    tool(2, found),
+                    text(3, "見つかりました"),
+                ]),
+            },
+        )
+        .unwrap();
+
+        let replayed: Vec<_> = f
+            .history()
+            .into_iter()
+            .filter_map(|m| match m {
+                ChatMessage::Assistant {
+                    content,
+                    tool_calls,
+                    ..
+                } => Some((content, tool_calls.len())),
+                ChatMessage::Tool { .. } => Some((None, 0)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            replayed,
+            vec![
+                (Some("調べます\n\nもう一度".to_string()), 1),
+                (None, 0),
+                (Some("見つかりました".to_string()), 0),
+            ]
+        );
     }
 
     /// 状態を表す結果も載せる。古い記録に残った分類のキーは見ない。
@@ -1773,7 +1880,7 @@ mod tests {
         );
     }
 
-    /// 置き換えられない保存は使わず、実行記録から組み立てる。
+    /// 置き換えられない保存は使わず、返信の行の中身から組み立てる。
     #[test]
     fn a_saved_attempt_whose_ids_cannot_be_reissued_is_rebuilt_from_the_records() {
         let f = Fixture::new();
@@ -1821,8 +1928,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();

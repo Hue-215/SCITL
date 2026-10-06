@@ -1,10 +1,16 @@
-import type { RefObject, UIEventHandler } from 'react'
+import type { ReactNode, RefObject, UIEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
 import { ConfirmButton } from './Dialog'
 import { formatDateTime, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
-import { buildThoughtItems, finalEntryOf, groupMessages, type ThoughtItem } from './thinking'
+import {
+  buildTurnSegments,
+  finalEntryOf,
+  groupMessages,
+  type ThoughtItem,
+  type TurnSegment,
+} from './thinking'
 import type { MessageView, PendingEntry } from './types'
 
 // Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
@@ -50,6 +56,24 @@ function EntryActions({
         onConfirm={onDelete}
         disabled={disabled}
       />
+    </div>
+  )
+}
+
+// ターンの中身の1区切り。本文は返信と同じ吹き出しで出す。`footer`は吹き出しの末尾に足すもの
+// (日時と操作)。
+function TurnSegmentView({
+  segment,
+  footer = null,
+}: {
+  segment: TurnSegment
+  footer?: ReactNode
+}) {
+  if (segment.kind === 'thoughts') return <ThinkingTools items={segment.items} />
+  return (
+    <div className="entry entry-assistant">
+      <EntryBody role="assistant" content={segment.text} />
+      {footer}
     </div>
   )
 }
@@ -204,23 +228,35 @@ export default function ChatLog({
           )
         }
 
-        // 応答生成1ターン分。思考・ツール呼び出しを発生順の折りたたみで見せ、返信(最終行。
-        // エラー発言を含む)を吹き出しとして表示する。再試行・削除の対象はこの最終行。
+        // 応答生成1ターン分。中身(思考・ツールの折りたたみと、ラウンドごとの本文)を起きた順に
+        // 並べる。再試行・削除の対象は返信の行(最終行。エラー発言を含む)。
         const finalMessage = finalEntryOf(item.entries)
+        const segments = buildTurnSegments(item.entries)
         const canRetryOrDelete =
           finalMessage.kind === 'normal' &&
           (finalMessage.role === 'assistant' || finalMessage.role === 'error')
+        const actions = canRetryOrDelete && (
+          <EntryActions
+            label={t('chat.retry_button')}
+            onAction={() => onRetry(finalMessage.id)}
+            onDelete={() => onRemove(finalMessage.id)}
+            disabled={disableActions}
+          />
+        )
+        const footer = (
+          <>
+            <time className="entry-time">{formatDateTime(finalMessage.created_at)}</time>
+            {actions}
+          </>
+        )
         // ユーザーが止めたターンは失敗として見せない。会話の最後なら返信の無い会話と同じく
         // 応答を生成する操作(中身は作り直し)を、続けて発言したあとなら止めたことだけを出す。
         if (finalMessage.role === 'error' && finalMessage.error_kind === 'stopped') {
           return (
             <li key={`turn-${item.turnId}`} className="turn-group">
-              <ThinkingTools items={buildThoughtItems(item.entries)} />
-              {finalMessage.partial_reply && (
-                <div className="entry entry-assistant">
-                  <EntryBody role="assistant" content={finalMessage.partial_reply} />
-                </div>
-              )}
+              {segments.map((segment, i) => (
+                <TurnSegmentView key={i} segment={segment} />
+              ))}
               {index === lastExchange ? (
                 <div className="button-row">
                   <GenerateReplyButton
@@ -234,39 +270,39 @@ export default function ChatLog({
             </li>
           )
         }
+        // 返信は、最後の本文の吹き出しに日時と操作を添える。失敗したターンの本文(受け取り
+        // 終えたもの)は生成中に見えていたものを返信と同じ形で残し、日時と操作はエラーに添える。
+        const lastText =
+          finalMessage.role === 'assistant'
+            ? segments.findLastIndex((segment) => segment.kind === 'text')
+            : -1
         return (
           <li key={`turn-${item.turnId}`} className="turn-group">
-            <ThinkingTools items={buildThoughtItems(item.entries)} />
-            {/* 失敗したターンで受け取り終えた本文。生成中に見えていたものを返信と同じ形で残す */}
-            {finalMessage.partial_reply && (
-              <div className="entry entry-assistant">
-                <EntryBody role="assistant" content={finalMessage.partial_reply} />
+            {segments.map((segment, i) => (
+              <TurnSegmentView
+                key={i}
+                segment={segment}
+                footer={i === lastText ? footer : null}
+              />
+            ))}
+            {lastText === -1 && (
+              <div className={`entry entry-${finalMessage.role}`}>
+                <EntryBody
+                  role={finalMessage.role}
+                  content={finalMessage.content}
+                  errorKind={finalMessage.error_kind}
+                />
+                {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
+                    プレーンテキストのまま出す */}
+                {finalMessage.error_detail && (
+                  <details className="entry-error-detail">
+                    <summary>{t('chat.error_detail_summary')}</summary>
+                    <pre>{finalMessage.error_detail}</pre>
+                  </details>
+                )}
+                {footer}
               </div>
             )}
-            <div className={`entry entry-${finalMessage.role}`}>
-              <EntryBody
-                role={finalMessage.role}
-                content={finalMessage.content}
-                errorKind={finalMessage.error_kind}
-              />
-              {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
-                  プレーンテキストのまま出す */}
-              {finalMessage.error_detail && (
-                <details className="entry-error-detail">
-                  <summary>{t('chat.error_detail_summary')}</summary>
-                  <pre>{finalMessage.error_detail}</pre>
-                </details>
-              )}
-              <time className="entry-time">{formatDateTime(finalMessage.created_at)}</time>
-              {canRetryOrDelete && (
-                <EntryActions
-                  label={t('chat.retry_button')}
-                  onAction={() => onRetry(finalMessage.id)}
-                  onDelete={() => onRemove(finalMessage.id)}
-                  disabled={disableActions}
-                />
-              )}
-            </div>
           </li>
         )
       })}
