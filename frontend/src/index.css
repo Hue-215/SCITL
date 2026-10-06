@@ -874,7 +874,14 @@ option {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   max-width: 100%;
-  overflow-wrap: anywhere;
+}
+
+/* 閉じた行は1行に収め、はみ出す分は省略する(折り返すと要約が開閉の印の下へ回り込む)。
+   全文は開いた引数・結果で見る。 */
+.tool-call summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tool-call-name {
