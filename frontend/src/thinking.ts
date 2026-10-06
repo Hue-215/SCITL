@@ -1,7 +1,7 @@
 import type { MessageKey } from './i18n'
 import type { MessageView, ToolExecutionView, TurnEvent } from './types'
 
-// 「思考・ツール」の折りたたみ表示のためのデータ整形。コンポーネント本体は./ThinkingTools.tsxに
+// ターンの中身(思考・ツール・本文)の表示のためのデータ整形。コンポーネント本体は./ThinkingTools.tsxに
 // 置く(react/only-export-componentsに合わせてファイルを分ける)。
 
 export interface TurnGroup {
@@ -72,14 +72,14 @@ export type ThoughtItem =
   | { kind: 'reasoning'; id: number; text: string }
   | { kind: 'tool'; id: number; execution: ToolExecutionView }
 
-/** ターンの中身を、起きた順に「思考・ツール」の折りたたみと本文の吹き出しに分けたもの。 */
+/** ターンの中身を、起きた順に思考・ツールの並び(`ThinkingTools`)と本文の吹き出しに分けたもの。 */
 export type TurnSegment =
   | { kind: 'thoughts'; items: ThoughtItem[] }
   | { kind: 'text'; id: number; text: string }
 
 /**
  * 1ターン分のentriesから、起きた順の折りたたみと本文の列を組み立てる。返信の行(最終行)の
- * 中身(`parts`)を順に読み、続く思考・ツールは1つの折りたたみにまとめ、本文はラウンドごとの
+ * 中身(`parts`)を順に読み、続く思考・ツールは1つの並びにまとめ、本文はラウンドごとの
  * 吹き出しにする。前置き→ツール→本題の順がそのまま残る。
  *
  * 最終行より前の行(返信の中身から指されていない実行記録。別の版で書かれた行等)は、先頭の
@@ -127,7 +127,7 @@ export interface LiveTurn {
 
 export const NO_LIVE_TURN: LiveTurn = { segments: [], open: null }
 
-/** 思考・ツールの項目を、末尾の折りたたみに足す(末尾が本文なら新しい折りたたみを開く)。 */
+/** 思考・ツールの項目を、末尾の並びに足す(末尾が本文なら新しい並びを始める)。 */
 function withThought(segments: TurnSegment[], item: ThoughtItem): TurnSegment[] {
   const last = segments[segments.length - 1]
   if (last?.kind === 'thoughts') {

@@ -473,7 +473,7 @@ fn to_result_value(result: CallToolResult) -> Value {
         value.insert("omitted_non_text_blocks".to_string(), json!(omitted));
     }
     if result.is_error.unwrap_or(false) {
-        // 実行記録の表示(`ExternalToolLine`/「思考・ツール」折りたたみ)は`result.error`の
+        // 実行記録の表示(`ThinkingTools.tsx`のツールの1行)は`result.error`の
         // 有無でエラーを判定する。サーバーが返したエラーもその形に合わせる。
         value.insert(
             "error".to_string(),
