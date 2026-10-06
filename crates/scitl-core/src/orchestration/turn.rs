@@ -8,7 +8,7 @@ use ulid::Ulid;
 use crate::attachments::{AttachmentStore, Taken};
 use crate::blocking;
 use crate::db::attachments as db_attachments;
-use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, Role};
+use crate::db::messages::{self, Chat, Kind, Message, NewMessage, Origin, ReplyPart, Role};
 use crate::db::tasks::{self, Task};
 use crate::db::transcripts::{self, NewTranscript};
 use crate::db::{in_transaction, with_conn, SharedConnection};
@@ -104,8 +104,7 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
             origin: Origin::User,
             error_kind: None,
             error_detail: None,
-            partial_reply: None,
-            reasoning: None,
+            parts: None,
         },
     )
 }
@@ -384,7 +383,8 @@ fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
 /// 失敗はどれもこの試行のエラー発言として保存して`Ok`で返す(何も書かずに抜けると、返信を
 /// 消した再試行ではターンごと会話から消える)。`Err`が返るのはエラー発言自体を書けないときだけ。
 /// `stop`で止めた場合も同じく、止めたことを表すエラー発言を書いて`Ok`で返す([`stop_response`])。
-/// 失敗までに受け取り終えたラウンドの本文は、エラー発言に添えて残す([`ReplyParts`])。
+/// 失敗までに受け取り終えたラウンドの中身と実行したツールは、エラー発言に添えて残す
+/// ([`ReplyParts`])。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -485,7 +485,7 @@ impl Attempt {
         content: &str,
         kind: Kind,
         error: Option<ErrorColumns>,
-        reasoning: Option<&str>,
+        parts: Option<&[ReplyPart]>,
     ) -> Result<i64> {
         messages::insert_message(
             conn,
@@ -500,8 +500,7 @@ impl Attempt {
                 },
                 error_kind: error.map(|e| e.kind),
                 error_detail: error.and_then(|e| e.detail),
-                partial_reply: error.and_then(|e| e.partial_reply),
-                reasoning,
+                parts,
             },
         )
     }
@@ -512,26 +511,40 @@ impl Attempt {
 struct ErrorColumns<'a> {
     kind: &'a str,
     detail: Option<&'a str>,
-    partial_reply: Option<&'a str>,
 }
 
-/// 受け取り終えたラウンドでモデルが書いた本文。ツールを呼んだラウンドに添えた本文も含める。
-/// ターンが成功すれば返信の本文に、失敗すればエラー発言の`partial_reply`になる。受け取りの
-/// 途中で失敗したラウンドの本文は断片なので入れない。
+/// このターンの中身を起きた順に積んだもの(`messages.parts`)。受け取り終えたラウンドの思考と
+/// 本文、実行したツールの記録を指す。ターンが成功すれば返信の行に、失敗すればエラー発言に持たせる。
+/// 受け取りの途中で失敗したラウンドは断片なので入れない。
 #[derive(Default)]
-struct ReplyParts(Vec<String>);
+struct ReplyParts(Vec<ReplyPart>);
 
 impl ReplyParts {
-    /// 空白だけの本文は、中身の無い吹き出しになるので入れない。
-    fn push(&mut self, text: &str) {
+    /// 受け取り終えたラウンドの思考と本文を積む。空白だけのものは、中身の無い吹き出しになるので
+    /// 入れない。
+    fn push_round(&mut self, round: u32, reasoning: Option<&str>, text: &str) {
+        if let Some(reasoning) = reasoning.filter(|r| !r.trim().is_empty()) {
+            self.0.push(ReplyPart::Reasoning {
+                round,
+                text: reasoning.to_string(),
+            });
+        }
         if !text.trim().is_empty() {
-            self.0.push(text.to_string());
+            self.0.push(ReplyPart::Text {
+                round,
+                text: text.to_string(),
+            });
         }
     }
 
-    /// ラウンドの順に空行で区切ってつなぐ。何も無ければ空文字列。
-    fn joined(&self) -> String {
-        self.0.join("\n\n")
+    /// 実行して記録を書いたツールを積む。`record`は実行記録の行のid。
+    fn push_tool(&mut self, round: u32, record: i64) {
+        self.0.push(ReplyPart::Tool { round, record });
+    }
+
+    /// モデルが本文を1つでも書いたか。
+    fn has_text(&self) -> bool {
+        self.0.iter().any(|p| matches!(p, ReplyPart::Text { .. }))
     }
 }
 
@@ -611,7 +624,7 @@ pub(super) async fn prepare_external_tools(
 ///
 /// 止める指示(`stop`)は、LLMの応答待ちの間と、ツール呼び出しの区切りで見る。
 ///
-/// 失敗はここでエラー発言にする(受け取り終えたラウンドの本文を添えるため)。`Err`が返るのは
+/// 失敗はここでエラー発言にする(受け取り終えたターンの中身を添えるため)。`Err`が返るのは
 /// エラー発言自体を書けないときだけ。
 async fn run_tool_rounds(
     db: SharedConnection,
@@ -666,11 +679,12 @@ async fn run_tool_rounds(
 
             let RoundResponse {
                 text,
-                reasoning: reasoning_for_db,
+                reasoning,
                 tool_calls,
             } = RoundResponse::collect(&events);
-            // 受け取り終えたラウンドの本文。このあとどの経路で終わっても、返信かエラー発言に残る。
-            reply_parts.push(&text);
+            // 受け取り終えたラウンドの中身。このあとどの経路で終わっても、返信かエラー発言に残る。
+            let round_no = u32::try_from(round).expect("tool rounds are few");
+            reply_parts.push_round(round_no, reasoning.as_deref(), &text);
 
             if tool_calls.is_empty() {
                 // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
@@ -681,10 +695,11 @@ async fn run_tool_rounds(
                     tool_calls: Vec::new(),
                     replay,
                 });
-                let reply = reply_parts.joined();
-                if reply.is_empty() {
+                if !reply_parts.has_text() {
                     return fail_turn(db, attempt, TurnFailure::EmptyResponse, reply_parts).await;
                 }
+                // 書けなかったときはエラー発言に同じ中身を残すので、取り出さずに写す。
+                let parts = reply_parts.0.clone();
 
                 let transcript = adapter.identity().and_then(|identity| {
                     let saved = request.transcript(&rounds);
@@ -698,16 +713,17 @@ async fn run_tool_rounds(
                 let attempt = attempt.clone();
                 with_conn(db, move |conn| {
                     in_transaction(conn, |conn| {
+                        // 本文は配列だけに持つ(`docs/spec/data-model/messages.md`)。
                         attempt.insert(
                             conn,
                             Role::Assistant,
-                            &reply,
+                            "",
                             Kind::Normal,
                             None,
-                            reasoning_for_db.as_deref(),
+                            Some(&parts),
                         )?;
                         // 保存は会話ログの補助なので、失敗しても返信は書く(保存の無いターンは
-                        // 実行記録から組み立てる)。
+                        // 返信の行の中身から組み立てる)。
                         if let Some((identity, saved)) = &transcript {
                             if let Err(e) = attempt.save_transcript(conn, identity, saved) {
                                 crate::diagnostics::report(format_args!(
@@ -734,7 +750,12 @@ async fn run_tool_rounds(
                 stop,
             };
             let executed = match calls
-                .execute(sessions, tool_calls, reasoning_for_db, &mut tool_time_used)
+                .execute(
+                    sessions,
+                    tool_calls,
+                    (round_no, &mut *reply_parts),
+                    &mut tool_time_used,
+                )
                 .await?
             {
                 Ok(executed) => executed,
@@ -819,6 +840,8 @@ struct RoundCalls<'a, 'c> {
 
 impl RoundCalls<'_, '_> {
     /// 呼ばれたツールを順にすべて実行し(1応答に複数載っても取りこぼさない)、実行記録を書く。
+    /// 書いた記録はそのつど`parts`(ラウンドの番号と、ターンの中身)に積むので、途中で打ち切っても
+    /// 実行した分はターンの中身に残る。
     /// `tool_time_used`はツール実行に使った時間の合計で、実行した分を足す。内側の`Err`は、
     /// ターンを打ち切るときの失敗の種類(外側の`Err`はDBに書けない等の失敗)。
     ///
@@ -831,12 +854,12 @@ impl RoundCalls<'_, '_> {
         &self,
         sessions: &mut McpSessions,
         tool_calls: Vec<ToolCallRequest>,
-        reasoning: Option<String>,
+        (round, parts): (u32, &mut ReplyParts),
         tool_time_used: &mut Duration,
     ) -> Result<std::result::Result<Vec<(ToolCallRequest, CallOutcome)>, TurnFailure>> {
         let ctx = self.ctx;
         let mut executed = Vec::with_capacity(tool_calls.len());
-        for (i, call) in tool_calls.into_iter().enumerate() {
+        for call in tool_calls {
             if self.stop.is_requested() {
                 return Ok(Err(TurnFailure::Stopped));
             }
@@ -855,9 +878,6 @@ impl RoundCalls<'_, '_> {
             .await?;
             *tool_time_used = tool_time_used.saturating_add(started.elapsed());
 
-            // このラウンドの思考は、ラウンド内最初のツール実行記録にだけ紐付ける(全呼び出しに
-            // 複製すると、画面の「思考・ツール」の件数が水増しされる)。
-            let reasoning_for_row = if i == 0 { reasoning.clone() } else { None };
             let record = ToolExecutionRecord {
                 tool: call.name.clone(),
                 arguments: match &call.arguments {
@@ -867,14 +887,8 @@ impl RoundCalls<'_, '_> {
                 result: outcome.result.clone(),
                 call_id: call.id.clone(),
             };
-            save_tool_execution(
-                self.db.clone(),
-                self.attempt,
-                record,
-                reasoning_for_row,
-                ctx.events,
-            )
-            .await?;
+            let id = save_tool_execution(self.db.clone(), self.attempt, record, ctx.events).await?;
+            parts.push_tool(round, id);
             executed.push((call, outcome));
         }
         Ok(Ok(executed))
@@ -992,25 +1006,17 @@ async fn read_tool_images(output: ToolOutput, store: AttachmentStore) -> Result<
 
 /// ツール実行記録を保存する唯一の入口。保存した値をそのまま画面へ知らせる
 /// ([`TurnEvent::ToolExecuted`])。画面への出力の規則は保存値を前提にしているので、保存する
-/// 値と知らせる値をここ1箇所で作る。
+/// 値と知らせる値をここ1箇所で作る。保存した行のidを返す。
 async fn save_tool_execution(
     db: SharedConnection,
     attempt: &Attempt,
     record: ToolExecutionRecord,
-    reasoning: Option<String>,
     events: TurnEvents<'_>,
-) -> Result<()> {
+) -> Result<i64> {
     let content = serde_json::to_string(&record).expect("a record of JSON values serializes");
     let attempt = attempt.clone();
     let id = with_conn(db, move |conn| {
-        attempt.insert(
-            conn,
-            Role::Tool,
-            &content,
-            Kind::ToolExecution,
-            None,
-            reasoning.as_deref(),
-        )
+        attempt.insert(conn, Role::Tool, &content, Kind::ToolExecution, None, None)
     })
     .await?;
     // DBのロックを離してから知らせる。
@@ -1018,11 +1024,11 @@ async fn save_tool_execution(
         id,
         execution: ToolExecutionView::of_record(&record),
     });
-    Ok(())
+    Ok(id)
 }
 
 /// エラー発言(`role='error'`)を保存する唯一の入口。`content`は`failure.user_message()`
-/// の定型文言、`error_detail`は`failure.detail()`、`partial_reply`は受け取り終えたラウンドの本文。
+/// の定型文言、`error_detail`は`failure.detail()`、`parts`はそれまでに受け取り終えたターンの中身。
 async fn fail_turn(
     db: SharedConnection,
     attempt: &Attempt,
@@ -1031,7 +1037,7 @@ async fn fail_turn(
 ) -> Result<()> {
     let attempt = attempt.clone();
     let content = failure.user_message();
-    let partial_reply = parts.joined();
+    let parts = parts.0.clone();
     with_conn(db, move |conn| {
         attempt.insert(
             conn,
@@ -1041,9 +1047,8 @@ async fn fail_turn(
             Some(ErrorColumns {
                 kind: failure.kind(),
                 detail: failure.detail(),
-                partial_reply: (!partial_reply.is_empty()).then_some(partial_reply.as_str()),
             }),
-            None,
+            Some(&parts),
         )
     })
     .await?;

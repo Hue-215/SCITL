@@ -1,7 +1,7 @@
 //! Markdownエクスポート。全タスクと総合チャットを、それぞれ1つのMarkdownファイルに書き出す。
 //! 書き出すのは画面から見られるものだけで、削除したタスク・工程・発言と、会話から外れた
 //! ターン(古い試行・破棄されたターン)は含めない。思考と`error_detail`も含めない。失敗した
-//! ターンで受け取り終えた本文(`partial_reply`)は、画面と同じく含める。
+//! ターンで受け取り終えた中身(エラー発言の`parts`)は、画面と同じく含める。
 //!
 //! 書き出し先は呼び出し側が決める。画面からはパスを受け取らない。
 
@@ -18,7 +18,7 @@ use ulid::Ulid;
 use crate::attachments::{safe_file_name, AttachmentStore, Attachments};
 use crate::blocking;
 use crate::db::attachments::{self, Attachment, AttachmentContent};
-use crate::db::messages::{self, Chat, Message};
+use crate::db::messages::{self, Chat, Message, ReplyRecords};
 use crate::db::task_steps::{self, TaskStep};
 use crate::db::tasks::{self, Task};
 use crate::db::{now_iso8601, with_conn, SharedConnection};
@@ -138,15 +138,18 @@ fn write_files(snapshot: &Snapshot, store: &AttachmentStore, dir: &Path) -> Resu
     Ok(counts)
 }
 
-/// 会話の行に、書き出した添付へのリンクを添える。
+/// 会話の行に、書き出した添付へのリンクを添える。返信の中身が指す実行記録は、独立した項目に
+/// せず返信の項目の中に並べる。
 fn entries<'a>(
     chat: &'a ChatRows,
     store: &AttachmentStore,
     dir: &Path,
     (written, missing): &mut (usize, usize),
 ) -> Vec<Entry<'a>> {
+    let records = ReplyRecords::of(&chat.messages);
     chat.messages
         .iter()
+        .filter(|message| !records.contains(message.id))
         .map(|message| {
             let attachments = chat
                 .attachments
@@ -172,6 +175,7 @@ fn entries<'a>(
                 .collect();
             Entry {
                 message,
+                parts: records.resolve(message),
                 attachments,
             }
         })
@@ -313,8 +317,8 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (matches!(origin, Origin::Turn { .. }) && kind == Kind::Normal)
+                        .then_some(&[]),
                 },
             )
             .unwrap()
@@ -325,11 +329,24 @@ mod tests {
         }
 
         fn reply(&self, chat: Chat, content: &str, turn_id: &str, attempt_no: i64) -> i64 {
-            let origin = Origin::Turn {
-                turn_id,
-                attempt_no,
-            };
-            self.message(chat, Role::Assistant, Kind::Normal, content, origin)
+            let parts = messages::parts_for_reply(&self.conn, turn_id, attempt_no, Some(content));
+            messages::insert_message(
+                &self.conn,
+                NewMessage {
+                    chat,
+                    role: Role::Assistant,
+                    content: "",
+                    kind: Kind::Normal,
+                    origin: Origin::Turn {
+                        turn_id,
+                        attempt_no,
+                    },
+                    error_kind: None,
+                    error_detail: None,
+                    parts: Some(&parts),
+                },
+            )
+            .unwrap()
         }
 
         fn attach(&self, message_id: i64, name: &str, content: AttachmentContent) {
@@ -382,6 +399,19 @@ mod tests {
             r#"{"tool":"discarded"}"#,
             discarded,
         );
+        // 返信の中身が指す記録は、返信の項目の中に、本文との起きた順で並ぶ。
+        f.say(chat, "with a tool");
+        f.message(
+            chat,
+            Role::Tool,
+            Kind::ToolExecution,
+            r#"{"tool":"list_tasks"}"#,
+            Origin::Turn {
+                turn_id: "turn-3",
+                attempt_no: 1,
+            },
+        );
+        f.reply(chat, "after the call", "turn-3", 1);
 
         let archived = f.task("しまった");
         let update = TaskUpdate {
@@ -401,6 +431,10 @@ mod tests {
         assert!(!task.contains("old attempt"));
         assert!(!task.contains("deleted message"));
         assert!(!task.contains("discarded"));
+        let call = task.find("Tool execution (").unwrap();
+        assert!(task.find("### User").unwrap() < call);
+        assert!(call < task.find("after the call").unwrap());
+        assert!(!task.contains("### Tool execution"));
         assert!(read(folder.join(format!("task-{archived}-しまった.md")))
             .contains("- Status: archived"));
         assert!(!folder.join(format!("task-{removed}-消した.md")).exists());

@@ -278,7 +278,7 @@ export default function App() {
 
   // 会話欄の中身が変わるのは、発言の引き直し・楽観表示の出し入れ・途中経過の到着・失敗の
   // 表示のとき。設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
-  useLayoutEffect(follow, [follow, messages, pending.length, live.length, failure, settingsOpen])
+  useLayoutEffect(follow, [follow, messages, pending.length, live, failure, settingsOpen])
 
   if (settingsOpen) {
     return (

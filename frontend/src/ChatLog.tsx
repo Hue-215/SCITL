@@ -1,10 +1,16 @@
-import type { RefObject, UIEventHandler } from 'react'
+import type { ReactNode, RefObject, UIEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
 import { ConfirmButton } from './Dialog'
 import { formatDateTime, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
-import { buildThoughtItems, finalEntryOf, groupMessages, type ThoughtItem } from './thinking'
+import {
+  buildTurnSegments,
+  finalEntryOf,
+  groupMessages,
+  type LiveTurn,
+  type TurnSegment,
+} from './thinking'
 import type { MessageView, PendingEntry } from './types'
 
 // Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
@@ -54,6 +60,24 @@ function EntryActions({
   )
 }
 
+// ターンの中身の1区切り。本文は返信と同じ吹き出しで出す。`footer`は吹き出しの末尾に足すもの
+// (日時と操作)。
+function TurnSegmentView({
+  segment,
+  footer = null,
+}: {
+  segment: TurnSegment
+  footer?: ReactNode
+}) {
+  if (segment.kind === 'thoughts') return <ThinkingTools items={segment.items} />
+  return (
+    <div className="entry entry-assistant">
+      <EntryBody role="assistant" content={segment.text} />
+      {footer}
+    </div>
+  )
+}
+
 // 返信の無い会話の末尾に出す、応答を生成する操作。止めたターンが会話の最後にあるときも同じ形で出す。
 function GenerateReplyButton({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
   return (
@@ -79,7 +103,8 @@ interface ChatLogProps {
   messages: MessageView[]
   // 実行中のコマンドの楽観表示・途中経過・コマンド自体の失敗(`useChatRequests`)。
   pending: PendingEntry[]
-  live: ThoughtItem[]
+  // 応答待ちの間に届いたターンの中身。
+  live: LiveTurn
   failure: string | null
   // 応答待ちの会話では、編集・再試行・削除を不可にする。
   disableActions: boolean
@@ -130,8 +155,8 @@ export default function ChatLog({
       {items.map((item, index) => {
         if (item.kind === 'plain') {
           const message = item.message
-          // 応答生成以外の経路(画面・MCP等)での操作の記録は「思考・ツール」の
-          // 折りたたみに含めず、独立した1行として表示する。
+          // 応答生成以外の経路(画面・MCP等)での操作の記録はターンに含めず、経路のラベルを
+          // 付けた独立した1行として表示する。
           if (message.kind === 'tool_execution') {
             return (
               <li key={message.id} className="entry entry-tool">
@@ -204,23 +229,35 @@ export default function ChatLog({
           )
         }
 
-        // 応答生成1ターン分。思考・ツール呼び出しを発生順の折りたたみで見せ、返信(最終行。
-        // エラー発言を含む)を吹き出しとして表示する。再試行・削除の対象はこの最終行。
+        // 応答生成1ターン分。中身(思考・ツールの並びと、ラウンドごとの本文)を起きた順に
+        // 並べる。再試行・削除の対象は返信の行(最終行。エラー発言を含む)。
         const finalMessage = finalEntryOf(item.entries)
+        const segments = buildTurnSegments(item.entries)
         const canRetryOrDelete =
           finalMessage.kind === 'normal' &&
           (finalMessage.role === 'assistant' || finalMessage.role === 'error')
+        const actions = canRetryOrDelete && (
+          <EntryActions
+            label={t('chat.retry_button')}
+            onAction={() => onRetry(finalMessage.id)}
+            onDelete={() => onRemove(finalMessage.id)}
+            disabled={disableActions}
+          />
+        )
+        const footer = (
+          <>
+            <time className="entry-time">{formatDateTime(finalMessage.created_at)}</time>
+            {actions}
+          </>
+        )
         // ユーザーが止めたターンは失敗として見せない。会話の最後なら返信の無い会話と同じく
         // 応答を生成する操作(中身は作り直し)を、続けて発言したあとなら止めたことだけを出す。
         if (finalMessage.role === 'error' && finalMessage.error_kind === 'stopped') {
           return (
             <li key={`turn-${item.turnId}`} className="turn-group">
-              <ThinkingTools items={buildThoughtItems(item.entries)} />
-              {finalMessage.partial_reply && (
-                <div className="entry entry-assistant">
-                  <EntryBody role="assistant" content={finalMessage.partial_reply} />
-                </div>
-              )}
+              {segments.map((segment, i) => (
+                <TurnSegmentView key={i} segment={segment} />
+              ))}
               {index === lastExchange ? (
                 <div className="button-row">
                   <GenerateReplyButton
@@ -234,51 +271,58 @@ export default function ChatLog({
             </li>
           )
         }
+        // 返信は、最後に来た本文の吹き出しに日時と操作を添える。本文のあとに思考・ツールが続いた
+        // (最後のラウンドが本文を書かなかった)ときは、ターンの末尾に添える。失敗したターンの本文
+        // (受け取り終えたもの)は生成中に見えていたものを返信と同じ形で残し、日時と操作はエラーに
+        // 添える。
+        const footerOnText =
+          finalMessage.role === 'assistant' && segments.at(-1)?.kind === 'text'
         return (
           <li key={`turn-${item.turnId}`} className="turn-group">
-            <ThinkingTools items={buildThoughtItems(item.entries)} />
-            {/* 失敗したターンで受け取り終えた本文。生成中に見えていたものを返信と同じ形で残す */}
-            {finalMessage.partial_reply && (
-              <div className="entry entry-assistant">
-                <EntryBody role="assistant" content={finalMessage.partial_reply} />
+            {segments.map((segment, i) => (
+              <TurnSegmentView
+                key={i}
+                segment={segment}
+                footer={footerOnText && i === segments.length - 1 ? footer : null}
+              />
+            ))}
+            {finalMessage.role === 'assistant' ? (
+              !footerOnText && <div>{footer}</div>
+            ) : (
+              <div className={`entry entry-${finalMessage.role}`}>
+                <EntryBody
+                  role={finalMessage.role}
+                  content={finalMessage.content}
+                  errorKind={finalMessage.error_kind}
+                />
+                {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
+                    プレーンテキストのまま出す */}
+                {finalMessage.error_detail && (
+                  <details className="entry-error-detail">
+                    <summary>{t('chat.error_detail_summary')}</summary>
+                    <pre>{finalMessage.error_detail}</pre>
+                  </details>
+                )}
+                {footer}
               </div>
             )}
-            <div className={`entry entry-${finalMessage.role}`}>
-              <EntryBody
-                role={finalMessage.role}
-                content={finalMessage.content}
-                errorKind={finalMessage.error_kind}
-              />
-              {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
-                  プレーンテキストのまま出す */}
-              {finalMessage.error_detail && (
-                <details className="entry-error-detail">
-                  <summary>{t('chat.error_detail_summary')}</summary>
-                  <pre>{finalMessage.error_detail}</pre>
-                </details>
-              )}
-              <time className="entry-time">{formatDateTime(finalMessage.created_at)}</time>
-              {canRetryOrDelete && (
-                <EntryActions
-                  label={t('chat.retry_button')}
-                  onAction={() => onRetry(finalMessage.id)}
-                  onDelete={() => onRemove(finalMessage.id)}
-                  disabled={disableActions}
-                />
-              )}
-            </div>
           </li>
         )
       })}
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
-          // 応答待ちの間の途中経過を、保存済みのターンと同じ形で出す。完了したら読み直した
-          // ターンに置き換わる。
+          // 応答待ちの間の途中経過を、保存済みのターンと同じ形で届いた順に出す。完了したら
+          // 読み直したターンに置き換わる。本文が流れている最中は応答待ちの文言を出さない(書き
+          // 終えてツールを実行している間は出す。止める指示を出したあとは、止めていることを出す)。
           <li key={`pending-${i}`} className="turn-group">
-            <ThinkingTools items={live} />
-            <div className="entry entry-pending">
-              <EntryBody role={entry.role} content={entry.content} />
-            </div>
+            {live.segments.map((segment, j) => (
+              <TurnSegmentView key={j} segment={segment} />
+            ))}
+            {(live.open !== 'text' || entry.stopping) && (
+              <div className="entry entry-pending">
+                <EntryBody role={entry.role} content={entry.content} />
+              </div>
+            )}
           </li>
         ) : (
           <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>

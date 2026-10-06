@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -106,11 +107,34 @@ pub struct NewMessage<'a> {
     /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
     /// モデル入力・エクスポートには使わない。
     pub error_detail: Option<&'a str>,
-    /// 失敗したターンで受け取り終えたラウンドの本文。エラー発言だけが持てる。表示・エクスポート
-    /// 専用で、APIへの入力には使わない。
-    pub partial_reply: Option<&'a str>,
-    /// モデルの思考(reasoning)。表示・エクスポート専用で、APIへの入力には使わない。
-    pub reasoning: Option<&'a str>,
+    /// ターンの返信の行(`Origin::Turn`の通常発言)だけが持ち、それには必ず持つ
+    /// (`0008_reply_parts.sql`のトリガー)。
+    pub parts: Option<&'a [ReplyPart]>,
+}
+
+/// ターンの返信の行が持つ、そのターンの中身(`messages.parts`)の1要素。起きた順に並べ、
+/// 本文はラウンドごとに分けたまま持つ(`docs/spec/data-model/messages.md`「1ターン内の往復で
+/// 保存するもの」)。`round`は1始まりのラウンドの番号で、ツールだけのラウンドが続いても
+/// 区切れるように要素ごとに持つ。
+///
+/// ツールは実行記録の行をidで指す。記録の行は実行した時点で書くログで、呼び出しと結果は
+/// そちらにだけ持つ。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReplyPart {
+    /// 思考の表示用のテキスト。表示専用で、モデルへの入力にもエクスポートにも出さない。
+    Reasoning {
+        round: u32,
+        text: String,
+    },
+    Text {
+        round: u32,
+        text: String,
+    },
+    Tool {
+        round: u32,
+        record: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -122,15 +146,97 @@ pub struct Message {
     pub content: String,
     pub kind: Kind,
     pub source: Option<String>,
-    pub reasoning: Option<String>,
     pub error_kind: Option<String>,
     pub error_detail: Option<String>,
-    pub partial_reply: Option<String>,
+    /// ターンの返信の行の中身([`ReplyPart`])。ほかの行は空。ツールは行のidを指すだけなので、
+    /// 画面へは指した記録を解いた形で渡す(`orchestration::list_chat`)。
+    #[serde(skip)]
+    pub parts: Vec<ReplyPart>,
     pub turn_id: Option<String>,
     pub attempt_no: Option<i64>,
     pub created_at: String,
     /// 発言に付いた添付。付けた順。
     pub attachments: Vec<AttachmentView>,
+}
+
+/// 返信の行の中身([`ReplyPart`])の1要素を、ツールなら指した実行記録の行を引いた形にしたもの。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ResolvedPart<'a> {
+    Reasoning { round: u32, text: &'a str },
+    Text { round: u32, text: &'a str },
+    Tool { round: u32, record: &'a Message },
+}
+
+impl ResolvedPart<'_> {
+    pub(crate) fn round(&self) -> u32 {
+        match self {
+            Self::Reasoning { round, .. } | Self::Text { round, .. } | Self::Tool { round, .. } => {
+                *round
+            }
+        }
+    }
+}
+
+/// 会話の行のうち、返信の行の中身から指されている実行記録の行。表示・エクスポート・履歴は、
+/// これらの記録を独立した行としては扱わず、指した返信の中身の位置に並べる。
+pub(crate) struct ReplyRecords<'a>(HashMap<i64, &'a Message>);
+
+impl<'a> ReplyRecords<'a> {
+    /// 指した記録は、返信と同じ試行の、`rows`にある(消していない)ものだけを引く。
+    pub(crate) fn of(rows: &'a [Message]) -> Self {
+        let by_id: HashMap<i64, &Message> = rows
+            .iter()
+            .filter(|m| m.kind == Kind::ToolExecution && m.turn_id.is_some())
+            .map(|m| (m.id, m))
+            .collect();
+        let mut referenced = HashMap::new();
+        for reply in rows {
+            for part in &reply.parts {
+                let ReplyPart::Tool { record, .. } = part else {
+                    continue;
+                };
+                if let Some(m) = by_id.get(record).filter(|m| same_attempt(m, reply)) {
+                    referenced.insert(*record, *m);
+                }
+            }
+        }
+        Self(referenced)
+    }
+
+    /// 行が、返信の中身から指されている実行記録か。
+    pub(crate) fn contains(&self, id: i64) -> bool {
+        self.0.contains_key(&id)
+    }
+
+    /// 返信の行の中身を、起きた順のまま解く。引けない記録(消した記録)を指す要素は飛ばす。
+    pub(crate) fn resolve(&self, reply: &'a Message) -> Vec<ResolvedPart<'a>> {
+        reply
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                ReplyPart::Reasoning { round, text } => Some(ResolvedPart::Reasoning {
+                    round: *round,
+                    text,
+                }),
+                ReplyPart::Text { round, text } => Some(ResolvedPart::Text {
+                    round: *round,
+                    text,
+                }),
+                ReplyPart::Tool { round, record } => self
+                    .0
+                    .get(record)
+                    .filter(|m| same_attempt(m, reply))
+                    .map(|m| ResolvedPart::Tool {
+                        round: *round,
+                        record: m,
+                    }),
+            })
+            .collect()
+    }
+}
+
+fn same_attempt(a: &Message, b: &Message) -> bool {
+    a.turn_id == b.turn_id && a.attempt_no == b.attempt_no
 }
 
 pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
@@ -142,20 +248,22 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
         } => (None, Some(turn_id), Some(attempt_no)),
         Origin::Operation(source) => (Some(source), None, None),
     };
+    let parts = msg
+        .parts
+        .map(|parts| serde_json::to_string(parts).expect("reply parts serialize"));
     conn.execute(
         "INSERT INTO messages
-            (task_id, role, content, kind, source, reasoning, error_kind, error_detail, partial_reply, turn_id, attempt_no, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            (task_id, role, content, kind, source, error_kind, error_detail, parts, turn_id, attempt_no, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             msg.chat.task_id(),
             msg.role,
             msg.content,
             msg.kind,
             source,
-            msg.reasoning,
             msg.error_kind,
             msg.error_detail,
-            msg.partial_reply,
+            parts,
             turn_id,
             attempt_no,
             now_iso8601(),
@@ -247,7 +355,7 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
 }
 
 /// [`message_from_row`]が読む列の並び。
-const MESSAGE_COLUMNS: &str = "id, task_id, role, content, kind, source, reasoning, error_kind, error_detail, partial_reply, turn_id, attempt_no, created_at";
+const MESSAGE_COLUMNS: &str = "id, task_id, role, content, kind, source, error_kind, error_detail, parts, turn_id, attempt_no, created_at";
 
 /// 添付は呼び出し側が埋める。
 fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
@@ -258,13 +366,17 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
         content: row.get(3)?,
         kind: row.get(4)?,
         source: row.get(5)?,
-        reasoning: row.get(6)?,
-        error_kind: row.get(7)?,
-        error_detail: row.get(8)?,
-        partial_reply: row.get(9)?,
-        turn_id: row.get(10)?,
-        attempt_no: row.get(11)?,
-        created_at: row.get(12)?,
+        error_kind: row.get(6)?,
+        error_detail: row.get(7)?,
+        parts: match row.get::<_, Option<String>>(8)? {
+            Some(json) => serde_json::from_str(&json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.into())
+            })?,
+            None => Vec::new(),
+        },
+        turn_id: row.get(9)?,
+        attempt_no: row.get(10)?,
+        created_at: row.get(11)?,
         attachments: Vec::new(),
     })
 }
@@ -420,6 +532,43 @@ pub fn next_attempt_no(conn: &Connection, turn_id: &str) -> Result<i64> {
     Ok(max.unwrap_or(0) + 1)
 }
 
+/// テストで返信の行を書くときの中身。試行のそれまでの実行記録を記録ごとに1ラウンドとして指し、
+/// 最後のラウンドに`text`を置く(`0008_reply_parts.sql`が移した形と同じ)。
+#[cfg(test)]
+pub(crate) fn parts_for_reply(
+    conn: &Connection,
+    turn_id: &str,
+    attempt_no: i64,
+    text: Option<&str>,
+) -> Vec<ReplyPart> {
+    let records: Vec<i64> = conn
+        .prepare(
+            "SELECT id FROM messages
+             WHERE kind = 'tool_execution' AND turn_id = ?1 AND attempt_no = ?2
+               AND deleted_at IS NULL
+             ORDER BY id",
+        )
+        .unwrap()
+        .query_map(rusqlite::params![turn_id, attempt_no], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let last = u32::try_from(records.len()).unwrap() + 1;
+    let mut parts: Vec<ReplyPart> = records
+        .into_iter()
+        .zip(1..)
+        .map(|(record, round)| ReplyPart::Tool { round, record })
+        .collect();
+    parts.extend(
+        text.filter(|t| !t.trim().is_empty())
+            .map(|t| ReplyPart::Text {
+                round: last,
+                text: t.to_string(),
+            }),
+    );
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,8 +599,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -469,8 +617,7 @@ mod tests {
                 },
                 error_kind: Some("empty_response"),
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: Some(&[]),
             },
         )
         .unwrap();
@@ -488,8 +635,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: Some(&[]),
             },
         )
         .unwrap();
@@ -514,8 +660,7 @@ mod tests {
                 origin: Origin::Operation(OperationSource::Ui),
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -540,8 +685,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (kind == Kind::Normal).then_some(&[]),
                 },
             )
         };
@@ -601,8 +745,7 @@ mod tests {
                     },
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (kind == Kind::Normal).then_some(&[]),
                 },
             )
         };
@@ -633,8 +776,7 @@ mod tests {
                 },
                 error_kind: Some("no_api_key"),
                 error_detail: Some("HTTP 401: invalid key"),
-                partial_reply: None,
-                reasoning: None,
+                parts: Some(&[]),
             },
         )
         .unwrap();
@@ -666,8 +808,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: Some("HTTP 500: boom"),
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         );
         assert!(on_user.is_err());
@@ -682,8 +823,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some(""),
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         );
         assert!(empty.is_err());
@@ -698,8 +838,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: Some("provider"),
                 error_detail: Some("HTTP 500: boom"),
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -711,48 +850,46 @@ mod tests {
             .is_err());
     }
 
-    /// 途中までの本文を持てるのはエラー発言だけで、空文字は持てない(`0007_partial_reply.sql`の
-    /// トリガー)。
+    /// 中身を持つのはターンの返信の行だけで、それには必ず持つ(`0008_reply_parts.sql`のトリガー)。
     #[test]
-    fn partial_reply_is_rejected_outside_error_messages_and_when_empty() {
+    fn parts_are_held_by_exactly_the_replies_of_turns() {
         let conn = db::open_in_memory().unwrap();
         let task_id = seed_task(&conn);
-        let insert = |role, error_kind, partial_reply| {
+        let turn = Origin::Turn {
+            turn_id: "turn-1",
+            attempt_no: 1,
+        };
+        let parts = [ReplyPart::Text {
+            round: 1,
+            text: "本文".to_string(),
+        }];
+        let insert = |role, kind, origin, parts| {
             insert_message(
                 &conn,
                 NewMessage {
                     chat: Chat::Task(task_id),
                     role,
-                    content: "本文",
-                    kind: Kind::Normal,
-                    origin: Origin::Turn {
-                        turn_id: "turn-1",
-                        attempt_no: 1,
-                    },
-                    error_kind,
+                    content: "{}",
+                    kind,
+                    origin,
+                    error_kind: (role == Role::Error).then_some("provider"),
                     error_detail: None,
-                    partial_reply,
-                    reasoning: None,
+                    parts,
                 },
             )
         };
 
-        assert!(insert(Role::Assistant, None, Some("途中")).is_err());
-        assert!(insert(Role::Error, Some("provider"), Some("")).is_err());
-        let id = insert(Role::Error, Some("provider"), Some("途中")).unwrap();
-        assert_eq!(
-            find_message(&conn, id)
-                .unwrap()
-                .unwrap()
-                .partial_reply
-                .as_deref(),
-            Some("途中")
-        );
+        assert!(insert(Role::Assistant, Kind::Normal, turn, None).is_err());
+        assert!(insert(Role::User, Kind::Normal, Origin::User, Some(&parts)).is_err());
+        assert!(insert(Role::Tool, Kind::ToolExecution, turn, Some(&parts)).is_err());
+        insert(Role::Error, Kind::Normal, turn, Some(&[])).unwrap();
+        let id = insert(Role::Assistant, Kind::Normal, turn, Some(&parts)).unwrap();
+        assert_eq!(find_message(&conn, id).unwrap().unwrap().parts, parts);
         assert!(conn
-            .execute(
-                "UPDATE messages SET role = 'assistant', error_kind = NULL WHERE id = ?1",
-                [id]
-            )
+            .execute("UPDATE messages SET parts = '{}' WHERE id = ?1", [id])
+            .is_err());
+        assert!(conn
+            .execute("UPDATE messages SET parts = NULL WHERE id = ?1", [id])
             .is_err());
     }
 
@@ -771,8 +908,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         );
         assert!(result.is_err());
@@ -795,8 +931,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -816,8 +951,7 @@ mod tests {
                     },
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: None,
                 },
             )
             .unwrap();
@@ -834,8 +968,7 @@ mod tests {
                     },
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: Some(&[]),
                 },
             )
             .unwrap();
@@ -877,8 +1010,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -914,8 +1046,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -946,8 +1077,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -965,8 +1095,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -984,8 +1113,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: Some(&[]),
             },
         )
         .unwrap();
@@ -1042,8 +1170,8 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (role != Role::Tool && matches!(origin, Origin::Turn { .. }))
+                        .then_some(&[]),
                 },
             )
             .unwrap()
@@ -1102,8 +1230,8 @@ mod tests {
                     origin,
                     error_kind: (role == Role::Error).then_some("provider"),
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (role != Role::Tool && matches!(origin, Origin::Turn { .. }))
+                        .then_some(&[]),
                 },
             )
             .unwrap()
@@ -1148,8 +1276,8 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (matches!(origin, Origin::Turn { .. }) && kind == Kind::Normal)
+                        .then_some(&[]),
                 },
             )
             .unwrap()
@@ -1190,8 +1318,8 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (role != Role::Tool && matches!(origin, Origin::Turn { .. }))
+                        .then_some(&[]),
                 },
             )
             .unwrap()
@@ -1252,8 +1380,7 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: matches!(origin, Origin::Turn { .. }).then_some(&[]),
                 },
             )
             .unwrap()
@@ -1298,8 +1425,7 @@ mod tests {
                 },
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: Some(&[]),
             },
         )
         .unwrap();
@@ -1324,8 +1450,7 @@ mod tests {
                 origin: Origin::User,
                 error_kind: None,
                 error_detail: None,
-                partial_reply: None,
-                reasoning: None,
+                parts: None,
             },
         )
         .unwrap();
@@ -1353,8 +1478,8 @@ mod tests {
                     origin,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: (role != Role::Tool && matches!(origin, Origin::Turn { .. }))
+                        .then_some(&[]),
                 },
             )
             .unwrap()
@@ -1394,8 +1519,7 @@ mod tests {
                     origin: Origin::User,
                     error_kind: None,
                     error_detail: None,
-                    partial_reply: None,
-                    reasoning: None,
+                    parts: None,
                 },
             )
             .unwrap()
