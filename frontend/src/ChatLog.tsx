@@ -8,6 +8,7 @@ import {
   buildTurnSegments,
   finalEntryOf,
   groupMessages,
+  type LiveTurn,
   type TurnSegment,
 } from './thinking'
 import type { MessageView, PendingEntry } from './types'
@@ -103,7 +104,7 @@ interface ChatLogProps {
   // 実行中のコマンドの楽観表示・途中経過・コマンド自体の失敗(`useChatRequests`)。
   pending: PendingEntry[]
   // 応答待ちの間に届いたターンの中身。
-  live: TurnSegment[]
+  live: LiveTurn
   failure: string | null
   // 応答待ちの会話では、編集・再試行・削除を不可にする。
   disableActions: boolean
@@ -311,13 +312,13 @@ export default function ChatLog({
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
           // 応答待ちの間の途中経過を、保存済みのターンと同じ形で届いた順に出す。完了したら
-          // 読み直したターンに置き換わる。本文が流れている間は応答待ちの文言を出さない(止める
-          // 指示を出したあとは、止めていることを出す)。
+          // 読み直したターンに置き換わる。本文が流れている最中は応答待ちの文言を出さない(書き
+          // 終えてツールを実行している間は出す。止める指示を出したあとは、止めていることを出す)。
           <li key={`pending-${i}`} className="turn-group">
-            {live.map((segment, j) => (
+            {live.segments.map((segment, j) => (
               <TurnSegmentView key={j} segment={segment} />
             ))}
-            {(live.at(-1)?.kind !== 'text' || entry.stopping) && (
+            {(live.open !== 'text' || entry.stopping) && (
               <div className="entry entry-pending">
                 <EntryBody role={entry.role} content={entry.content} />
               </div>

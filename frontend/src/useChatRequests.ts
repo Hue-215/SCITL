@@ -3,7 +3,7 @@ import { failureText } from './api'
 import { chatKey } from './chat'
 import { isolated, t } from './i18n'
 import { without } from './record'
-import { appendTurnEvent, NO_LIVE_TURN, type LiveTurn, type TurnSegment } from './thinking'
+import { appendTurnEvent, NO_LIVE_TURN, type LiveTurn } from './thinking'
 import type { Chat, PendingEntry, TurnEvent } from './types'
 
 // 会話に対するコマンド(聞き取りの開始・送信・編集・再試行・削除と、ヘッダーからのタスク操作)
@@ -17,7 +17,7 @@ export interface ChatRequests {
    */
   pendingOf: (chat: Chat) => PendingEntry[]
   /** 応答待ちの間に届いたターンの中身(思考・ツールの折りたたみと本文)。届いた順。 */
-  liveOf: (chat: Chat) => TurnSegment[]
+  liveOf: (chat: Chat) => LiveTurn
   isBusy: (chat: Chat) => boolean
   /** 応答を生成するコマンドの実行中(楽観表示に応答待ちがある)。削除・タスク操作の実行中は偽。 */
   isGenerating: (chat: Chat) => boolean
@@ -51,10 +51,6 @@ export interface ChatRequests {
    */
   stop: (chat: Chat, command: () => Promise<boolean>) => Promise<void>
 }
-
-// 途中経過の無い会話に返す列。描画のたびに新しい配列を作ると、途中経過を見て追従する
-// スクロールが毎回動くため、同じものを返す。
-const NO_SEGMENTS: TurnSegment[] = []
 
 export function useChatRequests(): ChatRequests {
   const [pending, setPending] = useState<Record<string, PendingEntry[]>>({})
@@ -152,7 +148,7 @@ export function useChatRequests(): ChatRequests {
           : entry,
       )
     },
-    liveOf: (chat) => live[chatKey(chat)]?.segments ?? NO_SEGMENTS,
+    liveOf: (chat) => live[chatKey(chat)] ?? NO_LIVE_TURN,
     isBusy: (chat) => pending[chatKey(chat)] !== undefined,
     isGenerating: (chat) =>
       pending[chatKey(chat)]?.some((entry) => entry.role === 'pending') ?? false,

@@ -173,6 +173,9 @@ export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
         const merged: TurnSegment = { ...last, text: last.text + response.text }
         return { segments: [...segments.slice(0, -1), merged], open }
       }
+      // 空白だけで始まる本文(呼び出しの前に改行だけを流すサーバーがある)は吹き出しにしない。
+      // 保存側も空白だけの本文を捨てる。
+      if (response.text.trim() === '') return live
       const opened: TurnSegment = { kind: 'text', id: segments.length, text: response.text }
       return { segments: [...segments, opened], open: 'text' }
     }

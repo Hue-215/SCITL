@@ -328,7 +328,7 @@ mod tests {
         let none = (None, None);
         insert("user", None, "質問", none);
         let first = insert("tool", Some("t1"), "{}", (Some("考える"), None));
-        let deleted = insert("tool", Some("t1"), "{}", none);
+        let deleted = insert("tool", Some("t1"), "{}", (Some("消した思考"), None));
         conn.execute(
             "UPDATE messages SET deleted_at = '2026-01-01T00:00:00Z' WHERE id = ?1",
             [deleted],

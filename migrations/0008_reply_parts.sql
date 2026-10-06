@@ -7,11 +7,13 @@ ALTER TABLE messages ADD COLUMN parts TEXT NULL;
 -- 記録に無い。今の実行記録からの履歴の組み立てと同じ発言列になる)。記録の思考はその記録の
 -- 前に置く。最後のラウンドには、返信の行の思考と本文(アシスタント発言は`content`、エラー発言は
 -- 受け取り終えた本文`partial_reply`)を置く。消した記録も指す(新しく書く中身と同じく、記録の
--- 側の`deleted_at`を戻せば返信の中身にも戻る。読むときに消した記録は飛ばす)。
+-- 側の`deleted_at`を戻せば返信の中身にも戻る。読むときに消した記録は飛ばす)。消した記録の思考は
+-- 移さない(読むときに飛ばせないため。今までも表示されていない)。空白だけの思考と本文は、Rust側と
+-- 同じく改行・タブも空白として外す。
 --
 -- 試行ごとの記録は索引を張った一時表に置いてから引く(長く使った会話でも行数に比例する時間で済む)。
 CREATE TEMP TABLE migrated_records AS
-SELECT id, turn_id, attempt_no, reasoning,
+SELECT id, turn_id, attempt_no, reasoning, deleted_at,
        ROW_NUMBER() OVER (PARTITION BY turn_id, attempt_no ORDER BY id) AS round
 FROM messages
 WHERE kind = 'tool_execution' AND turn_id IS NOT NULL;
@@ -37,7 +39,7 @@ parts (reply_id, round, seq, part) AS (
            json_object('type', 'reasoning', 'round', r.round, 'text', r.reasoning)
     FROM replies AS p
     JOIN migrated_records AS r ON r.turn_id = p.turn_id AND r.attempt_no = p.attempt_no
-    WHERE trim(coalesce(r.reasoning, '')) <> ''
+    WHERE trim(coalesce(r.reasoning, ''), ' ' || char(9, 10, 13)) <> '' AND r.deleted_at IS NULL
     UNION ALL
     SELECT p.id, r.round, 1, json_object('type', 'tool', 'round', r.round, 'record', r.id)
     FROM replies AS p
@@ -45,11 +47,11 @@ parts (reply_id, round, seq, part) AS (
     UNION ALL
     SELECT id, round, 0, json_object('type', 'reasoning', 'round', round, 'text', reasoning)
     FROM replies
-    WHERE trim(coalesce(reasoning, '')) <> ''
+    WHERE trim(coalesce(reasoning, ''), ' ' || char(9, 10, 13)) <> ''
     UNION ALL
     SELECT id, round, 1, json_object('type', 'text', 'round', round, 'text', text)
     FROM replies
-    WHERE trim(coalesce(text, '')) <> ''
+    WHERE trim(coalesce(text, ''), ' ' || char(9, 10, 13)) <> ''
 )
 SELECT reply_id, json_group_array(json(part) ORDER BY round, seq) AS parts
 FROM parts
