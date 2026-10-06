@@ -112,40 +112,72 @@ export function buildTurnSegments(entries: MessageView[]): TurnSegment[] {
   return segments
 }
 
-/** 応答待ちの間に届いたイベントから組み立てる思考・ツールの項目。 */
-export interface LiveThoughts {
-  items: ThoughtItem[]
-  /** 最後の項目が、続きの届きうる思考か。ラウンドの区切り(`done`)とツールの実行で閉じる。 */
-  reasoningOpen: boolean
+/**
+ * 応答待ちの間に届いたイベントから組み立てるターンの中身。保存済みのターンと同じ区切り
+ * (`TurnSegment`)で、届いた順に並べる。
+ */
+export interface LiveTurn {
+  segments: TurnSegment[]
+  /**
+   * 最後の項目が、続きの届きうる思考か本文か。ラウンドの区切り(`done`)とツールの実行で閉じる。
+   * 閉じたあとに届いた思考・本文は、次のラウンドの新しい項目にする。
+   */
+  open: 'reasoning' | 'text' | null
 }
 
-export const NO_LIVE_THOUGHTS: LiveThoughts = { items: [], reasoningOpen: false }
+export const NO_LIVE_TURN: LiveTurn = { segments: [], open: null }
+
+/** 思考・ツールの項目を、末尾の折りたたみに足す(末尾が本文なら新しい折りたたみを開く)。 */
+function withThought(segments: TurnSegment[], item: ThoughtItem): TurnSegment[] {
+  const last = segments[segments.length - 1]
+  if (last?.kind === 'thoughts') {
+    return [...segments.slice(0, -1), { kind: 'thoughts', items: [...last.items, item] }]
+  }
+  return [...segments, { kind: 'thoughts', items: [item] }]
+}
 
 /**
- * 届いたイベントを1件積む。保存済みのターンと同じく、1ラウンドの思考は1項目にまとめる。
- * 本文は描かない(完了後に読み直した返信で出す)。実行前のツール呼び出しも描かず、実行の
- * 知らせ(`tool_executed`)で結果と一緒に出す。
+ * 届いたイベントを1件積む。保存済みのターンと同じく、1ラウンドの思考と本文はそれぞれ1項目に
+ * まとめる。実行前のツール呼び出しは描かず、実行の知らせ(`tool_executed`)で結果と一緒に出す。
+ *
+ * 受け取りの途中で失敗したラウンドの本文も流れたまま見えるが、保存はされない(断片なので。
+ * `docs/spec/principles.md` 3節)。完了後に読み直した返信に置き換わる。
  */
-// TODO(#204): 本文もライブ表示する。
-export function appendTurnEvent(live: LiveThoughts, event: TurnEvent): LiveThoughts {
+export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
+  const { segments, open } = live
   if (event.type === 'tool_executed') {
     const item: ThoughtItem = { kind: 'tool', id: event.id, execution: event.execution }
-    return { items: [...live.items, item], reasoningOpen: false }
+    return { segments: withThought(segments, item), open: null }
   }
   const response = event.event
+  const last = segments[segments.length - 1]
   switch (response.type) {
     case 'reasoning_delta': {
-      const last = live.items[live.items.length - 1]
-      if (live.reasoningOpen && last?.kind === 'reasoning') {
-        const merged = { ...last, text: last.text + response.text }
-        return { items: [...live.items.slice(0, -1), merged], reasoningOpen: true }
+      const lastItem = last?.kind === 'thoughts' ? last.items[last.items.length - 1] : undefined
+      if (open === 'reasoning' && last?.kind === 'thoughts' && lastItem?.kind === 'reasoning') {
+        const merged: ThoughtItem = { ...lastItem, text: lastItem.text + response.text }
+        const thoughts: TurnSegment = { kind: 'thoughts', items: [...last.items.slice(0, -1), merged] }
+        return { segments: [...segments.slice(0, -1), thoughts], open }
       }
-      const opened: ThoughtItem = { kind: 'reasoning', id: live.items.length, text: response.text }
-      return { items: [...live.items, opened], reasoningOpen: true }
+      // 描画のキー。届いた思考の数で振る(ツールの項目は記録のidをキーにするので重ならない)。
+      const count = segments.reduce(
+        (n, segment) =>
+          n + (segment.kind === 'thoughts' ? segment.items.filter((i) => i.kind === 'reasoning').length : 0),
+        0,
+      )
+      const item: ThoughtItem = { kind: 'reasoning', id: count, text: response.text }
+      return { segments: withThought(segments, item), open: 'reasoning' }
+    }
+    case 'text_delta': {
+      if (open === 'text' && last?.kind === 'text') {
+        const merged: TurnSegment = { ...last, text: last.text + response.text }
+        return { segments: [...segments.slice(0, -1), merged], open }
+      }
+      const opened: TurnSegment = { kind: 'text', id: segments.length, text: response.text }
+      return { segments: [...segments, opened], open: 'text' }
     }
     case 'done':
-      return { ...live, reasoningOpen: false }
-    case 'text_delta':
+      return { ...live, open: null }
     case 'tool_call':
       return live
   }

@@ -53,4 +53,6 @@ export interface PendingEntry {
   content: string
   // 送った添付の名前(ユーザー発言のみ)。確定するまで開けないので、名前だけを出す。
   attachmentNames?: string[]
+  // 止める指示を出したあとの応答待ち(`content`は止めていることを伝える文言)。
+  stopping?: boolean
 }
