@@ -291,7 +291,7 @@ mod tests {
     }
 
     /// 実行記録と、本文をつないだ返信の行で持っていたターンを、返信の行の中身へ移す
-    /// (`0008_reply_parts.sql`)。記録は記録ごとに1ラウンドとし、消した記録は指さない。
+    /// (`0008_reply_parts.sql`)。記録は記録ごとに1ラウンドとし、消した記録も指す(読むときに飛ばす)。
     #[test]
     fn existing_replies_move_into_their_parts() {
         use crate::db::messages::{find_message, ReplyPart};
@@ -366,10 +366,14 @@ mod tests {
                 },
                 ReplyPart::Tool {
                     round: 2,
+                    record: deleted
+                },
+                ReplyPart::Tool {
+                    round: 3,
                     record: second
                 },
-                reasoning(3, "まとめる"),
-                text(3, "前置き\n\n本題"),
+                reasoning(4, "まとめる"),
+                text(4, "前置き\n\n本題"),
             ]
         );
         let stopped = find_message(&conn, stopped).unwrap().unwrap();

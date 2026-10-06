@@ -634,7 +634,8 @@ fn replied_turns(stored: &[Message]) -> HashSet<String> {
 ///
 /// 呼び出しがすべて送られず本文だけが残ったラウンドは、その本文を次のラウンドの本文の前に
 /// つなぐ(assistantの発言が続く並びを作らない)。最後のラウンドは本文が無くても置き、ツールの
-/// 結果で終わらせない。
+/// 結果で終わらせない。本文も思考も無い最後のラウンドは中身に要素を残さないので、結果で終わったら
+/// 本文の無いassistantで閉じる(実際に送った形も同じく閉じている)。
 fn reply_messages(parts: &[ResolvedPart]) -> Vec<ChatMessage> {
     let mut rounds: Vec<(u32, Vec<&ResolvedPart>)> = Vec::new();
     for part in parts {
@@ -668,7 +669,7 @@ fn reply_messages(parts: &[ResolvedPart]) -> Vec<ChatMessage> {
         texts.clear();
         messages.extend(results);
     }
-    if messages.is_empty() {
+    if matches!(messages.last(), None | Some(ChatMessage::Tool { .. })) {
         messages.push(ChatMessage::Assistant {
             content: None,
             tool_calls: Vec::new(),
@@ -1097,6 +1098,50 @@ mod tests {
                 (Some("見つかりました".to_string()), 0),
             ]
         );
+    }
+
+    /// 最後のラウンドが本文も思考も残さなかった返信は、結果で終わらせず本文の無いassistantで閉じる。
+    #[test]
+    fn closes_a_reply_whose_last_round_left_nothing() {
+        let f = Fixture::new();
+        f.user("u");
+        let found = f.record(Some("t1"), json!({ "hits": 1 }));
+        messages::insert_message(
+            &f.conn,
+            NewMessage {
+                chat: Chat::Task(f.task_id),
+                role: Role::Assistant,
+                content: "",
+                kind: Kind::Normal,
+                origin: Origin::Turn {
+                    turn_id: "t1",
+                    attempt_no: 1,
+                },
+                error_kind: None,
+                error_detail: None,
+                parts: Some(&[
+                    messages::ReplyPart::Text {
+                        round: 1,
+                        text: "調べます".to_string(),
+                    },
+                    messages::ReplyPart::Tool {
+                        round: 1,
+                        record: found,
+                    },
+                ]),
+            },
+        )
+        .unwrap();
+
+        let history = f.history();
+        assert!(matches!(
+            &history[history.len() - 3..],
+            [
+                ChatMessage::Assistant { content: Some(_), tool_calls, .. },
+                ChatMessage::Tool { .. },
+                ChatMessage::Assistant { content: None, .. },
+            ] if tool_calls.len() == 1
+        ));
     }
 
     /// 状態を表す結果も載せる。古い記録に残った分類のキーは見ない。

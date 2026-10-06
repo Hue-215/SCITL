@@ -270,22 +270,24 @@ export default function ChatLog({
             </li>
           )
         }
-        // 返信は、最後の本文の吹き出しに日時と操作を添える。失敗したターンの本文(受け取り
-        // 終えたもの)は生成中に見えていたものを返信と同じ形で残し、日時と操作はエラーに添える。
-        const lastText =
-          finalMessage.role === 'assistant'
-            ? segments.findLastIndex((segment) => segment.kind === 'text')
-            : -1
+        // 返信は、最後に来た本文の吹き出しに日時と操作を添える。本文のあとに思考・ツールが続いた
+        // (最後のラウンドが本文を書かなかった)ときは、ターンの末尾に添える。失敗したターンの本文
+        // (受け取り終えたもの)は生成中に見えていたものを返信と同じ形で残し、日時と操作はエラーに
+        // 添える。
+        const footerOnText =
+          finalMessage.role === 'assistant' && segments.at(-1)?.kind === 'text'
         return (
           <li key={`turn-${item.turnId}`} className="turn-group">
             {segments.map((segment, i) => (
               <TurnSegmentView
                 key={i}
                 segment={segment}
-                footer={i === lastText ? footer : null}
+                footer={footerOnText && i === segments.length - 1 ? footer : null}
               />
             ))}
-            {lastText === -1 && (
+            {finalMessage.role === 'assistant' ? (
+              !footerOnText && <div>{footer}</div>
+            ) : (
               <div className={`entry entry-${finalMessage.role}`}>
                 <EntryBody
                   role={finalMessage.role}

@@ -698,7 +698,8 @@ async fn run_tool_rounds(
                 if !reply_parts.has_text() {
                     return fail_turn(db, attempt, TurnFailure::EmptyResponse, reply_parts).await;
                 }
-                let parts = std::mem::take(&mut reply_parts.0);
+                // 書けなかったときはエラー発言に同じ中身を残すので、取り出さずに写す。
+                let parts = reply_parts.0.clone();
 
                 let transcript = adapter.identity().and_then(|identity| {
                     let saved = request.transcript(&rounds);

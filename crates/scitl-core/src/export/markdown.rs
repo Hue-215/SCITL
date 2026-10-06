@@ -102,12 +102,13 @@ fn push_entry(out: &mut String, entry: &Entry) {
         push_record(out, message);
     } else {
         // 失敗したターンで受け取り終えた中身。画面と同じく、エラーの文言より前に置く。エラーの
-        // 見出しの下に並ぶので、モデルが書いたものだと分かるように一言添える。
-        let exported = entry
+        // 見出しの下に並ぶので、モデルが書いた本文があれば、そうと分かるように一言添える
+        // (ツールの実行はそれぞれの見出しを持つ)。
+        let wrote = entry
             .parts
             .iter()
-            .any(|p| !matches!(p, ResolvedPart::Reasoning { .. }));
-        if message.role == Role::Error && exported {
+            .any(|p| matches!(p, ResolvedPart::Text { .. }));
+        if message.role == Role::Error && wrote {
             out.push_str("Reply received before the failure:\n\n");
         }
         push_parts(out, &entry.parts);
@@ -442,6 +443,33 @@ mod tests {
         let partial = out.find("```markdown\n工程を足します\n```\n").unwrap();
         let failure = out.find("```text\nThe request failed.\n```\n").unwrap();
         assert!(partial < failure, "{out}");
+    }
+
+    /// ツールを実行しただけで失敗したターンには、受け取った返信の一言を添えない。
+    #[test]
+    fn a_failure_after_only_tool_calls_does_not_claim_a_reply() {
+        let error = message(
+            Role::Error,
+            Kind::Normal,
+            "The tools ran out of time.",
+            None,
+        );
+        let record = message(Role::Tool, Kind::ToolExecution, r#"{"tool":"a"}"#, None);
+        let out = render_general_chat(&[Entry {
+            message: &error,
+            parts: vec![ResolvedPart::Tool {
+                round: 1,
+                record: &record,
+            }],
+            attachments: Vec::new(),
+        }]);
+
+        assert!(!out.contains("Reply received"), "{out}");
+        let call = out.find("Tool execution (").unwrap();
+        assert!(
+            call < out.find("The tools ran out of time.").unwrap(),
+            "{out}"
+        );
     }
 
     #[test]
