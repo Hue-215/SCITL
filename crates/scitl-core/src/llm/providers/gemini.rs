@@ -41,7 +41,10 @@ impl GeminiAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
+        let client = crate::net::hardened_client(
+            &base_url,
+            crate::net::RequestTimeout::Total(request_timeout),
+        )?;
         Ok(Self {
             client,
             base_url,
@@ -78,7 +81,10 @@ pub async fn list_models(
     credentials: &Credentials,
 ) -> Result<Vec<String>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
@@ -124,7 +130,10 @@ pub async fn detect(
     models: &[String],
 ) -> Result<HashMap<String, DetectedCapabilities>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut found = HashMap::new();
     for model in models {
         let mut url = super::endpoint(&base_url, MODELS)?;
@@ -359,9 +368,9 @@ const ABBREVIATED: &[(&str, &[&str])] = &[("image", &["data"]), ("thought", &["s
 struct InteractionResponse {
     status: String,
     /// 受け取ったまま送り返すため、生のJSONで持つ([`Replay`])。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     steps: Vec<Box<RawValue>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     errors: Vec<Value>,
 }
 
@@ -462,7 +471,7 @@ impl GeminiAdapter {
         let request = self.client.post(endpoint).json(&body);
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, |status, body| {
+        let response = super::reject_failure(response, secrets, |status, body| {
             http_error(status, body, secrets, thinking_level.is_some())
         })
         .await?;
@@ -622,6 +631,14 @@ mod tests {
     use secrecy::SecretString;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn reads_null_steps_and_errors_as_empty() {
+        let parsed: InteractionResponse =
+            serde_json::from_str(r#"{"status":"completed","steps":null,"errors":null}"#).unwrap();
+        assert!(parsed.steps.is_empty());
+        assert!(parsed.errors.is_empty());
+    }
 
     fn adapter(base_url: &str, key: &str) -> GeminiAdapter {
         GeminiAdapter::new(

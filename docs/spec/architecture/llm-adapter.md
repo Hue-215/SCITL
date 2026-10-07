@@ -78,6 +78,9 @@ Anthropic形式は`GET /v1/models`、Gemini形式は`GET /v1beta/models`)で取�
 - 方言によらない失敗(reqwestが報告する通信の失敗と、状態コードだけで決まるもの)の変換は
   `llm::LlmError`に置き、全アダプタがそれを呼ぶ
 - 応答本文でしか分からない失敗(コンテキスト超過の書き方等)の判定は各`providers/*.rs`に置く
+- 応答の欄が`null`でも、欄が無いときと同じに読む(`providers::null_as_default`、Issue #458)。空の欄を
+  省かずに`null`で返す互換サーバーがあり、型の誤りとして失敗にすると会話が続かない。ツールの引数が
+  `null`なら、空のオブジェクトに置き換えずに`null`として上位へ渡す(引数検証がモデルへ失敗を返す)
 - 詳細は`llm::ErrorDetail`で運ぶ。サニタイズするコンストラクタでしか作れない
   (`../data-model/messages.md`「エラー発言の詳細」)
 
@@ -122,6 +125,35 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 入れるかは方言ごとに下に書く。ターンをまたいでは、送った形のまま保存したものを次のターンに並べて
 返す(`transcript.md`「送った形のまま積む」)。最後の応答(ツールを呼ばなかった応答)の`Replay`も保存する
 
+## OpenAI互換
+
+**OpenAI互換**(`llm::providers::openai_compat`): Chat Completions(`POST {base_url}/chat/completions`)を
+`stream: true`で呼び、SSEで届く断片を受け取った順にイベントとして渡す(Issue #204)。SSEの分割は方言によらない
+`llm/providers/sse.rs`が持ち、`data`の読み方はアダプタが持つ。
+
+- `stream`を無視して1つのJSONで返すサーバーもあるので、応答の`Content-Type`が`text/event-stream`で
+  なければ、ストリーミングしない応答として読む。`stream: true`そのものを拒むサーバー(ツールと同時の
+  ストリーミングに対応しない古い推論サーバー等)には対応しない
+- 応答タイムアウトは、データの届かない時間の上限として使う(`network-secrets.md`「外部通信の一元化とネットワーク設定」)
+- 本文(`delta.content`)と思考(`delta.reasoning_content`)は、届いたらすぐ渡す
+- ツール呼び出しは`index`ごとに断片を組み立て、終わってから最初の断片が届いた順に渡す。最初の断片が
+  `id`と名前を、続く断片が引数の続きを運ぶ。`index`を付けないサーバーでは、`id`か名前が付いた断片を
+  新しい呼び出し、付いていない断片と直前と同じ`id`の断片を直前の呼び出しの続きとする(空の`id`・名前は
+  付いていないものとする)。同じ`index`でも、すでに`id`を持つ呼び出しに別の`id`が届いたら新しい呼び出しと
+  する(並列の呼び出しをすべて同じ`index`で送るサーバー)。名前の無い呼び出しは応答の解釈の失敗にする
+- 1回の応答のツール呼び出しは`MAX_TOOL_CALLS`(128)件までで、超えたら応答の解釈の失敗にする(ストリーミング
+  しない応答も同じ)。上限が無いと、呼び出しを大量に並べて組み立てと実行に時間とメモリを使わせられる
+- 終了理由(空でないもの)か`[DONE]`が届いたら完了とし、残りは読まない(`[DONE]`を送らずに接続を開けたままにする
+  サーバーで、組み立て終えた応答をタイムアウトで捨てないため)。どちらも無いまま本文が終わったら、
+  途中で切れたとして通信の失敗にする。返信の候補が1つも無ければ空応答にする。空の`data`は読み飛ばす
+- 途中で`{"error": …}`が届いたら、エラー応答の本文と同じ見分け方(コンテキスト超過等)で失敗にする。
+  `error.code`に状態コードを入れるサーバーでは、その状態コードで分類する(回数制限・認証)
+- 1イベントの大きさ(`sse.rs`)と、1回の応答として読む量の合計(SSEでもJSONでも`MAX_RESPONSE_BYTES`)に
+  上限を置く。待つ時間の上限は無通信の間隔だけなので、送り続けるサーバーを量で止める
+- `finish_reason: "content_filter"`は`LlmError::Refused`にする(下の「Anthropic形式」の`refusal`と同じ)。
+  断られたと分かるのは最後なので、途中までの本文はもう画面に流れているが、返信としては保存しない
+- 思考を送り返さない方言なので、`Replay`は常に空
+
 ## Anthropic形式
 
 **Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
@@ -146,7 +178,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   目印を自動で置かせる
 - 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は、途中まで書いた本文を渡さずに
   `LlmError::Refused`にし、断られたことが分かるエラー発言にする(OpenAI互換の
-  `finish_reason: "content_filter"`も同じ扱い)。`max_tokens`と
+  `finish_reason: "content_filter"`も同じ扱い。ストリーミングで読む方言では、本文は画面に流れたあとになるが、
+  返信としては保存しない)。`max_tokens`と
   `model_context_window_exceeded`は長さによる打ち切り(`FinishReason::Length`)にする
 - 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする

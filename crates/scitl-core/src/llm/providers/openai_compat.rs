@@ -28,7 +28,8 @@ pub struct OpenAiCompatAdapter {
 impl OpenAiCompatAdapter {
     /// 鍵とカスタムヘッダーの値は`credentials`の中で`SecretString`のまま持ち、平文`String`を
     /// 経由させない。`request_timeout`は
-    /// 設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)。
+    /// 設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)で、データの届かない
+    /// 時間の上限として使う。
     pub fn new(
         base_url: impl Into<String>,
         credentials: Credentials,
@@ -36,7 +37,12 @@ impl OpenAiCompatAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
+        // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
+        // 届き続けている間は切らない)。
+        let client = crate::net::hardened_client(
+            &base_url,
+            crate::net::RequestTimeout::BetweenReads(request_timeout),
+        )?;
         Ok(Self {
             client,
             base_url,
@@ -53,7 +59,10 @@ pub async fn list_models(
     credentials: &Credentials,
 ) -> Result<Vec<String>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let response = super::send_with_key(
         client.get(super::endpoint(&base_url, "models")?),
         credentials,
@@ -516,13 +525,15 @@ fn request_body<'a>(
             })
             .collect(),
         reasoning_effort: reasoning_effort.map(reasoning_effort_value),
-        // ストリーミングしなくても、応答はイベントに分けて渡す(`LlmAdapter::send`参照)。
-        stream: false,
+        // 無視して1つのJSONで返すサーバーもある(`OpenAiCompatAdapter::send`)。
+        stream: true,
     }
 }
 
 #[derive(Deserialize)]
 struct CompletionResponse {
+    /// 空(`null`も)なら空応答。
+    #[serde(default, deserialize_with = "super::null_as_default")]
     choices: Vec<Choice>,
 }
 
@@ -535,7 +546,7 @@ struct Choice {
 #[derive(Deserialize)]
 struct ResponseMessage {
     content: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     tool_calls: Vec<ResponseToolCall>,
     /// 思考(reasoning)の本文。OpenAI本家には無いが、互換を名乗るプロバイダ(DeepSeek、vLLM等)で
     /// 広く使われている拡張。
@@ -552,7 +563,337 @@ struct ResponseToolCall {
 #[derive(Deserialize)]
 struct ResponseFunctionCall {
     name: String,
-    arguments: String,
+    /// `null`で返すサーバーがある([`raw_arguments`])。
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// 引数の文字列。欄が`null`(または無い)なら`null`として読む。空のオブジェクトには置き換えない
+/// (`ToolArguments`。引数が要るツールを引数無しで発火させないため)。オブジェクトでない引数は
+/// ツールの引数検証が失敗としてモデルへ返し、出し直させる。
+fn raw_arguments(arguments: Option<String>) -> String {
+    arguments.unwrap_or_else(|| "null".to_string())
+}
+
+fn finish_reason(value: Option<&str>) -> FinishReason {
+    match value {
+        Some("tool_calls") => FinishReason::ToolCall,
+        Some("length") => FinishReason::Length,
+        Some(_) | None => FinishReason::Stop,
+    }
+}
+
+/// 安全上の判定で打ち切られた応答。途中まで書いた本文は返信にしない。
+fn content_filter_refusal(secrets: &SentSecrets) -> LlmError {
+    LlmError::Refused(ErrorDetail::http(
+        reqwest::StatusCode::OK,
+        "finish_reason: content_filter",
+        secrets,
+    ))
+}
+
+/// ストリーミングせずに1つのJSONで返った応答を、イベントに分けて渡す。
+fn emit_completion(
+    parsed: CompletionResponse,
+    secrets: &SentSecrets,
+    on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+) -> Result<(), LlmError> {
+    let choice = parsed
+        .choices
+        .into_iter()
+        .next()
+        .ok_or(LlmError::EmptyResponse)?;
+
+    if choice.message.tool_calls.len() > MAX_TOOL_CALLS {
+        return Err(too_many_tool_calls());
+    }
+    // 安全上の判定で打ち切られた応答は、途中まで書いた本文も渡さない(イベントを渡す前に
+    // 判定する)。
+    if choice.finish_reason.as_deref() == Some("content_filter") {
+        return Err(content_filter_refusal(secrets));
+    }
+
+    // 思考を本文・ツール呼び出しより先に置く(非ストリーミングで生成順は分からないが、
+    // 一般的な順序に合わせる)。
+    if let Some(reasoning) = choice.message.reasoning_content {
+        if !reasoning.is_empty() {
+            on_event(ResponseEvent::ReasoningDelta { text: reasoning });
+        }
+    }
+    if let Some(text) = choice.message.content {
+        if !text.is_empty() {
+            on_event(ResponseEvent::TextDelta { text });
+        }
+    }
+    for call in choice.message.tool_calls {
+        on_event(ResponseEvent::ToolCall {
+            id: call.id,
+            name: call.function.name,
+            arguments: ToolArguments::parse(raw_arguments(call.function.arguments)),
+        });
+    }
+    on_event(ResponseEvent::Done {
+        finish_reason: finish_reason(choice.finish_reason.as_deref()),
+    });
+    Ok(())
+}
+
+/// ストリーミングの応答の終わりの合図。
+const STREAM_DONE: &str = "[DONE]";
+
+/// ストリーミングの応答の1イベント(`chat.completion.chunk`)。
+#[derive(Deserialize)]
+struct StreamChunk {
+    /// 使用量だけを運ぶイベント等では空。
+    #[serde(default)]
+    choices: Option<Vec<StreamChoice>>,
+    /// 応答の途中で起きた失敗。状態コードは200のまま、本文で知らせるサーバーがある。
+    #[serde(default)]
+    error: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: Option<StreamDelta>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+    /// [`ResponseMessage::reasoning_content`]と同じ拡張。
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<StreamToolCall>>,
+}
+
+/// ツール呼び出しの断片。`index`ごとに、最初の断片が`id`と名前を、続く断片が引数の続きを運ぶ。
+#[derive(Deserialize)]
+struct StreamToolCall {
+    #[serde(default)]
+    index: Option<u64>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<StreamFunctionCall>,
+}
+
+#[derive(Deserialize)]
+struct StreamFunctionCall {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// 1回の応答で受け付けるツール呼び出しの数の上限。実際のモデルが1回に出す呼び出しはこれより
+/// ずっと少ない。上限が無いと、壊れた・悪意のあるサーバーが呼び出しを大量に並べて、組み立てと
+/// 実行に時間とメモリを使わせられる。
+const MAX_TOOL_CALLS: usize = 128;
+
+fn too_many_tool_calls() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the response contains too many tool calls",
+    ))
+}
+
+/// 組み立て中のツール呼び出し。
+struct PartialToolCall {
+    index: Option<u64>,
+    id: Option<String>,
+    name: String,
+    /// 引数の断片を連結したもの。どの断片も引数を運ばなければ`None`(ストリーミングしないときの
+    /// `null`と同じく[`raw_arguments`]で読む)。
+    arguments: Option<String>,
+}
+
+/// 断片から組み立てるツール呼び出しの並び。
+#[derive(Default)]
+struct ToolCallAssembler(Vec<PartialToolCall>);
+
+impl ToolCallAssembler {
+    /// 断片を1つ足す。`index`が同じ呼び出しへの続きとし、`index`を付けないサーバーでは、
+    /// `id`か名前が付いていれば新しい呼び出し、付いていなければ直前の呼び出しの続きとする
+    /// (続きの断片にも同じ`id`を繰り返すサーバーがあるので、直前と同じ`id`は続きとする)。
+    /// 空の`id`・名前は付いていないものとして扱う。同じ`index`でも、すでに`id`を持つ呼び出しに
+    /// 別の`id`が届いたら新しい呼び出しとする(並列の呼び出しをすべて同じ`index`で送るサーバー)。
+    ///
+    /// 呼び出しの数が[`MAX_TOOL_CALLS`]を超えたら失敗にする。
+    fn push(&mut self, fragment: StreamToolCall) -> Result<(), LlmError> {
+        let StreamToolCall {
+            index,
+            id,
+            function,
+        } = fragment;
+        let (name, arguments) = function.map_or((None, None), |f| (f.name, f.arguments));
+        let id = id.filter(|id| !id.is_empty());
+        let name = name.filter(|name| !name.is_empty());
+        let last = self.0.len().checked_sub(1);
+        let other_id = |i: usize| id.is_some() && self.0[i].id.is_some() && self.0[i].id != id;
+        let existing = match index {
+            Some(_) => self
+                .0
+                .iter()
+                .rposition(|c| c.index == index)
+                .filter(|&i| !other_id(i)),
+            None if id.is_some() && last.is_some_and(|i| self.0[i].id == id) => last,
+            None if id.is_some() || name.is_some() => None,
+            None => last,
+        };
+        let call = match existing {
+            Some(i) => &mut self.0[i],
+            None => {
+                if self.0.len() >= MAX_TOOL_CALLS {
+                    return Err(too_many_tool_calls());
+                }
+                self.0.push(PartialToolCall {
+                    index,
+                    id: None,
+                    name: String::new(),
+                    arguments: None,
+                });
+                self.0.last_mut().expect("just pushed")
+            }
+        };
+        if call.id.is_none() {
+            call.id = id;
+        }
+        // 名前は最初の断片だけが運ぶ。続く断片で繰り返すサーバーがあっても連結しない。
+        if call.name.is_empty() {
+            if let Some(name) = name {
+                call.name = name;
+            }
+        }
+        if let Some(arguments) = arguments {
+            call.arguments
+                .get_or_insert_with(String::new)
+                .push_str(&arguments);
+        }
+        Ok(())
+    }
+
+    /// 組み立て終えた呼び出しを、最初の断片が届いた順に返す。名前の無い呼び出しは、
+    /// ストリーミングしないときに名前の無い呼び出しを読めないのと同じく、応答の解釈の失敗にする。
+    fn finish(self, secrets: &SentSecrets) -> Result<Vec<ResponseEvent>, LlmError> {
+        self.0
+            .into_iter()
+            .map(|call| {
+                if call.name.is_empty() {
+                    return Err(LlmError::InvalidResponse(ErrorDetail::http(
+                        reqwest::StatusCode::OK,
+                        "a streamed tool call has no name",
+                        secrets,
+                    )));
+                }
+                Ok(ResponseEvent::ToolCall {
+                    id: call.id,
+                    name: call.name,
+                    arguments: ToolArguments::parse(raw_arguments(call.arguments)),
+                })
+            })
+            .collect()
+    }
+}
+
+/// ストリーミングの途中で届いたエラーの状態コード。本文の`code`に状態コードを入れるサーバー
+/// (OpenRouter等)では、それで分類する(回数制限・認証を見分けるため)。無ければ応答の200のまま。
+fn stream_error_status(error: &serde_json::Value) -> reqwest::StatusCode {
+    error
+        .get("code")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|code| u16::try_from(code).ok())
+        .and_then(|code| reqwest::StatusCode::from_u16(code).ok())
+        .filter(|status| status.is_client_error() || status.is_server_error())
+        .unwrap_or(reqwest::StatusCode::OK)
+}
+
+/// ストリーミングの応答(SSE)を読み、本文と思考の断片を届いた順に渡す。ツール呼び出しは
+/// 断片を組み立て終えてから、最後に`Done`の前に渡す。
+///
+/// 失敗は`Err`で返す(`LlmAdapter::send`の約束事)。それまでに渡した断片は画面に流れて
+/// いるが、呼び出し側は保存しない。`content_filter`で打ち切られた応答も同じで、本文は流れた
+/// あとだが返信にはしない。
+async fn read_stream(
+    response: reqwest::Response,
+    secrets: &SentSecrets,
+    reasoning_effort_sent: bool,
+    on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+) -> Result<(), LlmError> {
+    let mut saw_choice = false;
+    let mut finish: Option<String> = None;
+    let mut tool_calls = ToolCallAssembler::default();
+    let done = super::sse::read_data(response, secrets, |data| {
+        if data.trim() == STREAM_DONE {
+            return Ok(true);
+        }
+        // 生存確認に空の`data`を送るサーバーがある。
+        if data.trim().is_empty() {
+            return Ok(false);
+        }
+        let chunk: StreamChunk = serde_json::from_str(&data).map_err(|e| {
+            LlmError::InvalidResponse(ErrorDetail::http(
+                reqwest::StatusCode::OK,
+                &e.to_string(),
+                secrets,
+            ))
+        })?;
+        if let Some(error) = &chunk.error {
+            return Err(http_error(
+                stream_error_status(error),
+                &data,
+                secrets,
+                reasoning_effort_sent,
+            ));
+        }
+        let Some(choice) = chunk.choices.and_then(|c| c.into_iter().next()) else {
+            return Ok(false);
+        };
+        saw_choice = true;
+        if let Some(delta) = choice.delta {
+            if let Some(text) = delta.reasoning_content.filter(|t| !t.is_empty()) {
+                on_event(ResponseEvent::ReasoningDelta { text });
+            }
+            if let Some(text) = delta.content.filter(|t| !t.is_empty()) {
+                on_event(ResponseEvent::TextDelta { text });
+            }
+            for fragment in delta.tool_calls.unwrap_or_default() {
+                tool_calls.push(fragment)?;
+            }
+        }
+        // 終了理由が届いたら完了とし、残り(使用量・`[DONE]`)は読まない。`[DONE]`を送らずに
+        // 接続を開けたままにするサーバーで、組み立て終えた応答をタイムアウトで捨てないため。
+        // 空の終了理由は、まだ終わっていないものとする。
+        if let Some(reason) = choice.finish_reason.filter(|r| !r.is_empty()) {
+            finish = Some(reason);
+            return Ok(true);
+        }
+        Ok(false)
+    })
+    .await?;
+
+    // 終わりの合図も終了理由も無いまま本文が終わった。上流が落ちて途中で切れた。
+    if !done {
+        return Err(LlmError::Connection(ErrorDetail::internal(
+            "the event stream ended before the response was complete",
+        )));
+    }
+    if !saw_choice {
+        return Err(LlmError::EmptyResponse);
+    }
+    if finish.as_deref() == Some("content_filter") {
+        return Err(content_filter_refusal(secrets));
+    }
+    for call in tool_calls.finish(secrets)? {
+        on_event(call);
+    }
+    on_event(ResponseEvent::Done {
+        finish_reason: finish_reason(finish.as_deref()),
+    });
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -607,56 +948,16 @@ impl LlmAdapter for OpenAiCompatAdapter {
         )
         .await?;
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, |status, body| {
+        let response = super::reject_failure(response, secrets, |status, body| {
             http_error(status, body, secrets, reasoning_effort.is_some())
         })
         .await?;
-        let parsed: CompletionResponse = super::read_json(response, secrets).await?;
-
-        let choice = parsed
-            .choices
-            .into_iter()
-            .next()
-            .ok_or(LlmError::EmptyResponse)?;
-
-        // 安全上の判定で打ち切られた応答は、途中まで書いた本文も渡さない(イベントを渡す前に
-        // 判定する)。
-        if choice.finish_reason.as_deref() == Some("content_filter") {
-            return Err(LlmError::Refused(ErrorDetail::http(
-                reqwest::StatusCode::OK,
-                "finish_reason: content_filter",
-                secrets,
-            ))
-            .into());
+        if super::sse::is_event_stream(&response) {
+            read_stream(response, secrets, reasoning_effort.is_some(), on_event).await?;
+        } else {
+            let parsed: CompletionResponse = super::read_json(response, secrets).await?;
+            emit_completion(parsed, secrets, on_event)?;
         }
-
-        // 思考を本文・ツール呼び出しより先に置く(非ストリーミングで生成順は分からないが、
-        // 一般的な順序に合わせる)。
-        if let Some(reasoning) = choice.message.reasoning_content {
-            if !reasoning.is_empty() {
-                on_event(ResponseEvent::ReasoningDelta { text: reasoning });
-            }
-        }
-        if let Some(text) = choice.message.content {
-            if !text.is_empty() {
-                on_event(ResponseEvent::TextDelta { text });
-            }
-        }
-        for call in choice.message.tool_calls {
-            on_event(ResponseEvent::ToolCall {
-                id: call.id,
-                name: call.function.name,
-                arguments: ToolArguments::parse(call.function.arguments),
-            });
-        }
-
-        let finish_reason = match choice.finish_reason.as_deref() {
-            Some("tool_calls") => FinishReason::ToolCall,
-            Some("length") => FinishReason::Length,
-            Some(_) | None => FinishReason::Stop,
-        };
-        on_event(ResponseEvent::Done { finish_reason });
-
         Ok(Replay::default())
     }
 }

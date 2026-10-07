@@ -41,7 +41,10 @@ impl AnthropicAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
+        let client = crate::net::hardened_client(
+            &base_url,
+            crate::net::RequestTimeout::Total(request_timeout),
+        )?;
         Ok(Self {
             client,
             base_url,
@@ -84,7 +87,10 @@ pub async fn list_models(
     credentials: &Credentials,
 ) -> Result<Vec<String>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut names = Vec::new();
     let mut after: Option<String> = None;
     loop {
@@ -118,7 +124,10 @@ pub async fn detect(
     models: &[String],
 ) -> Result<HashMap<String, DetectedCapabilities>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut found = HashMap::new();
     for model in models {
         let mut url = super::endpoint(&base_url, MODELS)?;
@@ -391,7 +400,7 @@ struct MessageResponse {
     #[serde(rename = "type")]
     kind: Option<String>,
     /// 受け取ったまま送り返すため、生のJSONで持つ([`Replay`])。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     content: Vec<Box<RawValue>>,
     stop_reason: Option<String>,
     stop_details: Option<Value>,
@@ -473,7 +482,7 @@ impl AnthropicAdapter {
         let request = self.client.post(endpoint).json(&body);
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, |status, body| {
+        let response = super::reject_failure(response, secrets, |status, body| {
             http_error(status, body, secrets, thinking)
         })
         .await?;
@@ -619,6 +628,14 @@ mod tests {
     use secrecy::SecretString;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn reads_null_content_as_no_blocks() {
+        let parsed: MessageResponse =
+            serde_json::from_str(r#"{"type":"message","content":null,"stop_reason":"end_turn"}"#)
+                .unwrap();
+        assert!(parsed.content.is_empty());
+    }
 
     fn adapter(base_url: &str, key: &str) -> AnthropicAdapter {
         AnthropicAdapter::new(

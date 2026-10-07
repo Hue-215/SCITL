@@ -53,7 +53,7 @@ pub async fn detect(
     }
     let base_url = ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)?;
     let probe = Probe {
-        client: net::hardened_client(&base_url, Some(DETECT_TIMEOUT))?,
+        client: net::hardened_client(&base_url, net::RequestTimeout::Total(DETECT_TIMEOUT))?,
         root: server_root(&base_url),
         credentials,
     };
@@ -143,7 +143,7 @@ impl Probe<'_> {
             return Ok(None);
         }
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, |status, body| {
+        let response = super::reject_failure(response, secrets, |status, body| {
             LlmError::from_status(status, body, secrets)
         })
         .await?;

@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod gemini;
 mod local_server;
 pub mod openai_compat;
+mod sse;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -94,8 +95,22 @@ async fn read_success_json_with<T: DeserializeOwned>(
     secrets: &SentSecrets,
     classify: fn(StatusCode, &str, &SentSecrets) -> LlmError,
 ) -> Result<T, CoreError> {
-    let response = reject_failure(response, |status, body| classify(status, body, secrets)).await?;
+    let response = reject_failure(response, secrets, |status, body| {
+        classify(status, body, secrets)
+    })
+    .await?;
     Ok(read_json(response, secrets).await?)
+}
+
+/// 応答の欄が`null`でも、欄が無いときと同じ既定値にする(`#[serde(default, deserialize_with =
+/// "super::null_as_default")]`)。`#[serde(default)]`だけでは、無い欄は受けても`null`は型の誤りに
+/// なる。空の欄を省かずに`null`で返す互換サーバーがある(Issue #458)。
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    Ok(<Option<T> as serde::Deserialize>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// リクエストに並べる要素(Anthropic形式のブロック・Gemini形式のステップ)。組み立てたものか、
@@ -372,6 +387,7 @@ async fn send_with_key(
 /// 分からない種類を見ないなら、`classify`は[`LlmError::from_status`]でよい。
 async fn reject_failure(
     response: reqwest::Response,
+    secrets: &SentSecrets,
     classify: impl FnOnce(StatusCode, &str) -> LlmError,
 ) -> Result<reqwest::Response, LlmError> {
     let status = response.status();
@@ -379,13 +395,36 @@ async fn reject_failure(
         return Ok(response);
     }
     let retry_after = retry_after_secs(&response);
-    let body = response.text().await.unwrap_or_default();
+    let body = read_error_body(response, secrets).await;
     Err(match (classify(status, &body), retry_after) {
         (LlmError::RateLimit(detail), Some(secs)) => {
             LlmError::RateLimit(detail.with_retry_after(secs))
         }
         (error, _) => error,
     })
+}
+
+/// エラー応答の本文として読む量の上限。分類と詳細(`ErrorDetail`は512文字まで)には先頭だけで
+/// 足りる。ストリーミングで読む方言では待つ時間の上限が無通信の間隔だけなので、流し続ける
+/// 本文を読み切ろうとしない。
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// エラー応答の本文の先頭([`MAX_ERROR_BODY_BYTES`]まで)。読めなかった分は捨てる。
+///
+/// 上限で切ったときは、末尾から送った秘密情報の最も長い値の長さ分を捨てる。境界をまたいだ値は
+/// 一部だけが残り、伏せ字(値全体との照合)に掛からないため。
+async fn read_error_body(mut response: reqwest::Response, secrets: &SentSecrets) -> String {
+    let mut body = Vec::new();
+    while body.len() < MAX_ERROR_BODY_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    if body.len() >= MAX_ERROR_BODY_BYTES {
+        body.truncate(MAX_ERROR_BODY_BYTES.saturating_sub(secrets.max_len()));
+    }
+    String::from_utf8_lossy(&body).into_owned()
 }
 
 /// レート制限の応答が示す、送り直してよくなるまでの秒数(`Retry-After`)。日時の形は扱わない
@@ -404,15 +443,36 @@ fn retry_after_secs(response: &reqwest::Response) -> Option<u64> {
         .ok()
 }
 
+/// 1回の応答として読む量の上限。1回のモデル呼び出し・問い合わせの応答はこれよりずっと小さい。
+/// ストリーミングで読む方言では待つ時間の上限が無通信の間隔だけなので
+/// (`net::RequestTimeout::BetweenReads`)、送り続けるサーバーを時間では止められず、量で止める。
+/// ストリーミングを頼んでも1つのJSONで返すサーバーがあるので、JSONで読む経路にも掛ける。
+const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+/// 応答が大きすぎる([`MAX_RESPONSE_BYTES`])。
+fn response_too_large() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal("the response is too large"))
+}
+
 /// 成功の応答の本文をJSONとして読む。読めなければ送った秘密情報を伏せた[`LlmError`]にする。
 async fn read_json<T: DeserializeOwned>(
-    response: reqwest::Response,
+    mut response: reqwest::Response,
     secrets: &SentSecrets,
 ) -> Result<T, LlmError> {
-    response
-        .json()
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| LlmError::from_transport(e, secrets))
+        .map_err(|e| LlmError::from_body_read(e, secrets))?
+    {
+        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err(response_too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|e| {
+        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
+    })
 }
 
 /// 鍵を登録していないプロバイダー(`key_ref`が無い)は空の鍵で、鍵のヘッダーを付けずに送る
