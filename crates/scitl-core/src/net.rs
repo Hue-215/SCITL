@@ -300,10 +300,16 @@ mod tests {
         let url = format!("http://{}/", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            // 要求が分割して届いても、ヘッダーの終わりまで読み足す
+            let mut request = Vec::new();
             let mut buf = [0u8; 1024];
-            let n = stream.read(&mut buf).unwrap();
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = stream.read(&mut buf).unwrap();
+                assert!(n > 0, "connection closed before the end of the headers");
+                request.extend_from_slice(&buf[..n]);
+            }
             let _ = stream.write_all(NO_CONTENT.as_bytes());
-            String::from_utf8_lossy(&buf[..n]).into_owned()
+            String::from_utf8_lossy(&request).into_owned()
         });
         let client = hardened_client(
             &ExternalUrl::parse(&url).unwrap(),
