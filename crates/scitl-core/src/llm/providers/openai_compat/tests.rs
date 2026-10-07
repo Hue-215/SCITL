@@ -1072,6 +1072,32 @@ async fn assembles_tool_call_fragments_without_an_index() {
 }
 
 #[tokio::test]
+async fn reads_a_repeated_id_or_empty_fields_without_an_index_as_the_continuation() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"function\":{\"name\":\"list_tasks\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"function\":{\"arguments\":\"\\\"a\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"\",\"function\":{\"name\":\"\",\"arguments\":\"1}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({ "a": 1 }).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_tool_call_without_a_name_is_an_invalid_response() {
     let (result, _, _) = send_streamed(
         now(&[
@@ -1102,18 +1128,48 @@ async fn a_finish_reason_completes_the_stream_without_the_done_marker() {
 }
 
 #[tokio::test]
-async fn a_stream_cut_before_the_end_is_an_invalid_response() {
+async fn a_stream_cut_before_the_end_is_a_connection_failure() {
     let (result, events, _) = send_streamed(
         now(&["data: {\"choices\":[{\"delta\":{\"content\":\"途中\"}}]}\n\n"]),
         TEST_TIMEOUT,
     )
     .await;
     assert!(
-        matches!(result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
+        matches!(result, Err(CoreError::Llm(LlmError::Connection(_)))),
         "{result:?}"
     );
     // 流れた断片は画面に出たままになるが、`Err`なので呼び出し側は保存しない。
     assert_eq!(events, vec![text("途中")]);
+}
+
+#[tokio::test]
+async fn stops_reading_at_the_finish_reason() {
+    // 終了理由の後に`[DONE]`を送らず、接続も閉じないサーバー。
+    let (result, events, _) = send_streamed(
+        [
+            now(&["data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"]),
+            after(Duration::from_millis(1500), &["data: [DONE]\n\n"]),
+        ]
+        .concat(),
+        Duration::from_millis(300),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("ok"), done(FinishReason::Stop)]);
+}
+
+#[tokio::test]
+async fn skips_empty_data() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data:\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("ok"), done(FinishReason::Stop)]);
 }
 
 #[tokio::test]
@@ -1148,6 +1204,17 @@ async fn an_error_in_the_stream_is_classified_from_its_body() {
     .await;
     assert!(
         matches!(result, Err(CoreError::Llm(LlmError::Http(_)))),
+        "{result:?}"
+    );
+
+    // 本文の`code`が状態コードなら、それで分類する。
+    let (result, _, _) = send_streamed(
+        now(&["data: {\"error\":{\"code\":429,\"message\":\"slow down\"}}\n\n"]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(&result, Err(CoreError::Llm(LlmError::RateLimit(detail))) if detail.as_str().starts_with("HTTP 429")),
         "{result:?}"
     );
 }

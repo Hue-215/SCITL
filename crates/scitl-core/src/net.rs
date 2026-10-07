@@ -360,7 +360,7 @@ mod tests {
         .unwrap();
         let mut response = client.get(&url).send().await.unwrap();
         assert_eq!(response.chunk().await.unwrap().as_deref(), Some(&b"a"[..]));
-        // 本文を読む途中で切れても、タイムアウトとして報告される(`LlmError::from_transport`が
+        // 本文を読む途中で切れても、タイムアウトとして報告される(`LlmError::from_body_read`が
         // 種類を見分けられる)。
         let err = response.chunk().await.unwrap_err();
         assert!(err.is_timeout(), "{err:?}");

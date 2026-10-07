@@ -380,13 +380,31 @@ async fn reject_failure(
         return Ok(response);
     }
     let retry_after = retry_after_secs(&response);
-    let body = response.text().await.unwrap_or_default();
+    let body = read_error_body(response).await;
     Err(match (classify(status, &body), retry_after) {
         (LlmError::RateLimit(detail), Some(secs)) => {
             LlmError::RateLimit(detail.with_retry_after(secs))
         }
         (error, _) => error,
     })
+}
+
+/// エラー応答の本文として読む量の上限。分類と詳細(`ErrorDetail`は512文字まで)には先頭だけで
+/// 足りる。ストリーミングで読む方言では待つ時間の上限が無通信の間隔だけなので、流し続ける
+/// 本文を読み切ろうとしない。
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// エラー応答の本文の先頭([`MAX_ERROR_BODY_BYTES`]まで)。読めなかった分は捨てる。
+async fn read_error_body(mut response: reqwest::Response) -> String {
+    let mut body = Vec::new();
+    while body.len() < MAX_ERROR_BODY_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    body.truncate(MAX_ERROR_BODY_BYTES);
+    String::from_utf8_lossy(&body).into_owned()
 }
 
 /// レート制限の応答が示す、送り直してよくなるまでの秒数(`Retry-After`)。日時の形は扱わない

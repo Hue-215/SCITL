@@ -20,17 +20,28 @@ pub(super) fn is_event_stream(response: &reqwest::Response) -> bool {
 /// 返したら(方言の終わりの合図)、残りを読まずに終える。
 ///
 /// 返り値は、終わりの合図で止めたか。`false`なら、合図の無いまま本文が終わった。
+///
+/// 読む量の合計に上限([`MAX_STREAM_BYTES`])を掛ける。ストリーミングでは待つ時間の上限が
+/// 無通信の間隔だけなので(`net::RequestTimeout::BetweenReads`)、送り続けるサーバーを
+/// 時間では止められないため。
 pub(super) async fn read_data(
     mut response: reqwest::Response,
     secrets: &SentSecrets,
     mut on_data: impl FnMut(String) -> Result<bool, LlmError>,
 ) -> Result<bool, LlmError> {
     let mut decoder = SseDecoder::default();
+    let mut total = 0usize;
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|e| LlmError::from_body_read(e, secrets))?
     {
+        total = total.saturating_add(chunk.len());
+        if total > MAX_STREAM_BYTES {
+            return Err(LlmError::InvalidResponse(ErrorDetail::internal(
+                "the event stream is too large",
+            )));
+        }
         for data in decoder.push(&chunk)? {
             if on_data(data)? {
                 return Ok(true);
@@ -47,6 +58,9 @@ pub(super) async fn read_data(
 /// 手元のメモリを使い切らせないため。正常な応答の1イベントはこれよりずっと小さい。
 const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
 
+/// 1つの応答として読む量の上限([`read_data`])。1回のモデル呼び出しの応答はこれよりずっと小さい。
+const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
+
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// 届いた順にバイト列を受け取り、区切りまで届いたイベントの`data`を返す。チャンクの境界は
@@ -61,11 +75,18 @@ pub(super) struct SseDecoder {
     after_cr: bool,
     /// 先頭のBOMを見終えた。
     started: bool,
+    /// `pending`のうち、改行が無いと調べ終えた長さ。改行の届かない長い行を、チャンクが届く
+    /// たびに先頭から調べ直さないため。
+    scanned: usize,
 }
 
 impl SseDecoder {
     /// `bytes`を足し、区切りまで届いたイベントの`data`を届いた順に返す。
     pub(super) fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, LlmError> {
+        // 空のチャンクで`after_cr`を消さない。
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut bytes = bytes;
         if self.after_cr {
             self.after_cr = false;
@@ -86,11 +107,12 @@ impl SseDecoder {
 
         let mut events = Vec::new();
         let mut start = 0;
-        while let Some(offset) = self.pending[start..]
+        let mut from = self.scanned;
+        while let Some(offset) = self.pending[from..]
             .iter()
             .position(|b| matches!(b, b'\n' | b'\r'))
         {
-            let end = start + offset;
+            let end = from + offset;
             let mut next = end + 1;
             if self.pending[end] == b'\r' {
                 match self.pending.get(next) {
@@ -104,8 +126,10 @@ impl SseDecoder {
                 events.push(data);
             }
             start = next;
+            from = next;
         }
         self.pending.drain(..start);
+        self.scanned = self.pending.len();
         self.check_size()?;
         Ok(events)
     }
@@ -117,6 +141,7 @@ impl SseDecoder {
         if !self.pending.is_empty() {
             self.line(0, self.pending.len())?;
             self.pending.clear();
+            self.scanned = 0;
         }
         Ok(self.data.take())
     }
@@ -235,6 +260,23 @@ mod tests {
     fn returns_an_event_left_open_at_the_end() {
         assert_eq!(decode_chunks(&[b"data: a\n\ndata: b"]), vec!["a", "b"]);
         assert_eq!(decode_chunks(&[b"data: a\ndata: b\n"]), vec!["a\nb"]);
+    }
+
+    #[test]
+    fn an_empty_chunk_keeps_a_pending_carriage_return() {
+        assert_eq!(
+            decode_chunks(&[b"data: a\r", b"", b"\ndata: b\r\n\r\n"]),
+            vec!["a\nb"]
+        );
+    }
+
+    #[test]
+    fn finds_the_end_of_a_line_that_arrives_in_many_chunks() {
+        let mut decoder = SseDecoder::default();
+        for piece in [&b"data: "[..], b"a", b"b", b"c"] {
+            assert!(decoder.push(piece).unwrap().is_empty());
+        }
+        assert_eq!(decoder.push(b"\n\n").unwrap(), vec!["abc"]);
     }
 
     #[test]

@@ -690,7 +690,9 @@ struct ToolCallAssembler(Vec<PartialToolCall>);
 
 impl ToolCallAssembler {
     /// 断片を1つ足す。`index`が同じ呼び出しへの続きとし、`index`を付けないサーバーでは、
-    /// `id`か名前が付いていれば新しい呼び出し、付いていなければ直前の呼び出しの続きとする。
+    /// `id`か名前が付いていれば新しい呼び出し、付いていなければ直前の呼び出しの続きとする
+    /// (続きの断片にも同じ`id`を繰り返すサーバーがあるので、直前と同じ`id`は続きとする)。
+    /// 空の`id`・名前は付いていないものとして扱う。
     fn push(&mut self, fragment: StreamToolCall) {
         let StreamToolCall {
             index,
@@ -698,10 +700,14 @@ impl ToolCallAssembler {
             function,
         } = fragment;
         let (name, arguments) = function.map_or((None, None), |f| (f.name, f.arguments));
+        let id = id.filter(|id| !id.is_empty());
+        let name = name.filter(|name| !name.is_empty());
+        let last = self.0.len().checked_sub(1);
         let existing = match index {
             Some(_) => self.0.iter().position(|c| c.index == index),
+            None if id.is_some() && last.is_some_and(|i| self.0[i].id == id) => last,
             None if id.is_some() || name.is_some() => None,
-            None => self.0.len().checked_sub(1),
+            None => last,
         };
         let call = match existing {
             Some(i) => &mut self.0[i],
@@ -752,6 +758,18 @@ impl ToolCallAssembler {
     }
 }
 
+/// ストリーミングの途中で届いたエラーの状態コード。本文の`code`に状態コードを入れるサーバー
+/// (OpenRouter等)では、それで分類する(回数制限・認証を見分けるため)。無ければ応答の200のまま。
+fn stream_error_status(error: &serde_json::Value) -> reqwest::StatusCode {
+    error
+        .get("code")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|code| u16::try_from(code).ok())
+        .and_then(|code| reqwest::StatusCode::from_u16(code).ok())
+        .filter(|status| status.is_client_error() || status.is_server_error())
+        .unwrap_or(reqwest::StatusCode::OK)
+}
+
 /// ストリーミングの応答(SSE)を読み、本文と思考の断片を届いた順に渡す。ツール呼び出しは
 /// 断片を組み立て終えてから、最後に`Done`の前に渡す。
 ///
@@ -771,6 +789,10 @@ async fn read_stream(
         if data.trim() == STREAM_DONE {
             return Ok(true);
         }
+        // 生存確認に空の`data`を送るサーバーがある。
+        if data.trim().is_empty() {
+            return Ok(false);
+        }
         let chunk: StreamChunk = serde_json::from_str(&data).map_err(|e| {
             LlmError::InvalidResponse(ErrorDetail::http(
                 reqwest::StatusCode::OK,
@@ -778,9 +800,9 @@ async fn read_stream(
                 secrets,
             ))
         })?;
-        if chunk.error.is_some() {
+        if let Some(error) = &chunk.error {
             return Err(http_error(
-                reqwest::StatusCode::OK,
+                stream_error_status(error),
                 &data,
                 secrets,
                 reasoning_effort_sent,
@@ -801,19 +823,20 @@ async fn read_stream(
                 tool_calls.push(fragment);
             }
         }
+        // 終了理由が届いたら完了とし、残り(使用量・`[DONE]`)は読まない。`[DONE]`を送らずに
+        // 接続を開けたままにするサーバーで、組み立て終えた応答をタイムアウトで捨てないため。
         if choice.finish_reason.is_some() {
             finish = choice.finish_reason;
+            return Ok(true);
         }
         Ok(false)
     })
     .await?;
 
-    // 終わりの合図も終了理由も無いまま本文が終わった(途中で切れた)。
-    if !done && finish.is_none() {
-        return Err(LlmError::InvalidResponse(ErrorDetail::http(
-            reqwest::StatusCode::OK,
+    // 終わりの合図も終了理由も無いまま本文が終わった。上流が落ちて途中で切れた。
+    if !done {
+        return Err(LlmError::Connection(ErrorDetail::internal(
             "the event stream ended before the response was complete",
-            secrets,
         )));
     }
     if !saw_choice {
