@@ -21,9 +21,7 @@ pub(super) fn is_event_stream(response: &reqwest::Response) -> bool {
 ///
 /// 返り値は、終わりの合図で止めたか。`false`なら、合図の無いまま本文が終わった。
 ///
-/// 読む量の合計に上限([`MAX_STREAM_BYTES`])を掛ける。ストリーミングでは待つ時間の上限が
-/// 無通信の間隔だけなので(`net::RequestTimeout::BetweenReads`)、送り続けるサーバーを
-/// 時間では止められないため。
+/// 読む量の合計に、JSONで読む応答と同じ上限([`super::MAX_RESPONSE_BYTES`])を掛ける。
 pub(super) async fn read_data(
     mut response: reqwest::Response,
     secrets: &SentSecrets,
@@ -37,10 +35,8 @@ pub(super) async fn read_data(
         .map_err(|e| LlmError::from_body_read(e, secrets))?
     {
         total = total.saturating_add(chunk.len());
-        if total > MAX_STREAM_BYTES {
-            return Err(LlmError::InvalidResponse(ErrorDetail::internal(
-                "the event stream is too large",
-            )));
+        if total > super::MAX_RESPONSE_BYTES {
+            return Err(super::response_too_large());
         }
         for data in decoder.push(&chunk)? {
             if on_data(data)? {
@@ -57,9 +53,6 @@ pub(super) async fn read_data(
 /// 1つのイベント(行の途中を含む)として貯める大きさの上限。区切りを送らないサーバーに、
 /// 手元のメモリを使い切らせないため。正常な応答の1イベントはこれよりずっと小さい。
 const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
-
-/// 1つの応答として読む量の上限([`read_data`])。1回のモデル呼び出しの応答はこれよりずっと小さい。
-const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 

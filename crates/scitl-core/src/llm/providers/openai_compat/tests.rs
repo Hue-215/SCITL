@@ -1354,3 +1354,73 @@ async fn a_stream_that_keeps_arriving_outlasts_the_timeout() {
         vec![text("a"), text("b"), text("c"), done(FinishReason::Stop)]
     );
 }
+
+#[tokio::test]
+async fn parallel_calls_sent_with_the_same_index_stay_separate() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"list_tasks\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_b\",\"function\":{\"name\":\"list_steps\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            ResponseEvent::ToolCall {
+                id: Some("call_b".to_string()),
+                name: "list_steps".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn too_many_tool_calls_are_an_invalid_response() {
+    let fragments: String = (0..=MAX_TOOL_CALLS)
+        .map(|i| format!("{{\"index\":{i},\"function\":{{\"name\":\"list_tasks\"}}}}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let event: &'static str = Box::leak(
+        format!("data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{fragments}]}}}}]}}\n\n")
+            .into_boxed_str(),
+    );
+    let (result, events, _) = send_streamed(
+        now(&[
+            event,
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
+        "{result:?}"
+    );
+    assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn an_empty_finish_reason_does_not_end_the_stream() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"},\"finish_reason\":\"\"}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"b\"},\"finish_reason\":\"stop\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("a"), text("b"), done(FinishReason::Stop)]);
+}

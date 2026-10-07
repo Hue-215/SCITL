@@ -482,7 +482,7 @@ impl AnthropicAdapter {
         let request = self.client.post(endpoint).json(&body);
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, |status, body| {
+        let response = super::reject_failure(response, secrets, |status, body| {
             http_error(status, body, secrets, thinking)
         })
         .await?;

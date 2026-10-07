@@ -604,6 +604,9 @@ fn emit_completion(
         .next()
         .ok_or(LlmError::EmptyResponse)?;
 
+    if choice.message.tool_calls.len() > MAX_TOOL_CALLS {
+        return Err(too_many_tool_calls());
+    }
     // 安全上の判定で打ち切られた応答は、途中まで書いた本文も渡さない(イベントを渡す前に
     // 判定する)。
     if choice.finish_reason.as_deref() == Some("content_filter") {
@@ -687,6 +690,17 @@ struct StreamFunctionCall {
     arguments: Option<String>,
 }
 
+/// 1回の応答で受け付けるツール呼び出しの数の上限。実際のモデルが1回に出す呼び出しはこれより
+/// ずっと少ない。上限が無いと、壊れた・悪意のあるサーバーが呼び出しを大量に並べて、組み立てと
+/// 実行に時間とメモリを使わせられる。
+const MAX_TOOL_CALLS: usize = 128;
+
+fn too_many_tool_calls() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the response contains too many tool calls",
+    ))
+}
+
 /// 組み立て中のツール呼び出し。
 struct PartialToolCall {
     index: Option<u64>,
@@ -705,8 +719,11 @@ impl ToolCallAssembler {
     /// 断片を1つ足す。`index`が同じ呼び出しへの続きとし、`index`を付けないサーバーでは、
     /// `id`か名前が付いていれば新しい呼び出し、付いていなければ直前の呼び出しの続きとする
     /// (続きの断片にも同じ`id`を繰り返すサーバーがあるので、直前と同じ`id`は続きとする)。
-    /// 空の`id`・名前は付いていないものとして扱う。
-    fn push(&mut self, fragment: StreamToolCall) {
+    /// 空の`id`・名前は付いていないものとして扱う。同じ`index`でも、すでに`id`を持つ呼び出しに
+    /// 別の`id`が届いたら新しい呼び出しとする(並列の呼び出しをすべて同じ`index`で送るサーバー)。
+    ///
+    /// 呼び出しの数が[`MAX_TOOL_CALLS`]を超えたら失敗にする。
+    fn push(&mut self, fragment: StreamToolCall) -> Result<(), LlmError> {
         let StreamToolCall {
             index,
             id,
@@ -716,8 +733,13 @@ impl ToolCallAssembler {
         let id = id.filter(|id| !id.is_empty());
         let name = name.filter(|name| !name.is_empty());
         let last = self.0.len().checked_sub(1);
+        let other_id = |i: usize| id.is_some() && self.0[i].id.is_some() && self.0[i].id != id;
         let existing = match index {
-            Some(_) => self.0.iter().position(|c| c.index == index),
+            Some(_) => self
+                .0
+                .iter()
+                .rposition(|c| c.index == index)
+                .filter(|&i| !other_id(i)),
             None if id.is_some() && last.is_some_and(|i| self.0[i].id == id) => last,
             None if id.is_some() || name.is_some() => None,
             None => last,
@@ -725,6 +747,9 @@ impl ToolCallAssembler {
         let call = match existing {
             Some(i) => &mut self.0[i],
             None => {
+                if self.0.len() >= MAX_TOOL_CALLS {
+                    return Err(too_many_tool_calls());
+                }
                 self.0.push(PartialToolCall {
                     index,
                     id: None,
@@ -748,6 +773,7 @@ impl ToolCallAssembler {
                 .get_or_insert_with(String::new)
                 .push_str(&arguments);
         }
+        Ok(())
     }
 
     /// 組み立て終えた呼び出しを、最初の断片が届いた順に返す。名前の無い呼び出しは、
@@ -835,13 +861,14 @@ async fn read_stream(
                 on_event(ResponseEvent::TextDelta { text });
             }
             for fragment in delta.tool_calls.unwrap_or_default() {
-                tool_calls.push(fragment);
+                tool_calls.push(fragment)?;
             }
         }
         // 終了理由が届いたら完了とし、残り(使用量・`[DONE]`)は読まない。`[DONE]`を送らずに
         // 接続を開けたままにするサーバーで、組み立て終えた応答をタイムアウトで捨てないため。
-        if choice.finish_reason.is_some() {
-            finish = choice.finish_reason;
+        // 空の終了理由は、まだ終わっていないものとする。
+        if let Some(reason) = choice.finish_reason.filter(|r| !r.is_empty()) {
+            finish = Some(reason);
             return Ok(true);
         }
         Ok(false)
@@ -921,7 +948,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
         )
         .await?;
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, |status, body| {
+        let response = super::reject_failure(response, secrets, |status, body| {
             http_error(status, body, secrets, reasoning_effort.is_some())
         })
         .await?;

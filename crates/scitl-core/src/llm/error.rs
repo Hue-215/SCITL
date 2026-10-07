@@ -92,8 +92,9 @@ impl LlmError {
     }
 
     /// 本文を少しずつ読む途中(`reqwest::Response::chunk`)の失敗を種類付きにする。reqwestは
-    /// どれも解釈失敗(`is_decode`)として返すが、本文を解釈する前なので、途中で接続が切れたか、
-    /// 無通信の上限(`net::RequestTimeout::BetweenReads`)に達したかのどちらか。
+    /// どれも解釈失敗(`is_decode`)として返すが、本文の中身を解釈する前の失敗なので、タイムアウト
+    /// (無通信の上限`net::RequestTimeout::BetweenReads`か全体の上限)のほかは、途中で接続が
+    /// 切れた・転送の枠組み(chunked等)が壊れていたといった通信の失敗として扱う。
     pub fn from_body_read(e: reqwest::Error, secrets: &SentSecrets) -> Self {
         let timeout = e.is_timeout();
         let detail = ErrorDetail::transport(e, secrets);
@@ -204,6 +205,12 @@ impl SentSecrets {
 
     fn values(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(|v| v.expose_secret())
+    }
+
+    /// 最も長い値のバイト数(値が無ければ0)。値そのものは渡さない。本文を途中で切るとき、
+    /// 境界をまたいで一部だけ残った値を捨てる幅に使う。
+    pub(crate) fn max_len(&self) -> usize {
+        self.values().map(str::len).max().unwrap_or(0)
     }
 }
 

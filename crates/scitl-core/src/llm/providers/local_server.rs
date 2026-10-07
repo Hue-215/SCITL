@@ -143,7 +143,7 @@ impl Probe<'_> {
             return Ok(None);
         }
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, |status, body| {
+        let response = super::reject_failure(response, secrets, |status, body| {
             LlmError::from_status(status, body, secrets)
         })
         .await?;
