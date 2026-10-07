@@ -99,6 +99,17 @@ async fn read_success_json_with<T: DeserializeOwned>(
     Ok(read_json(response, secrets).await?)
 }
 
+/// 応答の欄が`null`でも、欄が無いときと同じ既定値にする(`#[serde(default, deserialize_with =
+/// "super::null_as_default")]`)。`#[serde(default)]`だけでは、無い欄は受けても`null`は型の誤りに
+/// なる。空の欄を省かずに`null`で返す互換サーバーがある(Issue #458)。
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    Ok(<Option<T> as serde::Deserialize>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// リクエストに並べる要素(Anthropic形式のブロック・Gemini形式のステップ)。組み立てたものか、
 /// 受け取ったまま送り返すもの([`crate::llm::Replay`])か。
 #[derive(serde::Serialize)]

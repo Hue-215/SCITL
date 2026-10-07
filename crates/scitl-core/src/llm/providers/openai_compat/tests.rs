@@ -178,6 +178,57 @@ async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
     )));
 }
 
+/// 空の欄を省かずに`null`で返すサーバー(Issue #458)。
+#[tokio::test]
+async fn null_fields_in_a_completion_read_as_absent() {
+    let (base_url, handle) = spawn_capturing(
+        r#"{"choices":[{"message":{"content":"ok","tool_calls":null,"reasoning_content":null},"finish_reason":"stop"}]}"#,
+    );
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .await;
+    handle.join().unwrap();
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::TextDelta {
+                text: "ok".to_string()
+            },
+            ResponseEvent::Done {
+                finish_reason: FinishReason::Stop
+            },
+        ]
+    );
+}
+
+#[test]
+fn null_choices_are_no_reply() {
+    let parsed: CompletionResponse = serde_json::from_str(r#"{"choices":null}"#).unwrap();
+    assert!(parsed.choices.is_empty());
+}
+
+/// 引数が`null`なら`null`として渡し、空のオブジェクトに置き換えない。
+#[test]
+fn null_tool_arguments_are_passed_up_as_null() {
+    let parsed: ResponseToolCall = serde_json::from_str(
+        r#"{"id":"call_1","type":"function","function":{"name":"get_task_list","arguments":null}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        ToolArguments::parse(raw_arguments(parsed.function.arguments)),
+        ToolArguments::from(serde_json::Value::Null)
+    );
+}
+
 #[tokio::test]
 async fn a_content_filter_stop_is_a_refusal_without_passing_the_partial_reply() {
     let (base_url, handle) = spawn_capturing(
@@ -1091,6 +1142,31 @@ async fn reads_a_repeated_id_or_empty_fields_without_an_index_as_the_continuatio
                 id: Some("call_a".to_string()),
                 name: "list_tasks".to_string(),
                 arguments: serde_json::json!({ "a": 1 }).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+/// 引数を運ばない呼び出しは、ストリーミングしないときの`"arguments": null`と同じく`null`にする。
+#[tokio::test]
+async fn a_streamed_tool_call_without_arguments_passes_null() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"get_task_list\",\"arguments\":null}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "get_task_list".to_string(),
+                arguments: serde_json::Value::Null.into(),
             },
             done(FinishReason::ToolCall),
         ]

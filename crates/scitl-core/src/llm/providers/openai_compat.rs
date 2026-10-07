@@ -532,6 +532,8 @@ fn request_body<'a>(
 
 #[derive(Deserialize)]
 struct CompletionResponse {
+    /// 空(`null`も)なら空応答。
+    #[serde(default, deserialize_with = "super::null_as_default")]
     choices: Vec<Choice>,
 }
 
@@ -544,7 +546,7 @@ struct Choice {
 #[derive(Deserialize)]
 struct ResponseMessage {
     content: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     tool_calls: Vec<ResponseToolCall>,
     /// 思考(reasoning)の本文。OpenAI本家には無いが、互換を名乗るプロバイダ(DeepSeek、vLLM等)で
     /// 広く使われている拡張。
@@ -561,7 +563,16 @@ struct ResponseToolCall {
 #[derive(Deserialize)]
 struct ResponseFunctionCall {
     name: String,
-    arguments: String,
+    /// `null`で返すサーバーがある([`raw_arguments`])。
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// 引数の文字列。欄が`null`(または無い)なら`null`として読む。空のオブジェクトには置き換えない
+/// (`ToolArguments`。引数が要るツールを引数無しで発火させないため)。オブジェクトでない引数は
+/// ツールの引数検証が失敗としてモデルへ返し、出し直させる。
+fn raw_arguments(arguments: Option<String>) -> String {
+    arguments.unwrap_or_else(|| "null".to_string())
 }
 
 fn finish_reason(value: Option<&str>) -> FinishReason {
@@ -615,7 +626,7 @@ fn emit_completion(
         on_event(ResponseEvent::ToolCall {
             id: call.id,
             name: call.function.name,
-            arguments: ToolArguments::parse(call.function.arguments),
+            arguments: ToolArguments::parse(raw_arguments(call.function.arguments)),
         });
     }
     on_event(ResponseEvent::Done {
@@ -681,7 +692,9 @@ struct PartialToolCall {
     index: Option<u64>,
     id: Option<String>,
     name: String,
-    arguments: String,
+    /// 引数の断片を連結したもの。どの断片も引数を運ばなければ`None`(ストリーミングしないときの
+    /// `null`と同じく[`raw_arguments`]で読む)。
+    arguments: Option<String>,
 }
 
 /// 断片から組み立てるツール呼び出しの並び。
@@ -716,7 +729,7 @@ impl ToolCallAssembler {
                     index,
                     id: None,
                     name: String::new(),
-                    arguments: String::new(),
+                    arguments: None,
                 });
                 self.0.last_mut().expect("just pushed")
             }
@@ -731,7 +744,9 @@ impl ToolCallAssembler {
             }
         }
         if let Some(arguments) = arguments {
-            call.arguments.push_str(&arguments);
+            call.arguments
+                .get_or_insert_with(String::new)
+                .push_str(&arguments);
         }
     }
 
@@ -751,7 +766,7 @@ impl ToolCallAssembler {
                 Ok(ResponseEvent::ToolCall {
                     id: call.id,
                     name: call.name,
-                    arguments: ToolArguments::parse(call.arguments),
+                    arguments: ToolArguments::parse(raw_arguments(call.arguments)),
                 })
             })
             .collect()

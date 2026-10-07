@@ -368,9 +368,9 @@ const ABBREVIATED: &[(&str, &[&str])] = &[("image", &["data"]), ("thought", &["s
 struct InteractionResponse {
     status: String,
     /// 受け取ったまま送り返すため、生のJSONで持つ([`Replay`])。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     steps: Vec<Box<RawValue>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     errors: Vec<Value>,
 }
 
@@ -631,6 +631,14 @@ mod tests {
     use secrecy::SecretString;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn reads_null_steps_and_errors_as_empty() {
+        let parsed: InteractionResponse =
+            serde_json::from_str(r#"{"status":"completed","steps":null,"errors":null}"#).unwrap();
+        assert!(parsed.steps.is_empty());
+        assert!(parsed.errors.is_empty());
+    }
 
     fn adapter(base_url: &str, key: &str) -> GeminiAdapter {
         GeminiAdapter::new(

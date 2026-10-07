@@ -400,7 +400,7 @@ struct MessageResponse {
     #[serde(rename = "type")]
     kind: Option<String>,
     /// 受け取ったまま送り返すため、生のJSONで持つ([`Replay`])。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     content: Vec<Box<RawValue>>,
     stop_reason: Option<String>,
     stop_details: Option<Value>,
@@ -628,6 +628,14 @@ mod tests {
     use secrecy::SecretString;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn reads_null_content_as_no_blocks() {
+        let parsed: MessageResponse =
+            serde_json::from_str(r#"{"type":"message","content":null,"stop_reason":"end_turn"}"#)
+                .unwrap();
+        assert!(parsed.content.is_empty());
+    }
 
     fn adapter(base_url: &str, key: &str) -> AnthropicAdapter {
         AnthropicAdapter::new(

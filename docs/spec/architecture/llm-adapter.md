@@ -78,6 +78,9 @@ Anthropic形式は`GET /v1/models`、Gemini形式は`GET /v1beta/models`)で取�
 - 方言によらない失敗(reqwestが報告する通信の失敗と、状態コードだけで決まるもの)の変換は
   `llm::LlmError`に置き、全アダプタがそれを呼ぶ
 - 応答本文でしか分からない失敗(コンテキスト超過の書き方等)の判定は各`providers/*.rs`に置く
+- 応答の欄が`null`でも、欄が無いときと同じに読む(`providers::null_as_default`、Issue #458)。空の欄を
+  省かずに`null`で返す互換サーバーがあり、型の誤りとして失敗にすると会話が続かない。ツールの引数が
+  `null`なら、空のオブジェクトに置き換えずに`null`として上位へ渡す(引数検証がモデルへ失敗を返す)
 - 詳細は`llm::ErrorDetail`で運ぶ。サニタイズするコンストラクタでしか作れない
   (`../data-model/messages.md`「エラー発言の詳細」)
 
