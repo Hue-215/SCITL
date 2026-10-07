@@ -9,10 +9,11 @@ use std::error::Error as _;
 use std::fmt;
 
 use reqwest::StatusCode;
+use secrecy::{ExposeSecret, SecretString};
 
 /// 詳細に載せる文字列の上限。
 const MAX_DETAIL_CHARS: usize = 512;
-/// 送信した鍵が現れたときの置き換え先。
+/// 送信した秘密情報が現れたときの置き換え先。
 const REDACTED: &str = "[redacted]";
 /// 要求URLが現れたときの置き換え先。
 const URL_PLACEHOLDER: &str = "[url]";
@@ -68,14 +69,14 @@ impl LlmError {
     ///   ことを表す
     /// - タイムアウトを解釈失敗より先に見る。本文を読む途中で応答タイムアウトに達すると、
     ///   reqwestは解釈失敗として返す
-    pub fn from_transport(e: reqwest::Error, api_key: &str) -> Self {
+    pub fn from_transport(e: reqwest::Error, secrets: &SentSecrets) -> Self {
         let (builder, connect, timeout, decode) = (
             e.is_builder(),
             e.is_connect(),
             e.is_timeout(),
             e.is_decode(),
         );
-        let detail = ErrorDetail::transport(e, api_key);
+        let detail = ErrorDetail::transport(e, secrets);
         if builder {
             Self::InvalidRequest(detail)
         } else if connect {
@@ -91,8 +92,8 @@ impl LlmError {
 
     /// 非成功の状態コードを、状態コードだけで決まる範囲で分類する。本文でしか分からない
     /// 種類は、アダプタがこれを呼ぶ前に判定する。
-    pub fn from_status(status: StatusCode, body: &str, api_key: &str) -> Self {
-        let detail = ErrorDetail::http(status, body, api_key);
+    pub fn from_status(status: StatusCode, body: &str, secrets: &SentSecrets) -> Self {
+        let detail = ErrorDetail::http(status, body, secrets);
         match status {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Self::Auth(detail),
             StatusCode::TOO_MANY_REQUESTS => Self::RateLimit(detail),
@@ -105,28 +106,28 @@ impl LlmError {
 /// 文字列は、DBに残り画面にも出る。サニタイズするコンストラクタでしか作れないようにし、
 /// アダプタが掛け忘れる経路を作らない。
 ///
-/// 掛けるのは、送信した鍵の伏せ字と、画面に出す診断文字列としての整形(1行に畳み、描かれない
-/// 文字を除き、長さを制限する)。伏せ字が要るのは、ゲートウェイが
-/// リクエストヘッダーをエコーバックする構成だと`Authorization`ヘッダーの値が本文にそのまま
+/// 掛けるのは、送信した秘密情報([`SentSecrets`])の伏せ字と、画面に出す診断文字列としての
+/// 整形(1行に畳み、描かれない文字を除き、長さを制限する)。伏せ字が要るのは、ゲートウェイが
+/// リクエストヘッダーをエコーバックする構成だと、鍵やカスタムヘッダーの値が本文にそのまま
 /// 現れうるため。鍵をURLに置く構成は`net::validate_external_url`がクエリ・userinfoを
-/// 拒否して塞いでいるため、対象は鍵1つで足りる。
+/// 拒否して塞いでいるため、対象はヘッダーに載せた値で足りる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorDetail(String);
 
 impl ErrorDetail {
     /// プロバイダーが非成功の状態コードとともに返した本文。
-    pub fn http(status: StatusCode, body: &str, api_key: &str) -> Self {
+    pub fn http(status: StatusCode, body: &str, secrets: &SentSecrets) -> Self {
         Self(format!(
             "HTTP {}: {}",
             status.as_u16(),
-            sanitize(body, api_key)
+            sanitize(body, secrets)
         ))
     }
 
     /// reqwest自身の表示は"error sending request"等の固定文言だけで、接続の拒否・
     /// タイムアウト・証明書エラーの区別は`source()`の先にしか無いため、原因まで連ねる。
     /// reqwestは表示に要求URLを含めるため取り除く(パスに鍵を置くゲートウェイがある)。
-    fn transport(e: reqwest::Error, api_key: &str) -> Self {
+    fn transport(e: reqwest::Error, secrets: &SentSecrets) -> Self {
         let url = e.url().map(|url| url.to_string());
         let e = e.without_url();
         let mut text = e.to_string();
@@ -144,7 +145,7 @@ impl ErrorDetail {
         if let Some(url) = url {
             text = text.replace(&url, URL_PLACEHOLDER);
         }
-        Self(sanitize(&text, api_key))
+        Self(sanitize(&text, secrets))
     }
 
     /// レート制限の応答が示した、送り直してよくなるまでの秒数を添える。
@@ -169,22 +170,46 @@ impl fmt::Display for ErrorDetail {
     }
 }
 
-fn sanitize(text: &str, api_key: &str) -> String {
-    if api_key.is_empty() {
-        return crate::text::display_label(text, MAX_DETAIL_CHARS);
+/// エラー文から伏せる、送った秘密情報(鍵と、カスタムヘッダーの値)。空の値は持たない。
+/// 値を含むため`Debug`は付けない。
+#[derive(Clone, Default)]
+pub struct SentSecrets(Vec<SecretString>);
+
+impl SentSecrets {
+    pub fn new<'a>(values: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut values: Vec<SecretString> = values
+            .into_iter()
+            .filter(|v| !v.is_empty())
+            .map(SecretString::from)
+            .collect();
+        // 長いものから伏せる。ある値が別の値の一部だと、短い方を先に伏せたとき、長い方の
+        // 残りの部分が伏せられずに現れる。
+        values.sort_by_key(|v| std::cmp::Reverse(v.expose_secret().len()));
+        Self(values)
     }
-    // 伏せ字は整える前と後の両方で掛ける。後で掛けるのは、鍵の途中に見えない文字を挟んだ形が
-    // 除いた時点で鍵として現れるため。その照合は整えた鍵で行う(鍵の前後に空白が付いたまま
+
+    fn values(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(|v| v.expose_secret())
+    }
+}
+
+fn sanitize(text: &str, secrets: &SentSecrets) -> String {
+    // 伏せ字は整える前と後の両方で掛ける。後で掛けるのは、値の途中に見えない文字を挟んだ形が
+    // 除いた時点で値として現れるため。その照合は整えた値で行う(鍵の前後に空白が付いたまま
     // 保存されていても、ヘッダー値としては空白を落とした形で送られ、そのまま返ってくる)。
-    // 切り詰めは伏せ字の後に行い、境界で鍵の一部が残らないようにする。
-    let visible = crate::text::visible_line(&text.replace(api_key, REDACTED));
-    let visible_key = crate::text::visible_line(api_key);
-    let redacted = if visible_key.is_empty() {
-        visible
-    } else {
-        visible.replace(&visible_key, REDACTED)
-    };
-    crate::text::ellipsize(&redacted, MAX_DETAIL_CHARS)
+    // 切り詰めは伏せ字の後に行い、境界で値の一部が残らないようにする。
+    let mut text = text.to_string();
+    for secret in secrets.values() {
+        text = text.replace(secret, REDACTED);
+    }
+    let mut visible = crate::text::visible_line(&text);
+    for secret in secrets.values() {
+        let visible_secret = crate::text::visible_line(secret);
+        if !visible_secret.is_empty() {
+            visible = visible.replace(&visible_secret, REDACTED);
+        }
+    }
+    crate::text::ellipsize(&visible, MAX_DETAIL_CHARS)
 }
 
 #[cfg(test)]
@@ -229,7 +254,8 @@ mod tests {
             .send()
             .await
             .unwrap_err();
-        let LlmError::Connection(detail) = LlmError::from_transport(err, "") else {
+        let LlmError::Connection(detail) = LlmError::from_transport(err, &SentSecrets::default())
+        else {
             panic!("expected LlmError::Connection");
         };
         // reqwest自身の固定文言だけで終わらず、原因が連なる。URLは載せない。
@@ -251,7 +277,7 @@ mod tests {
             .send()
             .await
             .unwrap_err();
-        let failure = LlmError::from_transport(err, "");
+        let failure = LlmError::from_transport(err, &SentSecrets::default());
         assert!(matches!(failure, LlmError::Timeout(_)), "{failure:?}");
         assert!(!failure.to_string().contains("127.0.0.1"), "{failure}");
     }
@@ -268,7 +294,7 @@ mod tests {
             .await
             .unwrap();
         let err = response.json::<serde_json::Value>().await.unwrap_err();
-        let failure = LlmError::from_transport(err, "");
+        let failure = LlmError::from_transport(err, &SentSecrets::default());
         assert!(
             matches!(failure, LlmError::InvalidResponse(_)),
             "{failure:?}"
@@ -285,7 +311,7 @@ mod tests {
             .send()
             .await
             .unwrap_err();
-        let failure = LlmError::from_transport(err, "sk-bad\nkey");
+        let failure = LlmError::from_transport(err, &SentSecrets::new(["sk-bad\nkey"]));
         assert!(
             matches!(failure, LlmError::InvalidRequest(_)),
             "{failure:?}"
@@ -296,17 +322,17 @@ mod tests {
     fn status_codes_decide_auth_and_rate_limit() {
         for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
             assert!(matches!(
-                LlmError::from_status(status, "", ""),
+                LlmError::from_status(status, "", &SentSecrets::default()),
                 LlmError::Auth(_)
             ));
         }
         assert!(matches!(
-            LlmError::from_status(StatusCode::TOO_MANY_REQUESTS, "", ""),
+            LlmError::from_status(StatusCode::TOO_MANY_REQUESTS, "", &SentSecrets::default()),
             LlmError::RateLimit(_)
         ));
         for status in [StatusCode::BAD_REQUEST, StatusCode::INTERNAL_SERVER_ERROR] {
             assert!(matches!(
-                LlmError::from_status(status, "", ""),
+                LlmError::from_status(status, "", &SentSecrets::default()),
                 LlmError::Http(_)
             ));
         }
@@ -317,7 +343,7 @@ mod tests {
         let detail = ErrorDetail::http(
             StatusCode::UNAUTHORIZED,
             "bad token sk-secret\n",
-            "sk-secret",
+            &SentSecrets::new(["sk-secret"]),
         );
         assert_eq!(detail.as_str(), "HTTP 401: bad token [redacted]");
     }
@@ -325,7 +351,7 @@ mod tests {
     #[test]
     fn sanitize_strips_control_chars_and_truncates() {
         let body = format!("line1\nline2\x07{}", "x".repeat(600));
-        let sanitized = sanitize(&body, "unused-key");
+        let sanitized = sanitize(&body, &SentSecrets::new(["unused-key"]));
         assert!(!sanitized.contains('\n'));
         assert!(!sanitized.contains('\x07'));
         assert!(sanitized.ends_with('…'));
@@ -335,13 +361,13 @@ mod tests {
     #[test]
     fn sanitize_removes_bidi_and_zero_width_chars() {
         let body = "a\u{202E}b\u{2066}c\u{200B}d\u{FEFF}e";
-        assert_eq!(sanitize(body, ""), "abcde");
+        assert_eq!(sanitize(body, &SentSecrets::default()), "abcde");
     }
 
     #[test]
     fn sanitize_redacts_key_saved_with_surrounding_spaces() {
         let body = "token sk-supersecret1234 rejected";
-        let sanitized = sanitize(body, " sk-supersecret1234\t");
+        let sanitized = sanitize(body, &SentSecrets::new([" sk-supersecret1234\t"]));
         assert!(!sanitized.contains("sk-supersecret1234"));
         assert!(sanitized.contains("[redacted]"));
     }
@@ -349,7 +375,7 @@ mod tests {
     #[test]
     fn sanitize_redacts_key_split_by_invisible_chars() {
         let body = "token sk-super\u{200B}secret1234 rejected";
-        let sanitized = sanitize(body, "sk-supersecret1234");
+        let sanitized = sanitize(body, &SentSecrets::new(["sk-supersecret1234"]));
         assert!(!sanitized.contains("sk-supersecret1234"));
         assert!(sanitized.contains("[redacted]"));
     }
@@ -357,8 +383,26 @@ mod tests {
     #[test]
     fn sanitize_redacts_leaked_api_key() {
         let body = "upstream rejected token sk-supersecret1234 for this request";
-        let sanitized = sanitize(body, "sk-supersecret1234");
+        let sanitized = sanitize(body, &SentSecrets::new(["sk-supersecret1234"]));
         assert!(!sanitized.contains("sk-supersecret1234"));
         assert!(sanitized.contains("[redacted]"));
+    }
+
+    #[test]
+    fn sanitize_redacts_every_sent_secret() {
+        let body = "echo: x-api-key=sk-key1234 cf-aig-authorization=gw-token5678";
+        let sanitized = sanitize(body, &SentSecrets::new(["sk-key1234", "gw-token5678"]));
+        assert_eq!(
+            sanitized,
+            "echo: x-api-key=[redacted] cf-aig-authorization=[redacted]"
+        );
+    }
+
+    #[test]
+    fn sanitize_redacts_the_longer_secret_first() {
+        // 短い値が長い値の一部でも、長い値の残りを出さない。
+        let body = "token abcd-efgh";
+        let sanitized = sanitize(body, &SentSecrets::new(["abcd", "abcd-efgh"]));
+        assert_eq!(sanitized, "token [redacted]");
     }
 }

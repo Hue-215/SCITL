@@ -3,12 +3,15 @@
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
-use super::{delete_secret, input, invalid, Settings, SettingsView};
+use super::{input, invalid, Settings, SettingsView};
 use crate::config::{validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef};
 use crate::error::{CoreError, Result};
 use crate::mcp;
-use crate::secrets;
 use crate::tools::external;
+
+/// 秘密情報の`key_ref`の接頭辞と、削除に失敗したときの診断に出す名前。
+const SECRET_PREFIX: &str = "mcp";
+const SECRET_WHAT: &str = "MCP secret";
 
 /// サーバー追加フォームからの入力。`McpEndpoint`と同じく、接続方式ごとに必要な値だけを
 /// 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
@@ -166,30 +169,13 @@ fn store_endpoint_secrets(endpoint: NewMcpEndpoint) -> Result<McpEndpoint> {
     let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
     Ok(McpEndpoint::StreamableHttp {
         url,
-        header_refs: store_secret_refs(headers)?,
+        header_refs: super::store_secret_refs(headers, SECRET_PREFIX, SECRET_WHAT)?,
     })
-}
-
-/// 秘密情報の値を保存し、`(name, key_ref)`の組に変換する。途中で失敗したら
-/// それまでに保存した分を削除してからエラーを返す(孤児を残さない)。
-fn store_secret_refs(pairs: Vec<(String, SecretString)>) -> Result<Vec<SecretRef>> {
-    let mut refs = Vec::with_capacity(pairs.len());
-    for (name, value) in pairs {
-        let key_ref = format!("mcp:{}", ulid::Ulid::new());
-        if let Err(e) = secrets::store(&key_ref, &value) {
-            delete_secret_refs(&refs);
-            return Err(e);
-        }
-        refs.push(SecretRef { name, key_ref });
-    }
-    Ok(refs)
 }
 
 /// 1件が失敗しても残りは試す。
 fn delete_secret_refs(refs: &[SecretRef]) {
-    for r in refs {
-        delete_secret(&r.key_ref, &format!("MCP secret '{}'", r.name));
-    }
+    super::delete_secret_refs(refs, SECRET_WHAT);
 }
 
 fn endpoint_secret_refs(endpoint: &McpEndpoint) -> &[SecretRef] {

@@ -63,8 +63,13 @@ pub enum ProviderCommand {
         /// OS credential store and is never printed.
         #[arg(long, value_name = "VAR")]
         api_key_env: Option<String>,
+        /// Request header NAME, taking its value from this process's variable VAR. The value
+        /// goes to the OS credential store. `{session_id}` in the value is replaced with an ID
+        /// of the conversation when a turn is sent. Can be repeated.
+        #[arg(long, value_name = "NAME=VAR")]
+        header: Vec<String>,
     },
-    /// Remove a provider and its stored API key.
+    /// Remove a provider and its stored API key and header values.
     Delete { provider_id: String },
     /// Ask the provider which models it offers. Nothing is saved.
     Models { provider_id: String },
@@ -205,6 +210,7 @@ pub async fn run_provider(session: &Session, command: ProviderCommand) -> Result
             api_format,
             base_url,
             api_key_env,
+            header,
         } => {
             let new = NewProvider {
                 name,
@@ -214,6 +220,7 @@ pub async fn run_provider(session: &Session, command: ProviderCommand) -> Result
                     .as_deref()
                     .map(|var| secret_from_env("--api-key-env", var))
                     .transpose()?,
+                headers: secrets_from_env("--header", header)?,
             };
             change(settings, move |s| s.add_provider(new)).await
         }

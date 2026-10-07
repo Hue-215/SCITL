@@ -5,32 +5,9 @@ import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import { isolated, t } from './i18n'
 import { CollapseToggle, NumberField, ServerNotice } from './settingsFields'
+import { parseKeyValueLines } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
-
-// 「1行1件、KEY=VALUE」形式のテキストをパースする。エラーは行ごとに個別指摘する。行は前後の
-// 空白を除いてから見るので、`=`が先頭でなければキーは空にならない。
-function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
-  const pairs: [string, string][] = []
-  const errors: string[] = []
-  text.split('\n').forEach((line, i) => {
-    const trimmed = line.trim()
-    if (trimmed === '') return
-    const eq = trimmed.indexOf('=')
-    if (eq <= 0) {
-      errors.push(
-        t('settings.tools.kv_line_invalid', {
-          line_no: i + 1,
-          line: isolated(trimmed),
-          sample: t('settings.tools.kv_sample'),
-        }),
-      )
-      return
-    }
-    pairs.push([trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim()])
-  })
-  return { pairs, errors }
-}
 
 // 使える文字と並びだけを見る(長さの上限はRust側から受け取る)。アンダーバーは英数字の間に
 // 1つずつだけ置ける。登録の可否はRust側(`config::validate_mcp_server_name`)が決め直す。

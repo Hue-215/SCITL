@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use reqwest::StatusCode;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
@@ -14,17 +13,21 @@ use crate::error::CoreError;
 use crate::llm::{
     AdapterIdentity, ChatMessage, DetectedCapabilities, ErrorDetail, FinishReason, InlineImage,
     LlmAdapter, LlmError, PromptText, Readiness, Replay, RequestPreview, ResponseEvent,
-    ToolArguments, ToolOffer,
+    SentSecrets, SessionId, ToolArguments, ToolOffer,
 };
 use crate::net::ExternalUrl;
 
-use super::{received, KeyHeader, RequestPart};
+use super::{received, Credentials, KeyHeader, RequestPart};
+
+/// SCITL自身が付けるヘッダー(鍵)。カスタムヘッダーには使わせない
+/// ([`super::validate_header_name`])。
+pub(super) const OWN_HEADERS: &[&str] = &["x-goog-api-key"];
 
 /// Gemini形式のアダプタ。
 pub struct GeminiAdapter {
     client: reqwest::Client,
     base_url: ExternalUrl,
-    api_key: SecretString,
+    credentials: Credentials,
     model: String,
 }
 
@@ -33,7 +36,7 @@ impl GeminiAdapter {
     /// `request_timeout`は設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)。
     pub fn new(
         base_url: impl Into<String>,
-        api_key: SecretString,
+        credentials: Credentials,
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
@@ -42,7 +45,7 @@ impl GeminiAdapter {
         Ok(Self {
             client,
             base_url,
-            api_key,
+            credentials,
             model: model.into(),
         })
     }
@@ -51,18 +54,29 @@ impl GeminiAdapter {
 const INTERACTIONS: &str = "v1beta/interactions";
 const MODELS: &str = "v1beta/models";
 
+/// 鍵とカスタムヘッダーを付けて送る。`session`は[`super::send_with_key`]と同じ。
 async fn send(
     request: reqwest::RequestBuilder,
-    api_key: &SecretString,
+    credentials: &Credentials,
+    session: Option<&SessionId>,
 ) -> Result<reqwest::Response, LlmError> {
-    super::send_with_key(request, api_key, KeyHeader::Named("x-goog-api-key")).await
+    super::send_with_key(
+        request,
+        credentials,
+        KeyHeader::Named("x-goog-api-key"),
+        session,
+    )
+    .await
 }
 
 // ---- モデル一覧と能力 ----
 
 /// `GET /v1beta/models`で、会話の生成に使えるモデルの名前(`models/`を除いたもの)を取得する。
 /// 名前順に並べ、重複と空の名前を除く。
-pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
+pub async fn list_models(
+    base_url: &str,
+    credentials: &Credentials,
+) -> Result<Vec<String>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
     let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
     let mut names = Vec::new();
@@ -73,9 +87,9 @@ pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<S
         if let Some(token) = &page_token {
             url.query_pairs_mut().append_pair("pageToken", token);
         }
-        let response = send(client.get(url), api_key).await?;
+        let response = send(client.get(url), credentials, None).await?;
         let page: ModelPage =
-            super::read_success_json_with(response, api_key, metadata_error).await?;
+            super::read_success_json_with(response, credentials.secrets(), metadata_error).await?;
         names.extend(
             page.models
                 .into_iter()
@@ -106,7 +120,7 @@ fn model_id(name: &str) -> &str {
 /// `models`の能力を`GET /v1beta/models/{id}`で問い合わせる。知らないモデル(404)は結果に含めない。
 pub async fn detect(
     base_url: &str,
-    api_key: &SecretString,
+    credentials: &Credentials,
     models: &[String],
 ) -> Result<HashMap<String, DetectedCapabilities>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
@@ -117,12 +131,12 @@ pub async fn detect(
         url.path_segments_mut()
             .map_err(|()| CoreError::ProviderConfig("failed to build endpoint".to_string()))?
             .push(model);
-        let response = send(client.get(url), api_key).await?;
+        let response = send(client.get(url), credentials, None).await?;
         if response.status() == StatusCode::NOT_FOUND {
             continue;
         }
         let info: ListedModel =
-            super::read_success_json_with(response, api_key, metadata_error).await?;
+            super::read_success_json_with(response, credentials.secrets(), metadata_error).await?;
         found.insert(model.clone(), info.detected());
     }
     Ok(found)
@@ -391,17 +405,22 @@ fn rejects_key(body: &str) -> bool {
 }
 
 /// 一覧・能力の問い合わせの失敗の分類。キーが無効なことは本文でしか分からない。
-fn metadata_error(status: StatusCode, body: &str, api_key: &str) -> LlmError {
+fn metadata_error(status: StatusCode, body: &str, secrets: &SentSecrets) -> LlmError {
     if rejects_key(body) {
-        return LlmError::Auth(ErrorDetail::http(status, body, api_key));
+        return LlmError::Auth(ErrorDetail::http(status, body, secrets));
     }
-    LlmError::from_status(status, body, api_key)
+    LlmError::from_status(status, body, secrets)
 }
 
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
 /// ここで判定し、残りは状態コードによる共通の分類に任せる。
-fn http_error(status: StatusCode, body: &str, api_key: &str, thinking_sent: bool) -> LlmError {
-    let detail = || ErrorDetail::http(status, body, api_key);
+fn http_error(
+    status: StatusCode,
+    body: &str,
+    secrets: &SentSecrets,
+    thinking_sent: bool,
+) -> LlmError {
+    let detail = || ErrorDetail::http(status, body, secrets);
     let parsed = serde_json::from_str::<Value>(body).ok();
     let error = parsed.as_ref().and_then(|v| v.get("error"));
     let code = error.and_then(error_code).unwrap_or_default();
@@ -425,12 +444,13 @@ fn http_error(status: StatusCode, body: &str, api_key: &str, thinking_sent: bool
             return LlmError::ReasoningEffortValueRejected(detail());
         }
     }
-    LlmError::from_status(status, body, api_key)
+    LlmError::from_status(status, body, secrets)
 }
 
 impl GeminiAdapter {
     async fn post(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         thinking_level: Option<&'static str>,
@@ -439,13 +459,14 @@ impl GeminiAdapter {
         let endpoint = super::endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
-        let response = send(self.client.post(endpoint).json(&body), &self.api_key).await?;
-        let key = self.api_key.expose_secret();
+        let request = self.client.post(endpoint).json(&body);
+        let response = send(request, &self.credentials, session).await?;
+        let secrets = self.credentials.secrets();
         let response = super::reject_failure(response, |status, body| {
-            http_error(status, body, key, thinking_level.is_some())
+            http_error(status, body, secrets, thinking_level.is_some())
         })
         .await?;
-        super::read_json(response, &self.api_key).await
+        super::read_json(response, secrets).await
     }
 }
 
@@ -491,22 +512,23 @@ impl LlmAdapter for GeminiAdapter {
 
     async fn send(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<Replay, CoreError> {
         let level = thinking_level(reasoning_effort);
-        let response = match self.post(messages, tools, level).await {
+        let response = match self.post(session, messages, tools, level).await {
             // `minimal`を持たないモデルでは、1つ上の強さで呼び直す。まだイベントを渡して
             // いないので、呼び直しても画面に二重に出ない。
             Err(LlmError::ReasoningEffortValueRejected(_)) if level == Some("minimal") => {
-                self.post(messages, tools, Some("low")).await?
+                self.post(session, messages, tools, Some("low")).await?
             }
             result => result?,
         };
 
-        let key = self.api_key.expose_secret();
+        let secrets = self.credentials.secrets();
         let finish_reason = match response.status.as_str() {
             "completed" => FinishReason::Stop,
             "requires_action" => FinishReason::ToolCall,
@@ -514,7 +536,7 @@ impl LlmAdapter for GeminiAdapter {
             // 断った応答は、途中まで書いた本文も渡さない(イベントを渡す前に判定する)。
             "failed" => {
                 let errors = Value::Array(response.errors.clone()).to_string();
-                let detail = ErrorDetail::http(StatusCode::OK, &errors, key);
+                let detail = ErrorDetail::http(StatusCode::OK, &errors, secrets);
                 let blocked = response
                     .errors
                     .iter()
@@ -528,12 +550,13 @@ impl LlmAdapter for GeminiAdapter {
                 .into());
             }
             other => {
-                let detail = ErrorDetail::http(StatusCode::OK, &format!("status: {other}"), key);
+                let detail =
+                    ErrorDetail::http(StatusCode::OK, &format!("status: {other}"), secrets);
                 return Err(LlmError::InvalidResponse(detail).into());
             }
         };
 
-        let steps = super::read_elements(&response.steps, &self.api_key)?;
+        let steps = super::read_elements(&response.steps, secrets)?;
         let mut replayed = Vec::new();
         let mut thought = false;
         for (raw, step) in response.steps.iter().zip(&steps) {
@@ -596,13 +619,14 @@ mod tests {
     use super::super::test_server::spawn_server;
     use super::*;
     use crate::llm::{ToolCallRequest, ToolSchema};
+    use secrecy::SecretString;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
     fn adapter(base_url: &str, key: &str) -> GeminiAdapter {
         GeminiAdapter::new(
             base_url,
-            SecretString::from(key),
+            Credentials::key_only(SecretString::from(key)),
             "gemini-test",
             TEST_TIMEOUT,
         )
@@ -847,6 +871,7 @@ mod tests {
         let mut events = Vec::new();
         let replay = adapter(&base_url, "key-test")
             .send(
+                None,
                 &[user("hi")],
                 ToolOffer::NONE,
                 Some(ReasoningEffort::High),
@@ -895,7 +920,7 @@ mod tests {
         )]);
         let mut events = Vec::new();
         let replay = adapter(&base_url, "")
-            .send(&[user("hi")], ToolOffer::NONE, None, &mut |e| {
+            .send(None, &[user("hi")], ToolOffer::NONE, None, &mut |e| {
                 events.push(e)
             })
             .await
@@ -920,7 +945,7 @@ mod tests {
         )]);
         let mut events = Vec::new();
         let result = adapter(&base_url, "")
-            .send(&[user("hi")], ToolOffer::NONE, None, &mut |e| {
+            .send(None, &[user("hi")], ToolOffer::NONE, None, &mut |e| {
                 events.push(e)
             })
             .await;
@@ -948,6 +973,7 @@ mod tests {
         let mut events = Vec::new();
         adapter(&base_url, "")
             .send(
+                None,
                 &[user("hi")],
                 ToolOffer::NONE,
                 Some(ReasoningEffort::Off),
@@ -977,7 +1003,7 @@ mod tests {
             http_error(
                 StatusCode::BAD_REQUEST,
                 &error("safety", "blocked"),
-                "",
+                &SentSecrets::default(),
                 false
             ),
             LlmError::Refused(_)
@@ -989,7 +1015,7 @@ mod tests {
                     "invalid_request",
                     "The input token count exceeds the maximum number of tokens allowed."
                 ),
-                "",
+                &SentSecrets::default(),
                 false
             ),
             LlmError::ContextExceeded(_)
@@ -998,7 +1024,7 @@ mod tests {
             http_error(
                 StatusCode::BAD_REQUEST,
                 &error("invalid_request", "thinking_level is not supported"),
-                "",
+                &SentSecrets::default(),
                 false
             ),
             LlmError::Http(_)
@@ -1007,7 +1033,7 @@ mod tests {
             http_error(
                 StatusCode::UNAUTHORIZED,
                 &error("authentication", "bad key"),
-                "",
+                &SentSecrets::default(),
                 true
             ),
             LlmError::Auth(_)
@@ -1019,18 +1045,23 @@ mod tests {
     fn classifies_an_invalid_key_reported_with_400_as_auth() {
         let body = r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}"#;
         assert!(matches!(
-            http_error(StatusCode::BAD_REQUEST, body, "", false),
+            http_error(
+                StatusCode::BAD_REQUEST,
+                body,
+                &SentSecrets::default(),
+                false
+            ),
             LlmError::Auth(_)
         ));
         assert!(matches!(
-            metadata_error(StatusCode::BAD_REQUEST, body, ""),
+            metadata_error(StatusCode::BAD_REQUEST, body, &SentSecrets::default()),
             LlmError::Auth(_)
         ));
         // `reason`が違う400は認証の失敗にしない。
         let other =
             r#"{"error":{"code":400,"status":"INVALID_ARGUMENT","details":[{"reason":"OTHER"}]}}"#;
         assert!(matches!(
-            metadata_error(StatusCode::BAD_REQUEST, other, ""),
+            metadata_error(StatusCode::BAD_REQUEST, other, &SentSecrets::default()),
             LlmError::Http(_)
         ));
     }
@@ -1047,9 +1078,12 @@ mod tests {
                 r#"{"models":[{"name":"models/gemini-a","supportedGenerationMethods":["generateContent"]}]}"#,
             ),
         ]);
-        let names = list_models(&base_url, &SecretString::from("key-test".to_string()))
-            .await
-            .unwrap();
+        let names = list_models(
+            &base_url,
+            &Credentials::key_only(SecretString::from("key-test".to_string())),
+        )
+        .await
+        .unwrap();
         let received = handle.join().unwrap();
 
         assert_eq!(names, ["gemini-a", "gemini-b"]);
@@ -1071,7 +1105,7 @@ mod tests {
         ]);
         let found = detect(
             &base_url,
-            &SecretString::from("key-test".to_string()),
+            &Credentials::key_only(SecretString::from("key-test".to_string())),
             &["gemini-a".to_string(), "gemini-gone".to_string()],
         )
         .await
@@ -1096,7 +1130,7 @@ mod tests {
         )]);
         let mut events = Vec::new();
         adapter(&base_url, "")
-            .send(&[user("hi")], ToolOffer::NONE, None, &mut |e| {
+            .send(None, &[user("hi")], ToolOffer::NONE, None, &mut |e| {
                 events.push(e)
             })
             .await

@@ -1,6 +1,7 @@
 // 設定画面の複数のタブが共有する入力の扱い。
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
+import { isolated, t } from './i18n'
 
 // フォーカスを外すと自動保存する数値入力。入力中は自身のstateだけを更新し、blur時にのみ親へ
 // 確定した値を渡す。入力チェック(空欄は未設定、それ以外は1以上の整数)をこの1箇所に閉じ、
@@ -44,4 +45,28 @@ export function usePositiveIntegerInput(
       'aria-invalid': invalid,
     },
   }
+}
+
+// 「1行1件、KEY=VALUE」形式のテキスト(HTTPヘッダーの欄)をパースする。エラーは行ごとに
+// 個別指摘する。行は前後の空白を除いてから見るので、`=`が先頭でなければキーは空にならない。
+export function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
+  const pairs: [string, string][] = []
+  const errors: string[] = []
+  text.split('\n').forEach((line, i) => {
+    const trimmed = line.trim()
+    if (trimmed === '') return
+    const eq = trimmed.indexOf('=')
+    if (eq <= 0) {
+      errors.push(
+        t('settings.tools.kv_line_invalid', {
+          line_no: i + 1,
+          line: isolated(trimmed),
+          sample: t('settings.tools.kv_sample'),
+        }),
+      )
+      return
+    }
+    pairs.push([trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim()])
+  })
+  return { pairs, errors }
 }

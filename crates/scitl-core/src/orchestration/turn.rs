@@ -15,7 +15,7 @@ use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet, StopSignal};
 use crate::llm::{
-    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent,
+    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, SessionId,
     ToolArguments, ToolCallRequest,
 };
 use crate::mcp::McpSessions;
@@ -619,6 +619,21 @@ pub(super) async fn prepare_external_tools(
     Some(ExternalToolset::build(fetched, &reserved).with_unavailable(unavailable, &reserved))
 }
 
+/// 会話ごとのセッションID([`SessionId`])。会話のキーは、タスクのチャットならタスクのIDと
+/// 作成日時、総合チャットなら固定の文字列。作成日時も含めるのは、主キーが`AUTOINCREMENT`
+/// ではなく、行を消す操作ができると、消した番号が次のタスクに使い回されうるため(今の削除は
+/// 論理削除で、行は消さない)。総合チャットは1つしかなく作り直されない。
+fn session_id(conn: &Connection, chat: Chat) -> Result<Option<SessionId>> {
+    let conversation = match chat {
+        Chat::General => "general".to_string(),
+        Chat::Task(task_id) => {
+            let task = tasks::get_task(conn, task_id)?;
+            format!("task:{task_id}:{}", task.created_at)
+        }
+    };
+    Ok(SessionId::for_conversation(&conversation))
+}
+
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
 /// 分けてあるだけで、1ターンの流れとしては地続き。
 ///
@@ -640,7 +655,10 @@ async fn run_tool_rounds(
         let db = db.clone();
         let reply_parts = &mut reply_parts;
         let chat = attempt.chat;
-        let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
+        let (stored, session) = with_conn(db.clone(), move |conn| {
+            Ok((history::load(conn, chat)?, session_id(conn, chat)?))
+        })
+        .await?;
         let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
         // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
         // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
@@ -658,6 +676,7 @@ async fn run_tool_rounds(
             let notify = ctx.events;
             let sent = stop
                 .unless_requested(adapter.send(
+                    session.as_ref(),
                     &messages_to_send,
                     offered,
                     ctx.reasoning_effort,

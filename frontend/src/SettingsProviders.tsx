@@ -23,7 +23,7 @@ import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
 import { CollapseToggle, ServerNotice } from './settingsFields'
-import { usePositiveIntegerInput } from './settingsInput'
+import { parseKeyValueLines, usePositiveIntegerInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
 
@@ -75,6 +75,7 @@ interface ProvidersTabProps {
     apiFormat: ApiFormat,
     baseUrl: string,
     apiKey: string | null,
+    headers: [string, string][],
   ) => Promise<void>
   onDeleteProvider: (providerId: string) => void
   // モデルの操作(追加・削除・表の各列)は種類が多いため、個別のコールバックを並べずに
@@ -170,6 +171,14 @@ function ProviderCard({
             : t('settings.provider.api_key_unset'),
         })}
       </p>
+      {provider.header_names.length > 0 && (
+        <p className="provider-card-meta">
+          {t('settings.tools.secret_names_display', {
+            label: t('settings.tools.header_names_label'),
+            names: provider.header_names.map(isolated).join(', '),
+          })}
+        </p>
+      )}
       {provider.error && (
         <p className="error">
           {t('settings.provider.unusable', { error: isolated(provider.error) })}
@@ -524,6 +533,7 @@ interface AddProviderFormProps {
     apiFormat: ApiFormat,
     baseUrl: string,
     apiKey: string | null,
+    headers: [string, string][],
   ) => Promise<void>
 }
 
@@ -533,6 +543,8 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
   const [apiFormat, setApiFormat] = useState<ApiFormat>('open_ai_compat')
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL_BY_FORMAT.open_ai_compat)
   const [apiKey, setApiKey] = useState('')
+  const [headersText, setHeadersText] = useState('')
+  const [headerErrors, setHeaderErrors] = useState<string[]>([])
   const pathHint = extraPathHint(apiFormat, baseUrl)
   // 失敗はフォームの直下に出し、入力は残す(Rust側の検証で弾かれても打ち直さずに済むように)。
   // 入力を空にするのは成功したときだけ。
@@ -544,11 +556,15 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
       onSubmit={(e) => {
         e.preventDefault()
         if (submission.running || !name.trim() || !baseUrl.trim()) return
+        const { pairs, errors } = parseKeyValueLines(headersText)
+        setHeaderErrors(errors)
+        if (errors.length > 0) return
         void submission.run(
-          () => onAdd(name.trim(), apiFormat, baseUrl.trim(), apiKey || null),
+          () => onAdd(name.trim(), apiFormat, baseUrl.trim(), apiKey || null, pairs),
           () => {
             setName('')
             setApiKey('')
+            setHeadersText('')
           },
         )
       }}
@@ -588,6 +604,20 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
           placeholder={t('settings.provider.api_key_placeholder')}
         />
       </label>
+      <label className="settings-field">
+        <span>{t('settings.tools.headers_hint', { sample: t('settings.tools.kv_sample') })}</span>
+        <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
+      </label>
+      {/* 入力の誤りは、欄の間隔で離さずにまとめて出す */}
+      {headerErrors.length > 0 && (
+        <div>
+          {headerErrors.map((e) => (
+            <p key={e} className="error">
+              {e}
+            </p>
+          ))}
+        </div>
+      )}
       {submission.error && <p className="error">{submission.error}</p>}
       <button type="submit" disabled={submission.running}>
         {submission.running ? t('common.adding') : t('common.add')}

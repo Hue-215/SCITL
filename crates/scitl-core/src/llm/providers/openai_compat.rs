@@ -1,31 +1,37 @@
 use std::time::Duration;
 
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{ApiFormat, ReasoningEffort};
 use crate::error::CoreError;
 use crate::llm::{
     AdapterIdentity, ChatMessage, ErrorDetail, FinishReason, InlineImage, LlmAdapter, LlmError,
-    PromptText, Readiness, Replay, RequestPreview, ResponseEvent, ToolArguments, ToolCallRequest,
-    ToolOffer,
+    PromptText, Readiness, Replay, RequestPreview, ResponseEvent, SentSecrets, SessionId,
+    ToolArguments, ToolCallRequest, ToolOffer,
 };
 use crate::net::ExternalUrl;
+
+use super::Credentials;
+
+/// SCITL自身が付けるヘッダー(鍵)。カスタムヘッダーには使わせない
+/// ([`super::validate_header_name`])。
+pub(super) const OWN_HEADERS: &[&str] = &["authorization"];
 
 /// OpenAI互換チャットコンプリーションAPIのアダプタ。方言の吸収はこのファイル内に閉じる。
 pub struct OpenAiCompatAdapter {
     client: reqwest::Client,
     base_url: ExternalUrl,
-    api_key: SecretString,
+    credentials: Credentials,
     model: String,
 }
 
 impl OpenAiCompatAdapter {
-    /// `api_key`は`SecretString`のまま受け取り、平文`String`を経由させない。`request_timeout`は
+    /// 鍵とカスタムヘッダーの値は`credentials`の中で`SecretString`のまま持ち、平文`String`を
+    /// 経由させない。`request_timeout`は
     /// 設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)。
     pub fn new(
         base_url: impl Into<String>,
-        api_key: SecretString,
+        credentials: Credentials,
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
@@ -34,7 +40,7 @@ impl OpenAiCompatAdapter {
         Ok(Self {
             client,
             base_url,
-            api_key,
+            credentials,
             model: model.into(),
         })
     }
@@ -42,16 +48,20 @@ impl OpenAiCompatAdapter {
 
 /// `GET {base_url}/models`で、プロバイダーが提供するモデル名を取得する。名前順に並べ、
 /// 重複と空の名前を除く。問い合わせ先は`base_url`の下だけで、通信先は増やさない。
-pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
+pub async fn list_models(
+    base_url: &str,
+    credentials: &Credentials,
+) -> Result<Vec<String>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
     let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
     let response = super::send_with_key(
         client.get(super::endpoint(&base_url, "models")?),
-        api_key,
+        credentials,
         super::KeyHeader::Bearer,
+        None,
     )
     .await?;
-    let parsed: ModelList = super::read_success_json(response, api_key).await?;
+    let parsed: ModelList = super::read_success_json(response, credentials.secrets()).await?;
     let mut names: Vec<String> = parsed
         .data
         .into_iter()
@@ -81,12 +91,12 @@ struct ListedModel {
 fn http_error(
     status: reqwest::StatusCode,
     body: &str,
-    api_key: &str,
+    secrets: &SentSecrets,
     reasoning_effort_sent: bool,
 ) -> LlmError {
-    let detail = || ErrorDetail::http(status, body, api_key);
+    let detail = || ErrorDetail::http(status, body, secrets);
     let Some(error) = ErrorBody::parse(body) else {
-        return LlmError::from_status(status, body, api_key);
+        return LlmError::from_status(status, body, secrets);
     };
     if error.is_context_exceeded() {
         return LlmError::ContextExceeded(detail());
@@ -101,7 +111,7 @@ fn http_error(
     match error.reasoning_effort_rejection().filter(|_| rejectable) {
         Some(Rejection::Parameter) => LlmError::ReasoningEffortRejected(detail()),
         Some(Rejection::Value) => LlmError::ReasoningEffortValueRejected(detail()),
-        None => LlmError::from_status(status, body, api_key),
+        None => LlmError::from_status(status, body, secrets),
     }
 }
 
@@ -579,6 +589,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
 
     async fn send(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
@@ -588,14 +599,19 @@ impl LlmAdapter for OpenAiCompatAdapter {
 
         let endpoint = super::endpoint(&self.base_url, CHAT_COMPLETIONS)?;
         let request = self.client.post(endpoint).json(&body);
-        let response =
-            super::send_with_key(request, &self.api_key, super::KeyHeader::Bearer).await?;
-        let key = self.api_key.expose_secret();
+        let response = super::send_with_key(
+            request,
+            &self.credentials,
+            super::KeyHeader::Bearer,
+            session,
+        )
+        .await?;
+        let secrets = self.credentials.secrets();
         let response = super::reject_failure(response, |status, body| {
-            http_error(status, body, key, reasoning_effort.is_some())
+            http_error(status, body, secrets, reasoning_effort.is_some())
         })
         .await?;
-        let parsed: CompletionResponse = super::read_json(response, &self.api_key).await?;
+        let parsed: CompletionResponse = super::read_json(response, secrets).await?;
 
         let choice = parsed
             .choices
@@ -609,7 +625,7 @@ impl LlmAdapter for OpenAiCompatAdapter {
             return Err(LlmError::Refused(ErrorDetail::http(
                 reqwest::StatusCode::OK,
                 "finish_reason: content_filter",
-                key,
+                secrets,
             ))
             .into());
         }

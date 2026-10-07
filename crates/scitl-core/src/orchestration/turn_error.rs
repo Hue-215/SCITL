@@ -243,9 +243,14 @@ mod tests {
     use reqwest::StatusCode;
 
     use super::*;
+    use crate::llm::SentSecrets;
 
     fn detail(text: &str) -> ErrorDetail {
-        ErrorDetail::http(StatusCode::INTERNAL_SERVER_ERROR, text, "")
+        ErrorDetail::http(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            text,
+            &SentSecrets::default(),
+        )
     }
 
     fn llm(e: LlmError) -> TurnFailure {
@@ -496,7 +501,7 @@ mod tests {
         let failure = llm(LlmError::from_status(
             StatusCode::UNAUTHORIZED,
             "missing bearer token",
-            "",
+            &SentSecrets::default(),
         ));
         assert_eq!(failure.kind(), "auth");
         assert!(failure.user_message().contains("missing"));

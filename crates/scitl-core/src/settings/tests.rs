@@ -33,6 +33,7 @@ fn add_local_provider(settings: &Settings, name: &str) -> SettingsView {
             api_format: ApiFormat::OpenAiCompat,
             base_url: "http://localhost:1234/v1".to_string(),
             api_key: None,
+            headers: Vec::new(),
         })
         .unwrap()
 }
@@ -45,6 +46,34 @@ fn http_endpoint() -> NewMcpEndpoint {
     }
 }
 
+/// 予約したヘッダー名・載せられない値・重複した名前は、資格情報ストアに触れる前に断る。
+#[test]
+fn add_provider_refuses_bad_headers_before_storing_anything() {
+    let (settings, _path, _dir) = temp_settings();
+    for headers in [
+        vec![("Authorization", "Bearer x")],
+        vec![("Content-Type", "text/plain")],
+        vec![("X-Title", "全角")],
+        vec![("X-Title", "a"), ("x-title", "b")],
+    ] {
+        let result = settings.add_provider(NewProvider {
+            name: "remote".to_string(),
+            api_format: ApiFormat::OpenAiCompat,
+            base_url: "http://localhost:1234/v1".to_string(),
+            api_key: None,
+            headers: headers
+                .iter()
+                .map(|(n, v)| (n.to_string(), SecretString::from(*v)))
+                .collect(),
+        });
+        assert!(result.is_err(), "{headers:?}");
+        if let Err(e) = result {
+            assert!(!e.to_string().contains("全角"), "{e}");
+        }
+    }
+    assert!(settings.view().providers.is_empty());
+}
+
 /// 空白だけの鍵・ヘッダーに載せられない鍵は、資格情報ストアに触れる前に断る。
 #[test]
 fn add_provider_refuses_a_key_that_is_not_visible_ascii() {
@@ -55,6 +84,7 @@ fn add_provider_refuses_a_key_that_is_not_visible_ascii() {
             api_format: ApiFormat::OpenAiCompat,
             base_url: "http://localhost:1234/v1".to_string(),
             api_key: Some(SecretString::from(key)),
+            headers: Vec::new(),
         });
         assert!(
             matches!(result, Err(CoreError::ProviderConfig(_))),
@@ -397,6 +427,7 @@ fn provider_name_must_be_visible_and_unique_and_the_url_is_trimmed() {
             api_format: ApiFormat::OpenAiCompat,
             base_url: base_url.to_string(),
             api_key: None,
+            headers: Vec::new(),
         })
     };
     let view = add(" Local ", " http://localhost:1234/v1 \n").unwrap();

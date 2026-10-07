@@ -126,7 +126,7 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
 | `attachment list` / `attachment orphans [--delete]` | 添付の一覧、どの添付からも指されていないファイル |
 | `export` | 全タスクと総合チャットをMarkdownでデータディレクトリの下へ書き出す |
 | `settings show` / `general` / `tools` / `language <コード>` | 設定の表示・変更 |
-| `provider add` / `delete <P>` / `models <P>` | プロバイダーの登録・削除・提供モデルの問い合わせ |
+| `provider add` / `delete <P>` / `models <P>` | プロバイダーの登録・削除・提供モデルの問い合わせ。カスタムヘッダーは`--header NAME=VAR`で渡す(値の`{session_id}`は会話ごとのIDに置き換わる) |
 | `model add <P> <モデル>...` / `remove` / `select` | モデルの登録・削除・選択 |
 | `mcp add-http` / `delete` / `enable` / `disable` / `enable-tool` / `disable-tool` / `fetch-tools` | 外部ツール(MCP)サーバーの登録と管理。秘密情報は`NAME=VAR`(VARは環境変数の名前)で渡す |
 

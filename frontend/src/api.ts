@@ -221,8 +221,9 @@ export function addProvider(
   apiFormat: ApiFormat,
   baseUrl: string,
   apiKey: string | null,
+  headers: [string, string][],
 ): Promise<SettingsView> {
-  return invoke('add_provider', { name, apiFormat, baseUrl, apiKey })
+  return invoke('add_provider', { name, apiFormat, baseUrl, apiKey, headers })
 }
 
 export function deleteProvider(providerId: string): Promise<SettingsView> {
