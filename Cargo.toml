@@ -69,7 +69,7 @@ open = { version = "5", features = ["shellexecute-on-windows"] }
 sha2 = "0.10"
 # 会話ごとのセッションIDの、起動ごとのシードをOSの乱数から作る(`scitl-core/src/llm/session.rs`)。
 # 同じ版が`ulid` → `rand`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
-# (`cargo tree -d -i getrandom`で確認)
+# (`cargo tree -i getrandom@0.3.4`で確認。getrandomは別の版も同居している)
 getrandom = "0.3.4"
 # 添付画像をdata URLにする(画面のサムネイルと、モデルへの埋め込み)。同じ版がhyper-utilの依存として
 # 既にビルドされている。上流の版が上がったら合わせて上げる(`cargo tree -d -i base64`で確認)

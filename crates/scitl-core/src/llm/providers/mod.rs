@@ -447,8 +447,8 @@ pub struct Credentials {
 
 impl Credentials {
     /// `headers`の名前と値は登録の時点で検証済み([`validate_header_name`]・
-    /// [`crate::net::secret_header_value`])。設定ファイルを手で書き換えた場合に備えて、名前は
-    /// ここでも読み直す。
+    /// [`crate::net::secret_header_value`])。ここで読み直すのは名前の形だけで、予約名かどうかは
+    /// 見直さない(設定ファイルを手で書き換えた場合は、書いたとおりに送る。MCPと同じ)。
     pub fn new(
         api_key: SecretString,
         headers: Vec<(String, SecretString)>,

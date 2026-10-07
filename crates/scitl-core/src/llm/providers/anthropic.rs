@@ -930,6 +930,49 @@ mod tests {
     ],"stop_reason":"tool_use"}"#;
 
     #[tokio::test]
+    async fn sends_custom_headers_with_the_version_and_a_user_agent_in_place_of_scitls() {
+        let (base_url, handle) = spawn_server(vec![(200, THINKING_AND_TOOL_USE)]);
+        let credentials = Credentials::new(
+            SecretString::from("sk-test"),
+            vec![
+                ("X-Session".to_string(), SecretString::from("{session_id}")),
+                ("User-Agent".to_string(), SecretString::from("my-agent/1.0")),
+            ],
+        )
+        .unwrap();
+        let adapter = AnthropicAdapter::new(
+            base_url,
+            credentials,
+            "claude-test",
+            std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+        let session = SessionId::for_conversation("general").unwrap();
+        adapter
+            .send(
+                Some(&session),
+                &[user("hi")],
+                ToolOffer::NONE,
+                None,
+                &mut |_| {},
+            )
+            .await
+            .unwrap();
+        let received = handle.join().unwrap();
+
+        let headers = &received[0].headers;
+        assert!(headers.contains(&format!("x-session: {}\r\n", session.as_str())));
+        assert!(headers.contains("anthropic-version: "));
+        assert!(headers.contains("x-api-key: sk-test"));
+        // 登録したUser-Agentが、SCITLの既定の値と置き換わって1本だけ送られる。
+        assert_eq!(headers.matches("user-agent: ").count(), 1, "{headers}");
+        assert!(
+            headers.contains("user-agent: my-agent/1.0\r\n"),
+            "{headers}"
+        );
+    }
+
+    #[tokio::test]
     async fn sends_the_key_as_x_api_key_and_returns_the_thinking_to_replay() {
         let (base_url, handle) = spawn_server(vec![(200, THINKING_AND_TOOL_USE)]);
         let mut events = Vec::new();
