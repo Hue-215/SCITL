@@ -177,10 +177,9 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 - プロンプトキャッシュは、システムプロンプトの末尾に目印を置き(ツールの定義とシステム
   プロンプトが常に読まれる)、リクエスト全体にも`cache_control`を付けて、伸びていく会話の末尾に
   目印を自動で置かせる
-- 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は、途中まで書いた本文を渡さずに
-  `LlmError::Refused`にし、断られたことが分かるエラー発言にする(OpenAI互換の
-  `finish_reason: "content_filter"`も同じ扱い。ストリーミングで読む方言では、本文は画面に流れたあとになるが、
-  返信としては保存しない)。`max_tokens`と
+- 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は`LlmError::Refused`にし、断られたことが
+  分かるエラー発言にする(OpenAI互換の`finish_reason: "content_filter"`も同じ扱い)。途中まで書いた本文は
+  返信として保存しない。ストリーミングでは画面に流れたあとになり、ストリーミングしない応答では渡さない。`max_tokens`と
   `model_context_window_exceeded`は長さによる打ち切り(`FinishReason::Length`)にする
 - 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
@@ -191,17 +190,21 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   中継があるため。OpenAI互換と同じ)。応答タイムアウトはデータの届かない時間の上限として使い、1イベントと
   1回の応答の大きさに上限を置くのもOpenAI互換と同じ
 - ブロックは`content_block_start`で届いたブロックに、`index`の同じ差分を足して組み立てる。`text_delta`は
-  `text`に、`thinking_delta`は`thinking`に、`signature_delta`は`signature`に続け、`citations_delta`は
-  `citations`に足す。`input_json_delta`は連結しておき、`content_block_stop`で`input`に読む(断片が空なら
-  空のオブジェクト。読めなければ応答の解釈の失敗にする。`input`をオブジェクトのまま送り返すので、壊れた
-  引数を持つ形が無い)。知らない差分は読み飛ばす。始まっていないブロックへの差分は応答の解釈の失敗にする
+  `text`に、`thinking_delta`は`thinking`に続け、`citations_delta`は`citations`に足す。`signature_delta`は
+  `signature`を置き換える(署名は断片ではなく1つの値で届く)。`input_json_delta`は連結しておき、読み終えてから
+  `input`に読む(断片が空なら空のオブジェクト。`input`の無い`tool_use`も空のオブジェクトにする)。読めなければ
+  応答の解釈の失敗にする(`input`をオブジェクトのまま送り返すので、壊れた引数を持つ形が無い)。長さの上限で
+  打ち切られた応答なら、打ち切りで呼び出しが切れたと分かる文言にする。知らない差分は読み飛ばす。始まって
+  いないブロックへの差分と、`MAX_STREAMED_ELEMENTS`(1024)を超えるブロックは応答の解釈の失敗にする
 - 本文と思考は届いたらすぐ渡し、ツール呼び出しは組み立て終えてから`Done`の前に渡す
 - 思考のブロックを含む応答は、組み立てたブロックを並びごと`Replay`に入れる(ストリーミングしないときと同じ。
   文字列の形は`transcript.md`「送った形のまま積む」)
-- `message_stop`か、終了理由(`message_delta`の`stop_reason`)が届いていれば完了とする。どちらも無いまま
-  本文が終わったら、途中で切れたとして通信の失敗にする。`message_start`・`ping`は読み飛ばす
+- 終了理由(`message_delta`の`stop_reason`)か`message_stop`が届いたら完了とし、残りは読まない(`message_stop`を
+  送らずに接続を開けたままにする中継で、組み立て終えた応答をタイムアウトで捨てないため。OpenAI互換と同じ)。
+  どちらも無いまま本文が終わったら、途中で切れたとして通信の失敗にする。`message_start`・`ping`は読み飛ばす
 - 途中で届いた`error`は、`error.type`をエラー応答で返るときの状態コードに読み替えて分類する
-  (`rate_limit_error`は429、`overloaded_error`は529等)
+  (`rate_limit_error`は429、`overloaded_error`は529等)。種類(`type`)を付けずに`{"error": …}`だけを送る
+  中継のイベントも同じに扱う
 
 ## Gemini形式
 
@@ -249,20 +252,21 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 ストリーミングの読み方:
 
-- `Content-Type`が`text/event-stream`でなければ、ストリーミングしない応答として読む。応答タイムアウトと
-  大きさの上限はOpenAI互換と同じ
+- `Accept: text/event-stream`を付けて頼む(公式SDKと同じ)。`Content-Type`が`text/event-stream`でなければ、
+  ストリーミングしない応答として読む。応答タイムアウトと大きさの上限はOpenAI互換と同じ
 - イベントは`data`のJSONの`event_type`で見分ける。出力のステップごとに`step.start`・`step.delta`・`step.stop`が
   `index`付きで届き、`interaction.completed`の状態(`interaction.status`)が届いたら完了とする。状態の無いまま
   本文が終わったら(`[DONE]`だけが届いた場合も)、途中で切れたとして通信の失敗にする。`interaction.created`・
   `interaction.status_update`は読み飛ばす
 - ステップは`step.start`で届いたステップに、`index`の同じ差分を足して組み立てる。`text`は`content`に、
   `thought_summary`は`summary`に足す(続く本文は1つの要素にまとめる。ストリーミングしないときは1つの要素で
-  返るため)。画像等の中身の差分は`content`に足す。`thought_signature`はそのステップの`signature`にする
-  (`function_call`のステップの署名もこれで届くものとする)。`arguments_delta`は連結しておき、`step.stop`で
-  `arguments`に読む(読めなければ応答の解釈の失敗。Anthropic形式と同じ理由)。根拠の注記等の知らない差分は
-  読み飛ばす
+  返るため)。画像等の中身の差分は`content`に足す。`thought_signature`はそのステップの`signature`を置き換える
+  (`function_call`のステップの署名もこれで届くものとする)。`arguments_delta`は連結しておき、読み終えてから
+  `arguments`に読む(`arguments`の無い`function_call`は空のオブジェクトにする。読めないとき・打ち切りのときの
+  扱いとステップの数の上限はAnthropic形式と同じ)。根拠の注記等の知らない差分は読み飛ばす
 - 本文と思考の要約は届いたらすぐ渡し、ツール呼び出しは組み立て終えてから`Done`の前に渡す。`thought`を含む
   応答は、組み立てた出力のステップを並びごと`Replay`に入れる(ストリーミングしないときと同じ)
-- 途中で届いた`error`は、`failed`の応答の`errors`と同じに分類する
+- 途中で届いた`error`は、`failed`の応答の`errors`と同じに分類する(方針・安全上の判定なら`LlmError::Refused`、
+  それ以外はプロバイダーのエラー)。`event_type`を付けずに`{"error": …}`だけを送る中継のイベントも同じ
 - 実際のAPIでは確かめていない。差分から組み立て直したステップ(キーの順・要約のまとめ方・`function_call`の
   署名の位置)を送り返して受け付けられるかは、上の確認(キーの順を逆にしても通った)からの推定

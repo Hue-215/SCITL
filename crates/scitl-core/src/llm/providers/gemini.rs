@@ -476,7 +476,12 @@ impl GeminiAdapter {
         let endpoint = super::endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
-        let request = self.client.post(endpoint).json(&body);
+        // ストリーミングを頼んでいることをヘッダーでも示す(公式SDKと同じ)。
+        let request = self
+            .client
+            .post(endpoint)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .json(&body);
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
         super::reject_failure(response, secrets, |status, body| {

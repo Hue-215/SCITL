@@ -208,6 +208,26 @@ fn streamed_arguments(text: &str, secrets: &SentSecrets) -> Result<serde_json::V
     })
 }
 
+/// ストリーミングで組み立てる要素(ブロック・ステップ)の数の上限。実際の応答の要素はこれより
+/// ずっと少ない。上限が無いと、壊れた・悪意のあるサーバーが要素を大量に並べて、差分を当てる
+/// 先を探す時間とメモリを使わせられる(1回の応答の量の上限の範囲でも数十万個になる)。
+const MAX_STREAMED_ELEMENTS: usize = 1024;
+
+/// 組み立てる要素が多すぎる([`MAX_STREAMED_ELEMENTS`])。
+fn too_many_elements() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the response contains too many content elements",
+    ))
+}
+
+/// 長さの上限で打ち切られた応答の、途中で切れたツール呼び出しの引数を読めなかった。切れた引数の
+/// 呼び出しは実行できないので、応答の解釈の失敗にするが、打ち切りが原因だと分かるようにする。
+fn tool_call_cut_off() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the output limit cut off a tool call before its arguments were complete",
+    ))
+}
+
 /// ストリーミングの`data`をJSONとして読む。
 fn parse_event(data: &str, secrets: &SentSecrets) -> Result<serde_json::Value, LlmError> {
     serde_json::from_str(data).map_err(|e| {

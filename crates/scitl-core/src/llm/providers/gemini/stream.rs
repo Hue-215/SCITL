@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use crate::llm::{ErrorDetail, LlmError, Replay, ResponseEvent, SentSecrets};
+use crate::llm::{ErrorDetail, FinishReason, LlmError, Replay, ResponseEvent, SentSecrets};
 
 /// ストリーミングの応答の終わりの合図。
 const STREAM_DONE: &str = "[DONE]";
@@ -16,8 +16,8 @@ struct Step {
     index: u64,
     /// `step.start`のステップに差分を足していったもの。
     value: Value,
-    /// `function_call`の引数(`arguments_delta`)の断片を連結したもの。`step.stop`で
-    /// `arguments`に読む。
+    /// `function_call`の引数(`arguments_delta`)の断片を連結したもの。応答を読み終えてから
+    /// `arguments`に読む(長さの上限で途中で切れたかは、状態が届くまで分からないため)。
     arguments: Option<String>,
 }
 
@@ -26,10 +26,13 @@ impl Step {
         self.value.get("type").and_then(Value::as_str)
     }
 
-    /// 連結した引数を`arguments`に読む。
+    /// 連結した引数を`arguments`に読む。`arguments`の無い`function_call`は空のオブジェクトにする
+    /// (送り返すときに欠けないように。定義の上では必須)。
     fn finish_arguments(&mut self, secrets: &SentSecrets) -> Result<(), LlmError> {
         if let Some(text) = self.arguments.take() {
             self.value["arguments"] = super::super::streamed_arguments(&text, secrets)?;
+        } else if self.kind() == Some("function_call") && self.value.get("arguments").is_none() {
+            self.value["arguments"] = Value::Object(serde_json::Map::new());
         }
         Ok(())
     }
@@ -71,6 +74,9 @@ pub(super) async fn read(
                     Some("model_output") => emit(text(super::output_text(&value)), on_event),
                     _ => {}
                 }
+                if steps.len() >= super::super::MAX_STREAMED_ELEMENTS {
+                    return Err(super::super::too_many_elements());
+                }
                 steps.push(Step {
                     index,
                     value,
@@ -103,13 +109,12 @@ pub(super) async fn read(
                             emit(reasoning(part.unwrap_or_default().to_string()), on_event);
                         }
                     }
+                    // 署名は断片ではなく1つの値で届く。開始のステップが署名を持っていても置き換える
+                    // (継ぎ足すと、同じ署名が2度届いたときに壊れた署名になる)。
                     Some("thought_signature") => {
-                        let signature = delta.get("signature").and_then(Value::as_str);
-                        super::super::append_text(
-                            &mut step.value,
-                            "signature",
-                            signature.unwrap_or_default(),
-                        );
+                        if let Some(signature) = delta.get("signature").filter(|s| s.is_string()) {
+                            step.value["signature"] = signature.clone();
+                        }
                     }
                     Some("arguments_delta") => {
                         let part = delta.get("arguments").and_then(Value::as_str);
@@ -121,12 +126,6 @@ pub(super) async fn read(
                     _ => {}
                 }
             }
-            Some("step.stop") => {
-                let index = step_index(&event)?;
-                if let Some(step) = steps.iter_mut().rfind(|s| s.index == index) {
-                    step.finish_arguments(secrets)?;
-                }
-            }
             Some("interaction.completed") => {
                 status = event
                     .pointer("/interaction/status")
@@ -135,11 +134,12 @@ pub(super) async fn read(
                 // 状態が届いたら完了とし、残り(`[DONE]`)は読まない。
                 return Ok(status.is_some());
             }
-            Some("error") => {
+            // 種類を付けずに`{"error": …}`だけを送る中継もある。
+            Some("error") | None if event.get("error").is_some() => {
                 let error = event.get("error").cloned().unwrap_or(Value::Null);
                 return Err(super::failure(&[error], secrets));
             }
-            // `interaction.created`・`interaction.status_update`・知らないイベント。
+            // `interaction.created`・`interaction.status_update`・`step.stop`・知らないイベント。
             _ => {}
         }
         Ok(false)
@@ -155,7 +155,11 @@ pub(super) async fn read(
     let mut thought = false;
     let mut replayed = Vec::new();
     for step in &mut steps {
-        step.finish_arguments(secrets)?;
+        step.finish_arguments(secrets)
+            .map_err(|e| match finish_reason {
+                FinishReason::Length => super::super::tool_call_cut_off(),
+                _ => e,
+            })?;
         if !super::is_replayed_step(&step.value) {
             continue;
         }
@@ -232,7 +236,7 @@ mod tests {
     use super::*;
     use crate::config::ReasoningEffort;
     use crate::error::CoreError;
-    use crate::llm::{ChatMessage, FinishReason, LlmAdapter, PromptText, ToolOffer};
+    use crate::llm::{ChatMessage, LlmAdapter, PromptText, ToolOffer};
 
     async fn send_streamed(
         pieces: &[&'static str],
@@ -255,7 +259,13 @@ mod tests {
                 &mut |e| events.push(e),
             )
             .await;
-        (result, events, handle.join().unwrap().body)
+        let received = handle.join().unwrap();
+        assert!(
+            received.headers.contains("accept: text/event-stream"),
+            "{}",
+            received.headers
+        );
+        (result, events, received.body)
     }
 
     fn text(t: &str) -> ResponseEvent {
@@ -465,5 +475,73 @@ mod tests {
             .map(|s| serde_json::from_str::<Value>(s.get()).unwrap()["type"].to_string())
             .collect();
         assert_eq!(types, ["\"thought\"", "\"model_output\""]);
+    }
+
+    /// 署名は置き換える。開始のステップと差分の両方で届いても、2度つながない。
+    #[tokio::test]
+    async fn a_signature_sent_twice_is_kept_once() {
+        let (result, _, _) = send_streamed(&[
+            "data: {\"event_type\":\"step.start\",\"index\":0,\"step\":{\"type\":\"thought\",\"signature\":\"sig\"}}\n\n",
+            "data: {\"event_type\":\"step.delta\",\"index\":0,\"delta\":{\"type\":\"thought_signature\",\"signature\":\"sig\"}}\n\n",
+            "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"v1_x\",\"status\":\"completed\"}}\n\n",
+        ])
+        .await;
+        let replay = result.unwrap();
+        let step: Value = serde_json::from_str(replay.elements()[0].get()).unwrap();
+        assert_eq!(step, json!({"type": "thought", "signature": "sig"}));
+    }
+
+    /// 引数の届かない呼び出しも、送り返すステップに空の`arguments`を持たせる。
+    #[tokio::test]
+    async fn a_call_without_arguments_is_replayed_with_an_empty_object() {
+        let (result, events, _) = send_streamed(&[
+            "data: {\"event_type\":\"step.start\",\"index\":0,\"step\":{\"type\":\"thought\",\"signature\":\"sig\"}}\n\n",
+            "data: {\"event_type\":\"step.start\",\"index\":1,\"step\":{\"type\":\"function_call\",\"id\":\"call_1\",\"name\":\"list_tasks\"}}\n\n",
+            "data: {\"event_type\":\"step.stop\",\"index\":1}\n\n",
+            "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"v1_x\",\"status\":\"requires_action\"}}\n\n",
+        ])
+        .await;
+        let replay = result.unwrap();
+        let call: Value = serde_json::from_str(replay.elements()[1].get()).unwrap();
+        assert_eq!(
+            call,
+            json!({"type": "function_call", "id": "call_1", "name": "list_tasks", "arguments": {}})
+        );
+        assert_eq!(
+            events[0],
+            ResponseEvent::ToolCall {
+                id: Some("call_1".to_string()),
+                name: "list_tasks".to_string(),
+                arguments: json!({}).into(),
+            }
+        );
+    }
+
+    /// 長さの上限で引数の途中で切れた呼び出しは、打ち切りが原因と分かる失敗にする。
+    #[tokio::test]
+    async fn a_tool_call_cut_off_by_the_output_limit_says_so() {
+        let (result, _, _) = send_streamed(&[
+            "data: {\"event_type\":\"step.start\",\"index\":0,\"step\":{\"type\":\"function_call\",\"id\":\"call_1\",\"name\":\"a\"}}\n\n",
+            "data: {\"event_type\":\"step.delta\",\"index\":0,\"delta\":{\"type\":\"arguments_delta\",\"arguments\":\"{\\\"x\\\":\"}}\n\n",
+            "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"v1_x\",\"status\":\"incomplete\"}}\n\n",
+        ])
+        .await;
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::InvalidResponse(detail))) if detail.as_str().contains("output limit")),
+            "{result:?}"
+        );
+    }
+
+    /// 種類を付けずに`{"error": …}`だけを送る中継でも、エラーの中身を残す。
+    #[tokio::test]
+    async fn a_bare_error_object_is_an_error() {
+        let (result, _, _) = send_streamed(&[
+            "data: {\"error\":{\"code\":\"internal\",\"message\":\"upstream failed\"}}\n\n",
+        ])
+        .await;
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::Http(detail))) if detail.as_str().contains("upstream failed")),
+            "{result:?}"
+        );
     }
 }

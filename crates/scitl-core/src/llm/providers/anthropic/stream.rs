@@ -7,7 +7,7 @@
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
-use crate::llm::{ErrorDetail, LlmError, Replay, ResponseEvent, SentSecrets};
+use crate::llm::{ErrorDetail, FinishReason, LlmError, Replay, ResponseEvent, SentSecrets};
 
 use super::Thinking;
 
@@ -16,8 +16,8 @@ struct Block {
     index: u64,
     /// `content_block_start`のブロックに差分を足していったもの。
     value: Value,
-    /// `tool_use`の引数(`input_json_delta`)の断片を連結したもの。`content_block_stop`で
-    /// `input`に読む。
+    /// `tool_use`の引数(`input_json_delta`)の断片を連結したもの。応答を読み終えてから`input`に
+    /// 読む(長さの上限で途中で切れたかは、終了理由が届くまで分からないため)。
     partial_json: Option<String>,
 }
 
@@ -26,10 +26,13 @@ impl Block {
         self.value.get("type").and_then(Value::as_str)
     }
 
-    /// 連結した引数を`input`に読む。
+    /// 連結した引数を`input`に読む。`input`の無い`tool_use`は空のオブジェクトにする(送り返す
+    /// ときに欠けないように)。
     fn finish_input(&mut self, secrets: &SentSecrets) -> Result<(), LlmError> {
         if let Some(text) = self.partial_json.take() {
             self.value["input"] = super::super::streamed_arguments(&text, secrets)?;
+        } else if self.kind() == Some("tool_use") && self.value.get("input").is_none() {
+            self.value["input"] = json!({});
         }
         Ok(())
     }
@@ -70,6 +73,9 @@ pub(super) async fn read(
                         emit_delta(delta, text, on_event);
                     }
                 }
+                if blocks.len() >= super::super::MAX_STREAMED_ELEMENTS {
+                    return Err(super::super::too_many_elements());
+                }
                 blocks.push(Block {
                     index,
                     value,
@@ -93,8 +99,9 @@ pub(super) async fn read(
                         super::super::append_text(&mut block.value, "thinking", text("thinking"));
                         emit_delta(kind, text("thinking"), on_event);
                     }
+                    // 署名は断片ではなく1つの値で届く。開始のブロックの値(空)は置き換える。
                     Some("signature_delta") => {
-                        super::super::append_text(&mut block.value, "signature", text("signature"));
+                        block.value["signature"] = json!(text("signature"));
                     }
                     Some("input_json_delta") => block
                         .partial_json
@@ -112,32 +119,32 @@ pub(super) async fn read(
                     _ => {}
                 }
             }
-            Some("content_block_stop") => {
-                let index = block_index(&event)?;
-                if let Some(block) = blocks.iter_mut().rfind(|b| b.index == index) {
-                    block.finish_input(secrets)?;
-                }
-            }
             Some("message_delta") => {
                 let delta = event.get("delta").unwrap_or(&Value::Null);
-                if let Some(reason) = delta.get("stop_reason").and_then(Value::as_str) {
-                    stop_reason = Some(reason.to_string());
-                }
                 if let Some(details) = delta.get("stop_details").filter(|d| !d.is_null()) {
                     stop_details = Some(details.clone());
+                }
+                // 終了理由が届いたら完了とし、残り(`message_stop`)は読まない。`message_stop`を
+                // 送らずに接続を開けたままにする中継で、組み立て終えた応答をタイムアウトで捨てないため。
+                if let Some(reason) = delta.get("stop_reason").and_then(Value::as_str) {
+                    stop_reason = Some(reason.to_string());
+                    return Ok(true);
                 }
             }
             Some("message_stop") => return Ok(true),
             Some("error") => return Err(stream_error(&event, &data, secrets, thinking)),
-            // `message_start`(本文は空)・`ping`・知らないイベント。
+            // 種類を付けずに`{"error": …}`だけを送る中継がある。
+            None if event.get("error").is_some() => {
+                return Err(stream_error(&event, &data, secrets, thinking))
+            }
+            // `message_start`(本文は空)・`content_block_stop`・`ping`・知らないイベント。
             _ => {}
         }
         Ok(false)
     })
     .await?;
 
-    // `message_stop`を省く中継でも、終了理由が届いていれば応答は終わっている。
-    if !stopped && stop_reason.is_none() {
+    if !stopped {
         return Err(super::super::stream_cut_off());
     }
     if stop_reason.as_deref() == Some("refusal") {
@@ -149,18 +156,22 @@ pub(super) async fn read(
         )));
     }
 
+    let finish_reason = super::finish_reason(stop_reason.as_deref());
     let mut replay = false;
     for block in &mut blocks {
-        block.finish_input(secrets)?;
+        block
+            .finish_input(secrets)
+            .map_err(|e| match finish_reason {
+                FinishReason::Length => super::super::tool_call_cut_off(),
+                _ => e,
+            })?;
         match block.kind() {
             Some("thinking" | "redacted_thinking") => replay = true,
             Some("tool_use") => on_event(super::tool_call(&block.value)),
             _ => {}
         }
     }
-    on_event(ResponseEvent::Done {
-        finish_reason: super::finish_reason(stop_reason.as_deref()),
-    });
+    on_event(ResponseEvent::Done { finish_reason });
 
     Ok(if replay {
         Replay::new(
@@ -224,17 +235,25 @@ mod tests {
     use super::*;
     use crate::config::ReasoningEffort;
     use crate::error::CoreError;
-    use crate::llm::{ChatMessage, FinishReason, LlmAdapter, PromptText, ToolOffer};
+    use crate::llm::{ChatMessage, LlmAdapter, PromptText, ToolOffer};
 
     async fn send_streamed(
         pieces: &[&'static str],
     ) -> (Result<Replay, CoreError>, Vec<ResponseEvent>, Value) {
-        let (base_url, handle) = spawn_event_stream(now(pieces));
+        send_streamed_with(now(pieces), Duration::from_secs(30)).await
+    }
+
+    /// 断片ごとの待ち時間と、応答タイムアウトを決めて送る。
+    async fn send_streamed_with(
+        pieces: Vec<(Duration, &'static [u8])>,
+        timeout: Duration,
+    ) -> (Result<Replay, CoreError>, Vec<ResponseEvent>, Value) {
+        let (base_url, handle) = spawn_event_stream(pieces);
         let adapter = AnthropicAdapter::new(
             base_url,
             crate::llm::providers::Credentials::key_only(SecretString::from("")),
             "claude-test",
-            Duration::from_secs(30),
+            timeout,
         )
         .unwrap();
         let mut events = Vec::new();
@@ -473,6 +492,107 @@ mod tests {
             "data: {\"type\":\"message_stop\"}\n\n",
         ])
         .await;
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
+            "{result:?}"
+        );
+    }
+
+    /// 終了理由が届いたら、`message_stop`を待たずに完了とする(接続を開けたままにする中継で、
+    /// 組み立て終えた応答をタイムアウトで捨てない)。
+    #[tokio::test]
+    async fn completes_at_the_stop_reason_even_if_the_connection_stays_open() {
+        let mut pieces = now(&[
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"ok\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+        ]);
+        pieces.push((
+            Duration::from_secs(2),
+            b"data: {\"type\":\"message_stop\"}\n\n",
+        ));
+        let (result, events, _) = send_streamed_with(pieces, Duration::from_millis(300)).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(events.len(), 2, "{events:?}");
+    }
+
+    /// データの届かない時間が応答タイムアウトを超えたら、タイムアウトにする。
+    #[tokio::test]
+    async fn a_silent_stream_times_out() {
+        let mut pieces = now(&[
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        ]);
+        pieces.push((
+            Duration::from_secs(2),
+            b"data: {\"type\":\"message_stop\"}\n\n",
+        ));
+        let (result, _, _) = send_streamed_with(pieces, Duration::from_millis(300)).await;
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::Timeout(_)))),
+            "{result:?}"
+        );
+    }
+
+    /// 伏せた思考は開始のブロックのまま、引用は`citations`に足して組み立てる。
+    #[tokio::test]
+    async fn rebuilds_redacted_thinking_and_citations() {
+        let (result, _, _) = send_streamed(&[
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"opaque\"}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\",\"citations\":null}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"cited_text\":\"a\"}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"cited_text\":\"b\"}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"said\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+        ])
+        .await;
+        let replayed: Vec<Value> = result
+            .unwrap()
+            .elements()
+            .iter()
+            .map(|b| serde_json::from_str(b.get()).unwrap())
+            .collect();
+        assert_eq!(
+            replayed,
+            vec![
+                json!({"type": "redacted_thinking", "data": "opaque"}),
+                json!({"type": "text", "text": "said", "citations": [{"cited_text": "a"}, {"cited_text": "b"}]}),
+            ]
+        );
+    }
+
+    /// 長さの上限で引数の途中で切れた呼び出しは、打ち切りが原因と分かる失敗にする。
+    #[tokio::test]
+    async fn a_tool_call_cut_off_by_the_output_limit_says_so() {
+        let (result, _, _) = send_streamed(&[
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"add_steps\",\"input\":{}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"descriptions\\\": [\\\"dr\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
+        ])
+        .await;
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::InvalidResponse(detail))) if detail.as_str().contains("output limit")),
+            "{result:?}"
+        );
+    }
+
+    /// 種類を付けずに`{"error": …}`だけを送る中継でも、エラーの中身を残す。
+    #[tokio::test]
+    async fn a_bare_error_object_is_an_error() {
+        let (result, _, _) = send_streamed(&[
+            "data: {\"error\":{\"message\":\"upstream failed\",\"code\":502}}\n\n",
+        ])
+        .await;
+        assert!(
+            matches!(&result, Err(CoreError::Llm(LlmError::Http(detail))) if detail.as_str().contains("upstream failed")),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_too_many_blocks() {
+        let start: &'static str = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n";
+        let pieces = vec![start; super::super::super::MAX_STREAMED_ELEMENTS + 1];
+        let (result, _, _) = send_streamed(&pieces).await;
         assert!(
             matches!(&result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
             "{result:?}"
