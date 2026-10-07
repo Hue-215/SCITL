@@ -122,6 +122,26 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 入れるかは方言ごとに下に書く。ターンをまたいでは、送った形のまま保存したものを次のターンに並べて
 返す(`transcript.md`「送った形のまま積む」)。最後の応答(ツールを呼ばなかった応答)の`Replay`も保存する
 
+## OpenAI互換
+
+**OpenAI互換**(`llm::providers::openai_compat`): Chat Completions(`POST {base_url}/chat/completions`)を
+`stream: true`で呼び、SSEで届く断片を受け取った順にイベントとして渡す(Issue #204)。SSEの分割は方言によらない
+`llm/providers/sse.rs`が持ち、`data`の読み方はアダプタが持つ。
+
+- `stream`を無視して1つのJSONで返すサーバーもあるので、応答の`Content-Type`が`text/event-stream`で
+  なければ、ストリーミングしない応答として読む
+- 応答タイムアウトは、データの届かない時間の上限として使う(`network-secrets.md`「外部通信の一元化とネットワーク設定」)
+- 本文(`delta.content`)と思考(`delta.reasoning_content`)は、届いたらすぐ渡す
+- ツール呼び出しは`index`ごとに断片を組み立て、終わってから最初の断片が届いた順に渡す。最初の断片が
+  `id`と名前を、続く断片が引数の続きを運ぶ。`index`を付けないサーバーでは、`id`か名前が付いた断片を
+  新しい呼び出し、付いていない断片を直前の呼び出しの続きとする。名前の無い呼び出しは応答の解釈の失敗にする
+- `[DONE]`か終了理由が届いたら完了とする(`[DONE]`を省くサーバーがある)。どちらも無いまま本文が
+  終わったら、途中で切れたとして応答の解釈の失敗にする。返信の候補が1つも無ければ空応答にする
+- 途中で`{"error": …}`が届いたら、エラー応答の本文と同じ見分け方(コンテキスト超過等)で失敗にする
+- `finish_reason: "content_filter"`は`LlmError::Refused`にする(下の「Anthropic形式」の`refusal`と同じ)。
+  断られたと分かるのは最後なので、途中までの本文はもう画面に流れているが、返信としては保存しない
+- 思考を送り返さない方言なので、`Replay`は常に空
+
 ## Anthropic形式
 
 **Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
@@ -146,7 +166,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   目印を自動で置かせる
 - 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は、途中まで書いた本文を渡さずに
   `LlmError::Refused`にし、断られたことが分かるエラー発言にする(OpenAI互換の
-  `finish_reason: "content_filter"`も同じ扱い)。`max_tokens`と
+  `finish_reason: "content_filter"`も同じ扱い。ストリーミングで読む方言では、本文は画面に流れたあとになるが、
+  返信としては保存しない)。`max_tokens`と
   `model_context_window_exceeded`は長さによる打ち切り(`FinishReason::Length`)にする
 - 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする

@@ -41,7 +41,10 @@ impl GeminiAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
+        let client = crate::net::hardened_client(
+            &base_url,
+            crate::net::RequestTimeout::Total(request_timeout),
+        )?;
         Ok(Self {
             client,
             base_url,
@@ -78,7 +81,10 @@ pub async fn list_models(
     credentials: &Credentials,
 ) -> Result<Vec<String>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
@@ -124,7 +130,10 @@ pub async fn detect(
     models: &[String],
 ) -> Result<HashMap<String, DetectedCapabilities>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut found = HashMap::new();
     for model in models {
         let mut url = super::endpoint(&base_url, MODELS)?;

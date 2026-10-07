@@ -102,15 +102,25 @@ impl ExternalUrl {
     }
 }
 
+/// HTTPクライアントが待つ時間の上限([`hardened_client`])。接続確立の上限([`CONNECT_TIMEOUT`])は
+/// どれにも掛かる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestTimeout {
+    /// リクエスト全体(応答本文の読み切りまで)の上限。
+    Total(Duration),
+    /// 読み取りが途切れている時間の上限。データが届くたびに測り直すので、少しずつ届き続ける
+    /// 応答(ストリーミング)は長くても切らない。最初のデータが届くまでも同じ上限で待つ。
+    BetweenReads(Duration),
+    /// 上限を掛けない。MCPは接続・一覧取得・呼び出し・切断をそれぞれ`tokio::time::timeout`で
+    /// 囲んでおり、長寿命のSSEストリームも使うためこれを使う。
+    None,
+}
+
 /// ハードニング済み`reqwest::Client`を組み立てる。通信先の検証を済ませたことを、`url`の型で
 /// 求める。
-///
-/// `request_timeout`はリクエスト全体(応答本文の読み切りまで)の上限。MCPは接続・一覧取得・
-/// 呼び出し・切断をそれぞれ`tokio::time::timeout`で囲んでおり、長寿命のSSEストリームも
-/// 使うため`None`を渡す。接続確立の上限([`CONNECT_TIMEOUT`])はどちらにも掛かる。
 pub fn hardened_client(
     _url: &ExternalUrl,
-    request_timeout: Option<Duration>,
+    timeout: RequestTimeout,
 ) -> Result<reqwest::Client, CoreError> {
     let mut builder = reqwest::Client::builder()
         .no_proxy()
@@ -119,8 +129,10 @@ pub fn hardened_client(
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .user_agent(USER_AGENT);
-    if let Some(timeout) = request_timeout {
-        builder = builder.timeout(timeout);
+    match timeout {
+        RequestTimeout::Total(timeout) => builder = builder.timeout(timeout),
+        RequestTimeout::BetweenReads(timeout) => builder = builder.read_timeout(timeout),
+        RequestTimeout::None => {}
     }
     builder
         .build()
@@ -295,7 +307,7 @@ mod tests {
         let url = spawn_once_delayed(NO_CONTENT, Duration::from_millis(500));
         let client = hardened_client(
             &ExternalUrl::parse(&url).unwrap(),
-            Some(Duration::from_millis(100)),
+            RequestTimeout::Total(Duration::from_millis(100)),
         )
         .unwrap();
         let err = client.get(&url).send().await.unwrap_err();
@@ -304,12 +316,74 @@ mod tests {
 
     #[tokio::test]
     async fn no_request_timeout_when_none() {
-        // MCPは`None`を渡し、各段の上限を呼び出し側の`tokio::time::timeout`に任せる。
+        // MCPは`RequestTimeout::None`を渡し、各段の上限を呼び出し側の`tokio::time::timeout`に任せる。
         // reqwest側に全体の上限が残っていると、呼び出し側の上限より先に切れる。
         let url = spawn_once_delayed(NO_CONTENT, Duration::from_millis(500));
-        let client = hardened_client(&ExternalUrl::parse(&url).unwrap(), None).unwrap();
+        let client =
+            hardened_client(&ExternalUrl::parse(&url).unwrap(), RequestTimeout::None).unwrap();
         let response = client.get(&url).send().await.unwrap();
         assert_eq!(response.status().as_u16(), 204);
+    }
+
+    /// 応答のヘッダーと本文の断片を`pieces`の順に、それぞれ前に`delay`だけ待ってから書く。
+    fn spawn_trickling(pieces: Vec<(Duration, &'static str)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                for (delay, piece) in pieces {
+                    std::thread::sleep(delay);
+                    if stream.write_all(piece.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    const CHUNKED_HEAD: &str = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+
+    #[tokio::test]
+    async fn between_reads_timeout_cuts_a_stalled_body() {
+        let url = spawn_trickling(vec![
+            (Duration::ZERO, CHUNKED_HEAD),
+            (Duration::ZERO, "1\r\na\r\n"),
+            (Duration::from_millis(800), "0\r\n\r\n"),
+        ]);
+        let client = hardened_client(
+            &ExternalUrl::parse(&url).unwrap(),
+            RequestTimeout::BetweenReads(Duration::from_millis(200)),
+        )
+        .unwrap();
+        let mut response = client.get(&url).send().await.unwrap();
+        assert_eq!(response.chunk().await.unwrap().as_deref(), Some(&b"a"[..]));
+        // 本文を読む途中で切れても、タイムアウトとして報告される(`LlmError::from_transport`が
+        // 種類を見分けられる)。
+        let err = response.chunk().await.unwrap_err();
+        assert!(err.is_timeout(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn between_reads_timeout_keeps_a_body_that_keeps_arriving() {
+        // 合計は上限を超えるが、間隔は上限より短い。
+        let step = Duration::from_millis(100);
+        let url = spawn_trickling(vec![
+            (Duration::ZERO, CHUNKED_HEAD),
+            (step, "1\r\na\r\n"),
+            (step, "1\r\nb\r\n"),
+            (step, "1\r\nc\r\n"),
+            (step, "0\r\n\r\n"),
+        ]);
+        let client = hardened_client(
+            &ExternalUrl::parse(&url).unwrap(),
+            RequestTimeout::BetweenReads(Duration::from_millis(300)),
+        )
+        .unwrap();
+        let body = client.get(&url).send().await.unwrap().text().await.unwrap();
+        assert_eq!(body, "abc");
     }
 
     #[tokio::test]
@@ -319,7 +393,7 @@ mod tests {
         );
         let client = hardened_client(
             &ExternalUrl::parse(&url).unwrap(),
-            Some(Duration::from_secs(5)),
+            RequestTimeout::Total(Duration::from_secs(5)),
         )
         .unwrap();
         // リダイレクトを追っていれば別ホストへの接続を試みて失敗するはずが、
@@ -347,7 +421,7 @@ mod tests {
         });
         let client = hardened_client(
             &ExternalUrl::parse(&url).unwrap(),
-            Some(Duration::from_secs(5)),
+            RequestTimeout::Total(Duration::from_secs(5)),
         )
         .unwrap();
         client.get(&url).send().await.unwrap();
@@ -364,7 +438,7 @@ mod tests {
         unsafe { std::env::set_var("http_proxy", "http://127.0.0.1:1") };
         let client = hardened_client(
             &ExternalUrl::parse(&url).unwrap(),
-            Some(Duration::from_secs(5)),
+            RequestTimeout::Total(Duration::from_secs(5)),
         )
         .unwrap();
         let result = client.get(&url).send().await;

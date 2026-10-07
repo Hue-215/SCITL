@@ -862,3 +862,352 @@ fn serializes_tool_response_and_omits_missing_tool_call_id() {
         serde_json::json!({"role": "tool", "content": "{}"})
     );
 }
+
+const EVENT_STREAM_HEAD: &str =
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nConnection: close\r\n\r\n";
+
+/// 1回だけ接続を受け、SSEの応答を`pieces`の順に、それぞれ前に`delay`だけ待ってから書いて
+/// 閉じる。受け取ったリクエストの本文を返す。
+fn spawn_streaming(
+    pieces: Vec<(Duration, &'static [u8])>,
+) -> (String, std::thread::JoinHandle<serde_json::Value>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 8192];
+        let header_end = loop {
+            let n = stream.read(&mut buf).unwrap();
+            raw.extend_from_slice(&buf[..n]);
+            if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
+        let length = headers
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length: "))
+            .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+        while raw.len() < header_end + length {
+            let n = stream.read(&mut buf).unwrap();
+            raw.extend_from_slice(&buf[..n]);
+        }
+        let body = serde_json::from_slice(&raw[header_end..header_end + length]).unwrap();
+        let _ = stream.write_all(EVENT_STREAM_HEAD.as_bytes());
+        for (delay, piece) in pieces {
+            std::thread::sleep(delay);
+            if stream.write_all(piece).is_err() {
+                break;
+            }
+        }
+        body
+    });
+    (format!("http://{addr}/v1"), handle)
+}
+
+/// 間を空けずに書く断片。
+fn now(pieces: &[&'static str]) -> Vec<(Duration, &'static [u8])> {
+    pieces
+        .iter()
+        .map(|p| (Duration::ZERO, p.as_bytes()))
+        .collect()
+}
+
+/// 間を空けて書く断片。
+fn after(step: Duration, pieces: &[&'static str]) -> Vec<(Duration, &'static [u8])> {
+    pieces.iter().map(|p| (step, p.as_bytes())).collect()
+}
+
+async fn send_streamed(
+    pieces: Vec<(Duration, &'static [u8])>,
+    timeout: Duration,
+) -> (
+    Result<Replay, CoreError>,
+    Vec<ResponseEvent>,
+    serde_json::Value,
+) {
+    let (base_url, handle) = spawn_streaming(pieces);
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        timeout,
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .await;
+    (result, events, handle.join().unwrap())
+}
+
+fn text(t: &str) -> ResponseEvent {
+    ResponseEvent::TextDelta {
+        text: t.to_string(),
+    }
+}
+
+fn reasoning(t: &str) -> ResponseEvent {
+    ResponseEvent::ReasoningDelta {
+        text: t.to_string(),
+    }
+}
+
+fn done(finish_reason: FinishReason) -> ResponseEvent {
+    ResponseEvent::Done { finish_reason }
+}
+
+#[tokio::test]
+async fn asks_for_a_stream_and_passes_deltas_in_the_order_they_arrive() {
+    let (result, events, body) = send_streamed(
+        [
+            now(&[
+                ": keep-alive\n\n",
+                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"考え\"}}]}\n\n",
+                // 行の途中で切れても、繋いで読む。
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"中\"}}]}\n\ndata: {\"choi",
+            ]),
+            // 「え」の途中で切れても、繋いで読む。
+            vec![
+                (
+                    Duration::from_millis(20),
+                    &b"ces\":[{\"delta\":{\"content\":\"\xE7\xAD\x94\xE3\x81"[..],
+                ),
+                (Duration::from_millis(20), &b"\x88\"}}]}\n\n"[..]),
+            ],
+            now(&[
+                "data: {\"choices\":[{\"delta\":{\"content\":\"です\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                // 使用量だけのイベントは読み飛ばす。
+                "data: {\"choices\":[],\"usage\":{\"total_tokens\":3}}\n\n",
+                "data: [DONE]\n\n",
+            ]),
+        ]
+        .concat(),
+        TEST_TIMEOUT,
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(body["stream"], true);
+    assert_eq!(
+        events,
+        vec![
+            reasoning("考え"),
+            reasoning("中"),
+            text("答え"),
+            text("です"),
+            done(FinishReason::Stop),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn assembles_tool_call_fragments_by_index() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"list_tasks\",\"arguments\":\"\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"update_task\",\"arguments\":\"{\\\"ti\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"tle\\\": \\\"a\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            ResponseEvent::ToolCall {
+                id: Some("call_b".to_string()),
+                name: "update_task".to_string(),
+                arguments: serde_json::json!({ "title": "a" }).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn assembles_tool_call_fragments_without_an_index() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"list_tasks\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"function\":{\"name\":\"list_steps\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: None,
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            ResponseEvent::ToolCall {
+                id: Some("call_b".to_string()),
+                name: "list_steps".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_tool_call_without_a_name_is_an_invalid_response() {
+    let (result, _, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_finish_reason_completes_the_stream_without_the_done_marker() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"length\"}]}",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("ok"), done(FinishReason::Length)]);
+}
+
+#[tokio::test]
+async fn a_stream_cut_before_the_end_is_an_invalid_response() {
+    let (result, events, _) = send_streamed(
+        now(&["data: {\"choices\":[{\"delta\":{\"content\":\"途中\"}}]}\n\n"]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
+        "{result:?}"
+    );
+    // 流れた断片は画面に出たままになるが、`Err`なので呼び出し側は保存しない。
+    assert_eq!(events, vec![text("途中")]);
+}
+
+#[tokio::test]
+async fn a_stream_with_no_reply_is_an_empty_response() {
+    let (result, events, _) = send_streamed(now(&["data: [DONE]\n\n"]), TEST_TIMEOUT).await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::EmptyResponse))),
+        "{result:?}"
+    );
+    assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn an_error_in_the_stream_is_classified_from_its_body() {
+    let (result, _, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+            "data: {\"error\":{\"message\":\"the request exceeds the available context size\",\"type\":\"exceed_context_size_error\"}}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::ContextExceeded(_)))),
+        "{result:?}"
+    );
+
+    let (result, _, _) = send_streamed(
+        now(&["data: {\"error\":{\"message\":\"upstream failed\"}}\n\n"]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::Http(_)))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_content_filter_stop_in_the_stream_is_a_refusal() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::Refused(_)))),
+        "{result:?}"
+    );
+    // 断られたと分かるのは最後なので、本文は流れたあと。`Done`は渡さない。
+    assert_eq!(events, vec![text("partial")]);
+}
+
+#[tokio::test]
+async fn a_stream_that_stops_arriving_times_out() {
+    let (result, events, _) = send_streamed(
+        [
+            now(&["data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"]),
+            after(Duration::from_millis(1500), &["data: [DONE]\n\n"]),
+        ]
+        .concat(),
+        Duration::from_millis(300),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::Timeout(_)))),
+        "{result:?}"
+    );
+    assert_eq!(events, vec![text("a")]);
+}
+
+#[tokio::test]
+async fn a_stream_that_keeps_arriving_outlasts_the_timeout() {
+    let step = Duration::from_millis(150);
+    let (result, events, _) = send_streamed(
+        after(
+            step,
+            &[
+                "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"c\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            ],
+        ),
+        Duration::from_millis(400),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![text("a"), text("b"), text("c"), done(FinishReason::Stop)]
+    );
+}

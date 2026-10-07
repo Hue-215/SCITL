@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod gemini;
 mod local_server;
 pub mod openai_compat;
+mod sse;
 
 use std::collections::HashMap;
 use std::sync::Arc;

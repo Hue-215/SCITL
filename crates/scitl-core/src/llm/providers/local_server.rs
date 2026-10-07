@@ -53,7 +53,7 @@ pub async fn detect(
     }
     let base_url = ExternalUrl::parse(base_url).map_err(CoreError::ProviderConfig)?;
     let probe = Probe {
-        client: net::hardened_client(&base_url, Some(DETECT_TIMEOUT))?,
+        client: net::hardened_client(&base_url, net::RequestTimeout::Total(DETECT_TIMEOUT))?,
         root: server_root(&base_url),
         credentials,
     };
