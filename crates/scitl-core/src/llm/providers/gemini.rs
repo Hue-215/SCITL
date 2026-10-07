@@ -19,6 +19,8 @@ use crate::net::ExternalUrl;
 
 use super::{received, Credentials, KeyHeader, RequestPart};
 
+mod stream;
+
 /// SCITL自身が付けるヘッダー(鍵)。カスタムヘッダーには使わせない
 /// ([`super::validate_header_name`])。
 pub(super) const OWN_HEADERS: &[&str] = &["x-goog-api-key"];
@@ -33,7 +35,8 @@ pub struct GeminiAdapter {
 
 impl GeminiAdapter {
     /// `base_url`は`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。
-    /// `request_timeout`は設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)。
+    /// `request_timeout`は設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)で、
+    /// データの届かない時間の上限として使う。
     pub fn new(
         base_url: impl Into<String>,
         credentials: Credentials,
@@ -41,9 +44,11 @@ impl GeminiAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
+        // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
+        // 届き続けている間は切らない)。
         let client = crate::net::hardened_client(
             &base_url,
-            crate::net::RequestTimeout::Total(request_timeout),
+            crate::net::RequestTimeout::BetweenReads(request_timeout),
         )?;
         Ok(Self {
             client,
@@ -196,6 +201,7 @@ struct RequestBody<'a> {
     tools: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     generation_config: Option<Value>,
+    stream: bool,
 }
 
 /// 思考の強さ(`thinking_level`)。思考を切る指定は無いので、「オフ」はいちばん弱い
@@ -244,6 +250,8 @@ fn request_body<'a>(
             })
             .collect(),
         generation_config: (!config.is_empty()).then_some(Value::Object(config)),
+        // 無視して1つのJSONで返す中継もある(`GeminiAdapter::send`)。
+        stream: true,
     }
 }
 
@@ -463,7 +471,7 @@ impl GeminiAdapter {
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         thinking_level: Option<&'static str>,
-    ) -> Result<InteractionResponse, LlmError> {
+    ) -> Result<reqwest::Response, LlmError> {
         let body = request_body(&self.model, messages, tools, thinking_level);
         let endpoint = super::endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
@@ -471,12 +479,135 @@ impl GeminiAdapter {
         let request = self.client.post(endpoint).json(&body);
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
-        let response = super::reject_failure(response, secrets, |status, body| {
+        super::reject_failure(response, secrets, |status, body| {
             http_error(status, body, secrets, thinking_level.is_some())
         })
-        .await?;
-        super::read_json(response, secrets).await
+        .await
     }
+}
+
+/// 応答の状態(`status`)を終了理由にする。`failed`は、`errors`(ストリーミングでは途中で届いた
+/// `error`)から分類した失敗にする。方針・安全上の判定で止めたなら`LlmError::Refused`。
+fn finish_reason(
+    status: &str,
+    errors: &[Value],
+    secrets: &SentSecrets,
+) -> Result<FinishReason, LlmError> {
+    match status {
+        "completed" => Ok(FinishReason::Stop),
+        "requires_action" => Ok(FinishReason::ToolCall),
+        "incomplete" => Ok(FinishReason::Length),
+        "failed" => Err(failure(errors, secrets)),
+        other => Err(LlmError::InvalidResponse(ErrorDetail::http(
+            StatusCode::OK,
+            &format!("status: {other}"),
+            secrets,
+        ))),
+    }
+}
+
+/// 失敗した応答のエラー。方針・安全上の判定で止めたなら`LlmError::Refused`、それ以外は
+/// プロバイダーのエラー。
+fn failure(errors: &[Value], secrets: &SentSecrets) -> LlmError {
+    let errors_text = Value::Array(errors.to_vec()).to_string();
+    let detail = ErrorDetail::http(StatusCode::OK, &errors_text, secrets);
+    let blocked = errors
+        .iter()
+        .filter_map(error_code)
+        .any(|code| BLOCKED_CODES.contains(&code));
+    if blocked {
+        LlmError::Refused(detail)
+    } else {
+        LlmError::Http(detail)
+    }
+}
+
+/// 思考の要約(`thought`の`summary`)の本文。
+fn thought_summary(step: &Value) -> String {
+    step.get("summary")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect()
+}
+
+/// 出力(`model_output`の`content`)の本文。
+fn output_text(step: &Value) -> String {
+    step.get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect()
+}
+
+/// `function_call`のステップの呼び出し。
+fn tool_call(step: &Value) -> ResponseEvent {
+    ResponseEvent::ToolCall {
+        id: step.get("id").and_then(Value::as_str).map(str::to_string),
+        name: step
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        arguments: ToolArguments::from(step.get("arguments").cloned().unwrap_or(json!({}))),
+    }
+}
+
+/// 送り返す出力のステップ(思考・本文・呼び出し)か。ほかのステップ(サーバー側のツール等)は
+/// 読まず、送り返しもしない。
+fn is_replayed_step(step: &Value) -> bool {
+    matches!(
+        step.get("type").and_then(Value::as_str),
+        Some("thought" | "model_output" | "function_call")
+    )
+}
+
+/// ストリーミングせずに1つのJSONで返った応答を、イベントに分けて渡す。
+fn emit_interaction(
+    response: InteractionResponse,
+    secrets: &SentSecrets,
+    on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+) -> Result<Replay, LlmError> {
+    // 断った応答は、途中まで書いた本文も渡さない(イベントを渡す前に判定する)。
+    let finish_reason = finish_reason(&response.status, &response.errors, secrets)?;
+
+    let steps = super::read_elements(&response.steps, secrets)?;
+    let mut replayed = Vec::new();
+    let mut thought = false;
+    for (raw, step) in response.steps.iter().zip(&steps) {
+        if !is_replayed_step(step) {
+            continue;
+        }
+        match step.get("type").and_then(Value::as_str) {
+            Some("thought") => {
+                thought = true;
+                let summary = thought_summary(step);
+                if !summary.is_empty() {
+                    on_event(ResponseEvent::ReasoningDelta { text: summary });
+                }
+            }
+            Some("model_output") => {
+                let text = output_text(step);
+                if !text.is_empty() {
+                    on_event(ResponseEvent::TextDelta { text });
+                }
+            }
+            _ => on_event(tool_call(step)),
+        }
+        replayed.push(raw.clone());
+    }
+    on_event(ResponseEvent::Done { finish_reason });
+
+    // 思考のステップは、次の呼び出しで受け取ったまま返す必要がある。並びも変えないよう、
+    // 上で読んだ出力のステップ(思考・本文・呼び出し)を並びごと返す。
+    Ok(if thought {
+        Replay::new(replayed)
+    } else {
+        Replay::default()
+    })
 }
 
 #[async_trait::async_trait]
@@ -536,90 +667,14 @@ impl LlmAdapter for GeminiAdapter {
             }
             result => result?,
         };
-
         let secrets = self.credentials.secrets();
-        let finish_reason = match response.status.as_str() {
-            "completed" => FinishReason::Stop,
-            "requires_action" => FinishReason::ToolCall,
-            "incomplete" => FinishReason::Length,
-            // 断った応答は、途中まで書いた本文も渡さない(イベントを渡す前に判定する)。
-            "failed" => {
-                let errors = Value::Array(response.errors.clone()).to_string();
-                let detail = ErrorDetail::http(StatusCode::OK, &errors, secrets);
-                let blocked = response
-                    .errors
-                    .iter()
-                    .filter_map(error_code)
-                    .any(|code| BLOCKED_CODES.contains(&code));
-                return Err(if blocked {
-                    LlmError::Refused(detail)
-                } else {
-                    LlmError::Http(detail)
-                }
-                .into());
-            }
-            other => {
-                let detail =
-                    ErrorDetail::http(StatusCode::OK, &format!("status: {other}"), secrets);
-                return Err(LlmError::InvalidResponse(detail).into());
-            }
-        };
-
-        let steps = super::read_elements(&response.steps, secrets)?;
-        let mut replayed = Vec::new();
-        let mut thought = false;
-        for (raw, step) in response.steps.iter().zip(&steps) {
-            match step.get("type").and_then(Value::as_str) {
-                Some("thought") => {
-                    thought = true;
-                    let summary: String = step
-                        .get("summary")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|part| part.get("text").and_then(Value::as_str))
-                        .collect();
-                    if !summary.is_empty() {
-                        on_event(ResponseEvent::ReasoningDelta { text: summary });
-                    }
-                }
-                Some("model_output") => {
-                    let text: String = step
-                        .get("content")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-                        .filter_map(|part| part.get("text").and_then(Value::as_str))
-                        .collect();
-                    if !text.is_empty() {
-                        on_event(ResponseEvent::TextDelta { text });
-                    }
-                }
-                Some("function_call") => on_event(ResponseEvent::ToolCall {
-                    id: step.get("id").and_then(Value::as_str).map(str::to_string),
-                    name: step
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    arguments: ToolArguments::from(
-                        step.get("arguments").cloned().unwrap_or(json!({})),
-                    ),
-                }),
-                _ => continue,
-            }
-            replayed.push(raw.clone());
-        }
-        on_event(ResponseEvent::Done { finish_reason });
-
-        // 思考のステップは、次の呼び出しで受け取ったまま返す必要がある。並びも変えないよう、
-        // 上で読んだ出力のステップ(思考・本文・呼び出し)を並びごと返す。
-        Ok(if thought {
-            Replay::new(replayed)
+        let replay = if super::sse::is_event_stream(&response) {
+            stream::read(response, secrets, on_event).await?
         } else {
-            Replay::default()
-        })
+            let parsed: InteractionResponse = super::read_json(response, secrets).await?;
+            emit_interaction(parsed, secrets, on_event)?
+        };
+        Ok(replay)
     }
 }
 

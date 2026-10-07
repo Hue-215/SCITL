@@ -157,7 +157,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 ## Anthropic形式
 
 **Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
-ストリーミングせずに呼ぶ。出典は公式ドキュメント(errors・thinking・prompt caching・models)。
+`stream: true`で呼び、SSEで届くイベントを受け取った順に読む(Issue #204。`anthropic/stream.rs`)。出典は公式
+ドキュメント(errors・thinking・prompt caching・models・streaming)。
 
 - ベースURLは`/v1`を含まない(`https://api.anthropic.com`)。鍵は`x-api-key`、版は
   `anthropic-version: 2023-06-01`で送る。設定画面は、`/v1`まで書いたURLにヒントを出す(登録は止めない)
@@ -184,12 +185,31 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 - 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
 
+ストリーミングの読み方:
+
+- `Content-Type`が`text/event-stream`でなければ、ストリーミングしない応答として読む(`stream`を無視する
+  中継があるため。OpenAI互換と同じ)。応答タイムアウトはデータの届かない時間の上限として使い、1イベントと
+  1回の応答の大きさに上限を置くのもOpenAI互換と同じ
+- ブロックは`content_block_start`で届いたブロックに、`index`の同じ差分を足して組み立てる。`text_delta`は
+  `text`に、`thinking_delta`は`thinking`に、`signature_delta`は`signature`に続け、`citations_delta`は
+  `citations`に足す。`input_json_delta`は連結しておき、`content_block_stop`で`input`に読む(断片が空なら
+  空のオブジェクト。読めなければ応答の解釈の失敗にする。`input`をオブジェクトのまま送り返すので、壊れた
+  引数を持つ形が無い)。知らない差分は読み飛ばす。始まっていないブロックへの差分は応答の解釈の失敗にする
+- 本文と思考は届いたらすぐ渡し、ツール呼び出しは組み立て終えてから`Done`の前に渡す
+- 思考のブロックを含む応答は、組み立てたブロックを並びごと`Replay`に入れる(ストリーミングしないときと同じ。
+  文字列の形は`transcript.md`「送った形のまま積む」)
+- `message_stop`か、終了理由(`message_delta`の`stop_reason`)が届いていれば完了とする。どちらも無いまま
+  本文が終わったら、途中で切れたとして通信の失敗にする。`message_start`・`ping`は読み飛ばす
+- 途中で届いた`error`は、`error.type`をエラー応答で返るときの状態コードに読み替えて分類する
+  (`rate_limit_error`は429、`overloaded_error`は529等)
+
 ## Gemini形式
 
 **Gemini形式**(`llm::providers::gemini`、Issue #81): Interactions API(`POST {base_url}/v1beta/interactions`)を
-ストリーミングせずに呼ぶ。旧来のAPIとされる`generateContent`ではなくこちらを使うのは、新しい機能が
-Interactions APIにだけ入るため。出典は公式ドキュメント(Interactions API reference・thinking・
-function calling・api-errors・models)。
+`stream: true`で呼び、SSEで届くイベントを受け取った順に読む(Issue #204。`gemini/stream.rs`)。旧来のAPIとされる
+`generateContent`ではなくこちらを使うのは、新しい機能がInteractions APIにだけ入るため。出典は公式ドキュメント
+(Interactions API reference・thinking・function calling・api-errors・models)。ストリーミングのイベントの形は、
+公式SDK(`@google/genai` 2.27.0)の型定義による。
 
 - ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る
 - **`store: false`を常に送る**。既定ではやり取りがGoogle側に保存される(有料で55日、無料で1日)。
@@ -217,7 +237,8 @@ function calling・api-errors・models)。
 - 最後の呼び出し(ツールの上限)は、ツールの定義を残して`generation_config.tool_choice: "none"`で禁じる
 - 出力の上限(`max_output_tokens`)は送らず、モデルの既定に任せる(必須ではないため)
 - 状態(`status`)の`completed`は通常の終了、`requires_action`はツール呼び出し、`incomplete`は長さによる
-  打ち切りにする。`failed`は、途中まで書いた本文を渡さずにエラーにする
+  打ち切りにする。`failed`はエラーにする(ストリーミングでは途中までの本文は画面に流れたあとになるが、
+  返信としては保存しない)
 - 方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、`failed`の応答の中に
   あっても、HTTPのエラー応答にあっても`LlmError::Refused`にする。それ以外の`failed`はプロバイダーの
   エラー(`LlmError::Http`)にする
@@ -225,3 +246,23 @@ function calling・api-errors・models)。
   `LlmError::ContextExceeded`にする
 - 能力の自動検出は`GET /v1beta/models/{id}`で行う。コンテキスト長は`inputTokenLimit`、思考は`thinking`で
   決め、ツールは常にありとする。画像入力の可否は情報に無いので決めない
+
+ストリーミングの読み方:
+
+- `Content-Type`が`text/event-stream`でなければ、ストリーミングしない応答として読む。応答タイムアウトと
+  大きさの上限はOpenAI互換と同じ
+- イベントは`data`のJSONの`event_type`で見分ける。出力のステップごとに`step.start`・`step.delta`・`step.stop`が
+  `index`付きで届き、`interaction.completed`の状態(`interaction.status`)が届いたら完了とする。状態の無いまま
+  本文が終わったら(`[DONE]`だけが届いた場合も)、途中で切れたとして通信の失敗にする。`interaction.created`・
+  `interaction.status_update`は読み飛ばす
+- ステップは`step.start`で届いたステップに、`index`の同じ差分を足して組み立てる。`text`は`content`に、
+  `thought_summary`は`summary`に足す(続く本文は1つの要素にまとめる。ストリーミングしないときは1つの要素で
+  返るため)。画像等の中身の差分は`content`に足す。`thought_signature`はそのステップの`signature`にする
+  (`function_call`のステップの署名もこれで届くものとする)。`arguments_delta`は連結しておき、`step.stop`で
+  `arguments`に読む(読めなければ応答の解釈の失敗。Anthropic形式と同じ理由)。根拠の注記等の知らない差分は
+  読み飛ばす
+- 本文と思考の要約は届いたらすぐ渡し、ツール呼び出しは組み立て終えてから`Done`の前に渡す。`thought`を含む
+  応答は、組み立てた出力のステップを並びごと`Replay`に入れる(ストリーミングしないときと同じ)
+- 途中で届いた`error`は、`failed`の応答の`errors`と同じに分類する
+- 実際のAPIでは確かめていない。差分から組み立て直したステップ(キーの順・要約のまとめ方・`function_call`の
+  署名の位置)を送り返して受け付けられるかは、上の確認(キーの順を逆にしても通った)からの推定
