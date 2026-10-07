@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use reqwest::StatusCode;
-use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use url::Url;
@@ -24,6 +23,8 @@ use url::Url;
 use crate::error::CoreError;
 use crate::llm::{DetectedCapabilities, LlmError};
 use crate::net::{self, ExternalUrl, HostClass};
+
+use super::Credentials;
 
 /// 検出1回の問い合わせごとの上限。手元のサーバーはすぐに答えるので短くてよく、
 /// ターンの開始([`crate::settings::Settings::snapshot_for_turn`])を長く待たせないため。
@@ -44,7 +45,7 @@ pub fn is_detectable(base_url: &str) -> bool {
 /// サーバーが知らないモデルは結果に含めない。
 pub async fn detect(
     base_url: &str,
-    api_key: &SecretString,
+    credentials: &Credentials,
     models: &[String],
 ) -> Result<Option<HashMap<String, DetectedCapabilities>>, CoreError> {
     if !is_detectable(base_url) {
@@ -54,7 +55,7 @@ pub async fn detect(
     let probe = Probe {
         client: net::hardened_client(&base_url, Some(DETECT_TIMEOUT))?,
         root: server_root(&base_url),
-        api_key,
+        credentials,
     };
 
     // llama.cppは起動時に読み込んだ1モデルだけを出すので、登録名によらず同じ能力になる。
@@ -102,7 +103,7 @@ fn server_root(base_url: &ExternalUrl) -> Url {
 struct Probe<'a> {
     client: reqwest::Client,
     root: Url,
-    api_key: &'a SecretString,
+    credentials: &'a Credentials,
 }
 
 impl Probe<'_> {
@@ -134,22 +135,22 @@ impl Probe<'_> {
         request: reqwest::RequestBuilder,
     ) -> Result<Option<T>, CoreError> {
         let response =
-            super::send_with_key(request, self.api_key, super::KeyHeader::Bearer).await?;
+            super::send_with_key(request, self.credentials, super::KeyHeader::Bearer, None).await?;
         if matches!(
             response.status(),
             StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
         ) {
             return Ok(None);
         }
-        let key = self.api_key.expose_secret();
+        let secrets = self.credentials.secrets();
         let response = super::reject_failure(response, |status, body| {
-            LlmError::from_status(status, body, key)
+            LlmError::from_status(status, body, secrets)
         })
         .await?;
         let body = response
             .bytes()
             .await
-            .map_err(|e| LlmError::from_transport(e, key))?;
+            .map_err(|e| LlmError::from_transport(e, secrets))?;
         Ok(serde_json::from_slice(&body).ok())
     }
 }
@@ -285,6 +286,7 @@ mod tests {
     use std::net::TcpListener;
 
     use super::*;
+    use secrecy::SecretString;
 
     /// 最小限のサーバーが返すもの。
     enum Reply {
@@ -325,8 +327,8 @@ mod tests {
         (format!("http://{addr}/v1"), rx)
     }
 
-    fn no_key() -> SecretString {
-        SecretString::from(String::new())
+    fn no_key() -> Credentials {
+        Credentials::key_only(SecretString::from(String::new()))
     }
 
     #[tokio::test]

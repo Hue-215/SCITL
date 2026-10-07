@@ -69,12 +69,14 @@ pub async fn add_provider(
     api_format: ApiFormat,
     base_url: String,
     api_key: Option<SecretString>,
+    headers: Vec<(String, SecretString)>,
 ) -> CommandResult<SettingsView> {
     let new = NewProvider {
         name,
         api_format,
         base_url,
         api_key,
+        headers,
     };
     with_settings(&state, move |s| s.add_provider(new)).await
 }

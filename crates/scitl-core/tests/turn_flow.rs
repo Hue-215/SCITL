@@ -9,9 +9,11 @@ use scitl_core::db::messages::{Chat, Kind, ReplyPart, Role};
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
+use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{
     AdapterIdentity, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    Replay, RequestPreview, ResponseEvent, SentAt, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
+    Replay, RequestPreview, ResponseEvent, SentAt, SentSecrets, SessionId, ToolArguments,
+    ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -267,6 +269,7 @@ impl LlmAdapter for ScriptedAdapter {
 
     async fn send(
         &self,
+        _session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         _reasoning_effort: Option<ReasoningEffort>,
@@ -356,6 +359,7 @@ impl LlmAdapter for StoppingAdapter<'_> {
 
     async fn send(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
@@ -368,7 +372,7 @@ impl LlmAdapter for StoppingAdapter<'_> {
             }
         }
         self.script
-            .send(messages, tools, reasoning_effort, on_event)
+            .send(session, messages, tools, reasoning_effort, on_event)
             .await
     }
 }
@@ -416,7 +420,7 @@ fn fails_to_authenticate() -> ScriptedAdapter {
     ScriptedAdapter::failing(LlmError::from_status(
         reqwest::StatusCode::UNAUTHORIZED,
         "invalid api key",
-        "",
+        &SentSecrets::default(),
     ))
 }
 
@@ -1569,6 +1573,7 @@ async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
 
         async fn send(
             &self,
+            _session: Option<&SessionId>,
             _messages: &[ChatMessage],
             _tools: ToolOffer<'_>,
             _reasoning_effort: Option<ReasoningEffort>,
@@ -1577,7 +1582,12 @@ async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
             on_event(ResponseEvent::TextDelta {
                 text: "途中まで".to_string(),
             });
-            Err(LlmError::from_status(reqwest::StatusCode::BAD_GATEWAY, "", "").into())
+            Err(LlmError::from_status(
+                reqwest::StatusCode::BAD_GATEWAY,
+                "",
+                &SentSecrets::default(),
+            )
+            .into())
         }
     }
 
@@ -4810,6 +4820,66 @@ async fn preview_reports_why_the_chat_cannot_be_used() {
     );
 }
 
+/// 送るたびに受け取ったセッションIDを覚える。応答は`script`に任せる。
+struct SessionRecorder {
+    script: ScriptedAdapter,
+    sessions: Mutex<Vec<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for SessionRecorder {
+    fn readiness(&self) -> Readiness {
+        self.script.readiness()
+    }
+
+    async fn send(
+        &self,
+        session: Option<&SessionId>,
+        messages: &[ChatMessage],
+        tools: ToolOffer<'_>,
+        reasoning_effort: Option<ReasoningEffort>,
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<Replay, CoreError> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .push(session.map(|s| s.as_str().to_string()));
+        self.script
+            .send(session, messages, tools, reasoning_effort, on_event)
+            .await
+    }
+}
+
+/// セッションIDは会話ごとに1つで、ターンをまたいでも変わらない。
+#[tokio::test]
+async fn each_conversation_sends_its_own_stable_session_id() {
+    let adapter = SessionRecorder {
+        script: ScriptedAdapter::repeating(text("ok")),
+        sessions: Mutex::new(Vec::new()),
+    };
+    let conn = db::open_in_memory().unwrap();
+    let first = Chat::Task(seed_task(&conn));
+    let second = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    for chat in [first, first, second, Chat::General] {
+        run_turn(db.clone(), &context(&adapter), chat, "hi".to_string())
+            .await
+            .unwrap();
+    }
+
+    let sessions: Vec<String> = adapter
+        .sessions
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(Option::unwrap)
+        .collect();
+    assert_eq!(sessions[0], sessions[1]);
+    assert_ne!(sessions[0], sessions[2]);
+    assert_ne!(sessions[0], sessions[3]);
+    assert_ne!(sessions[2], sessions[3]);
+}
+
 /// `responses`の数だけ接続を受け、順に本文を200で返す。受けたリクエストの本文を返す。
 fn spawn_messages_server(
     responses: Vec<&'static str>,
@@ -4869,7 +4939,7 @@ async fn anthropic_thinking_blocks_are_sent_back_unchanged_within_the_turn() {
     ]);
     let adapter = AnthropicAdapter::new(
         base_url,
-        secrecy::SecretString::from("sk-test".to_string()),
+        Credentials::key_only(secrecy::SecretString::from("sk-test".to_string())),
         "claude-test",
         std::time::Duration::from_secs(30),
     )

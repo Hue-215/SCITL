@@ -146,8 +146,8 @@ export default function Settings({ onClose }: SettingsProps) {
             ) : tab === 'providers' ? (
               <ProvidersTab
                 settings={settings}
-                onAddProvider={async (name, format, baseUrl, apiKey) => {
-                  await applyAdded(() => addProvider(name, format, baseUrl, apiKey))
+                onAddProvider={async (name, format, baseUrl, apiKey, headers) => {
+                  await applyAdded(() => addProvider(name, format, baseUrl, apiKey, headers))
                 }}
                 onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
                 onUpdateModels={runOrReportError}

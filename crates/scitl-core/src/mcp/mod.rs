@@ -503,39 +503,14 @@ pub fn validate_streamable_http_url(url: &str) -> Result<(), CoreError> {
     ExternalUrl::parse(url).map(drop).map_err(CoreError::Mcp)
 }
 
-/// リクエストの構造やMCPプロトコル自体が管理するヘッダー名。ユーザーが登録した
-/// カスタムヘッダーで上書きされてはならない(`authorization`はMCPサーバーの認証に
-/// 使う主用途のため許可する)。
-const RESERVED_HEADER_NAMES: &[&str] = &[
-    "host",
-    "content-length",
-    "content-type",
-    "transfer-encoding",
-    "connection",
-    "upgrade",
-    "te",
-    "trailer",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "accept",
-    "mcp-session-id",
-    "last-event-id",
-];
+/// MCPプロトコル自体が管理するヘッダー名。リクエストの構造を決める名前
+/// ([`crate::net::validate_custom_header_name`])に加えて断る。`authorization`はMCPサーバーの
+/// 認証に使う主用途のため許可する。
+const MCP_HEADER_NAMES: &[&str] = &["mcp-session-id", "last-event-id"];
 
 /// ヘッダー名を検証する(サーバー登録時、実際に接続する前のIPC層から呼ぶ)。
-/// CRLF・制御文字・空白等のトークン外文字は`HeaderName`のパース自体が拒否する
-/// (ヘッダーインジェクション対策)。加えて予約名を拒否する。
 pub fn validate_header_name(name: &str) -> Result<(), CoreError> {
-    reqwest::header::HeaderName::from_bytes(name.as_bytes())
-        .map_err(|e| CoreError::Mcp(format!("invalid header name '{name}': {e}")))?;
-    if RESERVED_HEADER_NAMES
-        .iter()
-        .any(|r| name.eq_ignore_ascii_case(r))
-    {
-        return Err(CoreError::Mcp(format!("header name '{name}' is reserved")));
-    }
-    Ok(())
+    crate::net::validate_custom_header_name(name, MCP_HEADER_NAMES).map_err(CoreError::Mcp)
 }
 
 /// ヘッダー値を検証する。載せられる値の規則は[`crate::net::secret_header_value`]が決める。

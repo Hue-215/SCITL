@@ -32,11 +32,14 @@ pub struct ProviderView {
     pub models: Vec<ModelView>,
     pub active_model: Option<String>,
     pub has_api_key: bool,
+    /// 登録したカスタムヘッダーの名前。値は秘密情報なので渡さない。
+    pub header_names: Vec<String>,
     /// モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
     pub can_detect_capabilities: bool,
     /// このプロバイダーをアクティブにしているが、組み立てられない理由。
     pub error: Option<String>,
-    /// このプロバイダーをアクティブにしているが、鍵を資格情報ストアから読めない理由。
+    /// このプロバイダーをアクティブにしているが、鍵(またはカスタムヘッダーの値)を
+    /// 資格情報ストアから読めない理由。
     /// `error`と違い、プロバイダーの設定ではなく資格情報ストアの側の問題で、ストアの
     /// ロックを解除すれば次の送信で直ることがある。
     pub key_error: Option<String>,
@@ -311,6 +314,7 @@ pub(super) fn build(
                     .collect(),
                 active_model: p.active_model.clone(),
                 has_api_key: p.key_ref.is_some(),
+                header_names: p.header_refs.iter().map(|r| r.name.clone()).collect(),
                 can_detect_capabilities: providers::can_detect_capabilities(p),
                 error: active_only(config, p, problems.active_provider_error),
                 key_error: active_only(config, p, problems.active_provider_key_error),
@@ -476,6 +480,7 @@ mod tests {
             models: vec![model.clone()],
             active_model: None,
             key_ref: None,
+            header_refs: Vec::new(),
         };
         let choice = ModelChoice::of(&provider, &model);
         assert_eq!(

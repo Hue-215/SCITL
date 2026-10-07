@@ -28,6 +28,7 @@ use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::providers::anthropic::AnthropicAdapter;
 use scitl_core::llm::providers::gemini::GeminiAdapter;
 use scitl_core::llm::providers::openai_compat::OpenAiCompatAdapter;
+use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{LlmAdapter, ResponseEvent, DEFAULT_CAPABILITIES};
 use scitl_core::mcp::{McpToolInfo, ToolCatalog};
 use scitl_core::orchestration::{
@@ -46,7 +47,7 @@ async fn main() {
 
     std::fs::create_dir_all(data.root()).unwrap();
     let db: SharedConnection = Arc::new(Mutex::new(db::open(data.database()).unwrap()));
-    let key = SecretString::from("relay-dummy-key".to_string());
+    let key = Credentials::key_only(SecretString::from("relay-dummy-key".to_string()));
     // LLM役は人間並みに遅いので長めに待つ。
     let timeout = Duration::from_secs(900);
     let dialect = std::env::var("RELAY_DIALECT").unwrap_or_else(|_| "openai".to_string());

@@ -1,6 +1,8 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
+use secrecy::SecretString;
+
 use super::*;
 use crate::llm::{InlineImage, SentAt, ToolSchema};
 
@@ -41,11 +43,15 @@ fn spawn_capturing(body: &'static str) -> (String, std::thread::JoinHandle<Strin
 
 async fn send_with_key(api_key: &str) -> String {
     let (base_url, handle) = spawn_capturing(MINIMAL_COMPLETION);
-    let adapter =
-        OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", TEST_TIMEOUT)
-            .unwrap();
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from(api_key)),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
     adapter
-        .send(&[], ToolOffer::NONE, None, &mut |_| {})
+        .send(None, &[], ToolOffer::NONE, None, &mut |_| {})
         .await
         .unwrap();
     handle.join().unwrap()
@@ -55,7 +61,7 @@ async fn send_with_key(api_key: &str) -> String {
 fn request_preview_is_the_body_send_would_post_without_the_key() {
     let adapter = OpenAiCompatAdapter::new(
         "http://127.0.0.1:1/v1",
-        SecretString::from("sk-preview-secret"),
+        Credentials::key_only(SecretString::from("sk-preview-secret")),
         "local-model",
         TEST_TIMEOUT,
     )
@@ -84,7 +90,7 @@ fn request_preview_is_the_body_send_would_post_without_the_key() {
 fn request_preview_abbreviates_only_images() {
     let adapter = OpenAiCompatAdapter::new(
         "http://127.0.0.1:1/v1",
-        SecretString::from(""),
+        Credentials::key_only(SecretString::from("")),
         "local-model",
         TEST_TIMEOUT,
     )
@@ -131,12 +137,14 @@ async fn api_key_is_sent_as_bearer() {
 async fn a_key_that_cannot_be_sent_in_a_header_is_refused_before_sending() {
     let adapter = OpenAiCompatAdapter::new(
         "http://127.0.0.1:1/v1",
-        SecretString::from("sk-a\nb"),
+        Credentials::key_only(SecretString::from("sk-a\nb")),
         "model",
         TEST_TIMEOUT,
     )
     .unwrap();
-    let result = adapter.send(&[], ToolOffer::NONE, None, &mut |_| {}).await;
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |_| {})
+        .await;
     assert!(
         matches!(&result, Err(CoreError::Llm(LlmError::InvalidRequest(detail)))
             if detail.as_str() == "the API key contains characters that cannot be sent in a header"),
@@ -149,11 +157,16 @@ async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
     let (base_url, handle) = spawn_capturing(
         r#"{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"update_task","arguments":"{\"title\": "}}]},"finish_reason":"tool_calls"}]}"#,
     );
-    let adapter =
-        OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT).unwrap();
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
     let mut events = Vec::new();
     adapter
-        .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
         .await
         .unwrap();
     handle.join().unwrap();
@@ -170,11 +183,16 @@ async fn a_content_filter_stop_is_a_refusal_without_passing_the_partial_reply() 
     let (base_url, handle) = spawn_capturing(
         r#"{"choices":[{"message":{"content":"partial"},"finish_reason":"content_filter"}]}"#,
     );
-    let adapter =
-        OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT).unwrap();
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
     let mut events = Vec::new();
     let result = adapter
-        .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
         .await;
     handle.join().unwrap();
 
@@ -190,14 +208,81 @@ async fn lists_models_under_the_base_url_sorted_without_duplicates() {
     let (base_url, handle) = spawn_capturing(
         r#"{"object":"list","data":[{"id":"gpt-b","object":"model"},{"id":"gpt-a"},{"id":"gpt-b"},{"id":" "}]}"#,
     );
-    let names = list_models(&base_url, &SecretString::from("sk-test"))
-        .await
-        .unwrap();
+    let names = list_models(
+        &base_url,
+        &Credentials::key_only(SecretString::from("sk-test")),
+    )
+    .await
+    .unwrap();
     let headers = handle.join().unwrap();
 
     assert_eq!(names, ["gpt-a", "gpt-b"]);
     assert!(headers.starts_with("get /v1/models http/1.1"));
     assert!(headers.contains("authorization: bearer sk-test"));
+}
+
+fn with_headers(headers: &[(&str, &str)]) -> Credentials {
+    Credentials::new(
+        SecretString::from("sk-test"),
+        headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), SecretString::from(*value)))
+            .collect(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn sends_custom_headers_with_the_session_id_in_place_of_the_placeholder() {
+    let (base_url, handle) = spawn_capturing(MINIMAL_COMPLETION);
+    let credentials = with_headers(&[
+        ("X-Opencode-Session", "{session_id}"),
+        ("X-Title", "SCITL {other}"),
+    ]);
+    let adapter = OpenAiCompatAdapter::new(base_url, credentials, "model", TEST_TIMEOUT).unwrap();
+    let session = SessionId::for_conversation("general").unwrap();
+    adapter
+        .send(Some(&session), &[], ToolOffer::NONE, None, &mut |_| {})
+        .await
+        .unwrap();
+    let headers = handle.join().unwrap();
+
+    assert!(
+        headers.contains(&format!("x-opencode-session: {}\r\n", session.as_str())),
+        "{headers}"
+    );
+    // 置き換えるのは`{session_id}`だけ。
+    assert!(headers.contains("x-title: scitl {other}\r\n"), "{headers}");
+    assert!(headers.contains("authorization: bearer sk-test"));
+}
+
+#[tokio::test]
+async fn listing_models_leaves_out_only_the_headers_that_need_a_session() {
+    let (base_url, handle) = spawn_capturing(r#"{"data":[]}"#);
+    let credentials = with_headers(&[("X-Opencode-Session", "{session_id}"), ("X-Title", "SCITL")]);
+    list_models(&base_url, &credentials).await.unwrap();
+    let headers = handle.join().unwrap();
+
+    assert!(!headers.contains("x-opencode-session"), "{headers}");
+    assert!(headers.contains("x-title: scitl\r\n"), "{headers}");
+}
+
+#[tokio::test]
+async fn an_echoed_custom_header_value_is_redacted_from_the_error() {
+    let (base_url, handle) = super::super::test_server::spawn_server(vec![(
+        400,
+        r#"{"error":{"message":"bad gateway token gw-secret-5678 for session"}}"#,
+    )]);
+    let credentials = with_headers(&[("cf-aig-authorization", "gw-secret-5678")]);
+    let adapter = OpenAiCompatAdapter::new(base_url, credentials, "model", TEST_TIMEOUT).unwrap();
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |_| {})
+        .await;
+    handle.join().unwrap();
+
+    let error = result.unwrap_err().to_string();
+    assert!(!error.contains("gw-secret-5678"), "{error}");
+    assert!(error.contains("[redacted]"), "{error}");
 }
 
 #[tokio::test]
@@ -211,7 +296,11 @@ async fn listing_models_reports_a_rejected_key_as_an_auth_error() {
             b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
         );
     });
-    let result = list_models(&format!("http://{addr}/v1"), &SecretString::from("")).await;
+    let result = list_models(
+        &format!("http://{addr}/v1"),
+        &Credentials::key_only(SecretString::from("")),
+    )
+    .await;
     server.join().unwrap();
 
     assert!(matches!(result, Err(CoreError::Llm(LlmError::Auth(_)))));
@@ -219,7 +308,12 @@ async fn listing_models_reports_a_rejected_key_as_an_auth_error() {
 
 /// 思考の強さを指定したリクエストが400で返った。
 fn bad_request(body: &str) -> LlmError {
-    http_error(reqwest::StatusCode::BAD_REQUEST, body, "", true)
+    http_error(
+        reqwest::StatusCode::BAD_REQUEST,
+        body,
+        &SentSecrets::default(),
+        true,
+    )
 }
 
 #[test]
@@ -294,11 +388,21 @@ fn tells_a_rejected_value_from_a_rejected_parameter() {
 fn reasoning_effort_in_the_body_alone_does_not_mean_it_was_rejected() {
     let body = r#"{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model.","param":"reasoning_effort","code":"unsupported_parameter"}}"#;
     assert!(matches!(
-        http_error(reqwest::StatusCode::BAD_REQUEST, body, "", false),
+        http_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+            &SentSecrets::default(),
+            false
+        ),
         LlmError::Http(_)
     ));
     assert!(matches!(
-        http_error(reqwest::StatusCode::TOO_MANY_REQUESTS, body, "", true),
+        http_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            body,
+            &SentSecrets::default(),
+            true
+        ),
         LlmError::RateLimit(_)
     ));
 }
@@ -312,7 +416,12 @@ fn other_error_bodies_fall_back_to_the_status_code() {
     ));
     assert!(matches!(bad_request("not json"), LlmError::Http(_)));
     assert!(matches!(
-        http_error(reqwest::StatusCode::UNAUTHORIZED, "", "", true),
+        http_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            "",
+            &SentSecrets::default(),
+            true
+        ),
         LlmError::Auth(_)
     ));
 }
@@ -320,9 +429,12 @@ fn other_error_bodies_fall_back_to_the_status_code() {
 #[test]
 fn context_exceeded_keeps_the_sanitized_body_as_detail() {
     let body = r#"{"error":{"code":"context_length_exceeded","message":"sk-secret"}}"#;
-    let LlmError::ContextExceeded(detail) =
-        http_error(reqwest::StatusCode::BAD_REQUEST, body, "sk-secret", true)
-    else {
+    let LlmError::ContextExceeded(detail) = http_error(
+        reqwest::StatusCode::BAD_REQUEST,
+        body,
+        &SentSecrets::new(["sk-secret"]),
+        true,
+    ) else {
         panic!("expected LlmError::ContextExceeded");
     };
     assert!(detail.as_str().starts_with("HTTP 400: "));

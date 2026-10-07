@@ -22,7 +22,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::attachments::Attachments;
-use crate::config::{self, Config, ToolConfig};
+use secrecy::SecretString;
+
+use crate::config::{self, Config, SecretRef, ToolConfig};
 use crate::db::messages::Chat;
 use crate::error::{CoreError, Result};
 use crate::i18n::Language;
@@ -420,6 +422,33 @@ fn delete_secret(key_ref: &str, what: &str) {
         crate::diagnostics::report(format_args!(
             "failed to delete {what} from secret store: {e}"
         ));
+    }
+}
+
+/// 秘密情報の値を保存し、`(name, key_ref)`の組に変換する。`key_ref`は`{prefix}:<ULID>`。
+/// 途中で失敗したらそれまでに保存した分を削除してからエラーを返す(孤児を残さない)。
+/// `what`は削除に失敗したときの診断に出す名前。
+fn store_secret_refs(
+    pairs: Vec<(String, SecretString)>,
+    prefix: &str,
+    what: &str,
+) -> Result<Vec<SecretRef>> {
+    let mut refs = Vec::with_capacity(pairs.len());
+    for (name, value) in pairs {
+        let key_ref = format!("{prefix}:{}", ulid::Ulid::new());
+        if let Err(e) = secrets::store(&key_ref, &value) {
+            delete_secret_refs(&refs, what);
+            return Err(e);
+        }
+        refs.push(SecretRef { name, key_ref });
+    }
+    Ok(refs)
+}
+
+/// 1件が失敗しても残りは試す。
+fn delete_secret_refs(refs: &[SecretRef], what: &str) {
+    for r in refs {
+        delete_secret(&r.key_ref, &format!("{what} '{}'", r.name));
     }
 }
 

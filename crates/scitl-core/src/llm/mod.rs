@@ -2,6 +2,7 @@ mod capabilities;
 mod error;
 mod prompt;
 pub mod providers;
+mod session;
 mod token_estimate;
 
 use std::sync::Arc;
@@ -13,11 +14,12 @@ pub use capabilities::{
     fallback_capabilities, resolve_capabilities, CapabilityLayer, DetectedCapabilities,
     DetectedCatalog, ModelCapabilities, DEFAULT_CAPABILITIES, FALLBACK_CONTEXT_LENGTH,
 };
-pub use error::{ErrorDetail, LlmError};
+pub use error::{ErrorDetail, LlmError, SentSecrets};
 pub use prompt::{
     user_message_format_note, AttachmentNote, OperationNote, PromptText, SentAt,
     DISCARDED_ATTEMPT_SOURCE,
 };
+pub use session::SessionId;
 pub use token_estimate::{estimate_message, estimate_tools};
 
 use crate::config::{ApiFormat, ReasoningEffort};
@@ -375,8 +377,12 @@ pub trait LlmAdapter: Send + Sync {
     /// - `Done`は成功したときに最後に1回だけ渡す(画面はこれをラウンドの区切りに使う)
     ///
     /// 応答のうち、同じターンの次の呼び出しで送り返しが要るものは[`Replay`]で返す。
+    ///
+    /// `session`は会話ごとのID。カスタムヘッダーの`{session_id}`を置き換える。`None`(OSの乱数を
+    /// 読めなかった)なら、`{session_id}`を含むヘッダーを送らない。
     async fn send(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,

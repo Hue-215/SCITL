@@ -3690,6 +3690,7 @@ dependencies = [
  "chrono",
  "dbus-secret-service-keyring-store",
  "dirs",
+ "getrandom 0.3.4",
  "icu_normalizer",
  "image",
  "keyring-core",

@@ -127,7 +127,41 @@ pub fn hardened_client(
         .map_err(|e| CoreError::Config(format!("failed to build HTTP client: {e}")))
 }
 
-/// 秘密情報(APIキー・MCPサーバーのヘッダーの値)を、送るヘッダーの値にする。載せられない
+/// リクエストの構造を決めるヘッダー名。利用者が登録するカスタムヘッダー(MCPサーバー・
+/// プロバイダー)で上書きさせない。
+const STRUCTURAL_HEADER_NAMES: &[&str] = &[
+    "host",
+    "content-length",
+    "content-type",
+    "transfer-encoding",
+    "connection",
+    "upgrade",
+    "te",
+    "trailer",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "accept",
+];
+
+/// 利用者が登録するカスタムヘッダーの名前を検証する(登録時、実際に送る前に呼ぶ)。
+/// CRLF・制御文字・空白等のトークン外文字は`HeaderName`のパース自体が拒否する
+/// (ヘッダーインジェクション対策)。加えて、リクエストの構造を決める名前と、経路ごとの
+/// 予約名`reserved`(小文字)を断る。
+pub fn validate_custom_header_name(name: &str, reserved: &[&str]) -> Result<(), String> {
+    reqwest::header::HeaderName::from_bytes(name.as_bytes())
+        .map_err(|e| format!("invalid header name '{name}': {e}"))?;
+    if STRUCTURAL_HEADER_NAMES
+        .iter()
+        .chain(reserved)
+        .any(|r| name.eq_ignore_ascii_case(r))
+    {
+        return Err(format!("header name '{name}' is reserved"));
+    }
+    Ok(())
+}
+
+/// 秘密情報(APIキー・カスタムヘッダーの値)を、送るヘッダーの値にする。載せられない
 /// 値なら`None`。`HeaderValue`は改行等の制御文字を拒むが0x80以上のバイトは通すので、
 /// 全角スペース等の混入をそのまま送らないようASCIIに限る。値はデバッグ表示に出ないよう
 /// `sensitive`にする。
