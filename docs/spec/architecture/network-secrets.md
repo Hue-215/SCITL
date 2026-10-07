@@ -16,6 +16,10 @@ HTTPクライアント(`reqwest`)は既定のままだと以下が「意図し�
   `rustls-platform-verifier`(reqwestの`rustls` feature)経由でOSの証明書ストアを使う
   (TLS実装自体はrustlsのままで、証明書の検証元だけをOS標準に揃える)
 
+あわせて、reqwestは既定でUser-Agentを付けないので、`SCITL/<版>`を名乗らせる。自前の
+User-Agentを求める通信先がある(OpenCode Go等)。送るのは名前と版だけで、利用者や環境の
+情報は載せない。
+
 **この設定は`scitl-core/src/net.rs`の`hardened_client`1関数に集約し、LLMプロバイダー
 (`llm/providers/*.rs`。チャット・モデル一覧の取得・能力の検出)と外部ツールサーバー
 (`mcp/http.rs`)を含む全HTTP経路が必ずここを通る**(1つの機能に関わる判断を1箇所に閉じる。

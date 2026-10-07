@@ -9,6 +9,10 @@ use crate::error::CoreError;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// 全経路で名乗るUser-Agent。reqwestは既定でUser-Agentを付けないため、明示しないと
+/// 名乗らずに通信する(自前のUser-Agentを求める通信先がある)。
+const USER_AGENT: &str = concat!("SCITL/", env!("CARGO_PKG_VERSION"));
+
 /// ホストの分類。平文httpを許すかどうかは、この分類だけで決める。宛先を絞る仕組みを足しても、
 /// 平文httpの可否はそちらと別にこの分類で判定する(両方を満たしたときだけ通す)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +117,8 @@ pub fn hardened_client(
         // リダイレクトは同一ホストも含めて一律に追わない。緩めると、登録先のLANサーバーが
         // 公開ホストへ302を返すだけで通信先が広がる。
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(CONNECT_TIMEOUT);
+        .connect_timeout(CONNECT_TIMEOUT)
+        .user_agent(USER_AGENT);
     if let Some(timeout) = request_timeout {
         builder = builder.timeout(timeout);
     }
@@ -287,6 +292,28 @@ mod tests {
         // ここでは追わずに302がそのまま返ってくることを確認する
         let response = client.get(&url).send().await.unwrap();
         assert_eq!(response.status().as_u16(), 302);
+    }
+
+    #[tokio::test]
+    async fn sends_scitl_user_agent() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let n = stream.read(&mut buf).unwrap();
+            let _ = stream.write_all(NO_CONTENT.as_bytes());
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        let client = hardened_client(
+            &ExternalUrl::parse(&url).unwrap(),
+            Some(Duration::from_secs(5)),
+        )
+        .unwrap();
+        client.get(&url).send().await.unwrap();
+        let request = server.join().unwrap().to_ascii_lowercase();
+        let expected = format!("user-agent: scitl/{}\r\n", env!("CARGO_PKG_VERSION"));
+        assert!(request.contains(&expected), "{request}");
     }
 
     #[tokio::test]
