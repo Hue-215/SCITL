@@ -46,15 +46,16 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
   「Android SDK Command-line Tools」も入れる
 - 環境変数: `ANDROID_HOME`(SDK)、`NDK_HOME`(`$ANDROID_HOME/ndk/<版>`)、`JAVA_HOME`(Android Studio同梱の
   JDK。Linuxなら`<Android Studio>/jbr`、Windowsなら`C:\Program Files\Android\Android Studio\jbr`)。
-  JDKはGradle(8.14.3)が動く版にする。Gradle 8.14はJava 24までで、Android Studioの設定でGradleのJDKに
-  新しい版を選んでいても、tauri-cliは`JAVA_HOME`を使う
+  JDKはGradle(8.14.3)が動く版にする。Gradle 8.14はJava 24までで、Java 25だとビルドスクリプトの段階で
+  `Unsupported class file major version 69`で止まる。Android Studioの設定でGradleのJDKに新しい版を
+  選んでいても、tauri-cliは`JAVA_HOME`を使う
 - Rustのターゲット: `aarch64-linux-android`(実機)、`x86_64-linux-android`(多くのエミュレーター)。
   `rustup target add aarch64-linux-android x86_64-linux-android`で入れる。
   ABIを指定せずにAPKを作ると、`armv7-linux-androideabi`・`i686-linux-android`も要る
   (`gen/android`の既定は4つのABIをまとめたAPK)
 - C/C++のコードを含むクレート(`rusqlite`の`bundled`のSQLite、rustlsの暗号の実装の`aws-lc-sys`)は、
   NDKのclangでビルドされる。`aws-lc-sys`はCコンパイラだけでビルドでき、cmakeは要らない
-  (aws-lc-sys 0.45のソースと、x86_64向けのビルドで確認、2026-10)
+  (aws-lc-sys 0.45・NDK 30.0で、x86_64向けのAPKのビルドで確認、2026-10)
 
 エミュレーターで起動する(`crates/scitl-tauri`で、エミュレーターを先に立ち上げておく):
 
