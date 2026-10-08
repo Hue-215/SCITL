@@ -1,4 +1,4 @@
-// 標準エラーへは`diagnostics`からだけ書く。
+// 標準エラー(Androidではlogcat)へは`diagnostics`からだけ書く。
 #![deny(clippy::print_stderr)]
 
 pub mod attachments;
