@@ -29,32 +29,41 @@ pub(super) enum NewDestination<'a> {
     },
 }
 
+/// ダイアログに出すURLの長さの上限(超えた分は「…」)。送り先のホストは別の行に全体を出す。
+const MAX_URL_CHARS: usize = 300;
+
 impl NewDestination<'_> {
-    /// 名前とURLは、見えない文字を`\uXXXX`の形にして見せる(除くと隠されていたことも消える。
-    /// `architecture/sanitize.md`の実行記録の行と同じ)。URLは検証で正規化した形を渡す。
+    /// 差し込む値はどれも1行に収め、見えない文字(改行を含む)を`\uXXXX`の形にして見せる
+    /// (除くと隠されていたことも消える。`architecture/sanitize.md`「ネイティブのダイアログ」)。
+    /// URLは入力のままではなく、送るときと同じ解釈で正規化した形を出す(入力のままだと、解釈で
+    /// 落ちる改行で文を差し込める)。送り先のホスト(国際化ドメインはpunycodeの形)は別の行に出す。
     pub(super) fn dialog(&self, lang: Language) -> DestinationDialog {
         let message = match self {
             Self::Provider {
                 name,
                 api_format,
                 base_url,
-            } => i18n::format(
-                lang,
-                "destination_dialog.provider_message",
-                &[
-                    ("name", &text::reveal_invisible(name)),
-                    ("format", i18n::text(lang, format_key(*api_format))),
-                    ("url", &text::reveal_invisible(base_url)),
-                ],
-            ),
-            Self::McpServer { name, url } => i18n::format(
-                lang,
-                "destination_dialog.mcp_message",
-                &[
-                    ("name", &text::reveal_invisible(name)),
-                    ("url", &text::reveal_invisible(url)),
-                ],
-            ),
+            } => {
+                let (url, host) = shown_url(base_url);
+                i18n::format(
+                    lang,
+                    "destination_dialog.provider_message",
+                    &[
+                        ("name", &one_line(name)),
+                        ("format", i18n::text(lang, format_key(*api_format))),
+                        ("host", &host),
+                        ("url", &url),
+                    ],
+                )
+            }
+            Self::McpServer { name, url } => {
+                let (url, host) = shown_url(url);
+                i18n::format(
+                    lang,
+                    "destination_dialog.mcp_message",
+                    &[("name", &one_line(name)), ("host", &host), ("url", &url)],
+                )
+            }
         };
         DestinationDialog {
             title: i18n::text(lang, "destination_dialog.title").to_string(),
@@ -62,6 +71,26 @@ impl NewDestination<'_> {
             confirm_label: i18n::text(lang, "destination_dialog.confirm").to_string(),
             cancel_label: i18n::text(lang, "common.cancel").to_string(),
         }
+    }
+}
+
+/// 1行の値として見せる形。改行も`\u000A`にする。
+fn one_line(s: &str) -> String {
+    text::reveal_invisible(s).replace('\n', "\\u000A")
+}
+
+/// 正規化したURL(長さの上限で切る)と、送り先のホスト。検証を通ったURLだけが来るので、読めない
+/// ことは無いが、読めなければ入力を1行にして出す。
+fn shown_url(raw: &str) -> (String, String) {
+    match reqwest::Url::parse(raw) {
+        Ok(url) => (
+            one_line(&text::ellipsize(url.as_str(), MAX_URL_CHARS)),
+            one_line(url.host_str().unwrap_or_default()),
+        ),
+        Err(_) => (
+            one_line(&text::ellipsize(raw, MAX_URL_CHARS)),
+            String::new(),
+        ),
     }
 }
 
@@ -104,5 +133,44 @@ mod tests {
         assert!(dialog.message.contains("http://127.0.0.1:8000/mcp"));
         assert!(!dialog.message.contains('{'), "{}", dialog.message);
         assert_ne!(dialog.confirm_label, "destination_dialog.confirm");
+    }
+
+    /// 解釈で落ちる改行・紛らわしい書き方は、送るときと同じ解釈の形で見せる。
+    #[test]
+    fn the_url_is_shown_as_it_will_be_used_and_on_one_line() {
+        let dialog = |url| {
+            NewDestination::McpServer { name: "x", url }
+                .dialog(Language::En)
+                .message
+        };
+        let template_lines = dialog("https://example.com/").lines().count();
+
+        let injected = dialog(
+            "https://evil.example/x\n\nThis server was checked.\n\nhttps://api.openai.com/v1",
+        );
+        assert_eq!(injected.lines().count(), template_lines, "{injected}");
+        assert!(injected.contains("evil.example"));
+
+        let disguised = dialog("https://evil.com\\@api.anthropic.com/");
+        assert!(
+            disguised.contains("https://evil.com/@api.anthropic.com/"),
+            "{disguised}"
+        );
+        let homograph = dialog("https://\u{0430}pi.openai.com/");
+        assert!(homograph.contains("xn--pi-6kc.openai.com"), "{homograph}");
+    }
+
+    /// 承認の判定はボタンの文言で行われる(`tauri-plugin-dialog`)ので、どの言語でも取りやめの
+    /// 文言と同じにしない。
+    #[test]
+    fn the_confirm_and_cancel_labels_differ_in_every_language() {
+        for lang in Language::ALL {
+            let dialog = NewDestination::McpServer {
+                name: "x",
+                url: "https://example.com/",
+            }
+            .dialog(lang);
+            assert_ne!(dialog.confirm_label, dialog.cancel_label, "{lang:?}");
+        }
     }
 }

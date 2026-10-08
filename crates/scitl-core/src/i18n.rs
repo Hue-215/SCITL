@@ -262,9 +262,6 @@ mod tests {
         assert!(placeholders("{a b}").is_err());
     }
 
-    /// 画面と写し合う値を、ts-rsの生成物と同じ置き場所(`frontend/src/bindings/`)へ書き出す。
-    /// 画面はこれを読み、自分では書かない。CIは生成し直した結果とコミット済みの生成物が一致する
-    /// ことを確かめるので、Rust側だけを変えても止まる。ts-rsは型しか書き出せないので、ここで書く。
     #[test]
     fn format_replaces_named_values_in_one_pass() {
         // 言語ファイルに無いキーは、キーそのものを文言として扱う。
@@ -278,6 +275,9 @@ mod tests {
         assert_eq!(format("{a}{a}", &[("a", "x")]), "xx");
     }
 
+    /// 画面と写し合う値を、ts-rsの生成物と同じ置き場所(`frontend/src/bindings/`)へ書き出す。
+    /// 画面はこれを読み、自分では書かない。CIは生成し直した結果とコミット済みの生成物が一致する
+    /// ことを確かめるので、Rust側だけを変えても止まる。ts-rsは型しか書き出せないので、ここで書く。
     #[test]
     fn export_shared_constants() {
         let dir = std::env::var("TS_RS_EXPORT_DIR").expect("set in .cargo/config.toml");
