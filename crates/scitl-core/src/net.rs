@@ -1,6 +1,7 @@
 //! 外部通信の経路(LLMプロバイダー、MCP streamable_http)に共通するURL検証と、HTTP
 //! クライアントのハードニング。どの経路もここを通る。
 
+use std::net::Ipv6Addr;
 use std::time::Duration;
 
 use url::Url;
@@ -21,7 +22,8 @@ pub enum HostClass {
     /// (`::ffff:127.0.0.0/104`)を含む。
     Loopback,
     /// プライベートIPアドレスの**リテラル**(RFC1918: 10/8・172.16/12・192.168/16、
-    /// IPv6 ULA: fc00::/7)。RFC1918のIPv4射影IPv6を含む。ホスト名は対象外(下記コメント参照)。
+    /// IPv6 ULA: fc00::/7。IPv6版のメタデータエンドポイントを除く)。RFC1918のIPv4射影IPv6を含む。
+    /// ホスト名は対象外(下記コメント参照)。
     PrivateLiteral,
     /// 上記のいずれでもない(パブリックIP、ホスト名)。
     Other,
@@ -32,6 +34,8 @@ pub enum HostClass {
 ///
 /// IPv4のリンクローカル(169.254.0.0/16)は`PrivateLiteral`に含めない。169.254.169.254は
 /// クラウドのメタデータエンドポイントで、平文httpしか話さない代表的なSSRFの標的のため。
+/// IPv6 ULAの中にあるIPv6版のメタデータエンドポイント([`IPV6_METADATA_RANGES`])も同じ理由で
+/// `PrivateLiteral`に含めない。
 ///
 /// IPv4射影IPv6(`::ffff:a.b.c.d`)は、射影元のIPv4アドレスとして分類する。接続できた
 /// 場合の宛先は射影元のIPv4アドレスと同じなので、書き方によって分類が変わらないようにする
@@ -57,9 +61,28 @@ pub fn classify_host(url: &Url) -> HostClass {
         Some(url::Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost") => {
             HostClass::Loopback
         }
+        Some(url::Host::Ipv6(ip)) if is_ipv6_metadata(ip) => HostClass::Other,
         Some(url::Host::Ipv6(ip)) if ip.is_unique_local() => HostClass::PrivateLiteral,
         _ => HostClass::Other,
     }
+}
+
+/// IPv6 ULA(fc00::/7)の中にある、クラウドのIPv6版メタデータエンドポイントの範囲
+/// (アドレスとプレフィックス長)。
+/// - AWS: `fd00:ec2::254`。`fd00:ec2::/32`はAWSがインスタンス向けのサービス(DNS・NTP等)に
+///   使う範囲なので、まとめて外す
+/// - Google Cloud: `fd20:ce::254`。周りのアドレスはVPCのULAに割り当てられうるので、
+///   このアドレスだけを外す
+const IPV6_METADATA_RANGES: &[(Ipv6Addr, u32)] = &[
+    (Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0), 32),
+    (Ipv6Addr::new(0xfd20, 0x00ce, 0, 0, 0, 0, 0, 0x0254), 128),
+];
+
+fn is_ipv6_metadata(ip: Ipv6Addr) -> bool {
+    IPV6_METADATA_RANGES.iter().any(|&(prefix, len)| {
+        let mask = u128::MAX << (128 - len);
+        u128::from(ip) & mask == u128::from(prefix) & mask
+    })
 }
 
 /// スキーム・ホスト・query/fragment/userinfoの検証。LLMプロバイダーのbase_url、
@@ -277,6 +300,19 @@ mod tests {
         // リンクローカル全体を対象から外す。
         assert!(validate_external_url(&Url::parse("http://169.254.169.254/").unwrap()).is_err());
         assert!(validate_external_url(&Url::parse("http://169.254.1.1/").unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_http_for_ipv6_metadata_endpoints() {
+        // IPv6版のIMDSはULA(fc00::/7)の中にあるが、IPv4のリンクローカルと同じく対象外。
+        let rejected = |url: &str| validate_external_url(&Url::parse(url).unwrap()).is_err();
+        assert!(rejected("http://[fd00:ec2::254]/"));
+        assert!(rejected("http://[fd00:ec2::253]/"));
+        assert!(rejected("http://[fd20:ce::254]/"));
+        // 外す範囲の外のULAは、従来どおり許す
+        assert!(!rejected("http://[fd00:ec3::254]/"));
+        assert!(!rejected("http://[fd20:ce::253]/"));
+        assert!(!rejected("http://[fd12:3456::1]/"));
     }
 
     #[test]
