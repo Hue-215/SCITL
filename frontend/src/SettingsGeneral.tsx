@@ -11,7 +11,8 @@ type GeneralUpdate = Parameters<typeof updateGeneralSettings>[0]
 
 interface GeneralTabProps {
   settings: SettingsView
-  onSave: (update: GeneralUpdate) => void
+  // 欄の誤りは理由の文言で返る(数値の欄が欄の下に出す)。
+  onSave: (update: GeneralUpdate) => Promise<string[]>
   onSaveLanguage: (language: Language) => void
 }
 
@@ -63,7 +64,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     systemPrompt: systemPrompt || null,
     taskChatSystemPrompt: taskChatSystemPrompt || null,
     taskOpeningMessage: taskOpeningMessage || null,
-    responseTimeoutSecs: general.response_timeout_secs,
+    responseTimeoutSecs: general.response_timeout_secs?.toString() ?? '',
   })
 
   return (
@@ -96,7 +97,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
         label={t('settings.general.system_prompt_label')}
         value={systemPrompt}
         onChange={setSystemPrompt}
-        onBlur={() => onSave(current())}
+        onBlur={() => void onSave(current())}
       />
 
       <NumberField
@@ -115,13 +116,13 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
             label={t('settings.general.task_chat_prompt_label')}
             value={taskChatSystemPrompt}
             onChange={setTaskChatSystemPrompt}
-            onBlur={() => onSave(current())}
+            onBlur={() => void onSave(current())}
           />
           <PromptField
             label={t('settings.general.task_opening_label')}
             value={taskOpeningMessage}
             onChange={setTaskOpeningMessage}
-            onBlur={() => onSave(current())}
+            onBlur={() => void onSave(current())}
           />
         </div>
       </details>

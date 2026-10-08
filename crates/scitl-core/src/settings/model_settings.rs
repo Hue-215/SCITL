@@ -228,16 +228,15 @@ impl Settings {
         draft.commit()
     }
 
-    /// `None`(空欄)は手動設定を外す。下の層と同じ値の扱いは[`Self::set_model_capability`]と同じ。
+    /// 数値の欄の文字列のまま受け取る。空欄は手動設定を外す。下の層と同じ値の扱いは
+    /// [`Self::set_model_capability`]と同じ。
     pub fn set_model_context_length(
         &self,
         provider_id: &str,
         model: &str,
-        context_length: Option<u32>,
+        context_length: &str,
     ) -> Result<SettingsView> {
-        if context_length == Some(0) {
-            return Err(invalid("context length must be 1 or greater"));
-        }
+        let context_length = input::positive_integer(context_length, u32::MAX)?;
         let fallback = self
             .fallback_capabilities(provider_id, model)
             .context_length;

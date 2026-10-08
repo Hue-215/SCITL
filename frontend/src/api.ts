@@ -1,6 +1,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
+  BaseUrlHint,
   PickingLimits,
   AvailableModel,
   Capability,
@@ -9,6 +10,7 @@ import type {
   DataDirError,
   DropNotice,
   ExportSummary,
+  FormOutcome,
   Language,
   LinkInspection,
   McpServerAdded,
@@ -195,32 +197,40 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
 }
 
 // プロンプトはどれも`string | null`で並ぶため、取り違えないようオブジェクト引数にする。
+// 数値の欄(`responseTimeoutSecs`等)は入力欄の文字列のまま送る。空欄は「未設定」で、Rust側の
+// 既定値に戻る。解釈と検証はRust側が行い、欄の誤りは`rejected`で返る。
 export function updateGeneralSettings(args: {
   systemPrompt: string | null
   taskChatSystemPrompt: string | null
   taskOpeningMessage: string | null
-  responseTimeoutSecs: number | null
-}): Promise<SettingsView> {
+  responseTimeoutSecs: string
+}): Promise<FormOutcome<SettingsView>> {
   return invoke('update_general_settings', args)
 }
 
-// ツール呼び出しの上限。nullは「未設定」で、Rust側の既定値に戻る。updateGeneralSettingsと
-// 同じ理由(number | nullが並ぶ)でオブジェクト引数にする。
+// ツール呼び出しの上限。数値の欄の扱いはupdateGeneralSettingsと同じ。引数の取り違えを
+// 避けるためオブジェクト引数にする。
 export function updateToolSettings(args: {
-  maxRoundsPerTurn: number | null
-  totalTimeoutSecs: number | null
-}): Promise<SettingsView> {
+  maxRoundsPerTurn: string
+  totalTimeoutSecs: string
+}): Promise<FormOutcome<SettingsView>> {
   return invoke('update_tool_settings', args)
 }
 
+// `headers`はヘッダーの欄の文字列のまま送る(1行1件の解釈はRust側)。
 export function addProvider(
   name: string,
   apiFormat: ApiFormat,
   baseUrl: string,
   apiKey: string | null,
-  headers: [string, string][],
-): Promise<SettingsView> {
+  headers: string,
+): Promise<FormOutcome<SettingsView>> {
   return invoke('add_provider', { name, apiFormat, baseUrl, apiKey, headers })
+}
+
+// 入力中のベースURLへのヒント(版のパスまで書いた等)。判定はRust側(アダプタの知識)。
+export function getBaseUrlHint(apiFormat: ApiFormat, baseUrl: string): Promise<BaseUrlHint | null> {
+  return invoke('get_base_url_hint', { apiFormat, baseUrl })
 }
 
 export function deleteProvider(providerId: string): Promise<SettingsView> {
@@ -259,11 +269,12 @@ export function setModelCapability(
   return invoke('set_model_capability', { providerId, model, capability, supported })
 }
 
+// `contextLength`は入力欄の文字列のまま送る(空欄は手動設定を外す)。
 export function setModelContextLength(
   providerId: string,
   model: string,
-  contextLength: number | null,
-): Promise<SettingsView> {
+  contextLength: string,
+): Promise<FormOutcome<SettingsView>> {
   return invoke('set_model_context_length', { providerId, model, contextLength })
 }
 
@@ -293,7 +304,10 @@ export function setReasoningEffort(
 }
 
 // 登録したら続けてツール一覧を取得する。取得に失敗しても登録は残り、理由が添えられる。
-export function addMcpServer(name: string, endpoint: NewMcpEndpoint): Promise<McpServerAdded> {
+export function addMcpServer(
+  name: string,
+  endpoint: NewMcpEndpoint,
+): Promise<FormOutcome<McpServerAdded>> {
   return invoke('add_mcp_server', { name, endpoint })
 }
 

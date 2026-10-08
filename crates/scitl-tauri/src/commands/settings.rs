@@ -6,8 +6,10 @@ use tauri::State;
 
 use scitl_core::config::{ApiFormat, Capability, ReasoningEffort};
 use scitl_core::i18n::Language;
+use scitl_core::llm::providers::{self, BaseUrlHint};
 use scitl_core::settings::{
-    AvailableModel, ChatModelsView, GeneralUpdate, NewProvider, SettingsView,
+    AvailableModel, ChatModelsView, FormOutcome, GeneralUpdate, HeaderInput, NewProvider,
+    SettingsView,
 };
 
 use super::{with_settings, CommandResult};
@@ -19,21 +21,25 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     state.settings.view()
 }
 
+/// 数値の欄は文字列のまま受け取る(解釈はcore)。欄の誤りは`FormOutcome::Rejected`で返す。
 #[tauri::command]
 pub async fn update_general_settings(
     state: State<'_, AppState>,
     system_prompt: Option<String>,
     task_chat_system_prompt: Option<String>,
     task_opening_message: Option<String>,
-    response_timeout_secs: Option<u64>,
-) -> CommandResult<SettingsView> {
+    response_timeout_secs: String,
+) -> CommandResult<FormOutcome<SettingsView>> {
     let update = GeneralUpdate {
         system_prompt,
         task_chat_system_prompt,
         task_opening_message,
         response_timeout_secs,
     };
-    with_settings(&state, move |s| s.update_general(update)).await
+    with_settings(&state, move |s| {
+        FormOutcome::from_result(s.update_general(update))
+    })
+    .await
 }
 
 /// 画面が起動時に1度だけ読む表示言語。`get_settings`と同じく、I/Oを伴わないので同期のまま。
@@ -50,18 +56,20 @@ pub async fn update_language(
     with_settings(&state, move |s| s.update_language(language)).await
 }
 
+/// 数値の欄は文字列のまま受け取る(`update_general_settings`と同じ)。
 #[tauri::command]
 pub async fn update_tool_settings(
     state: State<'_, AppState>,
-    max_rounds_per_turn: Option<u32>,
-    total_timeout_secs: Option<u64>,
-) -> CommandResult<SettingsView> {
+    max_rounds_per_turn: String,
+    total_timeout_secs: String,
+) -> CommandResult<FormOutcome<SettingsView>> {
     with_settings(&state, move |s| {
-        s.update_tools(max_rounds_per_turn, total_timeout_secs)
+        FormOutcome::from_result(s.update_tools(&max_rounds_per_turn, &total_timeout_secs))
     })
     .await
 }
 
+/// ヘッダーの欄は文字列のまま、秘密情報として受け取る(分けるのはcore)。
 #[tauri::command]
 pub async fn add_provider(
     state: State<'_, AppState>,
@@ -69,8 +77,8 @@ pub async fn add_provider(
     api_format: ApiFormat,
     base_url: String,
     api_key: Option<SecretString>,
-    headers: Vec<(String, SecretString)>,
-) -> CommandResult<SettingsView> {
+    headers: HeaderInput,
+) -> CommandResult<FormOutcome<SettingsView>> {
     let new = NewProvider {
         name,
         api_format,
@@ -78,7 +86,17 @@ pub async fn add_provider(
         api_key,
         headers,
     };
-    with_settings(&state, move |s| s.add_provider(new)).await
+    with_settings(&state, move |s| {
+        FormOutcome::from_result(s.add_provider(new))
+    })
+    .await
+}
+
+/// 登録フォームで入力中のベースURLへのヒント。判定はアダプタの知識なのでcoreが持つ
+/// (`llm::providers::base_url_hint`)。I/Oを伴わないので同期のまま。
+#[tauri::command]
+pub fn get_base_url_hint(api_format: ApiFormat, base_url: String) -> Option<BaseUrlHint> {
+    providers::base_url_hint(api_format, &base_url)
 }
 
 #[tauri::command]
@@ -141,10 +159,10 @@ pub async fn set_model_context_length(
     state: State<'_, AppState>,
     provider_id: String,
     model: String,
-    context_length: Option<u32>,
-) -> CommandResult<SettingsView> {
+    context_length: String,
+) -> CommandResult<FormOutcome<SettingsView>> {
     with_settings(&state, move |s| {
-        s.set_model_context_length(&provider_id, &model, context_length)
+        FormOutcome::from_result(s.set_model_context_length(&provider_id, &model, &context_length))
     })
     .await
 }

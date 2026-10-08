@@ -222,11 +222,12 @@ export default function App() {
     )
   }
 
-  // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。
+  // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。空白だけで
+  // 確定させないのは入力の補助で、受け付けるかと前後の空白を削るかはRust側が決める。
   const submitEdit = async (message: MessageView) => {
     const messageId = message.id
-    const text = editDraft.trim()
-    if ((!text && message.attachments.length === 0) || disableActions) return
+    const text = editDraft
+    if ((text.trim() === '' && message.attachments.length === 0) || disableActions) return
     const target = chat
     setEditingId(null)
     stick()

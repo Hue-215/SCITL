@@ -97,6 +97,7 @@ pub fn run() {
             commands::settings::update_language,
             commands::settings::update_tool_settings,
             commands::settings::add_provider,
+            commands::settings::get_base_url_hint,
             commands::settings::delete_provider,
             commands::settings::add_models,
             commands::settings::remove_model,

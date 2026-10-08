@@ -46,6 +46,10 @@ pub enum CoreError {
     /// 設定・登録の操作が規則に反する(空の名前、未登録のID、重複、範囲外の値)。
     #[error("invalid settings: {0}")]
     InvalidSettings(String),
+    /// 画面の入力を受け付けなかった。画面が欄の近くに表示言語で出す理由で、種類のまま返す
+    /// (`settings::FormOutcome`)。
+    #[error("input rejected: {0}")]
+    Rejected(crate::settings::Rejections),
     #[error("MCP server error: {0}")]
     Mcp(String),
     /// リンクを開けない(許可されていない・解釈できないURL、OS側の起動失敗)。

@@ -33,7 +33,7 @@ fn add_local_provider(settings: &Settings, name: &str) -> SettingsView {
             api_format: ApiFormat::OpenAiCompat,
             base_url: "http://localhost:1234/v1".to_string(),
             api_key: None,
-            headers: Vec::new(),
+            headers: HeaderInput::default(),
         })
         .unwrap()
 }
@@ -42,7 +42,7 @@ fn add_local_provider(settings: &Settings, name: &str) -> SettingsView {
 fn http_endpoint() -> NewMcpEndpoint {
     NewMcpEndpoint::StreamableHttp {
         url: "http://127.0.0.1:8000/mcp".to_string(),
-        headers: Vec::new(),
+        headers: HeaderInput::default(),
     }
 }
 
@@ -57,7 +57,7 @@ async fn adding_keeps_the_registration_when_the_following_query_fails() {
             api_format: ApiFormat::OpenAiCompat,
             base_url: "http://127.0.0.1:1/v1".to_string(),
             api_key: None,
-            headers: Vec::new(),
+            headers: HeaderInput::default(),
         })
         .unwrap()
         .providers[0]
@@ -75,7 +75,7 @@ async fn adding_keeps_the_registration_when_the_following_query_fails() {
             "tools".to_string(),
             NewMcpEndpoint::StreamableHttp {
                 url: "http://127.0.0.1:1/mcp".to_string(),
-                headers: Vec::new(),
+                headers: HeaderInput::default(),
             },
         )
         .await
@@ -122,7 +122,7 @@ fn add_provider_refuses_a_key_that_is_not_visible_ascii() {
             api_format: ApiFormat::OpenAiCompat,
             base_url: "http://localhost:1234/v1".to_string(),
             api_key: Some(SecretString::from(key)),
-            headers: Vec::new(),
+            headers: HeaderInput::default(),
         });
         assert!(
             matches!(result, Err(CoreError::ProviderConfig(_))),
@@ -164,7 +164,7 @@ fn a_settings_change_reloads_an_unreadable_key() {
     add_local_provider(&settings, "local");
     make_key_unavailable(&settings);
 
-    settings.update_tools(Some(3), None).unwrap();
+    settings.update_tools("3", "").unwrap();
     ready_adapter(&settings);
 }
 
@@ -426,24 +426,35 @@ fn removing_active_model_falls_back_to_first() {
 #[test]
 fn rejects_limits_and_timeouts_out_of_range() {
     let (settings, _, _dir) = temp_settings();
-    for secs in [0, input::MAX_TIMEOUT_SECS + 1, u64::MAX] {
-        assert!(settings
-            .update_general(general_update(None, Some(secs)))
-            .is_err());
-        assert!(settings.update_tools(None, Some(secs)).is_err());
+    for secs in ["0", &(input::MAX_TIMEOUT_SECS + 1).to_string(), "x"] {
+        assert!(settings.update_general(general_update(None, secs)).is_err());
+        assert!(settings.update_tools("", secs).is_err());
     }
-    for rounds in [0, input::MAX_ROUNDS_PER_TURN + 1] {
-        assert!(settings.update_tools(Some(rounds), None).is_err());
+    for rounds in [
+        "0".to_string(),
+        (input::MAX_ROUNDS_PER_TURN + 1).to_string(),
+    ] {
+        assert!(settings.update_tools(&rounds, "").is_err());
     }
     settings
-        .update_general(general_update(None, Some(input::MAX_TIMEOUT_SECS)))
+        .update_general(general_update(None, &input::MAX_TIMEOUT_SECS.to_string()))
         .unwrap();
-    settings
+    let view = settings
         .update_tools(
-            Some(input::MAX_ROUNDS_PER_TURN),
-            Some(input::MAX_TIMEOUT_SECS),
+            &input::MAX_ROUNDS_PER_TURN.to_string(),
+            &input::MAX_TIMEOUT_SECS.to_string(),
         )
         .unwrap();
+    assert_eq!(
+        view.tools.max_rounds_per_turn,
+        Some(input::MAX_ROUNDS_PER_TURN)
+    );
+    // 断った理由は、画面が欄の近くに出す種類で返す。
+    let err = settings.update_tools("0", "").unwrap_err();
+    assert!(matches!(
+        err,
+        CoreError::Rejected(Rejections(reasons)) if reasons == [InputRejection::NotPositiveInteger]
+    ));
 }
 
 #[test]
@@ -455,7 +466,7 @@ fn provider_name_must_be_visible_and_unique_and_the_url_is_trimmed() {
             api_format: ApiFormat::OpenAiCompat,
             base_url: base_url.to_string(),
             api_key: None,
-            headers: Vec::new(),
+            headers: HeaderInput::default(),
         })
     };
     let view = add(" Local ", " http://localhost:1234/v1 \n").unwrap();
@@ -489,7 +500,7 @@ fn model_name_must_be_visible() {
 #[test]
 fn mcp_endpoint_refuses_repeated_or_malformed_secret_names() {
     let (settings, _, _dir) = temp_settings();
-    let pairs = |names: &[&str]| -> Vec<(String, SecretString)> {
+    let pairs = |names: &[&str]| -> HeaderInput {
         names
             .iter()
             .map(|n| (n.to_string(), SecretString::from("v")))
@@ -508,15 +519,12 @@ fn mcp_endpoint_refuses_repeated_or_malformed_secret_names() {
     assert!(settings.view().mcp_servers.is_empty());
 }
 
-fn general_update(
-    system_prompt: Option<&str>,
-    response_timeout_secs: Option<u64>,
-) -> GeneralUpdate {
+fn general_update(system_prompt: Option<&str>, response_timeout_secs: &str) -> GeneralUpdate {
     GeneralUpdate {
         system_prompt: system_prompt.map(str::to_string),
         task_chat_system_prompt: None,
         task_opening_message: None,
-        response_timeout_secs,
+        response_timeout_secs: response_timeout_secs.to_string(),
     }
 }
 
@@ -527,7 +535,7 @@ fn blank_prompts_and_prompts_equal_to_their_defaults_are_saved_as_unset() {
         .update_general(GeneralUpdate {
             task_chat_system_prompt: Some(default_task_chat_prompt(Language::DEFAULT).to_string()),
             task_opening_message: Some(default_opening_message(Language::DEFAULT).to_string()),
-            ..general_update(None, None)
+            ..general_update(None, "")
         })
         .unwrap();
     assert!(view.general.task_chat_system_prompt.is_none());
@@ -537,7 +545,7 @@ fn blank_prompts_and_prompts_equal_to_their_defaults_are_saved_as_unset() {
         .update_general(GeneralUpdate {
             task_chat_system_prompt: Some("custom".to_string()),
             task_opening_message: Some(" \n".to_string()),
-            ..general_update(Some("  "), None)
+            ..general_update(Some("  "), "")
         })
         .unwrap();
     assert_eq!(
@@ -556,7 +564,7 @@ fn language_is_saved_apart_from_the_other_general_settings() {
     settings.update_language(Language::En).unwrap();
     // プロンプト欄を保存しても、表示言語は変えない。
     let view = settings
-        .update_general(general_update(Some("prompt"), None))
+        .update_general(general_update(Some("prompt"), ""))
         .unwrap();
     assert_eq!(view.general.language, Language::En);
     assert_eq!(Settings::load(path).display_language(), Language::En);
@@ -585,23 +593,66 @@ fn failed_save_leaves_current_settings_unchanged() {
     // 保存先をディレクトリにして書き込みを失敗させる。
     std::fs::create_dir_all(&path).unwrap();
     assert!(settings
-        .update_general(general_update(Some("prompt"), None))
+        .update_general(general_update(Some("prompt"), ""))
         .is_err());
     assert!(settings.current().config.general.system_prompt.is_none());
 }
 
-/// フォームが送る`[名前, 値]`の組のまま、値を`SecretString`として受け取れる。
+/// フォームが送るヘッダーの欄の文字列を、`SecretString`のまま受け取ってから分ける。
 #[test]
-fn new_mcp_endpoint_reads_secret_values_from_ipc_pairs() {
+fn new_mcp_endpoint_reads_the_header_field_as_a_secret() {
     let endpoint: NewMcpEndpoint = serde_json::from_value(serde_json::json!({
         "transport": "streamable_http",
         "url": "https://example.com/mcp",
-        "headers": [["Authorization", "Bearer token"]],
+        "headers": "Authorization=Bearer token\n",
     }))
     .unwrap();
     let NewMcpEndpoint::StreamableHttp { headers, .. } = endpoint;
+    assert!(matches!(headers, HeaderInput::Lines(_)));
+    let headers = headers.into_pairs().unwrap();
     assert_eq!(headers[0].0, "Authorization");
     assert_eq!(headers[0].1.expose_secret(), "Bearer token");
+}
+
+/// 識別子・URL・ヘッダーの欄の誤りは、画面が欄の近くに出す種類でまとめて返す。
+#[test]
+fn mcp_form_mistakes_are_returned_together_as_kinds() {
+    let (settings, _, _dir) = temp_settings();
+    let form = |url: &str, headers: &str| NewMcpEndpoint::StreamableHttp {
+        url: url.to_string(),
+        headers: HeaderInput::Lines(SecretString::from(headers.to_string())),
+    };
+    let reasons = |result: Result<(String, SettingsView)>| match result {
+        Err(CoreError::Rejected(Rejections(reasons))) => reasons,
+        other => panic!("expected a rejection, got {:?}", other.map(|(id, _)| id)),
+    };
+
+    assert_eq!(
+        reasons(settings.register_mcp_server(" ", form(" ", "A=1\nsecret"))),
+        [
+            InputRejection::McpServerNameRequired,
+            InputRejection::UrlRequired,
+            InputRejection::HeaderLineInvalid { line_no: 2 },
+        ]
+    );
+    for name in ["a__b", "_a", "a-b", "abcdefghijklmnopq"] {
+        assert_eq!(
+            reasons(settings.register_mcp_server(name, form("http://127.0.0.1:8000/mcp", ""))),
+            [InputRejection::McpServerNameInvalid {
+                max_chars: crate::config::MCP_SERVER_NAME_MAX_CHARS
+            }],
+            "{name:?}"
+        );
+    }
+    settings
+        .register_mcp_server("tools", http_endpoint())
+        .unwrap();
+    assert_eq!(
+        reasons(settings.register_mcp_server(" tools ", http_endpoint())),
+        [InputRejection::McpServerNameTaken {
+            name: "tools".to_string()
+        }]
+    );
 }
 
 /// 子プロセスとして起動する方式(stdio)の登録は、画面からもCLIからも受け付けない。
@@ -612,18 +663,6 @@ fn new_mcp_endpoint_refuses_stdio() {
         "command": "npx",
     }));
     assert!(endpoint.is_err());
-}
-
-#[test]
-fn mcp_server_name_must_be_unique() {
-    let (settings, _, _dir) = temp_settings();
-    settings
-        .register_mcp_server("tools", http_endpoint())
-        .unwrap();
-    let err = settings
-        .register_mcp_server("tools", http_endpoint())
-        .unwrap_err();
-    assert!(matches!(err, CoreError::InvalidSettings(_)));
 }
 
 /// 試すのをやめたサーバーも、有効にし直せば次のターンでまた試す。無効にしただけでは数え直さない。
@@ -738,7 +777,7 @@ fn unreadable_config_file_starts_empty_and_refuses_to_save() {
         Err(TurnFailure::SettingsUnreadable)
     ));
     let err = settings
-        .update_general(general_update(Some("prompt"), None))
+        .update_general(general_update(Some("prompt"), ""))
         .unwrap_err();
     assert!(matches!(err, CoreError::InvalidSettings(_)));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "providers = [");
@@ -778,7 +817,7 @@ name = "m"
     ));
 
     // アダプタの入力を変えない変更は通る。
-    settings.update_tools(Some(3), None).unwrap();
+    settings.update_tools("3", "").unwrap();
     // 使えるプロバイダーを足しても、アクティブは壊れたままなので状態は変わらない。
     add_local_provider(&settings, "Local");
     assert!(settings.view().providers[0].error.is_some());
@@ -809,7 +848,7 @@ fn adapter_is_rebuilt_only_when_its_inputs_change() {
         .set_model_capability(&id, "m1", Capability::Image, true)
         .unwrap();
     settings
-        .set_model_context_length(&id, "m1", Some(4096))
+        .set_model_context_length(&id, "m1", "4096")
         .unwrap();
     assert!(Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
 }
@@ -840,14 +879,10 @@ fn capability_overrides_are_kept_only_while_they_differ_from_the_default() {
     settings
         .set_model_capability(&id, "m", Capability::Thinking, !fallback.thinking)
         .unwrap();
-    let view = settings
-        .set_model_context_length(&id, "m", Some(8192))
-        .unwrap();
+    let view = settings.set_model_context_length(&id, "m", "8192").unwrap();
     let model = &view.providers[0].models[0];
     assert_eq!(model.capabilities.context_length, 8192);
-    assert!(settings
-        .set_model_context_length(&id, "m", Some(0))
-        .is_err());
+    assert!(settings.set_model_context_length(&id, "m", "0").is_err());
 
     let saved = &config::load(&path).unwrap().providers[0].models[0];
     assert_eq!(saved.overrides.thinking, Some(!fallback.thinking));
@@ -893,7 +928,7 @@ fn detected_capabilities_are_the_layer_below_manual_settings() {
 
     // 検出した値と同じにしたら手動設定は残らず、既定値と同じでも違えば残る。
     let view = settings
-        .set_model_context_length(&id, "m", Some(16_384))
+        .set_model_context_length(&id, "m", "16384")
         .unwrap();
     assert!(!view.providers[0].models[0].overridden);
     let view = settings

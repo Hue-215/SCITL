@@ -62,6 +62,20 @@ impl GeminiAdapter {
 const INTERACTIONS: &str = "v1beta/interactions";
 const MODELS: &str = "v1beta/models";
 
+/// 公式のベースURL(登録フォームの初期値)。
+pub(super) const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com";
+
+/// `base_url`のパスが、アダプタの足す版のパスまで含んでいるか(`/v1beta`まで書いた、
+/// OpenAI互換の窓口`/v1beta/openai`を書いた等)。含めると存在しないパスに送ることになる。
+pub(super) fn includes_version_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    ["/v1", "/v1beta"].iter().any(|version| {
+        ["", "/interactions", "/openai"]
+            .iter()
+            .any(|rest| path.ends_with(&format!("{version}{rest}")))
+    })
+}
+
 /// 鍵とカスタムヘッダーを付けて送る。`session`は[`super::send_with_key`]と同じ。
 async fn send(
     request: reqwest::RequestBuilder,

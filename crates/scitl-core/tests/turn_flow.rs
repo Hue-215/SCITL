@@ -4016,6 +4016,41 @@ fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
         .collect()
 }
 
+/// 送信・編集の本文の前後の空白は、どの経路から来ても削って保存する。
+#[tokio::test]
+async fn sent_and_edited_text_is_saved_without_surrounding_whitespace() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["応答A"])),
+        Chat::Task(task_id),
+        " \n元の質問\n\n ".to_string(),
+    )
+    .await
+    .unwrap();
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        assert_eq!(text_of(&messages[0]), "元の質問");
+        messages[0].id
+    };
+
+    edit_user_message(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["応答B"])),
+        Chat::Task(task_id),
+        user_message_id,
+        "\u{3000}編集後\n 2行目 \n".to_string(),
+    )
+    .await
+    .unwrap();
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    assert_eq!(text_of(&messages[0]), "編集後\n 2行目");
+}
+
 /// タスクを作ったら、続けて聞き取りを始める。作った知らせは聞き取りより先に届く。
 async fn create_task_opening(db: &SharedConnection, ctx: &TurnContext<'_>) -> i64 {
     let created = std::sync::OnceLock::new();

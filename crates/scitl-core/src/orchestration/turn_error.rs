@@ -186,6 +186,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Internal(_) => unexpected("internal"),
         // 設定操作でだけ起きる。ターンの経路には来ない。
         CoreError::InvalidSettings(_) => unexpected("invalid_settings"),
+        // 画面の入力を受け取る設定操作でだけ起きる。ターンの経路には来ない。
+        CoreError::Rejected(_) => unexpected("rejected"),
         // リンクを開く操作でだけ起きる。ターンの経路には来ない。
         CoreError::Link(_) => unexpected("link"),
         // エクスポートでだけ起きる。ターンの経路には来ない。

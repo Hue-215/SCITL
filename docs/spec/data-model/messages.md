@@ -7,7 +7,7 @@
 | id | INTEGER | PRIMARY KEY |
 | task_id | INTEGER | NULL可。NULL=総合チャット |
 | role | TEXT | NOT NULL, `CHECK (role IN ('user','assistant','tool','error'))` |
-| content | TEXT | NOT NULL。ターンの返信の行(アシスタント発言)は空文字で、本文は`parts`に持つ |
+| content | TEXT | NOT NULL。ターンの返信の行(アシスタント発言)は空文字で、本文は`parts`に持つ。ユーザー発言は前後の空白を落として保存する(送信・編集のどの経路でも同じ。`orchestration::turn`) |
 | kind | TEXT | NOT NULL, `CHECK (kind IN ('normal','tool_execution'))` |
 | source | TEXT | 経路の印。応答生成以外の経路での操作の記録にだけ付ける(下記「ターン境界」)。それ以外はNULL |
 | error_kind | TEXT | NULL可。`role='error'`のときのみ非NULLで、安定した種別コードを持つ(例: `no_model`, `context_exceeded`) |

@@ -112,14 +112,16 @@ export default function ChatCompose({
     }
   })
 
-  // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
+  // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。空白だけの
+  // 本文で送信を押せなくするのは入力の補助で、受け付けるかはRust側が決める。
   const canSend = !disabled && !staged.busy && (draft.trim() !== '' || staged.ready)
 
+  // 本文は打ったまま送る(前後の空白を削るかはRust側が決める)。
   const send = () => {
     if (!canSend) return
     const attachments = staged.take()
     setDraft('')
-    onSend({ text: draft.trim(), attachments, restore: () => staged.restore(attachments) })
+    onSend({ text: draft, attachments, restore: () => staged.restore(attachments) })
   }
 
   return (

@@ -16,6 +16,7 @@ mod input;
 mod mcp_settings;
 mod model_settings;
 mod provider_settings;
+mod rejection;
 pub mod view;
 
 use std::path::PathBuf;
@@ -38,8 +39,10 @@ use crate::orchestration::{
 };
 use crate::secrets;
 
+pub use input::HeaderInput;
 pub use mcp_settings::{McpServerAdded, NewMcpEndpoint};
 pub use provider_settings::NewProvider;
+pub use rejection::{FormOutcome, InputRejection, Rejections};
 pub use view::{AvailableModel, ChatModelsView, SettingsView};
 
 /// 設定画面「一般」タブの入力(表示言語を除く)。プロンプトは`Option<String>`が並ぶので、
@@ -48,7 +51,8 @@ pub struct GeneralUpdate {
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
     pub task_opening_message: Option<String>,
-    pub response_timeout_secs: Option<u64>,
+    /// 数値の欄の文字列のまま受け取る(空欄は未設定。解釈は`input::positive_integer`)。
+    pub response_timeout_secs: String,
 }
 
 #[derive(Clone)]
@@ -289,11 +293,8 @@ impl Settings {
     /// (`orchestration::stored_prompt`)。表示言語は[`Self::update_language`]が別に持つので、
     /// ここでは変えない。
     pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
-        let response_timeout_secs = input::bounded(
-            update.response_timeout_secs,
-            "response timeout (seconds)",
-            input::MAX_TIMEOUT_SECS,
-        )?;
+        let response_timeout_secs =
+            input::positive_integer(&update.response_timeout_secs, input::MAX_TIMEOUT_SECS)?;
         let mut draft = self.edit();
         let general = &mut draft.config.general;
         general.system_prompt = stored_prompt(update.system_prompt, None);
@@ -321,22 +322,16 @@ impl Settings {
         draft.commit()
     }
 
-    /// 空欄(`None`)は「未設定」として既定値に戻す。
+    /// 数値の欄の文字列のまま受け取る。空欄は「未設定」として既定値に戻す。
     pub fn update_tools(
         &self,
-        max_rounds_per_turn: Option<u32>,
-        total_timeout_secs: Option<u64>,
+        max_rounds_per_turn: &str,
+        total_timeout_secs: &str,
     ) -> Result<SettingsView> {
-        let max_rounds_per_turn = input::bounded(
-            max_rounds_per_turn,
-            "max rounds per turn",
-            input::MAX_ROUNDS_PER_TURN,
-        )?;
-        let total_timeout_secs = input::bounded(
-            total_timeout_secs,
-            "tool timeout (seconds)",
-            input::MAX_TIMEOUT_SECS,
-        )?;
+        let max_rounds_per_turn =
+            input::positive_integer(max_rounds_per_turn, input::MAX_ROUNDS_PER_TURN)?;
+        let total_timeout_secs =
+            input::positive_integer(total_timeout_secs, input::MAX_TIMEOUT_SECS)?;
         let mut draft = self.edit();
         draft.config.tools = ToolConfig {
             max_rounds_per_turn,

@@ -93,13 +93,14 @@ async fn save_user_message(
 }
 
 /// ユーザー発言の行を書く。会話が存在するかは呼び出し側が確かめる([`require_chat`])。
+/// 本文の前後の空白は削る(送信・編集のどの経路から来ても、同じ入力なら同じ本文を保存する)。
 pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> Result<i64> {
     messages::insert_message(
         conn,
         NewMessage {
             chat,
             role: Role::User,
-            content: text,
+            content: text.trim(),
             kind: Kind::Normal,
             origin: Origin::User,
             error_kind: None,

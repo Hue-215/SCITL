@@ -163,7 +163,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 - ベースURLは`/v1`を含まない(`https://api.anthropic.com`)。鍵は`x-api-key`、版は
   `anthropic-version: 2023-06-01`で送る。設定画面は、`/v1`まで書いたURLにヒントを出す(登録は止めない。
-  判定はアダプタ側に置く。今は画面だけが持っており、Issue #488で移す)
+  判定はアダプタ側に置き(`providers::base_url_hint`)、画面は結果の種類から文言を引く。Gemini形式の
+  `/v1beta`も同じ)。登録フォームの既定のベースURLも方言ごとにアダプタが持ち、設定画面の状態で渡す
 - `max_tokens`は必須なので、アダプタが固定の値を送る。設定で変えられるようにするのはIssue #271
 - 思考の強さは`thinking: {type: "adaptive", display: "summarized"}`と`output_config.effort`で渡す。
   `display`を指定しないと思考の中身が空で返り、画面に出せない。「オフ」は`thinking: {type: "disabled"}`

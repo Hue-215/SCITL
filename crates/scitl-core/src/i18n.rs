@@ -252,11 +252,15 @@ mod tests {
              export const MAX_MEMORY_CHARS = {};\n\
              \n\
              /** 持てるメモリの上限件数(`db::memories::MAX_MEMORIES`)。 */\n\
-             export const MAX_MEMORIES = {};\n",
+             export const MAX_MEMORIES = {};\n\
+             \n\
+             /** タスクのタイトルの上限文字数(`db::tasks::MAX_TITLE_CHARS`)。 */\n\
+             export const MAX_TITLE_CHARS = {};\n",
             quoted(Language::DEFAULT.code()),
             quoted(crate::orchestration::turn_error::MESSAGE_KEY_PREFIX),
             crate::db::memories::MAX_MEMORY_CHARS,
             crate::db::memories::MAX_MEMORIES,
+            crate::db::tasks::MAX_TITLE_CHARS,
         );
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("SharedConstants.ts"), body).unwrap();

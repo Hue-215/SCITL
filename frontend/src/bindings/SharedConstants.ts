@@ -12,3 +12,6 @@ export const MAX_MEMORY_CHARS = 200;
 
 /** 持てるメモリの上限件数(`db::memories::MAX_MEMORIES`)。 */
 export const MAX_MEMORIES = 100;
+
+/** タスクのタイトルの上限文字数(`db::tasks::MAX_TITLE_CHARS`)。 */
+export const MAX_TITLE_CHARS = 40;
