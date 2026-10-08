@@ -246,9 +246,17 @@ mod tests {
              export const DEFAULT_LANGUAGE: Language = {};\n\
              \n\
              /** エラー発言の文言のキーの前置き(`orchestration::turn_error::MESSAGE_KEY_PREFIX`)。 */\n\
-             export const TURN_ERROR_KEY_PREFIX = {};\n",
+             export const TURN_ERROR_KEY_PREFIX = {};\n\
+             \n\
+             /** メモリ1件の本文の上限文字数(`db::memories::MAX_MEMORY_CHARS`)。 */\n\
+             export const MAX_MEMORY_CHARS = {};\n\
+             \n\
+             /** 持てるメモリの上限件数(`db::memories::MAX_MEMORIES`)。 */\n\
+             export const MAX_MEMORIES = {};\n",
             quoted(Language::DEFAULT.code()),
             quoted(crate::orchestration::turn_error::MESSAGE_KEY_PREFIX),
+            crate::db::memories::MAX_MEMORY_CHARS,
+            crate::db::memories::MAX_MEMORIES,
         );
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("SharedConstants.ts"), body).unwrap();

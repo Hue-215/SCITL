@@ -1265,6 +1265,69 @@ option {
   justify-content: flex-end;
 }
 
+/* 設定のメモリタブ(SettingsMemory.tsx)。一覧は1つの枠の中に行を並べ、行の間を線で区切る。 */
+.memory-list-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.memory-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.memory-item + .memory-item {
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.memory-item.editing {
+  background-color: var(--color-surface);
+}
+
+.memory-item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.memory-item-row > .button-row {
+  flex-shrink: 0;
+}
+
+.memory-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.memory-item-content {
+  overflow-wrap: anywhere;
+}
+
+.memory-actions {
+  justify-content: flex-end;
+}
+
+.memory-empty {
+  padding: var(--space-4);
+  border: var(--border-width) dashed var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-text-secondary);
+}
+
 /* 節の始まりを示す仕切り線。線とその下の余白は、区切られる側のブロックが上端に持つ
    (独立した<hr>にすると、線の持ち主と余白の持ち主が分かれ、入れ物のgapと二重になる)。
    中の間隔は節ごとに違うため、ここでは持たない(ui.md「スタイルシートの2層構成」

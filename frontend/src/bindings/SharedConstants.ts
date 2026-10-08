@@ -6,3 +6,9 @@ export const DEFAULT_LANGUAGE: Language = "ja";
 
 /** エラー発言の文言のキーの前置き(`orchestration::turn_error::MESSAGE_KEY_PREFIX`)。 */
 export const TURN_ERROR_KEY_PREFIX = "turn_error.";
+
+/** メモリ1件の本文の上限文字数(`db::memories::MAX_MEMORY_CHARS`)。 */
+export const MAX_MEMORY_CHARS = 200;
+
+/** 持てるメモリの上限件数(`db::memories::MAX_MEMORIES`)。 */
+export const MAX_MEMORIES = 100;

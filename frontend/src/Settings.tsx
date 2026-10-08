@@ -18,6 +18,7 @@ import { isolated, t } from './i18n'
 import { without } from './record'
 import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
+import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
 
 interface SettingsProps {
@@ -27,6 +28,7 @@ interface SettingsProps {
 // 左のレールに並べるタブ(並び順のまま)。
 const TABS = [
   { id: 'general', label: 'settings.nav.general' },
+  { id: 'memory', label: 'settings.nav.memory' },
   { id: 'providers', label: 'settings.nav.provider' },
   { id: 'mcp', label: 'settings.nav.tools' },
 ] as const
@@ -143,6 +145,8 @@ export default function Settings({ onClose }: SettingsProps) {
                 onSave={(update) => runOrReportError(() => updateGeneralSettings(update))}
                 onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
               />
+            ) : tab === 'memory' ? (
+              <MemoryTab />
             ) : tab === 'providers' ? (
               <ProvidersTab
                 settings={settings}
