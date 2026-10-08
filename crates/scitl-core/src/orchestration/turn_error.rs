@@ -173,6 +173,7 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Migration(_) => unexpected("migration"),
         CoreError::TaskNotFound(_) => unexpected("task_not_found"),
         CoreError::TaskStepNotFound(_) => unexpected("task_step_not_found"),
+        CoreError::MemoryNotFound(_) => unexpected("memory_not_found"),
         CoreError::MessageNotFound(_) => unexpected("message_not_found"),
         CoreError::AttachmentNotFound(_) => unexpected("attachment_not_found"),
         // 実体の置き場所のパスを含みうるので、文言は載せない。
