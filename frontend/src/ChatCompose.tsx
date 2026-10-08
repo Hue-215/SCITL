@@ -110,6 +110,8 @@ export default function ChatCompose({
   const canAdd = !disabled
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
   const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)
+  // OSの選択画面を開いている間。
+  const [picking, setPicking] = useState(false)
 
   // 受け取ったファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addReceived`は描くたびに
   // 変わる)。応答待ちになった描画のすぐ後から受け付けないよう、画面に出す前に差し替える。選択画面・
@@ -145,16 +147,20 @@ export default function ChatCompose({
         >
           <button
             type="button"
-            disabled={!canAdd}
+            disabled={!canAdd || picking}
             title={t('attachment.add_tooltip')}
-            // 選ぶのも読むのもRust側(OSの選択画面)。画面はファイルに触れない。
+            // 選ぶのも読むのもRust側(OSの選択画面)。画面はファイルに触れない。開いている間は
+            // 押せなくする(2つ開くと、後に閉じた方の受け取りが先の分を置き換える)。
             onClick={() => {
-              void pickAttachments().then(
-                (files) => {
-                  if (files) receive(files)
-                },
-                (e: unknown) => onError(failureText(e)),
-              )
+              setPicking(true)
+              void pickAttachments()
+                .then(
+                  (files) => {
+                    if (files) receive(files)
+                  },
+                  (e: unknown) => onError(failureText(e)),
+                )
+                .finally(() => setPicking(false))
             }}
           >
             {t('attachment.add_button')}

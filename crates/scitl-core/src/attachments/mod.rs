@@ -57,17 +57,26 @@ pub fn delivery_without_model(kind: AttachmentKind) -> Option<Delivery> {
 }
 
 /// クリップボードの画像(RGBAの画素の並び)を、受け取ったファイル(PNG)にする。名前は、画像を
-/// 貼り付けたときにブラウザが付けるものに揃える。画素の数が正規化で扱える上限を超えるものは、
-/// 符号化せずに断る。
-pub fn clipboard_image(width: u32, height: u32, rgba: Vec<u8>) -> Result<ReceivedFile> {
+/// 貼り付けたときにブラウザが付けるものに揃える。預けるときの正規化と同じ長辺まで先に縮めてから
+/// 符号化する(写真を等倍のPNGにすると、画像の大きさの上限に当たりやすいため)。画素の数が正規化で
+/// 扱える上限を超えるものは、写しを作る前に断る。
+pub fn clipboard_image(width: u32, height: u32, rgba: &[u8]) -> Result<ReceivedFile> {
     if u64::from(width) * u64::from(height) > normalize::MAX_PIXELS {
         return Err(CoreError::Attachment(
             "the image on the clipboard is too large".to_string(),
         ));
     }
-    let image = image::RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
         CoreError::Attachment("the image on the clipboard is malformed".to_string())
     })?;
+    let mut image = image::DynamicImage::ImageRgba8(image);
+    if width.max(height) > normalize::MAX_LONG_EDGE {
+        image = image.resize(
+            normalize::MAX_LONG_EDGE,
+            normalize::MAX_LONG_EDGE,
+            image::imageops::FilterType::Triangle,
+        );
+    }
     let mut bytes = Vec::new();
     image
         .write_to(
@@ -118,11 +127,12 @@ impl Attachments {
             .received
             .take(batch_id, index)
             .ok_or_else(|| CoreError::Attachment("received file not found".to_string()))?;
-        if !self.staged.has_room() {
+        // 読む前に席を取る。並べて受け取っても、上限を超える分は読まない。
+        let Some(seat) = self.staged.reserve() else {
             return Ok(staging::too_many());
-        }
+        };
         match received::read(file)? {
-            Ok((name, bytes)) => self.stage(name, bytes),
+            Ok((name, bytes)) => self.staged.stage_seated(name, bytes, seat),
             Err(reason) => Ok(StageOutcome::Rejected { reason }),
         }
     }
@@ -329,7 +339,7 @@ mod tests {
     fn a_clipboard_image_is_staged_as_a_png_image() {
         let t = TempStore::new();
         let attachments = Attachments::new(t.store.clone());
-        let file = clipboard_image(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        let file = clipboard_image(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
         let notice = attachments.receive(vec![file]).unwrap();
         assert_eq!(notice.names, ["image.png"]);
         let StageOutcome::Staged { kind, .. } =
@@ -338,7 +348,16 @@ mod tests {
             panic!("expected staged");
         };
         assert_eq!(kind, AttachmentKind::Image);
-        assert!(clipboard_image(2, 2, vec![0; 3]).is_err());
+        assert!(clipboard_image(2, 2, &[0; 3]).is_err());
+        // 長辺は正規化と同じ長さまで先に縮める。
+        let edge = normalize::MAX_LONG_EDGE;
+        let ReceivedFile::Bytes { bytes, .. } =
+            clipboard_image(edge * 2, 10, &vec![0; (edge * 2 * 10 * 4) as usize]).unwrap()
+        else {
+            panic!("expected bytes");
+        };
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(decoded.width(), edge);
     }
 
     /// 1つの発言に付けられる数に達していたら、受け取ったファイルを読まずに断る。

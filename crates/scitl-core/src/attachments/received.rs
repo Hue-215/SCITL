@@ -100,7 +100,17 @@ pub fn name_from_uri(uri: &str) -> String {
         .unwrap_or_default();
     let decoded = percent_encoding::percent_decode_str(last).decode_utf8_lossy();
     // 文書の提供元は`primary:Download/memo.txt`のように、区切りを符号化した道筋を最後の区間に置く。
-    decoded.rsplit('/').next().unwrap_or_default().to_string()
+    let name = decoded
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    // 名前が取れない提供元でも読めるよう、書き出しのときの既定の名前(`safe_file_name`)と揃える。
+    if name.trim().is_empty() {
+        "attachment".to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 /// 元のファイル名。
@@ -316,6 +326,11 @@ mod tests {
             name_from_uri("content://media/external/images/media/image%3A1000000034?x=1"),
             "image:1000000034"
         );
+        assert_eq!(
+            name_from_uri("content://x/document/primary%3ADownload%2F"),
+            "primary:Download"
+        );
+        assert_eq!(name_from_uri("content://x/document/%2F"), "attachment");
     }
 
     /// どのOSでも絶対パスになるパス。

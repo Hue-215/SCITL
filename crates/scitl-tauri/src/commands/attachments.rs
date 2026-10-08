@@ -141,8 +141,7 @@ fn clipboard_image(app: &AppHandle) -> scitl_core::error::Result<Option<Received
     let Ok(image) = app.clipboard().read_image() else {
         return Ok(None);
     };
-    let (width, height) = (image.width(), image.height());
-    scitl_core::attachments::clipboard_image(width, height, image.rgba().to_vec()).map(Some)
+    scitl_core::attachments::clipboard_image(image.width(), image.height(), image.rgba()).map(Some)
 }
 
 #[cfg(mobile)]

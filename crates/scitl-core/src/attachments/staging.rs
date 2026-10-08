@@ -9,6 +9,7 @@
 //! 大きさ・MIME・内容のハッシュも正規化した後のもの。
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
@@ -99,14 +100,58 @@ impl Taken {
 /// 預けようとしたものを断る(古いものを黙って捨てない)。入力欄は1つなので、預かりの数は入力欄に
 /// 並ぶ添付の数と一致する(取り消し・送信に失敗して戻した添付も、預かりの出し入れで合う)。
 /// 送信までメモリに持つので、乗っ取られた画面から際限なく預けさせない(合計量も、この数と
-/// 種別ごとの上限の積で抑えられる)。
+/// 種別ごとの上限の積で抑えられる)。受け取ったファイルは、読む前に席を取る([`Self::reserve`])。
+/// 読んでいる途中のものも数に入れ、並べて受け取っても上限を超える分は読まない。
+///
+/// 例外は送信に失敗して戻した添付([`Self::restore`])で、その間に足した添付と合わせて上限を超え
+/// うる(戻す分を捨てると利用者の添付を失うので、超えたまま戻す。送るときに断られ、利用者が減らす)。
 #[derive(Default)]
 pub(super) struct Staged {
     entries: Mutex<HashMap<String, Entry>>,
+    /// 席を取って読んでいる途中の数。増やすのは`entries`のロックの中だけ。
+    reserved: AtomicUsize,
+}
+
+/// 受け取ったファイルを読む間の席([`Staged::reserve`])。預けるか、落とせば返る。
+pub(super) struct Seat<'a>(&'a Staged);
+
+impl Drop for Seat<'_> {
+    fn drop(&mut self) {
+        self.0.reserved.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl Staged {
+    /// 席を取る。預かりと読んでいる途中の数が上限に達していれば`None`で、そのファイルは読まない。
+    pub(super) fn reserve(&self) -> Option<Seat<'_>> {
+        let entries = self.lock();
+        if entries.len() + self.reserved.load(Ordering::Acquire) >= LIMITS.per_message {
+            return None;
+        }
+        self.reserved.fetch_add(1, Ordering::AcqRel);
+        Some(Seat(self))
+    }
+
     pub(super) fn stage(&self, name: String, bytes: Vec<u8>) -> Result<StageOutcome> {
+        self.stage_into(name, bytes, None)
+    }
+
+    /// 席を取って読んだものを預ける。
+    pub(super) fn stage_seated(
+        &self,
+        name: String,
+        bytes: Vec<u8>,
+        seat: Seat<'_>,
+    ) -> Result<StageOutcome> {
+        self.stage_into(name, bytes, Some(seat))
+    }
+
+    fn stage_into(
+        &self,
+        name: String,
+        bytes: Vec<u8>,
+        seat: Option<Seat<'_>>,
+    ) -> Result<StageOutcome> {
         if name.trim().is_empty() {
             return Err(CoreError::InvalidArgument {
                 name: "name".to_string(),
@@ -127,8 +172,9 @@ impl Staged {
         let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
         let mut entries = self.lock();
-        // 読む前にも確かめているが(`has_room`)、並べて預けたものが先に入っているかもしれない。
-        if entries.len() >= LIMITS.per_message {
+        // 席を持っていれば、その席の分は数に入っているので除いて数える。
+        let others = self.reserved.load(Ordering::Acquire) - usize::from(seat.is_some());
+        if entries.len() + others >= LIMITS.per_message {
             return Ok(too_many());
         }
         entries.insert(
@@ -139,17 +185,15 @@ impl Staged {
                 bytes: bytes.into(),
             },
         );
+        // 預かりに入れたので、席は返す(ロックの中で返し、数が一時的にも二重にならないように)。
+        drop(seat);
+        drop(entries);
         Ok(StageOutcome::Staged {
             token,
             kind: classified.kind,
             mime_type: classified.mime_type.to_string(),
             size_bytes,
         })
-    }
-
-    /// まだ預けられるか。ファイルを読む前に確かめ、預けられないものは読まない。
-    pub(super) fn has_room(&self) -> bool {
-        self.lock().len() < LIMITS.per_message
     }
 
     /// 預かりを空にする。画面が読み込み直されると、入力欄の添付は消えるのに預かりは残り、
@@ -275,7 +319,7 @@ mod tests {
         let tokens: Vec<String> = (0..LIMITS.per_message)
             .map(|i| token_of(staged.stage(format!("{i}.txt"), b"a".to_vec()).unwrap()))
             .collect();
-        assert!(!staged.has_room());
+        assert!(staged.reserve().is_none());
         assert_eq!(
             staged.stage("over.txt".into(), b"a".to_vec()).unwrap(),
             too_many()
@@ -285,10 +329,36 @@ mod tests {
         // 取り消した分だけ、また預けられる。
         let a = token_of(staged.stage("a.txt".into(), b"a".to_vec()).unwrap());
         staged.discard(&a);
-        assert!(staged.has_room());
+        assert!(staged.reserve().is_some());
         staged.stage("b.txt".into(), b"a".to_vec()).unwrap();
         staged.clear();
         assert_eq!(staged.lock().len(), 0);
+    }
+
+    /// 読んでいる途中の席も数に入れ、席を持って預けるときは自分の席を除いて数える。
+    #[test]
+    fn seats_count_toward_the_limit_until_they_are_used_or_dropped() {
+        let staged = Staged::default();
+        let seats: Vec<Seat<'_>> = (0..LIMITS.per_message)
+            .map(|_| staged.reserve().unwrap())
+            .collect();
+        assert!(staged.reserve().is_none());
+        assert_eq!(
+            staged.stage("x.txt".into(), b"a".to_vec()).unwrap(),
+            too_many()
+        );
+        let mut seats = seats.into_iter();
+        let first = seats.next().unwrap();
+        assert!(matches!(
+            staged
+                .stage_seated("a.txt".into(), b"a".to_vec(), first)
+                .unwrap(),
+            StageOutcome::Staged { .. }
+        ));
+        assert!(staged.reserve().is_none());
+        drop(seats);
+        assert_eq!(staged.reserved.load(Ordering::Acquire), 0);
+        assert!(staged.reserve().is_some());
     }
 
     #[test]
