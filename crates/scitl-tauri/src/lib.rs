@@ -11,7 +11,7 @@ use scitl_core::in_flight::InFlightSet;
 use scitl_core::paths::{self, DataDirError, DataLayout};
 use scitl_core::settings::Settings;
 use tauri::ipc::Channel;
-use tauri::{DragDropEvent, Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
 /// (DBは`db::with_conn`、設定は`settings::Settings`、生成中の会話は`in_flight`)。
@@ -50,8 +50,7 @@ pub fn run() {
         .plugin(navigation::guard())
         .setup(|app| {
             show_version_in_title(app);
-            let revealed = paths::revealed_attachments(&paths::default_cache_dir()?);
-            match open_app_state(revealed) {
+            match start_app_state(app.handle()) {
                 Ok(state) => app.manage(state),
                 Err(failure) => {
                     scitl_core::diagnostics::report(format_args!("could not start: {failure}"));
@@ -127,6 +126,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             // このあとプロセスは接続を閉じずに終わるので、WALにだけある変更をここで本体へ書き戻す。
+            // Androidではプロセスがここを通らずに終わらされることが多く、次の起動時の書き戻しに任せる。
             if let RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<AppState>() {
                     scitl_core::db::checkpoint_wal(&state.db);
@@ -135,9 +135,42 @@ pub fn run() {
         });
 }
 
-/// 実行ファイルの隣のデータディレクトリを開き、コマンド層の状態を作る。
-fn open_app_state(revealed_attachments: PathBuf) -> Result<AppState, DataDirError> {
-    let data = DataLayout::new(paths::data_dir_beside_executable()?);
+/// データディレクトリと、添付を開くときの書き出し先を決めて開き、コマンド層の状態を作る。
+fn start_app_state(app: &AppHandle) -> Result<AppState, DataDirError> {
+    let data = data_dir(app)?;
+    let cache = app.path().app_cache_dir().map_err(no_app_dir)?;
+    // モバイルでは利用者が置き場所を変えられないので、場所を移すよう促す失敗にしない。
+    open_app_state(data, paths::revealed_attachments(&cache)).map_err(|e| {
+        if cfg!(mobile) {
+            e.in_app_dir()
+        } else {
+            e
+        }
+    })
+}
+
+/// データディレクトリの場所(`data-model/tables.md`「データディレクトリの場所」)。デスクトップでは
+/// 実行ファイルの隣で、フォルダごと持ち運べる。モバイルではOSがアプリに与えた内部ストレージ。
+#[cfg(desktop)]
+fn data_dir(_app: &AppHandle) -> Result<PathBuf, DataDirError> {
+    paths::data_dir_beside_executable()
+}
+
+#[cfg(mobile)]
+fn data_dir(app: &AppHandle) -> Result<PathBuf, DataDirError> {
+    let dir = app.path().app_data_dir().map_err(no_app_dir)?;
+    Ok(paths::data_dir_within(&dir))
+}
+
+fn no_app_dir(e: tauri::Error) -> DataDirError {
+    DataDirError::NoAppDir {
+        reason: e.to_string(),
+    }
+}
+
+/// `data`のデータディレクトリを開き、コマンド層の状態を作る。
+fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppState, DataDirError> {
+    let data = DataLayout::new(data);
     paths::create_private_dir(data.root()).map_err(|e| DataDirError::Unusable {
         dir: data.root().display().to_string(),
         reason: e.to_string(),
