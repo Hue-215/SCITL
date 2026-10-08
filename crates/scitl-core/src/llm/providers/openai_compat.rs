@@ -877,9 +877,7 @@ async fn read_stream(
 
     // 終わりの合図も終了理由も無いまま本文が終わった。上流が落ちて途中で切れた。
     if !done {
-        return Err(LlmError::Connection(ErrorDetail::internal(
-            "the event stream ended before the response was complete",
-        )));
+        return Err(super::stream_cut_off());
     }
     if !saw_choice {
         return Err(LlmError::EmptyResponse);

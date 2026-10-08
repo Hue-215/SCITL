@@ -181,6 +181,67 @@ fn read_elements(
         .collect()
 }
 
+/// ストリーミングで差分から組み立て直した要素を、送り返す要素([`crate::llm::Replay`])にする。
+/// `Value`から書き出すので、キーの順は受け取った順ではなく名前順になる(方言ごとに、キーの順を
+/// 見ないことを確かめてある。`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
+fn assembled_element(value: &serde_json::Value) -> Box<RawValue> {
+    serde_json::value::to_raw_value(value).expect("a JSON value serializes")
+}
+
+/// 組み立て中の要素(オブジェクト)の`key`の文字列の後ろに`text`を足す。文字列でなければ置き換える。
+fn append_text(element: &mut serde_json::Value, key: &str, text: &str) {
+    match element.get_mut(key) {
+        Some(serde_json::Value::String(existing)) => existing.push_str(text),
+        _ => element[key] = serde_json::Value::String(text.to_string()),
+    }
+}
+
+/// ストリーミングで断片を連結したツール呼び出しの引数を読む。断片が無い(空の)引数は空の
+/// オブジェクトとする。引数をオブジェクトのまま送り返す方言なので、読めなければ応答の解釈の
+/// 失敗にする(壊れた引数を送り返す形が無い)。
+fn streamed_arguments(text: &str, secrets: &SentSecrets) -> Result<serde_json::Value, LlmError> {
+    if text.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(text).map_err(|e| {
+        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
+    })
+}
+
+/// ストリーミングで組み立てる要素(ブロック・ステップ)の数の上限。実際の応答の要素はこれより
+/// ずっと少ない。上限が無いと、壊れた・悪意のあるサーバーが要素を大量に並べて、差分を当てる
+/// 先を探す時間とメモリを使わせられる(1回の応答の量の上限の範囲でも数十万個になる)。
+const MAX_STREAMED_ELEMENTS: usize = 1024;
+
+/// 組み立てる要素が多すぎる([`MAX_STREAMED_ELEMENTS`])。
+fn too_many_elements() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the response contains too many content elements",
+    ))
+}
+
+/// 長さの上限で打ち切られた応答の、途中で切れたツール呼び出しの引数を読めなかった。切れた引数の
+/// 呼び出しは実行できないので、応答の解釈の失敗にするが、打ち切りが原因だと分かるようにする。
+fn tool_call_cut_off() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the output limit cut off a tool call before its arguments were complete",
+    ))
+}
+
+/// ストリーミングの`data`をJSONとして読む。
+fn parse_event(data: &str, secrets: &SentSecrets) -> Result<serde_json::Value, LlmError> {
+    serde_json::from_str(data).map_err(|e| {
+        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
+    })
+}
+
+/// 終わりの合図の無いまま、ストリーミングの応答の本文が終わった(上流が落ちて途中で切れた)。
+fn stream_cut_off() -> LlmError {
+    LlmError::Connection(ErrorDetail::internal(
+        "the event stream ended before the response was complete",
+    ))
+}
+
 /// ツール呼び出しの引数を、オブジェクトしか受け付けない方言に渡す形にする。その方言の応答から
 /// 来た呼び出しは常にオブジェクトなので、そうでないのは別の方言で実行した記録だけで、空の
 /// オブジェクトとして送る。

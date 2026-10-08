@@ -3,6 +3,7 @@ use std::net::TcpListener;
 
 use secrecy::SecretString;
 
+use super::super::test_server::now;
 use super::*;
 use crate::llm::{InlineImage, SentAt, ToolSchema};
 
@@ -914,55 +915,13 @@ fn serializes_tool_response_and_omits_missing_tool_call_id() {
     );
 }
 
-const EVENT_STREAM_HEAD: &str =
-    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nConnection: close\r\n\r\n";
-
-/// 1回だけ接続を受け、SSEの応答を`pieces`の順に、それぞれ前に`delay`だけ待ってから書いて
-/// 閉じる。受け取ったリクエストの本文を返す。
+/// SSEの応答を返すサーバー([`super::super::test_server::spawn_event_stream`])。`base_url`に`/v1`を足す。
 fn spawn_streaming(
     pieces: Vec<(Duration, &'static [u8])>,
 ) -> (String, std::thread::JoinHandle<serde_json::Value>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut raw = Vec::new();
-        let mut buf = [0u8; 8192];
-        let header_end = loop {
-            let n = stream.read(&mut buf).unwrap();
-            raw.extend_from_slice(&buf[..n]);
-            if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                break i + 4;
-            }
-        };
-        let headers = String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase();
-        let length = headers
-            .lines()
-            .find_map(|l| l.strip_prefix("content-length: "))
-            .map_or(0, |v| v.trim().parse::<usize>().unwrap());
-        while raw.len() < header_end + length {
-            let n = stream.read(&mut buf).unwrap();
-            raw.extend_from_slice(&buf[..n]);
-        }
-        let body = serde_json::from_slice(&raw[header_end..header_end + length]).unwrap();
-        let _ = stream.write_all(EVENT_STREAM_HEAD.as_bytes());
-        for (delay, piece) in pieces {
-            std::thread::sleep(delay);
-            if stream.write_all(piece).is_err() {
-                break;
-            }
-        }
-        body
-    });
-    (format!("http://{addr}/v1"), handle)
-}
-
-/// 間を空けずに書く断片。
-fn now(pieces: &[&'static str]) -> Vec<(Duration, &'static [u8])> {
-    pieces
-        .iter()
-        .map(|p| (Duration::ZERO, p.as_bytes()))
-        .collect()
+    let (base_url, handle) = super::super::test_server::spawn_event_stream(pieces);
+    let handle = std::thread::spawn(move || handle.join().unwrap().body);
+    (format!("{base_url}/v1"), handle)
 }
 
 /// 間を空けて書く断片。

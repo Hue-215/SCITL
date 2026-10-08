@@ -111,8 +111,10 @@ impl ChatMessage {
 /// (`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。送った形の保存
 /// (`orchestration::transcript`)には直列化して載せるが、中核は形を読まずにそのまま持つ。
 ///
-/// 応答の要素を、受け取った生のJSONのまま並びごと持つ。`serde_json::Value`に読み直すと
-/// オブジェクトのキーの順が変わり、受け取ったままではなくなる。空なら送り返すものは無い。
+/// 応答の要素を、JSONの文字列のまま並びごと持つ。ストリーミングしない応答では受け取った生の
+/// 文字列のまま持つ(`serde_json::Value`に読み直すとオブジェクトのキーの順が変わり、受け取った
+/// ままではなくなる)。ストリーミングでは、アダプタが差分から組み立て直した要素を書き出したもの。
+/// 空なら送り返すものは無い。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Replay(Vec<Box<RawValue>>);
