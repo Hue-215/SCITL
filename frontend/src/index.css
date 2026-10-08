@@ -1032,6 +1032,11 @@ option {
   font-size: var(--font-size-sm);
 }
 
+/* 注記の形のまま誤りを示すもの(上限を超えた文字数)。.settings-hintより後に置き、色だけを上書きする。 */
+.settings-hint.error {
+  color: var(--color-danger);
+}
+
 .settings-advanced summary {
   font-weight: var(--font-weight-strong);
 }
@@ -1319,13 +1324,6 @@ option {
 
 .memory-actions {
   justify-content: flex-end;
-}
-
-.memory-empty {
-  padding: var(--space-4);
-  border: var(--border-width) dashed var(--color-border);
-  border-radius: var(--radius);
-  color: var(--color-text-secondary);
 }
 
 /* 節の始まりを示す仕切り線。線とその下の余白は、区切られる側のブロックが上端に持つ

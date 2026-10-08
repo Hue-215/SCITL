@@ -9,6 +9,7 @@ import { formatDateTime, isolated, t } from './i18n'
 import { useAsyncAction } from './useAsyncAction'
 
 // 文字数はRust側と同じくUnicodeのスカラー値で数える(`maxLength`はUTF-16の単位なので使わない)。
+// Rust側は1行に畳んだ後で数えるので、改行や連続する空白を含む本文では、画面が先に止めることがある。
 function charCount(text: string): number {
   return Array.from(text).length
 }
@@ -137,6 +138,7 @@ export function MemoryTab() {
   const [memories, setMemories] = useState<Memory[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const [duplicate, setDuplicate] = useState(false)
   const adding = useAsyncAction()
   const headingId = useId()
 
@@ -156,14 +158,21 @@ export function MemoryTab() {
 
   const add = (e: React.FormEvent) => {
     e.preventDefault()
+    setDuplicate(false)
     void adding.run(
       async () => {
-        await addMemory(draft)
+        const added = await addMemory(draft)
         await reload()
+        return added
       },
-      () => setDraft(''),
+      (added) => {
+        setDraft('')
+        setDuplicate(added.length === 0)
+      },
     )
   }
+
+  const full = memories !== null && memories.length >= MAX_MEMORIES
 
   return (
     <div className="settings-panel">
@@ -185,7 +194,7 @@ export function MemoryTab() {
         {memories === null ? (
           !loadError && <p>{t('common.loading')}</p>
         ) : memories.length === 0 ? (
-          <p className="memory-empty">{t('settings.memory.empty')}</p>
+          <p className="list-empty">{t('settings.memory.empty')}</p>
         ) : (
           <ul className="memory-list">
             {memories.map((memory) => (
@@ -199,18 +208,23 @@ export function MemoryTab() {
         <DraftField
           label={t('settings.memory.add_label')}
           value={draft}
-          onChange={setDraft}
+          onChange={(value) => {
+            setDraft(value)
+            setDuplicate(false)
+          }}
           placeholder={t('settings.memory.add_placeholder')}
         />
         <div className="button-row memory-actions">
           <button
             type="submit"
             className="primary"
-            disabled={adding.running || !canSubmit(draft)}
+            disabled={adding.running || full || !canSubmit(draft)}
           >
             {adding.running ? t('common.adding') : t('common.add')}
           </button>
         </div>
+        {full && <p className="settings-hint">{t('settings.memory.full', { max: MAX_MEMORIES })}</p>}
+        {duplicate && <p className="settings-hint">{t('settings.memory.duplicate')}</p>}
         {adding.error && <p className="error">{adding.error}</p>}
       </form>
     </div>

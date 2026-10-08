@@ -124,7 +124,8 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
 | `chat reply [--task <ID>]` | 返信の無いまま終わった会話の応答を生成する。何も消さない |
 | `chat preview [--task <ID>] [--message <本文>] [--external-tools]` | 次のターンで送るリクエストの本文を表示する。送信も保存もしない |
 | `attachment list` / `attachment orphans [--delete]` | 添付の一覧、どの添付からも指されていないファイル |
-| `export` | 全タスクと総合チャットをMarkdownでデータディレクトリの下へ書き出す |
+| `export` | 全タスク・総合チャット・メモリをMarkdownでデータディレクトリの下へ書き出す |
+| `memory list` / `add <本文>...` / `update <ID> <本文>` / `delete <ID>` | 会話をまたいで共有するメモリの表示・変更。変更したら変更後の一覧を出す |
 | `settings show` / `general` / `tools` / `language <コード>` | 設定の表示・変更 |
 | `provider add` / `delete <P>` / `models <P>` | プロバイダーの登録・削除・提供モデルの問い合わせ。カスタムヘッダーは`--header NAME=VAR`で渡す(値の`{session_id}`は会話ごとのIDに置き換わる) |
 | `model add <P> <モデル>...` / `remove` / `select` | モデルの登録・削除・選択 |

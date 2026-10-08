@@ -11,13 +11,11 @@ pub async fn list_memories(state: State<'_, AppState>) -> CommandResult<Vec<Memo
     with_db(&state, memories::list).await
 }
 
-/// メモリタブからの書き足し。規則はツールと同じ(`db::memories::add`)。
+/// メモリタブからの書き足し。規則はツールと同じ(`db::memories::add`)。新しく足したメモリを
+/// 返す(既にある本文なら空)。
 #[tauri::command]
-pub async fn add_memory(state: State<'_, AppState>, content: String) -> CommandResult<()> {
-    with_db(&state, move |conn| {
-        memories::add(conn, &[content]).map(drop)
-    })
-    .await
+pub async fn add_memory(state: State<'_, AppState>, content: String) -> CommandResult<Vec<Memory>> {
+    with_db(&state, move |conn| memories::add(conn, &[content])).await
 }
 
 /// メモリタブからの編集(`db::memories::update`)。

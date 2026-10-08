@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::{check_max_chars, now_iso8601};
 use crate::error::{CoreError, Result};
-use crate::text::visible_line;
+use crate::text::{drop_stacked_variation_selectors, visible_line};
 
 /// 会話をまたいで共有する、利用者についての事実1件。どの会話にも属さない。
 #[derive(Debug, Clone, Serialize)]
@@ -40,11 +40,11 @@ pub fn list(conn: &Connection) -> Result<Vec<Memory>> {
     Ok(rows)
 }
 
-/// 本文の正規化。描かれない文字を除き、制御文字(改行を含む)を空白にして1行に畳み、
-/// 空ならエラーにする。描かれない文字を保存の時点で除くのは、全会話のモデルに渡る本文に、
-/// 設定画面で見えない文字列を残さないため。追加と更新で同じ規則を通す。
+/// 本文の正規化。描かれない文字と重ねた異体字セレクタを除き、制御文字(改行を含む)を空白に
+/// して1行に畳み、空ならエラーにする。見えない文字を保存の時点で除くのは、全会話のモデルに
+/// 渡る本文に、設定画面で見えない文字列を残さないため。追加と更新で同じ規則を通す。
 fn normalize_content(raw: &str, arg_name: &str) -> Result<String> {
-    let content = visible_line(raw);
+    let content = visible_line(&drop_stacked_variation_selectors(raw));
     if content.is_empty() {
         return Err(CoreError::InvalidArgument {
             name: arg_name.to_string(),
@@ -97,11 +97,22 @@ pub fn add(conn: &Connection, contents: &[String]) -> Result<Vec<Memory>> {
     })
 }
 
-/// メモリの本文の書き換え。`updated_at`は値が変わったかを比べずに進める。
+/// メモリの本文の書き換え。`updated_at`は値が変わったかを比べずに進める。他のメモリと同じ
+/// 本文にする書き換えは断る(追加と同じく、同じ本文を2件持たない)。
 pub fn update(conn: &Connection, memory_id: i64, content: &str) -> Result<Memory> {
     super::in_transaction(conn, |conn| {
         get(conn, memory_id)?;
         let content = normalize_content(content, "content")?;
+        if list(conn)?
+            .iter()
+            .any(|m| m.id != memory_id && m.content == content)
+        {
+            return Err(CoreError::InvalidArgument {
+                name: "content".to_string(),
+                reason: "another memory already has this content; delete one of them instead"
+                    .to_string(),
+            });
+        }
         conn.execute(
             "UPDATE memories SET content = ?1, updated_at = ?2 WHERE id = ?3",
             rusqlite::params![content, now_iso8601(), memory_id],
@@ -225,6 +236,24 @@ mod tests {
         let err = update(&conn, id, "\n").unwrap_err();
         assert!(matches!(err, CoreError::InvalidArgument { .. }));
         assert_eq!(list(&conn).unwrap()[0].content, "夜型");
+
+        // 同じ本文への書き換えは、自分自身なら通り、他のメモリと重なるなら断る。
+        update(&conn, id, "夜型").unwrap();
+        add(&conn, &strings(&["猫が好き"])).unwrap();
+        let err = update(&conn, id, "猫が好き").unwrap_err();
+        assert!(matches!(err, CoreError::InvalidArgument { .. }));
+    }
+
+    /// 字形を選ぶ1個は残し、重ねて文字列を隠す並びは除く。
+    #[test]
+    fn stacked_variation_selectors_are_dropped() {
+        let conn = db::open_in_memory().unwrap();
+        let hidden: String = "😀\u{FE0F}\u{E0101}\u{E0102}\u{FE01}".to_string();
+
+        let added = add(&conn, &[hidden, "葛\u{E0100}飾".to_string()]).unwrap();
+
+        assert_eq!(added[0].content, "😀\u{FE0F}");
+        assert_eq!(added[1].content, "葛\u{E0100}飾");
     }
 
     #[test]

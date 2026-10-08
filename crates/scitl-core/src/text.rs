@@ -54,6 +54,26 @@ pub fn is_variation_selector(c: char) -> bool {
     )
 }
 
+/// 前の文字に付いた1個を残し、続けて重ねた異体字セレクタと先頭の異体字セレクタを除く。
+/// 異体字セレクタを並べると、任意のバイト列を1文字の後ろに見えない形で写せる(1個で
+/// 1バイト)。字形を選ぶ正規の使い方(絵文字のU+FE0F、漢字の異体字シーケンス)は1文字に1個で済む。
+pub fn drop_stacked_variation_selectors(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut after_base = false;
+    for c in s.chars() {
+        if is_variation_selector(c) {
+            if after_base {
+                out.push(c);
+            }
+            after_base = false;
+        } else {
+            out.push(c);
+            after_base = true;
+        }
+    }
+    out
+}
+
 /// 制御文字(改行を含む)を空白に畳み、連続空白を1つにまとめ、前後の空白を落とす。
 pub fn collapse_whitespace(s: &str) -> String {
     let replaced: String = s

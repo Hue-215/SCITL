@@ -335,8 +335,9 @@ export function listMemories(): Promise<Memory[]> {
   return invoke('list_memories')
 }
 
-// 空・長すぎる本文と、上限の件数を超える追加は断られる。既にある本文と同じなら何も増えない。
-export function addMemory(content: string): Promise<void> {
+// 空・長すぎる本文と、上限の件数を超える追加は断られる。新しく足したメモリを返し、既にある
+// 本文と同じなら空の配列になる。
+export function addMemory(content: string): Promise<Memory[]> {
   return invoke('add_memory', { content })
 }
 
