@@ -84,7 +84,7 @@ SCITL/
 │   │       ├── files.rs            # 書きかけのファイルを完成した名前で残さない書き込み
 │   │       ├── settings/           # 設定・登録の操作(規則・検証・秘密情報の出し入れ・保存)
 │   │       ├── error.rs            # コア全体の失敗の種類(CoreError)
-│   │       ├── diagnostics.rs      # coreの唯一の標準エラーへの出口(architecture/sanitize.md)
+│   │       ├── diagnostics.rs      # coreの唯一の診断の出口。標準エラー、Androidではlogcat(architecture/sanitize.md)
 │   │       ├── blocking.rs         # 非同期層からブロッキング処理を呼ぶ入口(architecture/concurrency.md)
 │   │       ├── in_flight.rs        # 同じ対象への処理を同時に1本に絞る(タスクごとの応答生成)
 │   │       ├── link.rs             # 本文中のリンクを開く前の判定とOSへの委譲(architecture/webview-boundary.md)
