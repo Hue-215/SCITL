@@ -14,12 +14,14 @@ import {
   updateToolSettings,
 } from './api'
 import type { SettingsView } from './types'
+import { Drawer, DrawerToggle } from './Drawer'
 import { isolated, t } from './i18n'
 import { without } from './record'
 import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
 import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
+import { useDrawer } from './useDrawer'
 
 interface SettingsProps {
   onClose: () => void
@@ -40,6 +42,8 @@ export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 狭い窓で畳む左のメニュー。タブを選んだら閉じる。
+  const drawer = useDrawer()
 
   const reload = async () => {
     try {
@@ -58,6 +62,7 @@ export default function Settings({ onClose }: SettingsProps) {
   // タブを切り替えたら、前のタブの操作で出たエラーは伏せる(残っていると、
   // 今見ているタブの内容に対する指摘のように見えるため)。
   const selectTab = (next: TabId) => {
+    drawer.close()
     setTab(next)
     setError(null)
   }
@@ -100,7 +105,7 @@ export default function Settings({ onClose }: SettingsProps) {
   }
 
   return (
-    <div className="settings">
+    <div className={drawer.narrow ? 'settings narrow' : 'settings'}>
       <header className="settings-header">
         <button
           type="button"
@@ -111,24 +116,27 @@ export default function Settings({ onClose }: SettingsProps) {
         >
           ←
         </button>
+        <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
         <h1>{t('settings.heading')}</h1>
       </header>
 
       <div className="settings-body">
-        <nav className="settings-rail">
-          {TABS.map(({ id, label }) => (
-            <button
-              key={id}
-              type="button"
-              className={tab === id ? 'settings-tab selected' : 'settings-tab'}
-              onClick={() => selectTab(id)}
-            >
-              {t(label)}
-            </button>
-          ))}
-        </nav>
+        <Drawer drawer={drawer}>
+          <nav className="settings-rail">
+            {TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                className={tab === id ? 'settings-tab selected' : 'settings-tab'}
+                onClick={() => selectTab(id)}
+              >
+                {t(label)}
+              </button>
+            ))}
+          </nav>
+        </Drawer>
 
-        <div className="settings-content">
+        <div className="settings-content" inert={drawer.shown}>
           <div className="settings-column">
             {settings?.config_error && (
               <p className="error">

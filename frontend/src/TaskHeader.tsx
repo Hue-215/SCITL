@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ConfirmButton } from './Dialog'
 import { isolated, t } from './i18n'
 import { isCommitEnter } from './keyboard'
@@ -14,6 +14,8 @@ const MAX_TITLE_LENGTH = 40
 
 interface TaskHeaderProps {
   task: TaskDetailView
+  // 名前の前に置く、畳んだサイドバーを引き出すボタン(Drawer.tsx)。
+  drawerToggle: ReactNode
   // 応答待ちの間は操作させない(Rust側でも断る。orchestration::operations)。
   disabled: boolean
   onRename: (title: string) => void
@@ -25,6 +27,7 @@ interface TaskHeaderProps {
 // 削除。タスクを切り替えたら編集中の状態を捨てるよう、呼び出し側はタスクのidを`key`に渡す。
 export default function TaskHeader({
   task,
+  drawerToggle,
   disabled,
   onRename,
   onSetArchived,
@@ -47,43 +50,46 @@ export default function TaskHeader({
   return (
     <header className="chat-header">
       <div className="chat-header-row">
-        <h1>
-          {editing ? (
-            <input
-              className="chat-header-title-input"
-              value={draft}
-              maxLength={MAX_TITLE_LENGTH}
-              // 未設定のタスクは、画面で呼んでいる名前(フォールバック)を手掛かりに出す。
-              placeholder={name}
-              aria-label={t('task_header.title_input_label')}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (isCommitEnter(e)) {
-                  e.preventDefault()
-                  commit()
-                } else if (e.key === 'Escape') {
-                  setEditing(false)
-                }
-              }}
-              // フォーカスを外したら取り消す。確定はEnterだけ。
-              onBlur={() => setEditing(false)}
-              autoFocus
-            />
-          ) : (
-            <button
-              type="button"
-              className="chat-header-title"
-              disabled={disabled}
-              title={t('task_header.rename_hint')}
-              onClick={() => {
-                setDraft(task.title ?? '')
-                setEditing(true)
-              }}
-            >
-              {name}
-            </button>
-          )}
-        </h1>
+        <div className="chat-header-name">
+          {drawerToggle}
+          <h1>
+            {editing ? (
+              <input
+                className="chat-header-title-input"
+                value={draft}
+                maxLength={MAX_TITLE_LENGTH}
+                // 未設定のタスクは、画面で呼んでいる名前(フォールバック)を手掛かりに出す。
+                placeholder={name}
+                aria-label={t('task_header.title_input_label')}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (isCommitEnter(e)) {
+                    e.preventDefault()
+                    commit()
+                  } else if (e.key === 'Escape') {
+                    setEditing(false)
+                  }
+                }}
+                // フォーカスを外したら取り消す。確定はEnterだけ。
+                onBlur={() => setEditing(false)}
+                autoFocus
+              />
+            ) : (
+              <button
+                type="button"
+                className="chat-header-title"
+                disabled={disabled}
+                title={t('task_header.rename_hint')}
+                onClick={() => {
+                  setDraft(task.title ?? '')
+                  setEditing(true)
+                }}
+              >
+                {name}
+              </button>
+            )}
+          </h1>
+        </div>
         <div className="button-row">
           <button type="button" disabled={disabled} onClick={() => onSetArchived(!archived)}>
             {archived ? t('task_header.unarchive') : t('task_header.archive')}

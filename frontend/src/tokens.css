@@ -119,11 +119,11 @@
   --compose-bottom-gap: var(--space-1);
 
   /* レスポンシブ計算の基準値。吹き出し・設定本文の幅は入れ物に追従させるため、CSSで直接
-     使うのは上限値(--content-max-width)だけで、--content-min-widthは下の最小幅の導出式の
+     使うのは上限値(--content-max-width)だけで、--content-min-widthは下の窓の幅の導出式の
      入力として持つ。 */
   --sidebar-width: 16rem;
   --settings-rail-width: 12rem;
-  --content-min-width: 22rem;
+  --content-min-width: 19.5rem;
   --content-max-width: 42rem;
 
   /* 複数行入力欄(textarea)が内容に応じて自動で伸びる範囲。全箇所で共通の
@@ -146,19 +146,30 @@
 }
 
 /*
- * ウィンドウ最小幅(crates/scitl-tauri/tauri.conf.json の app.windows[].minWidth)の
- * 導出式。この値はJSON側にコメントを書けないため、ここに残す。
+ * 窓の幅に関わる値の導出式。値を写す先(JSONとメディアクエリの条件)には式もvar()も
+ * 書けないため、ここに残す。px は16px/rem換算。
  *
- *   --sidebar-width(16rem。box-sizing: border-boxのため仕切り線1pxはこの内側)
- *   + --content-min-width(22rem)
+ * 内容領域(.layout main)の最小幅:
+ *   --content-min-width(19.5rem)
  *   + バブルのマージン合計(--bubble-margin-near + --bubble-margin-far = 3rem)
- *   = 41rem = 656px(16px/rem換算)
+ *   = 22.5rem = 360px
+ *
+ * ウィンドウ最小幅(crates/scitl-tauri/tauri.conf.json の app.windows[].minWidth):
+ *   窓が狭いときはサイドバーを畳むので、内容領域の最小幅と同じ 22.5rem = 360px
+ *
+ * サイドバーを畳む境目(useDrawer.ts の NARROW_QUERY。サイドバーを出したままで内容領域が
+ * 最小幅を保てる幅):
+ *   --sidebar-width(16rem。box-sizing: border-boxのため仕切り線1pxはこの内側)
+ *   + 内容領域の最小幅(22.5rem)
+ *   = 38.5rem = 616px
+ *   設定のメニュー(--settings-rail-width)はサイドバーより細いので、同じ境目で畳めば
+ *   設定の本文も内容領域の最小幅を下回らない。
  *
  * .layout main は左右paddingを持たない。持たせるとバブルのマージンに上乗せされて
  * 近い側・遠い側の2倍の関係が窓端から見て崩れ、スクロールバーも窓の端から浮くため。
  *
- * トークンやマージン設計(.chat-log > * 等)を変えたときは、この式とminWidthの両方を
- * 見直すこと。minHeightの480pxはこの式と独立した目視での妥当値。
+ * トークンやマージン設計(.chat-log > * 等)を変えたときは、この式とminWidth・
+ * NARROW_QUERYを見直すこと。minHeightの480pxはこの式と独立した目視での妥当値。
  *
  * なお場所を取る形式のスクロールバーが出る環境では、その幅(15px前後)だけログ領域が
  * 狭くなる。吹き出しは入れ物に追従するので縮むだけで、はみ出しはしない。

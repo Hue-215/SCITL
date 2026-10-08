@@ -11,7 +11,9 @@ interface DialogProps {
   width?: string
 }
 
-const FOCUSABLE_SELECTOR =
+// フォーカスを受け取れる要素。ダイアログのフォーカストラップと、引き出し(useDrawer.ts)を開いたときの
+// フォーカスの移し先を探すのに使う。
+export const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 // ダイアログの共通枠。余白・角丸・ボタン配置を統一する。本文は children に委ね、枠自体は
@@ -55,7 +57,7 @@ export default function Dialog({ title, onClose, children, width }: DialogProps)
   }, [onClose])
 
   return createPortal(
-    <div className="dialog-overlay" onClick={onClose}>
+    <div className="dialog-overlay scrim" onClick={onClose}>
       <div
         ref={boxRef}
         className="dialog"
