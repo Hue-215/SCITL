@@ -1,5 +1,6 @@
 //! アプリのデータの置き場所。GUIとCLIが同じファイルを開くため、ディレクトリの解決と
-//! その中の並びをここに閉じる。
+//! その中の並びをここに閉じる。OSがアプリに与える場所(Android)はTauriのパス解決で決まるので、
+//! GUIが決めたパスを受け取る(このモジュールはTauriに依存しない)。
 
 use std::path::{Path, PathBuf};
 
@@ -10,11 +11,11 @@ use crate::{CoreError, APP_IDENTIFIER};
 #[error("this OS has no directory for application cache")]
 pub struct NoAppDir;
 
-/// 実行ファイルのフォルダの中の、データディレクトリの名前。
+/// データディレクトリの名前。実行ファイルのフォルダ(デスクトップ)か、OSがアプリに与えた場所(Android)の中に置く。
 const DATA_DIR_NAME: &str = "data";
 
 /// データディレクトリを決められない・使えない理由。GUIは起動時に開けなかった理由として
-/// 画面へ渡し、画面は種類で文言を選ぶ。パスは利用者が置き場所を直すのに要るので載せる。
+/// 画面へ渡し、画面は種類で文言を選ぶ。パスは利用者が置き場所を直す・問い合わせるのに要るので載せる。
 #[derive(Debug, Clone, serde::Serialize, thiserror::Error)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -28,9 +29,16 @@ pub enum DataDirError {
         "this executable is in a temporary directory ({dir}); extract it to a permanent location"
     )]
     TemporaryDir { dir: String },
+    /// OSがアプリのデータ・キャッシュの置き場所を示さない。
+    #[error("the OS did not give a directory for this application: {reason}")]
+    NoAppDir { reason: String },
     /// データディレクトリを作れない・書き込めない(書き込めない場所に置いた等)。
     #[error("could not open the data directory {dir}: {reason}")]
     Unusable { dir: String, reason: String },
+    /// OSがアプリに与えた場所(Android)のデータディレクトリを作れない・書き込めない。
+    /// 利用者は置き場所を変えられないので、[`Self::Unusable`]と分けて文言を選ばせる。
+    #[error("could not open the data directory {dir}: {reason}")]
+    AppDirUnusable { dir: String, reason: String },
     /// データディレクトリには書けるが、DBを開けない(新しい版で使ったDB、壊れたDB等)。
     #[error("could not open the database in {dir}: {reason}")]
     Database { dir: String, reason: String },
@@ -48,15 +56,30 @@ impl DataDirError {
             Self::Database { dir, reason }
         }
     }
+
+    /// OSがアプリに与えた場所で起きた失敗として読み替える。置き場所を移すよう促す
+    /// [`Self::Unusable`]を[`Self::AppDirUnusable`]にし、ほかはそのまま返す。
+    pub fn in_app_dir(self) -> Self {
+        match self {
+            Self::Unusable { dir, reason } => Self::AppDirUnusable { dir, reason },
+            other => other,
+        }
+    }
 }
 
-/// 既定のデータディレクトリ。実行ファイルと同じフォルダの`data`で、フォルダごと持ち運べる。
+/// デスクトップのデータディレクトリ。実行ファイルと同じフォルダの`data`で、フォルダごと持ち運べる。
 /// GUIとCLIは同じフォルダに置くので、同じデータを開く。
 pub fn data_dir_beside_executable() -> Result<PathBuf, DataDirError> {
     let exe = std::env::current_exe().map_err(|e| DataDirError::NoExecutable {
         reason: e.to_string(),
     })?;
     data_dir_beside(&exe, &std::env::temp_dir())
+}
+
+/// OSがアプリに与えた場所(Androidのアプリの内部ストレージ)の中のデータディレクトリ。
+/// その場所の直下にはWebViewのプロファイル等も置かれるので、混ざらないよう`data`の下に置く。
+pub fn data_dir_within(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(DATA_DIR_NAME)
 }
 
 fn data_dir_beside(exe: &Path, temp_dir: &Path) -> Result<PathBuf, DataDirError> {
@@ -68,7 +91,7 @@ fn data_dir_beside(exe: &Path, temp_dir: &Path) -> Result<PathBuf, DataDirError>
             dir: dir.display().to_string(),
         });
     }
-    Ok(dir.join(DATA_DIR_NAME))
+    Ok(data_dir_within(dir))
 }
 
 /// `dir`が`temp_dir`の中にあるか。どちらもリンクと短い形の名前(Windowsの8.3形式)を
@@ -81,7 +104,8 @@ fn is_within(dir: &Path, temp_dir: &Path) -> bool {
     }
 }
 
-/// 既定のキャッシュディレクトリ。Tauriの`app_cache_dir`と同じ決め方。
+/// デスクトップのキャッシュディレクトリ。GUIとCLIの両方がこれで決めるので、同じ場所を使う。
+/// Tauriの`app_cache_dir`と同じ決め方。
 pub fn default_cache_dir() -> Result<PathBuf, NoAppDir> {
     dirs::cache_dir()
         .map(|dir| dir.join(APP_IDENTIFIER))
@@ -221,6 +245,26 @@ mod data_dir_tests {
 
         let result = data_dir_beside(&extracted.join("scitl.exe"), temp.path());
         assert!(matches!(result, Err(DataDirError::TemporaryDir { .. })));
+    }
+
+    #[test]
+    fn a_failure_in_the_app_dir_does_not_ask_to_move_the_executable() {
+        let unusable = DataDirError::Unusable {
+            dir: "d".to_string(),
+            reason: "r".to_string(),
+        };
+        assert!(matches!(
+            unusable.in_app_dir(),
+            DataDirError::AppDirUnusable { .. }
+        ));
+        let database = DataDirError::Database {
+            dir: "d".to_string(),
+            reason: "r".to_string(),
+        };
+        assert!(matches!(
+            database.in_app_dir(),
+            DataDirError::Database { .. }
+        ));
     }
 
     #[test]
