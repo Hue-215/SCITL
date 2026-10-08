@@ -31,14 +31,30 @@ pub enum HostClass {
 ///
 /// IPv4のリンクローカル(169.254.0.0/16)は`PrivateLiteral`に含めない。169.254.169.254は
 /// クラウドのメタデータエンドポイントで、平文httpしか話さない代表的なSSRFの標的のため。
+///
+/// IPv4射影IPv6(`::ffff:a.b.c.d`)は、射影元のIPv4アドレスとして分類する。接続先は
+/// 射影元のIPv4アドレスと同じなので、書き方によって分類が変わらないようにする。
+/// 非推奨のIPv4互換形式(`::a.b.c.d`)は射影元として扱わず`Other`のままにする。
 pub fn classify_host(url: &Url) -> HostClass {
+    let ipv4 = match url.host() {
+        Some(url::Host::Ipv4(ip)) => Some(ip),
+        Some(url::Host::Ipv6(ip)) => ip.to_ipv4_mapped(),
+        _ => None,
+    };
+    if let Some(ip) = ipv4 {
+        return if ip.is_loopback() {
+            HostClass::Loopback
+        } else if ip.is_private() {
+            HostClass::PrivateLiteral
+        } else {
+            HostClass::Other
+        };
+    }
     match url.host() {
-        Some(url::Host::Ipv4(ip)) if ip.is_loopback() => HostClass::Loopback,
         Some(url::Host::Ipv6(ip)) if ip.is_loopback() => HostClass::Loopback,
         Some(url::Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost") => {
             HostClass::Loopback
         }
-        Some(url::Host::Ipv4(ip)) if ip.is_private() => HostClass::PrivateLiteral,
         Some(url::Host::Ipv6(ip)) if ip.is_unique_local() => HostClass::PrivateLiteral,
         _ => HostClass::Other,
     }
@@ -269,12 +285,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_http_for_ipv4_mapped_ipv6_literal() {
-        // IPv4射影IPv6アドレスは`Ipv6Addr::is_unique_local`の対象にならないため拒否される。
-        // プライベートアドレスに接続したい場合はIPv4リテラルで書く必要がある。
-        assert!(
-            validate_external_url(&Url::parse("http://[::ffff:192.168.1.7]/").unwrap()).is_err()
+    fn classifies_ipv4_mapped_ipv6_as_its_ipv4_address() {
+        let class = |url: &str| classify_host(&Url::parse(url).unwrap());
+        assert_eq!(class("http://[::ffff:127.0.0.1]/"), HostClass::Loopback);
+        assert_eq!(
+            class("http://[::ffff:192.168.1.7]/"),
+            HostClass::PrivateLiteral
         );
+        assert_eq!(
+            class("http://[::ffff:10.0.0.1]/"),
+            HostClass::PrivateLiteral
+        );
+        assert_eq!(class("http://[::ffff:8.8.8.8]/"), HostClass::Other);
+        // 射影元がリンクローカル(IMDS)なら、IPv4で書いたときと同じく対象外
+        assert_eq!(class("http://[::ffff:169.254.169.254]/"), HostClass::Other);
+    }
+
+    #[test]
+    fn allows_http_for_ipv4_mapped_loopback_and_private() {
+        assert!(
+            validate_external_url(&Url::parse("http://[::ffff:127.0.0.1]:8080/").unwrap()).is_ok()
+        );
+        assert!(
+            validate_external_url(&Url::parse("http://[::ffff:192.168.1.7]/").unwrap()).is_ok()
+        );
+        assert!(validate_external_url(&Url::parse("http://[::ffff:8.8.8.8]/").unwrap()).is_err());
+        assert!(
+            validate_external_url(&Url::parse("http://[::ffff:169.254.169.254]/").unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_http_for_ipv4_compatible_ipv6() {
+        // 非推奨のIPv4互換形式(::a.b.c.d)は射影として扱わず、IPv6として分類する。
+        // どの許可範囲(::1・fc00::/7)にも入らないので拒否される。
+        assert!(validate_external_url(&Url::parse("http://[::127.0.0.1]/").unwrap()).is_err());
+        assert!(validate_external_url(&Url::parse("http://[::192.168.1.7]/").unwrap()).is_err());
     }
 
     // 以下は`hardened_client`が組み立てたクライアントが、実際にリダイレクトを追わないか・
