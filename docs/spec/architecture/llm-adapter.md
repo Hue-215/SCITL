@@ -161,7 +161,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 ドキュメント(errors・thinking・prompt caching・models・streaming)。
 
 - ベースURLは`/v1`を含まない(`https://api.anthropic.com`)。鍵は`x-api-key`、版は
-  `anthropic-version: 2023-06-01`で送る。設定画面は、`/v1`まで書いたURLにヒントを出す(登録は止めない)
+  `anthropic-version: 2023-06-01`で送る。設定画面は、`/v1`まで書いたURLにヒントを出す(登録は止めない。
+  判定はアダプタ側に置くが、今は画面に写してある。Issue #488)
 - `max_tokens`は必須なので、アダプタが固定の値を送る。設定で変えられるようにするのはIssue #271
 - 思考の強さは`thinking: {type: "adaptive", display: "summarized"}`と`output_config.effort`で渡す。
   `display`を指定しないと思考の中身が空で返り、画面に出せない。「オフ」は`thinking: {type: "disabled"}`
@@ -214,7 +215,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 (Interactions API reference・thinking・function calling・api-errors・models)。ストリーミングのイベントの形は、
 公式SDK(`@google/genai` 2.27.0)の型定義による。
 
-- ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る
+- ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る。
+  `/v1beta`等の版まで書いたURLへのヒントはAnthropic形式と同じ
 - **`store: false`を常に送る**。既定ではやり取りがGoogle側に保存される(有料で55日、無料で1日)。
   会話はこのアプリが持ち、毎回すべてを入力のステップ(`user_input`・`model_output`・`function_call`・
   `function_result`)として送る(`previous_interaction_id`は使わない)

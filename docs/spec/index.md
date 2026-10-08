@@ -20,7 +20,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 | `architecture/transcript.md` | 履歴の組み立て、送った形の保存、思考の送り返し、間引き | 保存の形を変えるなら当たる |
 | `architecture/concurrency.md` | 多重起動の防止、同期と非同期の境界、応答生成の停止、途中経過の通知 | 2つ目の起動から届く引数を使うなら当たる |
 | `architecture/network-secrets.md` | HTTPクライアント、平文http、秘密情報、資格情報ストア | 当たる |
-| `architecture/webview-boundary.md` | IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる。IPCコマンドの引数でパス・URL等を受け取るものを足す・広げるなら当たる |
+| `architecture/webview-boundary.md` | 画面が持つもの・持たないもの、IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる。IPCコマンドの引数でパス・URL等を受け取るものを足す・広げるなら当たる |
 | `architecture/sanitize.md` | 外部から来た文字列・自由入力を、モデル・画面・端末・ファイルへ出す | 当たる |
 | `architecture/i18n.md` | 画面の文言、言語ファイル、表示言語 | 当たらない |
 | `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方(外から受け取る入力)・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
@@ -28,7 +28,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 | `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`・`memories`、索引、PRAGMAと排他、マイグレーション | 当たる |
 | `data-model/messages.md` | `messages`、ターン境界、操作の記録、`turn_transcripts`。`architecture/transcript.md`と対で読む | 当たる |
 | `tools.md` | LLMに公開するツールのスキーマ、引数検証、履歴への載せ方、外部(MCP)ツールの公開 | 公開する操作・権限を変えるなら当たる |
-| `ui.md` | 画面を触るとき(必ず読む。`principles.md` 6節も) | 当たらない |
+| `ui.md` | 画面を触るとき(必ず読む。`principles.md` 6節と、`architecture/webview-boundary.md`「画面が持つもの・持たないもの」も) | 当たらない |
 
 ## ファイルを跨ぐ不変条件
 
@@ -43,8 +43,12 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 - **保存するデータは書き換えず、無害化は出力先へ出す直前に出力先ごとに掛ける**: 送った形の保存は
   無害化済みのまま持つので、無害化の規則を変えたら保存の形の版を上げる。`architecture/sanitize.md`・
   `architecture/transcript.md`
-- **WebViewからファイルのパスを受け取らない**: `architecture/attachments.md`「受け取り方」・
-  `architecture/export.md`・`architecture/cli.md`(端末は例外)
+- **画面は表示に徹する**: ファイル・OSの機能・入力の検証と規則・複数の処理をまとめる手順はRust側に
+  置き、画面に写さない。`principles.md` 4節「UI層は表示に徹する」・`architecture/webview-boundary.md`
+  「画面が持つもの・持たないもの」・`ui.md`
+- **画面からファイルのパスも中身も受け取らない**: 選ばせる・読む・書く・開くはRust側で行う。
+  `architecture/attachments.md`「受け取り方」・`architecture/export.md`・`architecture/cli.md`(端末は例外)。
+  添付の選択と貼り付けは、今は画面から中身を受け取っている(Issue #476)
 - **秘密情報に触れるのは`secrets.rs`だけ、HTTPは`net::hardened_client`だけを通る**:
   `architecture/network-secrets.md`・`architecture/cli.md`・`architecture/llm-adapter.md`
 
@@ -96,7 +100,7 @@ SCITL/
 │       ├── tauri.conf.json         # CSP・devCsp
 │       ├── gen/android/            # Androidのプロジェクト(architecture/tech-stack.md「Androidのビルド」)
 │       └── src/commands/
-├── frontend/                       # React + TypeScript + Vite
+├── frontend/                       # React + TypeScript + Vite。表示だけを持つ
 ├── lang/                           # ja.json / en.json(core・frontend共有。architecture/i18n.md)
 └── migrations/                     # 0001_init.sql から番号順(data-model/tables.md 5節)
 ```
@@ -105,4 +109,6 @@ SCITL/
   (状態遷移、ツール引数検証、ターンのオーケストレーション、サニタイズ、秘密情報アクセス)を
   すべて置く
 - **GUI** (`scitl-tauri`): コマンドはロジックを持たず、coreを1つ呼ぶだけ(`architecture/webview-boundary.md`)
+- **画面** (`frontend/`): 表示に徹し、判定・規則・手順を持たない(`architecture/webview-boundary.md`
+  「画面が持つもの・持たないもの」)
 - **CLI** (`scitl-cli`・`scitl-debug-cli`): `architecture/cli.md`
