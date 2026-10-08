@@ -18,10 +18,10 @@ import type {
   ReasoningEffort,
   SettingsView,
   StageOutcome,
-  Task,
   TaskCreation,
   TaskDetailView,
   TaskListItem,
+  TaskOpeningEvent,
   TurnEvent,
 } from './types'
 
@@ -43,16 +43,10 @@ export function listTasks(): Promise<TaskListItem[]> {
   return invoke('list_tasks')
 }
 
-// 作ったら続けて聞き取りを始める。作ったタスクは聞き取りの前に`onCreated`へ、聞き取りの
-// 途中経過は`onEvent`へ届き、返るのは聞き取りが終わってから。
-export function createTask(
-  onCreated: (task: Task) => void,
-  onEvent: (event: TurnEvent) => void,
-): Promise<TaskCreation> {
-  return invoke('create_task', {
-    onCreated: new Channel(onCreated),
-    onEvent: new Channel(onEvent),
-  })
+// 作ったら続けて聞き取りを始める。作ったタスクと聞き取りの途中経過は、この順で`onEvent`へ
+// 届く。返るのは聞き取りが終わってからで、返ったときに作った知らせがまだ届いていないこともある。
+export function createTask(onEvent: (event: TaskOpeningEvent) => void): Promise<TaskCreation> {
+  return invoke('create_task', { onEvent: new Channel(onEvent) })
 }
 
 // ヘッダーからのタスク操作。どれも応答を生成中のタスクでは断られる。

@@ -156,8 +156,12 @@ async fn main() {
                 })
                 .await
                 .unwrap();
-                let TaskCreation::Created { task } = creation else {
-                    panic!("the adapter is not ready");
+                let TaskCreation::Created {
+                    task,
+                    opening_error: None,
+                } = creation
+                else {
+                    panic!("the task chat did not open: {creation:?}");
                 };
                 chat = Chat::Task(task.id);
             }

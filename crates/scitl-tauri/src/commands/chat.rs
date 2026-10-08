@@ -12,7 +12,7 @@ use crate::AppState;
 
 /// ターンの途中経過を`channel`へ送る受け口。送れなくても(画面が閉じた等)ターンは最後まで
 /// 走らせて保存するので、送信の失敗は捨てる。
-pub(super) fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '_ {
+fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '_ {
     move |event| {
         let _ = channel.send(event);
     }

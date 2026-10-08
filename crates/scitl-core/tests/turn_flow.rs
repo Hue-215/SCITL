@@ -4025,7 +4025,11 @@ async fn create_task_opening(db: &SharedConnection, ctx: &TurnContext<'_>) -> i6
     })
     .await
     .unwrap();
-    let TaskCreation::Created { task } = creation else {
+    let TaskCreation::Created {
+        task,
+        opening_error: None,
+    } = creation
+    else {
         panic!("expected Created, got {creation:?}");
     };
     assert_eq!(created.get(), Some(&task.id));

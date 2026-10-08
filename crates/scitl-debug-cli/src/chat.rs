@@ -165,7 +165,11 @@ pub async fn create_task(session: &Session) -> Result<(), DebugError> {
     })
     .await?;
     let task = match creation {
-        TaskCreation::Created { task } => task,
+        TaskCreation::Created {
+            opening_error: Some(error),
+            ..
+        } => return Err(DebugError::OpeningFailed(error)),
+        TaskCreation::Created { task, .. } => task,
         TaskCreation::Unavailable { error_kind } => {
             return Err(DebugError::ChatUnavailable(error_kind.to_string()));
         }

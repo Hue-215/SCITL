@@ -233,8 +233,8 @@ rm -rf "$D"
 
 ## 4. ドライバーで動かす
 
-`crates/scitl-core/examples/relay_session.rs`は、GUIと同じ入口(`create_task`・`run_turn`)を台本どおりに呼ぶ。設定ファイルと資格情報ストアを使わずにアダプタとターンの文脈を
-直に組み立てるので、Secret Serviceの無い環境でも動き、設定からは起こしにくい場面(実体の無い
+`crates/scitl-core/examples/relay_session.rs`は、GUIと同じ入口(`create_task`・`run_turn`)を
+台本どおりに呼ぶ。設定ファイルと資格情報ストアを使わずにアダプタとターンの文脈を直に組み立てるので、Secret Serviceの無い環境でも動き、設定からは起こしにくい場面(実体の無い
 外部ツールの定義を出し入れする、コンテキスト長を狭める)を作れる。設定の読み方まで含めて確かめる
 ときは2節を使う。
 

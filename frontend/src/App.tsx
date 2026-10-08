@@ -24,7 +24,7 @@ import { t, turnErrorText } from './i18n'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
-import type { Chat, MessageView, TaskDetailView, TaskListItem, TurnEvent } from './types'
+import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent } from './types'
 import { useChatRequests } from './useChatRequests'
 import { useDrawer } from './useDrawer'
 import { useStickToBottom } from './useStickToBottom'
@@ -133,42 +133,53 @@ export default function App() {
     void loadChat(chat)
   }, [chat, loadChat])
 
-  // 作ったらユーザーの発言を待たずに聞き取りを始める(Rust側の1つの操作)。作った知らせを
-  // 受けたらその会話を開き、聞き取りの応答待ちを会話ごとの表示に載せる。
+  // 作ったらユーザーの発言を待たずに聞き取りを始める(Rust側の1つの操作)。作ったタスクの
+  // 会話を開き、聞き取りの応答待ちを会話ごとの表示に載せる。
   const addTask = async () => {
     if (adding) return
     setAdding(true)
     setAddBlocked(null)
-    // 聞き取りの途中経過の行き先。作った知らせより後に届くので、それまでは無い。
+    // 聞き取りの途中経過の行き先。会話を開くまでは無い。
     let forward: ((event: TurnEvent) => void) | null = null
-    let created = false
-    const creation = createTask(
-      (task) => {
-        created = true
-        setAdding(false)
-        void loadTasks()
-        selectChat(taskChat(task.id))
-        void requests.run(
-          taskChat(task.id),
-          [{ role: 'pending', content: t('chat.pending_reply') }],
-          (onEvent) => {
-            forward = onEvent
-            return creation
-          },
-          settle,
-        )
-      },
-      (event) => forward?.(event),
-    )
+    let opened = false
+    // 作った知らせはコマンドの完了より遅れて届くことがあるので、知らせと完了の早いほうで
+    // 1回だけ開く。
+    const open = (task: Task) => {
+      if (opened) return
+      opened = true
+      setAdding(false)
+      void loadTasks()
+      selectChat(taskChat(task.id))
+      void requests.run(
+        taskChat(task.id),
+        [{ role: 'pending', content: t('chat.pending_reply') }],
+        (onEvent) => {
+          forward = onEvent
+          // 聞き取りを始められなかった理由は、その会話の失敗として出す。
+          return creation.then((result) => {
+            if (result.status === 'created' && result.opening_error !== null) {
+              throw result.opening_error
+            }
+          })
+        },
+        settle,
+      )
+    }
+    const creation = createTask((event) => {
+      if (event.type === 'created') open(event.task)
+      else forward?.(event.event)
+    })
     try {
       const result = await creation
-      if (result.status === 'unavailable') {
+      if (result.status === 'created') {
+        open(result.task)
+      } else {
         // モデル未選択等でチャットを使えない間は作らない。理由はエラー発言と同じ文言で出す。
         setAddBlocked(turnErrorText(result.error_kind, result.error_kind))
       }
     } catch (e) {
-      // 作ったあとの失敗(聞き取りを始められない)は、`requests`がその会話に出す。
-      if (!created) setError(failureText(e))
+      // 作る前の失敗だけが届く(作ったあとの失敗は結果に添えられる)。
+      setError(failureText(e))
     } finally {
       setAdding(false)
     }
