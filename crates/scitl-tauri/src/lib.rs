@@ -126,7 +126,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             // このあとプロセスは接続を閉じずに終わるので、WALにだけある変更をここで本体へ書き戻す。
-            // Androidではプロセスがここを通らずに終わらされることが多く、次の起動時の書き戻しに任せる。
+            // Androidでは裏に回ったプロセスをOSが回収するときにここを通らないので、そのときは次の起動時の
+            // 書き戻しに任せる。
             if let RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<AppState>() {
                     scitl_core::db::checkpoint_wal(&state.db);
