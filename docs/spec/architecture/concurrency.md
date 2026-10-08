@@ -7,7 +7,9 @@ APIキーの参照が黙って消える)、同じ会話を同時に生成でき�
 
 - 2つ目の起動は、DBと設定を開く`setup`より前に終わり、既に開いているウィンドウを前に出す。
   そのためプラグインは他のプラグインより先に登録する
-- 対象はGUIだけ。CLI(`scitl-cli`・`scitl-debug-cli`)とGUIが同時に開く場合は、
+- 対象はデスクトップのGUIだけ。Androidでは使わず、プラグインの依存もデスクトップだけに置く
+  (OSがアプリのプロセスを1つに保ち、Activityも`singleTask`で1つにする)
+- CLI(`scitl-cli`・`scitl-debug-cli`)とGUIが同時に開く場合は、
   SQLiteのロックで扱う(`../data-model/tables.md`「複数プロセスからの書き込みの排他」)。設定ファイルの
   書き換えの競合もCLIとの間には残るので、この防止だけに頼らない
 - **外に開いている口**: Linuxはセッションバスの名前`net.niigo.scitl.SingleInstance`と

@@ -140,6 +140,45 @@ jobs:
           git status --porcelain -- frontend/src/bindings | tee "$RUNNER_TEMP/bindings-diff"
           test ! -s "$RUNNER_TEMP/bindings-diff"
 
+  # Android向けにだけ外れるcfg(デスクトップにしか無いAPI・プラグイン)は、ほかのジョブでは
+  # コンパイルもされない。外し漏れはそれだけで次のAndroidのビルドを止めるので、PRごとに見る。
+  # APKは作らず(Gradleと署名の用意が要る)、コンパイルが通ることだけを確かめる。NDKは
+  # ランナーの画像に入っているものを使う。
+  rust-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      # `gen/android`のGradleのwrapperは、Androidのビルドで実行されるバイナリ。差し替えられて
+      # いないかを、Gradleが版ごとに公開するチェックサムと照合する。
+      - name: Gradleのwrapperの照合
+        working-directory: crates/scitl-tauri/gen/android/gradle/wrapper
+        run: |
+          version=$(sed -n 's|^distributionUrl=.*/gradle-\(.*\)-bin\.zip$|\1|p' gradle-wrapper.properties)
+          expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-$version-wrapper.jar.sha256")
+          echo "$expected  gradle-wrapper.jar" | sha256sum -c -
+
+      - name: Rustのターゲットを入れる
+        run: rustup target add aarch64-linux-android
+
+      - name: cargoのキャッシュ
+        # 第三者のアクションなので、タグではなくコミットで固定する(タグは付け替えられる)。
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # C/C++を含むクレート(SQLite・aws-lc-sys)はNDKのclangでビルドする。clangの名前の数字は
+      # APIレベルで、`gen/android/app/build.gradle.kts`の`minSdk`から読む。
+      - name: clippy(aarch64-linux-android)
+        run: |
+          min_sdk=$(sed -n 's/^ *minSdk = \([0-9]*\)$/\1/p' crates/scitl-tauri/gen/android/app/build.gradle.kts)
+          test -n "$min_sdk"
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android${min_sdk}-clang"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          cargo clippy -p scitl-core -p scitl-tauri --target aarch64-linux-android --locked -- -D warnings
+
   frontend:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

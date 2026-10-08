@@ -6,3 +6,8 @@ frontend/src/bindings/*.ts text eol=lf
 # `tauri build`はこのファイルをLFで書き直す。CRLFでチェックアウトされていると、内容が同じでも
 # 配布用のビルドのたびに「変更あり」と出る
 crates/scitl-tauri/Cargo.toml text eol=lf
+
+# Gradleのwrapperの起動スクリプトは、OSごとの改行でないと動かない(Gradleが`gradle init`で付けるものと同じ)
+crates/scitl-tauri/gen/android/gradlew text eol=lf
+crates/scitl-tauri/gen/android/*.bat text eol=crlf
+crates/scitl-tauri/gen/android/**/*.jar binary

@@ -94,6 +94,7 @@ SCITL/
 │   ├── scitl-debug-cli/            # scitl-cliのコマンドに、応答生成・設定・登録を足す
 │   └── scitl-tauri/                # 薄いIPCシェル
 │       ├── tauri.conf.json         # CSP・devCsp
+│       ├── gen/android/            # Androidのプロジェクト(architecture/tech-stack.md「Androidのビルド」)
 │       └── src/commands/
 ├── frontend/                       # React + TypeScript + Vite
 ├── lang/                           # ja.json / en.json(core・frontend共有。architecture/i18n.md)
