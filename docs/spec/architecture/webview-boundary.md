@@ -63,7 +63,9 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 生成は`cargo test`が行い、CIは生成し直した結果とコミット済みの生成物が一致することを確かめる。
 
 コマンドの失敗は`commands::CommandError`の1つの型で返し、画面へ渡す形(`CoreError`の表示文の
-文字列)をそこだけで決める。各コマンドは`?`で返すだけにする。
+文字列)をそこだけで決める。各コマンドは`?`で返すだけにする。画面の入力を受け取るコマンドで、
+画面が欄の近くに表示言語で出す誤り(`CoreError::Rejected`)は、失敗にせず`settings::FormOutcome`の
+`rejected`で種類のまま返す(`i18n.md`)。
 
 `get_current_task_detail` のようなモデル向けツール(引数なし、対象はターン開始時に
 オーケストレーション側が固定)と、フロントエンド向けIPCコマンドの `task_id` 引数

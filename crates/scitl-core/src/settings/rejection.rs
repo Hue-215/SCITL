@@ -8,15 +8,38 @@ use serde::Serialize;
 
 use crate::error::{CoreError, Result};
 
+/// 数値の欄のどれか。CLIのエラー文に名前を出すのと、画面がどの欄の下に出すかを決めるのに使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum NumberField {
+    ResponseTimeoutSecs,
+    MaxRoundsPerTurn,
+    TotalTimeoutSecs,
+    ContextLength,
+}
+
+impl NumberField {
+    fn name(self) -> &'static str {
+        match self {
+            Self::ResponseTimeoutSecs => "response timeout (seconds)",
+            Self::MaxRoundsPerTurn => "max rounds per turn",
+            Self::TotalTimeoutSecs => "tool timeout (seconds)",
+            Self::ContextLength => "context length",
+        }
+    }
+}
+
 /// 受け付けなかった理由の1つ。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputRejection {
     /// 数値の欄が1以上の整数でない。
-    NotPositiveInteger,
+    NotPositiveInteger { field: NumberField },
     /// 数値の欄が上限を超える。
     NumberTooLarge {
+        field: NumberField,
         #[cfg_attr(test, ts(type = "number"))]
         max: u64,
     },
@@ -29,16 +52,20 @@ pub enum InputRejection {
     McpServerNameTaken { name: String },
     /// MCPサーバーのURLが空。
     UrlRequired,
-    /// ヘッダーの欄の`line_no`行目(1から数える)が`NAME=VALUE`の形でない。値は秘密情報
-    /// なので、行の中身は返さない。
+    /// ヘッダーの欄の`line_no`行目(1から数える)が`NAME=VALUE`の形でないか、名前がHTTPの
+    /// ヘッダー名として読めない(`NAME: VALUE`と書いた等)。値は秘密情報なので、行の中身は返さない。
     HeaderLineInvalid { line_no: usize },
 }
 
 impl fmt::Display for InputRejection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotPositiveInteger => f.write_str("must be an integer of 1 or more"),
-            Self::NumberTooLarge { max } => write!(f, "must be at most {max}"),
+            Self::NotPositiveInteger { field } => {
+                write!(f, "{} must be an integer of 1 or more", field.name())
+            }
+            Self::NumberTooLarge { field, max } => {
+                write!(f, "{} must be at most {max}", field.name())
+            }
             Self::McpServerNameRequired => f.write_str("MCP server name must not be empty"),
             Self::McpServerNameInvalid { max_chars } => write!(
                 f,

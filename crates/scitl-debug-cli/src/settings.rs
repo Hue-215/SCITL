@@ -185,7 +185,8 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
                 system_prompt,
                 task_chat_system_prompt,
                 task_opening_message,
-                response_timeout_secs: response_timeout_secs.unwrap_or_default(),
+                // 省いた値は既定値に戻す(空欄と同じ)。
+                response_timeout_secs: Some(response_timeout_secs.unwrap_or_default()),
             };
             change(settings, move |s| s.update_general(update)).await
         }
@@ -194,9 +195,10 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
             total_timeout_secs,
         } => {
             change(settings, move |s| {
+                // 省いた値は既定値に戻す(空欄と同じ)。
                 s.update_tools(
-                    max_rounds_per_turn.as_deref().unwrap_or_default(),
-                    total_timeout_secs.as_deref().unwrap_or_default(),
+                    Some(max_rounds_per_turn.as_deref().unwrap_or_default()),
+                    Some(total_timeout_secs.as_deref().unwrap_or_default()),
                 )
             })
             .await

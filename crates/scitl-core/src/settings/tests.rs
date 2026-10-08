@@ -164,7 +164,7 @@ fn a_settings_change_reloads_an_unreadable_key() {
     add_local_provider(&settings, "local");
     make_key_unavailable(&settings);
 
-    settings.update_tools("3", "").unwrap();
+    settings.update_tools(Some("3"), Some("")).unwrap();
     ready_adapter(&settings);
 }
 
@@ -428,21 +428,21 @@ fn rejects_limits_and_timeouts_out_of_range() {
     let (settings, _, _dir) = temp_settings();
     for secs in ["0", &(input::MAX_TIMEOUT_SECS + 1).to_string(), "x"] {
         assert!(settings.update_general(general_update(None, secs)).is_err());
-        assert!(settings.update_tools("", secs).is_err());
+        assert!(settings.update_tools(None, Some(secs)).is_err());
     }
     for rounds in [
         "0".to_string(),
         (input::MAX_ROUNDS_PER_TURN + 1).to_string(),
     ] {
-        assert!(settings.update_tools(&rounds, "").is_err());
+        assert!(settings.update_tools(Some(&rounds), None).is_err());
     }
     settings
         .update_general(general_update(None, &input::MAX_TIMEOUT_SECS.to_string()))
         .unwrap();
     let view = settings
         .update_tools(
-            &input::MAX_ROUNDS_PER_TURN.to_string(),
-            &input::MAX_TIMEOUT_SECS.to_string(),
+            Some(&input::MAX_ROUNDS_PER_TURN.to_string()),
+            Some(&input::MAX_TIMEOUT_SECS.to_string()),
         )
         .unwrap();
     assert_eq!(
@@ -450,11 +450,29 @@ fn rejects_limits_and_timeouts_out_of_range() {
         Some(input::MAX_ROUNDS_PER_TURN)
     );
     // 断った理由は、画面が欄の近くに出す種類で返す。
-    let err = settings.update_tools("0", "").unwrap_err();
+    let err = settings.update_tools(Some("0"), None).unwrap_err();
     assert!(matches!(
         err,
-        CoreError::Rejected(Rejections(reasons)) if reasons == [InputRejection::NotPositiveInteger]
+        CoreError::Rejected(Rejections(reasons))
+            if reasons == [InputRejection::NotPositiveInteger { field: NumberField::MaxRoundsPerTurn }]
     ));
+    // 送らなかった欄(`None`)は保存済みの値のまま変えない。
+    let view = settings.update_tools(None, Some("")).unwrap();
+    assert_eq!(
+        view.tools.max_rounds_per_turn,
+        Some(input::MAX_ROUNDS_PER_TURN)
+    );
+    assert_eq!(view.tools.total_timeout_secs, None);
+    let view = settings
+        .update_general(GeneralUpdate {
+            response_timeout_secs: None,
+            ..general_update(Some("prompt"), "")
+        })
+        .unwrap();
+    assert_eq!(
+        view.general.response_timeout_secs,
+        Some(input::MAX_TIMEOUT_SECS)
+    );
 }
 
 #[test]
@@ -524,7 +542,7 @@ fn general_update(system_prompt: Option<&str>, response_timeout_secs: &str) -> G
         system_prompt: system_prompt.map(str::to_string),
         task_chat_system_prompt: None,
         task_opening_message: None,
-        response_timeout_secs: response_timeout_secs.to_string(),
+        response_timeout_secs: Some(response_timeout_secs.to_string()),
     }
 }
 
@@ -817,7 +835,7 @@ name = "m"
     ));
 
     // アダプタの入力を変えない変更は通る。
-    settings.update_tools("3", "").unwrap();
+    settings.update_tools(Some("3"), Some("")).unwrap();
     // 使えるプロバイダーを足しても、アクティブは壊れたままなので状態は変わらない。
     add_local_provider(&settings, "Local");
     assert!(settings.view().providers[0].error.is_some());

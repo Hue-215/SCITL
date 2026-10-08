@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use super::provider_settings::find_provider_mut;
-use super::{input, invalid, view, AvailableModel, ChatModelsView, Settings, SettingsView};
+use super::{
+    input, invalid, view, AvailableModel, ChatModelsView, NumberField, Settings, SettingsView,
+};
 use crate::blocking;
 use crate::config::{
     Capability, Config, ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort,
@@ -236,7 +238,8 @@ impl Settings {
         model: &str,
         context_length: &str,
     ) -> Result<SettingsView> {
-        let context_length = input::positive_integer(context_length, u32::MAX)?;
+        let context_length =
+            input::positive_integer(context_length, u32::MAX, NumberField::ContextLength)?;
         let fallback = self
             .fallback_capabilities(provider_id, model)
             .context_length;

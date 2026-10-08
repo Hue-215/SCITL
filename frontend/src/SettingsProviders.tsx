@@ -543,6 +543,8 @@ function AddProviderForm({ choices, onAdd }: AddProviderFormProps) {
       onSubmit={(e) => {
         e.preventDefault()
         if (submission.running) return
+        // 前の送信の欄の誤りは、この送信がコマンドごと失敗しても残さない。
+        setErrors([])
         void submission.run(
           () => onAdd(name, apiFormat, baseUrl, apiKey || null, headersText),
           (rejected) => {

@@ -10,8 +10,12 @@ import { useCollapse } from './useCollapse'
 
 interface McpTabProps {
   settings: SettingsView
-  // 数値の欄の文字列のまま保存する。欄の誤りは理由の文言で返る。
-  onSaveLimits: (maxRoundsPerTurn: string, totalTimeoutSecs: string) => Promise<string[]>
+  // 数値の欄の文字列のまま保存する。書き換えた欄だけを送り、もう一方はnull(保存済みのまま)。
+  // 欄の誤りは理由の文言で返る。
+  onSaveLimits: (
+    maxRoundsPerTurn: string | null,
+    totalTimeoutSecs: string | null,
+  ) => Promise<string[]>
   // 欄の誤りは理由の文言で返る(フォームの下に出す)。受け付けたら空。
   onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<string[]>
   onDeleteServer: (serverId: string) => void
@@ -67,18 +71,14 @@ export function McpTab({
           label={t('settings.tools.max_rounds_label')}
           value={settings.tools.max_rounds_per_turn}
           defaultValue={settings.tools.default_max_rounds_per_turn}
-          onSave={(rounds) =>
-            onSaveLimits(rounds, settings.tools.total_timeout_secs?.toString() ?? '')
-          }
+          onSave={(rounds) => onSaveLimits(rounds, null)}
         />
 
         <NumberField
           label={t('settings.tools.timeout_label')}
           value={settings.tools.total_timeout_secs}
           defaultValue={settings.tools.default_total_timeout_secs}
-          onSave={(secs) =>
-            onSaveLimits(settings.tools.max_rounds_per_turn?.toString() ?? '', secs)
-          }
+          onSave={(secs) => onSaveLimits(null, secs)}
         />
       </section>
     </div>
@@ -215,6 +215,8 @@ function AddMcpServerForm({ nameMaxChars, onAdd }: AddMcpServerFormProps) {
     e.preventDefault()
     if (submission.running) return
     const endpoint: NewMcpEndpoint = { transport: 'streamable_http', url, headers: headersText }
+    // 前の送信の欄の誤りは、この送信がコマンドごと失敗しても残さない。
+    setErrors([])
     void submission.run(
       () => onAdd(name, endpoint),
       (rejected) => {

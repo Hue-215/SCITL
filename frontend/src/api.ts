@@ -198,12 +198,13 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
 
 // プロンプトはどれも`string | null`で並ぶため、取り違えないようオブジェクト引数にする。
 // 数値の欄(`responseTimeoutSecs`等)は入力欄の文字列のまま送る。空欄は「未設定」で、Rust側の
-// 既定値に戻る。解釈と検証はRust側が行い、欄の誤りは`rejected`で返る。
+// 既定値に戻る。nullは保存済みの値のまま変えない(書き換えた欄だけを送る)。解釈と検証は
+// Rust側が行い、欄の誤りは`rejected`で返る。
 export function updateGeneralSettings(args: {
   systemPrompt: string | null
   taskChatSystemPrompt: string | null
   taskOpeningMessage: string | null
-  responseTimeoutSecs: string
+  responseTimeoutSecs: string | null
 }): Promise<FormOutcome<SettingsView>> {
   return invoke('update_general_settings', args)
 }
@@ -211,8 +212,8 @@ export function updateGeneralSettings(args: {
 // ツール呼び出しの上限。数値の欄の扱いはupdateGeneralSettingsと同じ。引数の取り違えを
 // 避けるためオブジェクト引数にする。
 export function updateToolSettings(args: {
-  maxRoundsPerTurn: string
-  totalTimeoutSecs: string
+  maxRoundsPerTurn: string | null
+  totalTimeoutSecs: string | null
 }): Promise<FormOutcome<SettingsView>> {
   return invoke('update_tool_settings', args)
 }

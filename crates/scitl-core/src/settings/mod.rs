@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::attachments::Attachments;
 use secrecy::SecretString;
 
-use crate::config::{self, Config, SecretRef, ToolConfig};
+use crate::config::{self, Config, SecretRef};
 use crate::db::messages::Chat;
 use crate::error::{CoreError, Result};
 use crate::i18n::Language;
@@ -42,7 +42,7 @@ use crate::secrets;
 pub use input::HeaderInput;
 pub use mcp_settings::{McpServerAdded, NewMcpEndpoint};
 pub use provider_settings::NewProvider;
-pub use rejection::{FormOutcome, InputRejection, Rejections};
+pub use rejection::{FormOutcome, InputRejection, NumberField, Rejections};
 pub use view::{AvailableModel, ChatModelsView, SettingsView};
 
 /// 設定画面「一般」タブの入力(表示言語を除く)。プロンプトは`Option<String>`が並ぶので、
@@ -52,7 +52,9 @@ pub struct GeneralUpdate {
     pub task_chat_system_prompt: Option<String>,
     pub task_opening_message: Option<String>,
     /// 数値の欄の文字列のまま受け取る(空欄は未設定。解釈は`input::positive_integer`)。
-    pub response_timeout_secs: String,
+    /// `None`は保存済みの値のまま変えない(プロンプトだけを保存するときに、書き換えていない
+    /// 欄を検証し直さない)。
+    pub response_timeout_secs: Option<String>,
 }
 
 #[derive(Clone)]
@@ -293,8 +295,16 @@ impl Settings {
     /// (`orchestration::stored_prompt`)。表示言語は[`Self::update_language`]が別に持つので、
     /// ここでは変えない。
     pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
-        let response_timeout_secs =
-            input::positive_integer(&update.response_timeout_secs, input::MAX_TIMEOUT_SECS)?;
+        let response_timeout_secs = update
+            .response_timeout_secs
+            .map(|text| {
+                input::positive_integer(
+                    &text,
+                    input::MAX_TIMEOUT_SECS,
+                    NumberField::ResponseTimeoutSecs,
+                )
+            })
+            .transpose()?;
         let mut draft = self.edit();
         let general = &mut draft.config.general;
         general.system_prompt = stored_prompt(update.system_prompt, None);
@@ -307,7 +317,9 @@ impl Settings {
             update.task_opening_message,
             Some(default_opening_message(language)),
         );
-        general.response_timeout_secs = response_timeout_secs;
+        if let Some(secs) = response_timeout_secs {
+            general.response_timeout_secs = secs;
+        }
         draft.commit()
     }
 
@@ -322,21 +334,39 @@ impl Settings {
         draft.commit()
     }
 
-    /// 数値の欄の文字列のまま受け取る。空欄は「未設定」として既定値に戻す。
+    /// 数値の欄の文字列のまま受け取る。空欄は「未設定」として既定値に戻し、`None`は保存済みの
+    /// 値のまま変えない(画面は書き換えた欄だけを送り、もう一方を検証し直さない)。
     pub fn update_tools(
         &self,
-        max_rounds_per_turn: &str,
-        total_timeout_secs: &str,
+        max_rounds_per_turn: Option<&str>,
+        total_timeout_secs: Option<&str>,
     ) -> Result<SettingsView> {
-        let max_rounds_per_turn =
-            input::positive_integer(max_rounds_per_turn, input::MAX_ROUNDS_PER_TURN)?;
-        let total_timeout_secs =
-            input::positive_integer(total_timeout_secs, input::MAX_TIMEOUT_SECS)?;
+        let max_rounds_per_turn = max_rounds_per_turn
+            .map(|text| {
+                input::positive_integer(
+                    text,
+                    input::MAX_ROUNDS_PER_TURN,
+                    NumberField::MaxRoundsPerTurn,
+                )
+            })
+            .transpose()?;
+        let total_timeout_secs = total_timeout_secs
+            .map(|text| {
+                input::positive_integer(
+                    text,
+                    input::MAX_TIMEOUT_SECS,
+                    NumberField::TotalTimeoutSecs,
+                )
+            })
+            .transpose()?;
         let mut draft = self.edit();
-        draft.config.tools = ToolConfig {
-            max_rounds_per_turn,
-            total_timeout_secs,
-        };
+        let tools = &mut draft.config.tools;
+        if let Some(rounds) = max_rounds_per_turn {
+            tools.max_rounds_per_turn = rounds;
+        }
+        if let Some(secs) = total_timeout_secs {
+            tools.total_timeout_secs = secs;
+        }
         draft.commit()
     }
 }

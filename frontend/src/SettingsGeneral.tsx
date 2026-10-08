@@ -64,7 +64,8 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     systemPrompt: systemPrompt || null,
     taskChatSystemPrompt: taskChatSystemPrompt || null,
     taskOpeningMessage: taskOpeningMessage || null,
-    responseTimeoutSecs: general.response_timeout_secs?.toString() ?? '',
+    // 数値の欄はその欄を書き換えたときだけ送る(プロンプトの保存で検証し直さない)。
+    responseTimeoutSecs: null,
   })
 
   return (

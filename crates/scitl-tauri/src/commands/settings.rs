@@ -21,14 +21,15 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     state.settings.view()
 }
 
-/// 数値の欄は文字列のまま受け取る(解釈はcore)。欄の誤りは`FormOutcome::Rejected`で返す。
+/// 数値の欄は文字列のまま受け取る(解釈はcore。`None`は保存済みの値のまま)。欄の誤りは
+/// `FormOutcome::Rejected`で返す。
 #[tauri::command]
 pub async fn update_general_settings(
     state: State<'_, AppState>,
     system_prompt: Option<String>,
     task_chat_system_prompt: Option<String>,
     task_opening_message: Option<String>,
-    response_timeout_secs: String,
+    response_timeout_secs: Option<String>,
 ) -> CommandResult<FormOutcome<SettingsView>> {
     let update = GeneralUpdate {
         system_prompt,
@@ -60,11 +61,14 @@ pub async fn update_language(
 #[tauri::command]
 pub async fn update_tool_settings(
     state: State<'_, AppState>,
-    max_rounds_per_turn: String,
-    total_timeout_secs: String,
+    max_rounds_per_turn: Option<String>,
+    total_timeout_secs: Option<String>,
 ) -> CommandResult<FormOutcome<SettingsView>> {
     with_settings(&state, move |s| {
-        FormOutcome::from_result(s.update_tools(&max_rounds_per_turn, &total_timeout_secs))
+        FormOutcome::from_result(s.update_tools(
+            max_rounds_per_turn.as_deref(),
+            total_timeout_secs.as_deref(),
+        ))
     })
     .await
 }
