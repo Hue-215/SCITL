@@ -11,6 +11,7 @@ import type {
   ExportSummary,
   Language,
   LinkInspection,
+  Memory,
   MessageView,
   NewMcpEndpoint,
   ReasoningEffort,
@@ -327,4 +328,23 @@ export function inspectLink(url: string): Promise<LinkInspection> {
 
 export function openConfirmedLink(url: string): Promise<void> {
   return invoke('open_confirmed_link', { url })
+}
+
+// 設定のメモリタブ。変更のコマンドは何も返さないので、画面は続けて一覧を読み直す。
+export function listMemories(): Promise<Memory[]> {
+  return invoke('list_memories')
+}
+
+// 空・長すぎる本文と、上限の件数を超える追加は断られる。新しく足したメモリを返し、既にある
+// 本文と同じなら空の配列になる。
+export function addMemory(content: string): Promise<Memory[]> {
+  return invoke('add_memory', { content })
+}
+
+export function updateMemory(memoryId: number, content: string): Promise<void> {
+  return invoke('update_memory', { memoryId, content })
+}
+
+export function deleteMemory(memoryId: number): Promise<void> {
+  return invoke('delete_memory', { memoryId })
 }

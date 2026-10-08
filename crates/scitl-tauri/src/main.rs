@@ -115,6 +115,10 @@ fn main() {
             commands::mcp::set_mcp_server_enabled,
             commands::mcp::set_mcp_tool_enabled,
             commands::mcp::fetch_mcp_tools,
+            commands::memories::list_memories,
+            commands::memories::add_memory,
+            commands::memories::update_memory,
+            commands::memories::delete_memory,
             commands::link::inspect_link,
             commands::link::open_confirmed_link,
         ])

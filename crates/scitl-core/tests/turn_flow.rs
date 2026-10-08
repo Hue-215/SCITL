@@ -4161,8 +4161,8 @@ fn calls_tools_then_confirms(tool_calls: Vec<(&str, serde_json::Value)>) -> Scri
     ScriptedAdapter::new(vec![calls(tool_calls), text("確認しました")]).repeating_last()
 }
 
-/// 総合チャット。発言はどのタスクにも属さず、モデルには読み取り専用のツールとタスク
-/// 一覧だけを渡す。更新系のツールを呼ばれても実行しない。
+/// 総合チャット。発言はどのタスクにも属さず、モデルにはタスクについて読み取り専用のツールと
+/// メモリのツールだけを渡す。タスクの更新系のツールを呼ばれても実行しない。
 #[tokio::test]
 async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     let conn = db::open_in_memory().unwrap();
@@ -4185,7 +4185,15 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     let offered = adapter.offered();
     assert_eq!(
         offered[0],
-        vec!["get_task_list", "get_task_detail", "read_attachment"]
+        vec![
+            "get_task_list",
+            "get_task_detail",
+            "read_attachment",
+            "get_memories",
+            "add_memories",
+            "update_memory",
+            "delete_memory",
+        ]
     );
     // タスクの一覧は添えず、モデルが読み取りのツールで読む。
     let first = &adapter.sent_messages()[0];
@@ -4209,6 +4217,42 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     assert!(db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .is_empty());
+}
+
+/// メモリはどの会話にも属さない。あるタスクの会話で書いたものを、総合チャットで読める。
+#[tokio::test]
+async fn memories_written_in_a_task_are_read_in_the_general_chat() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let writer = calls_tools_then_confirms(vec![("add_memories", json!({ "contents": ["朝型"] }))]);
+    run_turn(
+        db.clone(),
+        &context(&writer),
+        Chat::Task(task_id),
+        "朝のほうが集中できる".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let reader = calls_tools_then_confirms(vec![("get_memories", json!({}))]);
+    run_turn(
+        db.clone(),
+        &context(&reader),
+        Chat::General,
+        "私のこと覚えてる?".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let read = db::messages::list_for_chat(&conn, Chat::General)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.kind == Kind::ToolExecution)
+        .unwrap();
+    let result = &serde_json::from_str::<serde_json::Value>(&read.content).unwrap()["result"];
+    assert_eq!(result[0]["content"], "朝型");
 }
 
 /// 総合チャットの応答生成も1本に絞るが、タスクの会話は妨げない。

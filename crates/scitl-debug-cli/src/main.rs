@@ -59,6 +59,9 @@ enum Command {
     /// Register, change and remove external tool (MCP) servers.
     #[command(subcommand)]
     Mcp(settings::McpCommand),
+    /// Show and change the memories shared across all conversations.
+    #[command(subcommand)]
+    Memory(MemoryCommand),
 }
 
 #[derive(Subcommand)]
@@ -81,6 +84,22 @@ enum AttachmentCommand {
         #[arg(long)]
         delete: bool,
     },
+}
+
+/// メモリの操作。変更したら、採番されたIDを続けて使えるよう、変更後の一覧を出す。
+#[derive(Subcommand)]
+enum MemoryCommand {
+    /// List the memories.
+    List,
+    /// Add memories, one fact per argument. Contents that already exist are skipped.
+    Add {
+        #[arg(required = true)]
+        contents: Vec<String>,
+    },
+    /// Rewrite a memory.
+    Update { memory_id: i64, content: String },
+    /// Delete a memory.
+    Delete { memory_id: i64 },
 }
 
 #[tokio::main]
@@ -126,7 +145,28 @@ async fn run(cli: Cli) -> Result<(), DebugError> {
         Command::Provider(command) => settings::run_provider(&session, command).await?,
         Command::Model(command) => settings::run_model(&session, command).await?,
         Command::Mcp(command) => settings::run_mcp(&session, command).await?,
+        Command::Memory(command) => run_memory(&session, command).await?,
     }
+    Ok(())
+}
+
+async fn run_memory(session: &Session, command: MemoryCommand) -> Result<(), DebugError> {
+    use db::memories;
+    let memories = db::with_conn(session.db.clone(), move |conn| {
+        match command {
+            MemoryCommand::List => {}
+            MemoryCommand::Add { contents } => {
+                memories::add(conn, &contents)?;
+            }
+            MemoryCommand::Update { memory_id, content } => {
+                memories::update(conn, memory_id, &content)?;
+            }
+            MemoryCommand::Delete { memory_id } => memories::delete(conn, memory_id)?,
+        }
+        memories::list(conn)
+    })
+    .await?;
+    print_json(&memories);
     Ok(())
 }
 

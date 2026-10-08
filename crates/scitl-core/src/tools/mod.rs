@@ -26,14 +26,18 @@ macro_rules! internal_tool {
     };
 }
 
+pub mod add_memories;
 pub mod add_steps;
 mod args;
+pub mod delete_memory;
 pub mod delete_step;
 pub mod external;
 pub mod get_current_task_detail;
+pub mod get_memories;
 pub mod get_task_detail;
 pub mod get_task_list;
 pub mod read_attachment;
+pub mod update_memory;
 pub mod update_step;
 pub mod update_task;
 
@@ -77,11 +81,15 @@ pub(crate) struct InternalTool {
     run: Run,
 }
 
-/// 実行の形。タスクを対象にする形は、タスクチャットの一覧([`TASK`])にだけ並べる。
+/// 実行の形。タスクを対象にする形は、タスクチャットの一覧([`TASK`])にだけ並べる。会話によらない
+/// 形(メモリ)は、どの会話の一覧にも並べる。
 #[derive(Clone, Copy)]
 enum Run {
     /// 会話によらない読み取り。
     Read(fn(&Connection, &Value) -> Result<Value>),
+    /// 会話によらない書き込み(メモリ)。確認から変更後の全体の読み直しまでを1単位にする。
+    /// 対象がタスクではないので、総合チャットでも実行できる(権限の分離の対象外)。
+    Write(fn(&Connection, &Value) -> Result<Value>),
     /// 会話の対象タスクの読み取り。
     ReadTask(fn(&Connection, i64, &Value) -> Result<Value>),
     /// 会話の対象タスクの更新。対象の確認から変更後の全体の読み直しまでを1単位にする。
@@ -91,8 +99,8 @@ enum Run {
     ReadAttachment,
 }
 
-/// 会話で公開する内部ツール。総合チャットは読み取り専用のツールだけを公開する。実装関数は
-/// 1つのまま、公開する集合だけを会話で分ける。
+/// 会話で公開する内部ツール。総合チャットはタスクについて読み取り専用のツールだけを公開する。
+/// 実装関数は1つのまま、公開する集合だけを会話で分ける。
 fn tools_of(chat: Chat) -> &'static [InternalTool] {
     match chat {
         Chat::General => GENERAL,
@@ -112,6 +120,10 @@ const GENERAL: &[InternalTool] = &[
     get_task_list::TOOL,
     get_task_detail::TOOL,
     read_attachment::TOOL,
+    get_memories::TOOL,
+    add_memories::TOOL,
+    update_memory::TOOL,
+    delete_memory::TOOL,
 ];
 
 const TASK: &[InternalTool] = &[
@@ -122,6 +134,10 @@ const TASK: &[InternalTool] = &[
     update_step::TOOL,
     delete_step::TOOL,
     read_attachment::TOOL,
+    get_memories::TOOL,
+    add_memories::TOOL,
+    update_memory::TOOL,
+    delete_memory::TOOL,
 ];
 
 fn find(chat: Chat, name: &str) -> Option<&'static InternalTool> {
@@ -148,7 +164,7 @@ pub fn names(chat: Chat) -> Vec<String> {
         .collect()
 }
 
-/// その名前のツールを実行すると、効果が後に残りうるか。内部ツールは更新系だけが残り、読み取り
+/// その名前のツールを実行すると、効果が後に残りうるか。内部ツールは書き込み系だけが残り、読み取り
 /// (添付の読み込みを含む)は残らない。外部ツールと知らない名前は、読むだけか判別できないので
 /// 残りうるものとする。捨てた試行の記録を伝えるか(`orchestration::history`)の判断に使う。
 pub fn has_lasting_effect(name: &str) -> bool {
@@ -157,7 +173,7 @@ pub fn has_lasting_effect(name: &str) -> bool {
         .flatten()
         .find(|tool| (tool.schema)().name() == name)
         .is_none_or(|tool| match tool.run {
-            Run::UpdateTask(_) => true,
+            Run::UpdateTask(_) | Run::Write(_) => true,
             Run::Read(_) | Run::ReadTask(_) | Run::ReadAttachment => false,
         })
 }
@@ -173,7 +189,7 @@ pub fn recorded_result(name: &str, result: Value) -> Value {
 }
 
 /// 会話での内部ツールの実行。会話で公開していない名前は[`CoreError::UnknownTool`]にする。
-/// 総合チャットで更新系のツールを呼ばれても、ここで止まる(権限の分離をモデルの自己制御に
+/// 総合チャットでタスクの更新系のツールを呼ばれても、ここで止まる(権限の分離をモデルの自己制御に
 /// 頼らない)。タスクチャットの`task_id`は呼び出し元(orchestration)が文脈から渡す(モデルには
 /// 公開しない)。`image_input`はモデルが画像入力に対応するか(`attachments::delivery`)。
 pub fn execute(
@@ -190,6 +206,7 @@ pub fn execute(
             return read_attachment::execute(conn, chat, image_input, arguments)
         }
         (Run::Read(run), _) => run(conn, arguments),
+        (Run::Write(run), _) => db::in_transaction(conn, |conn| run(conn, arguments)),
         (Run::ReadTask(run), Chat::Task(task_id)) => run(conn, task_id, arguments),
         (Run::UpdateTask(run), Chat::Task(task_id)) => {
             db::in_transaction(conn, |conn| run(conn, task_id, arguments))
@@ -250,13 +267,31 @@ mod tests {
         assert!(!names(Chat::General).contains(&update_task::NAME.to_string()));
     }
 
+    /// メモリはタスクに紐づかないので、総合チャットでも書き込める。
     #[test]
-    fn only_updates_and_unknown_tools_have_lasting_effects() {
+    fn general_chat_can_write_memories() {
+        let conn = db::open_in_memory().unwrap();
+        let output = execute(
+            &conn,
+            Chat::General,
+            true,
+            add_memories::NAME,
+            &serde_json::json!({ "contents": ["朝型"] }),
+        )
+        .unwrap();
+        assert_eq!(output.result[0]["content"], "朝型");
+    }
+
+    #[test]
+    fn only_writes_and_unknown_tools_have_lasting_effects() {
         for name in [
             update_task::NAME,
             add_steps::NAME,
             update_step::NAME,
             delete_step::NAME,
+            add_memories::NAME,
+            update_memory::NAME,
+            delete_memory::NAME,
             "server__tool",
         ] {
             assert!(has_lasting_effect(name), "{name}");
@@ -266,6 +301,7 @@ mod tests {
             get_task_detail::NAME,
             get_current_task_detail::NAME,
             read_attachment::NAME,
+            get_memories::NAME,
         ] {
             assert!(!has_lasting_effect(name), "{name}");
         }

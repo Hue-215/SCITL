@@ -47,6 +47,13 @@ impl<'a> Args<'a> {
         }
     }
 
+    pub fn required_string(&self, name: &str) -> Result<String> {
+        self.required(name)?
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| invalid(name, "expected a string"))
+    }
+
     pub fn required_i64(&self, name: &str) -> Result<i64> {
         self.required(name)?
             .as_i64()

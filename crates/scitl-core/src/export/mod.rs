@@ -18,6 +18,7 @@ use ulid::Ulid;
 use crate::attachments::{safe_file_name, AttachmentStore, Attachments};
 use crate::blocking;
 use crate::db::attachments::{self, Attachment, AttachmentContent};
+use crate::db::memories::{self, Memory};
 use crate::db::messages::{self, Chat, Message, ReplyRecords};
 use crate::db::task_steps::{self, TaskStep};
 use crate::db::tasks::{self, Task};
@@ -81,6 +82,7 @@ impl ChatRows {
 struct Snapshot {
     tasks: Vec<(Task, Vec<TaskStep>, ChatRows)>,
     general: ChatRows,
+    memories: Vec<Memory>,
 }
 
 impl Snapshot {
@@ -96,6 +98,7 @@ impl Snapshot {
         Ok(Self {
             tasks,
             general: ChatRows::read(conn, Chat::General)?,
+            memories: memories::list(conn)?,
         })
     }
 }
@@ -129,6 +132,10 @@ fn write_files(snapshot: &Snapshot, store: &AttachmentStore, dir: &Path) -> Resu
     write_file(
         &dir.join("general-chat.md"),
         &markdown::render_general_chat(&general),
+    )?;
+    write_file(
+        &dir.join("memories.md"),
+        &markdown::render_memories(&snapshot.memories),
     )?;
     for (task, steps, chat) in &snapshot.tasks {
         let conversation = entries(chat, store, dir, &mut counts);
@@ -439,6 +446,21 @@ mod tests {
             .contains("- Status: archived"));
         assert!(!folder.join(format!("task-{removed}-消した.md")).exists());
         assert!(read(folder.join("general-chat.md")).contains("general hello"));
+    }
+
+    /// メモリは削除したものを除いて書き出す。本文はMarkdownの構造として読まれない形にする。
+    #[test]
+    fn writes_memories_except_deleted_ones() {
+        let f = Fixture::new();
+        memories::add(&f.conn, &["朝型 *強調*".to_string(), "消した".to_string()]).unwrap();
+        let removed = memories::list(&f.conn).unwrap()[1].id;
+        memories::delete(&f.conn, removed).unwrap();
+
+        let (_, folder) = f.export();
+
+        let body = read(folder.join("memories.md"));
+        assert!(body.contains("朝型 \\*強調\\*"));
+        assert!(!body.contains("消した"));
     }
 
     #[test]
