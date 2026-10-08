@@ -20,12 +20,14 @@ import {
 import ChatCompose, { type ComposedMessage } from './ChatCompose'
 import ChatLog from './ChatLog'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
+import { Drawer, DrawerToggle } from './Drawer'
 import { t, turnErrorText } from './i18n'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
 import type { Chat, MessageView, TaskDetailView, TaskListItem } from './types'
 import { useChatRequests } from './useChatRequests'
+import { useDrawer } from './useDrawer'
 import { useStickToBottom } from './useStickToBottom'
 
 export default function App() {
@@ -94,6 +96,8 @@ export default function App() {
 
   const requests = useChatRequests()
   const { reloaded } = requests
+  // 狭い窓で畳むサイドバー。サイドバーで会話・タスクの追加・設定を選んだら閉じる。
+  const drawer = useDrawer()
 
   const loadChat = useCallback(
     async (target: Chat) => {
@@ -293,22 +297,36 @@ export default function App() {
     )
   }
 
-  return (
-    <div className="layout">
-      <Sidebar
-        tasks={tasks}
-        selected={chat}
-        onSelect={selectChat}
-        onAddTask={() => void addTask()}
-        adding={adding}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
+  const drawerToggle = <DrawerToggle drawer={drawer} label={t('sidebar.open_tooltip')} />
 
-      <main>
+  return (
+    <div className={drawer.narrow ? 'layout narrow' : 'layout'}>
+      <Drawer drawer={drawer}>
+        <Sidebar
+          tasks={tasks}
+          selected={chat}
+          onSelect={(next) => {
+            drawer.close()
+            selectChat(next)
+          }}
+          onAddTask={() => {
+            drawer.close()
+            void addTask()
+          }}
+          adding={adding}
+          onOpenSettings={() => {
+            drawer.close()
+            setSettingsOpen(true)
+          }}
+        />
+      </Drawer>
+
+      <main inert={drawer.shown}>
         {task ? (
           <TaskHeader
             key={task.id}
             task={task}
+            drawerToggle={drawerToggle}
             disabled={disableActions}
             onRename={(title) => runTaskOperation(task.id, () => renameTask(task.id, title))}
             onSetArchived={(archived) =>
@@ -326,7 +344,12 @@ export default function App() {
           />
         ) : (
           <header className="chat-header">
-            <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
+            <div className="chat-header-row">
+              <div className="chat-header-name">
+                {drawerToggle}
+                <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
+              </div>
+            </div>
           </header>
         )}
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from './i18n'
+import { FOCUSABLE_SELECTOR } from './keyboard'
 
 interface DialogProps {
   title: string
@@ -10,9 +11,6 @@ interface DialogProps {
   // 枠自体は既定幅だけを持ち、外から上書きできるようにする。
   width?: string
 }
-
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 // ダイアログの共通枠。余白・角丸・ボタン配置を統一する。本文は children に委ね、枠自体は
 // 内容を知らない。
@@ -55,7 +53,7 @@ export default function Dialog({ title, onClose, children, width }: DialogProps)
   }, [onClose])
 
   return createPortal(
-    <div className="dialog-overlay" onClick={onClose}>
+    <div className="dialog-overlay scrim" onClick={onClose}>
       <div
         ref={boxRef}
         className="dialog"

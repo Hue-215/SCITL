@@ -336,6 +336,8 @@ option {
 .layout {
   display: flex;
   height: 100vh;
+  /* 狭い窓で引き出したサイドバー(.drawer)の位置の基準。 */
+  position: relative;
 }
 
 .layout main {
@@ -376,6 +378,16 @@ option {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* 名前と、その前に置く引き出すボタン(狭い窓)の組。折り返さない名前の幅を基準に並べるので、
+   操作と1行に収まらなければ操作の方が次の行へ移り、名前は1行を使って折り返す。 */
+.chat-header-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
 }
 
@@ -532,6 +544,41 @@ option {
   padding: var(--space-2);
 }
 
+/* 狭い窓で畳む左のカラム(サイドバー・設定のメニュー)の入れ物(Drawer.tsx)。広い窓では
+   カラムを並びの中にそのまま出す。 */
+.drawer {
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* 狭い窓では内容の上に重ね、引き出したときだけ見せる。visibility で隠すのは、隠れている間に
+   Tabで中へ入れないようにするため。 */
+.narrow .drawer {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  visibility: hidden;
+  /* 重ねると下の内容が透けるので、ここだけは背景色で塗る。 */
+  background: var(--color-bg);
+}
+
+.narrow .drawer.open {
+  visibility: visible;
+}
+
+.drawer-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
+/* 引き出したカラムと暗幕は、選択一覧(.dropdown-popup)より手前に出す。同じ順位にしておき、
+   DOMで暗幕の後に置いたカラムが暗幕より手前になる。ダイアログ(.dialog-overlay)より手前に
+   なるが、引き出している間は内容側がinertでダイアログを開けないので重ならない。 */
+.narrow .drawer,
+.drawer-backdrop {
+  z-index: 2;
+}
+
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
@@ -586,7 +633,7 @@ option {
   font-weight: var(--font-weight-strong);
 }
 
-/* アイコン1つだけを置くボタンの箱。サイドバーの⚙と設定画面の←が同じ形。
+/* アイコン1つだけを置くボタンの箱。
    SVGアイコン導入時にグリフから箱へ移す作業をここ1箇所で済ませる。
    グリフをアイコン代わりに使うのは暫定実装で、font-size/line-heightはそのための指定
    (SVG化時はwidth/heightを内側の<svg>へ移す。tokens.css参照)。 */
@@ -949,6 +996,8 @@ option {
   flex: 1;
   display: flex;
   min-height: 0;
+  /* 狭い窓で引き出したメニュー(.drawer)の位置の基準。見出しは覆わない。 */
+  position: relative;
 }
 
 .settings-rail {
@@ -1456,14 +1505,17 @@ button.danger {
   user-select: text;
 }
 
+/* 背後の画面を覆う暗幕(ダイアログ・引き出したカラムの後ろ)。明暗のテーマによらず同じ色にする。 */
+.scrim {
+  background: rgb(0 0 0 / 0.5);
+}
+
 /* ダイアログの共通枠。タスク削除・プロバイダー削除・外部ツールサーバー削除の確認のほか、
    リンク確認・画像プレビュー・テキスト添付の全文表示でも共通で使う。ウィンドウ全体を覆う
    都合、内容領域の幅基準ではなくoverlay自身の幅(100%)を基準にする。 */
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  /* 背景を覆う暗幕。ここでしか使わない値なのでトークン化しない。 */
-  background: rgb(0 0 0 / 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
