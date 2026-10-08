@@ -2,9 +2,10 @@
 
 use secrecy::{ExposeSecret, SecretString};
 
+use super::destination::NewDestination;
 use super::rejection::rejected;
 use super::{delete_secret, delete_secret_refs, input, invalid, store_secret_refs, HeaderInput};
-use super::{Settings, SettingsView};
+use super::{DestinationDialog, Settings, SettingsView};
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::error::{CoreError, Result};
 use crate::llm::providers;
@@ -42,7 +43,15 @@ impl Settings {
     /// (チャットのモデル選択で見分けられなくなる)。鍵・ヘッダーの値の保存に失敗したら
     /// プロバイダー自体の登録も中断し、登録に失敗したら保存した値を消す。どちらでも参照と
     /// 値の片方だけが残る状態を作らない。
-    pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
+    ///
+    /// 検証を通ったら、秘密情報を保存する前に`confirm`で利用者に通信先を確かめ、承認されなければ
+    /// 何も保存せずに[`CoreError::Cancelled`]を返す(画面からの登録はネイティブのダイアログ。
+    /// 端末で利用者自身が打つCLIは確かめない)。確かめる間は書き込みロックを持たない。
+    pub fn add_provider(
+        &self,
+        new: NewProvider,
+        confirm: impl FnOnce(&DestinationDialog) -> bool,
+    ) -> Result<SettingsView> {
         // 欄の誤りは画面が欄の近くに出すので、他の検証より先に見る。
         let headers = new.headers.into_pairs().map_err(rejected)?;
         let name = input::name(&new.name, "provider name", input::PROVIDER_NAME_MAX_CHARS)?;
@@ -56,6 +65,14 @@ impl Settings {
             providers::validate_api_key(key)?;
         }
         validate_headers(new.api_format, &headers)?;
+        let destination = NewDestination::Provider {
+            name: &name,
+            api_format: new.api_format,
+            base_url: &base_url,
+        };
+        if !confirm(&destination.dialog(self.display_language())) {
+            return Err(CoreError::Cancelled);
+        }
 
         let key_ref = match api_key {
             Some(key) => {

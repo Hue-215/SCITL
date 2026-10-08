@@ -24,3 +24,10 @@ export function rejectionText(reason: InputRejection): string {
       })
   }
 }
+
+// 追加のフォームの送信の結果。登録しなかったとき、欄の誤りがあれば`errors`に文言が入る
+// (確認のダイアログで取りやめたときは空)。フォームは登録したときだけ入力を空にする。
+export interface AddResult {
+  added: boolean
+  errors: string[]
+}

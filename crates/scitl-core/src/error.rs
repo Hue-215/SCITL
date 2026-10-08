@@ -50,6 +50,9 @@ pub enum CoreError {
     /// (`settings::FormOutcome`)。
     #[error("input rejected: {0}")]
     Rejected(crate::settings::Rejections),
+    /// 新しい通信先の登録を、利用者が確認のダイアログで取りやめた(`settings::DestinationDialog`)。
+    #[error("the registration was cancelled")]
+    Cancelled,
     #[error("MCP server error: {0}")]
     Mcp(String),
     /// リンクを開けない(許可されていない・解釈できないURL、OS側の起動失敗)。

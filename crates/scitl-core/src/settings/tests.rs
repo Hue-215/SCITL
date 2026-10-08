@@ -28,13 +28,16 @@ fn ready_adapter(settings: &Settings) -> SharedAdapter {
 
 fn add_local_provider(settings: &Settings, name: &str) -> SettingsView {
     settings
-        .add_provider(NewProvider {
-            name: name.to_string(),
-            api_format: ApiFormat::OpenAiCompat,
-            base_url: "http://localhost:1234/v1".to_string(),
-            api_key: None,
-            headers: HeaderInput::default(),
-        })
+        .add_provider(
+            NewProvider {
+                name: name.to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: "http://localhost:1234/v1".to_string(),
+                api_key: None,
+                headers: HeaderInput::default(),
+            },
+            |_| true,
+        )
         .unwrap()
 }
 
@@ -46,19 +49,66 @@ fn http_endpoint() -> NewMcpEndpoint {
     }
 }
 
+/// 新しい通信先は、検証を通ったあとで利用者に確かめ、取りやめたら何も保存しない。
+/// 欄の誤りがあれば確かめない(確かめてから断ることはしない)。
+#[test]
+fn a_new_destination_is_saved_only_when_the_user_confirms_it() {
+    let (settings, _, _dir) = temp_settings();
+    let provider = || NewProvider {
+        name: "remote".to_string(),
+        api_format: ApiFormat::Anthropic,
+        base_url: " https://api.example.com ".to_string(),
+        api_key: None,
+        headers: HeaderInput::default(),
+    };
+
+    let mut shown = None;
+    let err = settings
+        .add_provider(provider(), |dialog| {
+            shown = Some(dialog.clone());
+            false
+        })
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Cancelled));
+    let shown = shown.unwrap();
+    assert!(shown.message.contains("remote"));
+    assert!(shown.message.contains("https://api.example.com"));
+    assert!(settings.view().providers.is_empty());
+
+    let err = settings
+        .register_mcp_server("tools", http_endpoint(), |_| false)
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Cancelled));
+    assert!(settings.view().mcp_servers.is_empty());
+
+    let invalid = NewMcpEndpoint::StreamableHttp {
+        url: String::new(),
+        headers: HeaderInput::default(),
+    };
+    assert!(settings
+        .register_mcp_server("tools", invalid, |_| panic!("asked about invalid input"))
+        .is_err());
+
+    settings.add_provider(provider(), |_| true).unwrap();
+    assert_eq!(settings.view().providers.len(), 1);
+}
+
 /// 追加に続く能力の検出とツール一覧の取得に失敗しても、登録は残る。
 #[tokio::test]
 async fn adding_keeps_the_registration_when_the_following_query_fails() {
     let (settings, _path, _dir) = temp_settings();
     let settings = Arc::new(settings);
     let provider = settings
-        .add_provider(NewProvider {
-            name: "local".to_string(),
-            api_format: ApiFormat::OpenAiCompat,
-            base_url: "http://127.0.0.1:1/v1".to_string(),
-            api_key: None,
-            headers: HeaderInput::default(),
-        })
+        .add_provider(
+            NewProvider {
+                name: "local".to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: "http://127.0.0.1:1/v1".to_string(),
+                api_key: None,
+                headers: HeaderInput::default(),
+            },
+            |_| true,
+        )
         .unwrap()
         .providers[0]
         .id
@@ -77,6 +127,7 @@ async fn adding_keeps_the_registration_when_the_following_query_fails() {
                 url: "http://127.0.0.1:1/mcp".to_string(),
                 headers: HeaderInput::default(),
             },
+            |_| true,
         )
         .await
         .unwrap();
@@ -94,16 +145,19 @@ fn add_provider_refuses_bad_headers_before_storing_anything() {
         vec![("X-Title", "全角")],
         vec![("X-Title", "a"), ("x-title", "b")],
     ] {
-        let result = settings.add_provider(NewProvider {
-            name: "remote".to_string(),
-            api_format: ApiFormat::OpenAiCompat,
-            base_url: "http://localhost:1234/v1".to_string(),
-            api_key: None,
-            headers: headers
-                .iter()
-                .map(|(n, v)| (n.to_string(), SecretString::from(*v)))
-                .collect(),
-        });
+        let result = settings.add_provider(
+            NewProvider {
+                name: "remote".to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: "http://localhost:1234/v1".to_string(),
+                api_key: None,
+                headers: headers
+                    .iter()
+                    .map(|(n, v)| (n.to_string(), SecretString::from(*v)))
+                    .collect(),
+            },
+            |_| true,
+        );
         assert!(result.is_err(), "{headers:?}");
         if let Err(e) = result {
             assert!(!e.to_string().contains("全角"), "{e}");
@@ -117,13 +171,16 @@ fn add_provider_refuses_bad_headers_before_storing_anything() {
 fn add_provider_refuses_a_key_that_is_not_visible_ascii() {
     let (settings, _path, _dir) = temp_settings();
     for key in ["   ", "sk-test\n"] {
-        let result = settings.add_provider(NewProvider {
-            name: "remote".to_string(),
-            api_format: ApiFormat::OpenAiCompat,
-            base_url: "http://localhost:1234/v1".to_string(),
-            api_key: Some(SecretString::from(key)),
-            headers: HeaderInput::default(),
-        });
+        let result = settings.add_provider(
+            NewProvider {
+                name: "remote".to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: "http://localhost:1234/v1".to_string(),
+                api_key: Some(SecretString::from(key)),
+                headers: HeaderInput::default(),
+            },
+            |_| true,
+        );
         assert!(
             matches!(result, Err(CoreError::ProviderConfig(_))),
             "{key:?}"
@@ -479,13 +536,16 @@ fn rejects_limits_and_timeouts_out_of_range() {
 fn provider_name_must_be_visible_and_unique_and_the_url_is_trimmed() {
     let (settings, _, _dir) = temp_settings();
     let add = |name: &str, base_url: &str| {
-        settings.add_provider(NewProvider {
-            name: name.to_string(),
-            api_format: ApiFormat::OpenAiCompat,
-            base_url: base_url.to_string(),
-            api_key: None,
-            headers: HeaderInput::default(),
-        })
+        settings.add_provider(
+            NewProvider {
+                name: name.to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: base_url.to_string(),
+                api_key: None,
+                headers: HeaderInput::default(),
+            },
+            |_| true,
+        )
     };
     let view = add(" Local ", " http://localhost:1234/v1 \n").unwrap();
     assert_eq!(view.providers[0].name, "Local");
@@ -530,7 +590,9 @@ fn mcp_endpoint_refuses_repeated_or_malformed_secret_names() {
             headers: pairs(headers),
         };
         assert!(
-            settings.register_mcp_server("tools", endpoint).is_err(),
+            settings
+                .register_mcp_server("tools", endpoint, |_| true)
+                .is_err(),
             "{headers:?}"
         );
     }
@@ -646,7 +708,7 @@ fn mcp_form_mistakes_are_returned_together_as_kinds() {
     };
 
     assert_eq!(
-        reasons(settings.register_mcp_server(" ", form(" ", "A=1\nsecret"))),
+        reasons(settings.register_mcp_server(" ", form(" ", "A=1\nsecret"), |_| true)),
         [
             InputRejection::McpServerNameRequired,
             InputRejection::UrlRequired,
@@ -655,7 +717,11 @@ fn mcp_form_mistakes_are_returned_together_as_kinds() {
     );
     for name in ["a__b", "_a", "a-b", "abcdefghijklmnopq"] {
         assert_eq!(
-            reasons(settings.register_mcp_server(name, form("http://127.0.0.1:8000/mcp", ""))),
+            reasons(settings.register_mcp_server(
+                name,
+                form("http://127.0.0.1:8000/mcp", ""),
+                |_| true
+            )),
             [InputRejection::McpServerNameInvalid {
                 max_chars: crate::config::MCP_SERVER_NAME_MAX_CHARS
             }],
@@ -663,10 +729,10 @@ fn mcp_form_mistakes_are_returned_together_as_kinds() {
         );
     }
     settings
-        .register_mcp_server("tools", http_endpoint())
+        .register_mcp_server("tools", http_endpoint(), |_| true)
         .unwrap();
     assert_eq!(
-        reasons(settings.register_mcp_server(" tools ", http_endpoint())),
+        reasons(settings.register_mcp_server(" tools ", http_endpoint(), |_| true)),
         [InputRejection::McpServerNameTaken {
             name: "tools".to_string()
         }]
@@ -688,7 +754,7 @@ fn new_mcp_endpoint_refuses_stdio() {
 fn re_enabling_an_mcp_server_tries_it_again() {
     let (settings, _, _dir) = temp_settings();
     let (id, _) = settings
-        .register_mcp_server("tools", http_endpoint())
+        .register_mcp_server("tools", http_endpoint(), |_| true)
         .unwrap();
     while !settings.mcp_tools.record_failure(&id) {}
 
@@ -702,7 +768,7 @@ fn re_enabling_an_mcp_server_tries_it_again() {
 fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
     let (settings, _, _dir) = temp_settings();
     let (id, _) = settings
-        .register_mcp_server("tools", http_endpoint())
+        .register_mcp_server("tools", http_endpoint(), |_| true)
         .unwrap();
 
     let err = settings
@@ -726,7 +792,7 @@ fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
 fn tools_whose_schema_cannot_be_exposed_cannot_be_enabled() {
     let (settings, _, _dir) = temp_settings();
     let (id, _) = settings
-        .register_mcp_server("tools", http_endpoint())
+        .register_mcp_server("tools", http_endpoint(), |_| true)
         .unwrap();
     let tool = |name: &str, input_schema: serde_json::Value| mcp::McpToolInfo {
         name: name.to_string(),
@@ -759,7 +825,7 @@ fn tools_whose_schema_cannot_be_exposed_cannot_be_enabled() {
 fn enabling_more_external_tools_than_the_limit_is_refused() {
     let (settings, _, _dir) = temp_settings();
     let (id, _) = settings
-        .register_mcp_server("tools", http_endpoint())
+        .register_mcp_server("tools", http_endpoint(), |_| true)
         .unwrap();
     for i in 0..external::MAX_EXTERNAL_TOOLS {
         settings
@@ -852,7 +918,7 @@ fn adapter_is_rebuilt_only_when_its_inputs_change() {
     let before = ready_adapter(&settings);
 
     settings
-        .register_mcp_server("tools", http_endpoint())
+        .register_mcp_server("tools", http_endpoint(), |_| true)
         .unwrap();
     assert!(Arc::ptr_eq(&before, &ready_adapter(&settings)));
 

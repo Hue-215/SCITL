@@ -12,6 +12,7 @@
 | 設定ファイル形式 | TOML | 秘密情報は含まず参照のみを持つ(`network-secrets.md`「秘密情報」) |
 | 言語ファイル形式 | JSON | フロントエンド(Vite)が追加プラグイン無しに読み込める |
 | 多重起動の防止(デスクトップのみ) | `tauri-plugin-single-instance` | 公式プラグインで、通信はローカルのIPCだけ。自前で持つとOSごとのIPCを2通り書くことになり、攻撃面も保守量も増える(`concurrency.md`「多重起動の防止」) |
+| ネイティブのダイアログ | `tauri-plugin-dialog` | 公式プラグインで、デスクトップ(`rfd`)とAndroid(Kotlin側)の両方を持つ。画面(WebView)では作れない確認を、Rust側から出すために使う(`webview-boundary.md`「CSP / Tauri権限設定」)。依存として`tauri-plugin-fs`も入る。どちらも画面に権限(capabilities)を与えない |
 
 トークン数の見積もりは、現状は文字数からのフォールバック(`llm::token_estimate`)だけを持つ
 (Issue #66)。トークナイザはモデルごとに違い、クレートを足しても登録されたモデルに合う保証が

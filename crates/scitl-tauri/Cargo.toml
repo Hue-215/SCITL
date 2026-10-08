@@ -20,6 +20,7 @@ scitl-core = { path = "../scitl-core" }
 tauri = { version = "2", features = [] }
 secrecy = { workspace = true }
 percent-encoding = { workspace = true }
+tauri-plugin-dialog = "2"
 
 # 多重起動の防止はデスクトップだけ(`lib.rs`の`run`)
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
