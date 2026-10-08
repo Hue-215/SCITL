@@ -2,7 +2,8 @@
 /target/
 node_modules/
 frontend/dist/
-crates/scitl-tauri/gen/
+# Tauriがビルドのたびに作る権限のスキーマ。`gen/android`(Androidのプロジェクト)は手を入れて管理するので含めない
+crates/scitl-tauri/gen/schemas/
 
 # 秘密情報
 .env
