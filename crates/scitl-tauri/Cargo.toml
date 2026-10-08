@@ -31,7 +31,8 @@ tauri-plugin-clipboard-manager = "~2.3"
 # パスで届き、リンクは`scitl-core`が`open`クレートで開く。`open`はAndroidで動かない)
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-fs = "2"
-tauri-plugin-opener = "2"
+# 2.6からTauri 2.12を要求するので2.5に留める
+tauri-plugin-opener = "~2.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5.9"

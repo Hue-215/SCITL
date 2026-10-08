@@ -121,7 +121,23 @@ pub struct LinkDialog {
 pub fn dialog(lang: Language, inspection: &LinkInspection) -> LinkDialog {
     let line = |s: &str| text::reveal_invisible_line(&text::ellipsize(s, MAX_SHOWN_URL_CHARS));
     let t = |key| i18n::text(lang, key).to_string();
-    let mut sections = vec![line(&inspection.url)];
+    // 見出しのURLは、読めるものは開くときと同じ解釈で正規化した形にする(入力のままだと、空白の
+    // 並びで別の行の文に見せたり、長さの上限で切ってホストを隠したりできる)。開けるWebのリンクは、
+    // 移動先のホストを必ず別の行に出す。
+    let parsed = Url::parse(&inspection.url).ok();
+    let mut head = line(parsed.as_ref().map_or(&inspection.url, |url| url.as_str()));
+    if let (LinkVerdict::Web, Some(host)) = (
+        &inspection.verdict,
+        parsed.as_ref().and_then(|url| url.host_str()),
+    ) {
+        head.push('\n');
+        head.push_str(&i18n::format(
+            lang,
+            "link.host_label",
+            &[("host", &line(host))],
+        ));
+    }
+    let mut sections = vec![head];
     if let Some(real_url) = &inspection.real_url {
         sections.push(format!(
             "{}\n{}\n{}",
@@ -262,6 +278,19 @@ mod tests {
         // URLの中の改行で、文を差し込ませない(URLは1行に収める)。
         let injected = dialog(Language::En, &inspect("javascript:x\n\nThis link is safe."));
         assert!(!injected.message.lines().any(|l| l == "This link is safe."));
+        // 空白の並びは正規化で`%20`になり、長い道筋でもホストは別の行に出る。
+        let spaced = dialog(
+            Language::En,
+            &inspect("https://evil.example/       Checked by SCITL."),
+        );
+        assert!(!spaced.message.contains("       "), "{}", spaced.message);
+        let slashes = format!("https:{}evil.example/", "/".repeat(300));
+        let hidden = dialog(Language::En, &inspect(&slashes));
+        assert!(
+            hidden.message.contains("evil.example"),
+            "{}",
+            hidden.message
+        );
         assert!(!plain.message.contains('{') && !disguised.message.contains('{'));
     }
 

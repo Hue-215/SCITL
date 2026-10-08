@@ -56,7 +56,12 @@ pub fn run() {
     #[cfg(target_os = "android")]
     let builder = builder
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init());
+        // 画面へリンクのクリックを奪うスクリプトを差し込ませない(既定は差し込む)。
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        );
     builder
         .plugin(navigation::guard())
         // Rust側からだけ使う(`dialog.rs`・`commands/attachments.rs`)。画面に権限は与えない。

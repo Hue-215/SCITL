@@ -32,7 +32,8 @@ export default memo(function Markdown({ text }: { text: string }) {
           rootRef.current?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' })
           return
         }
-        // 失敗はRust側がダイアログで知らせるので、ここでは何も出さない。
+        // 開けないリンクとOSへ渡す失敗はRust側がダイアログで知らせる。コマンド自体の失敗(起動に
+        // 失敗した画面等)は、本文の中に出す場所が無いので出さない。
         void openLink(href).catch(() => undefined)
       }
       return (

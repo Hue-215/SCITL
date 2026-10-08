@@ -53,6 +53,7 @@
   "errors.positive_integer": "1以上の整数で入力してください",
   "link.dialog_title": "外部サイトへ移動",
   "link.generic_warning": "SCITL外部のサイトに移動します。URLが意図したものか確認してください。",
+  "link.host_label": "移動先のホスト: {host}",
   "link.mailto_note": "メールを開きます",
   "link.open": "開く",
   "link.open_failed": "リンクを開けませんでした: {error}",
