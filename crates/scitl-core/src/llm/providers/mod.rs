@@ -527,7 +527,7 @@ async fn read_json<T: DeserializeOwned>(
 }
 
 /// 応答の本文を、`limit`バイトを超えたら打ち切って読む(超えたら[`response_too_large`])。
-/// 成功の応答の本文はすべてこれで読む(上限は[`MAX_RESPONSE_BYTES`])。
+/// JSONで読む成功の応答の本文はこれで読む(上限は[`MAX_RESPONSE_BYTES`]。SSEは`sse.rs`が同じ上限を数える)。
 async fn read_body(
     mut response: reqwest::Response,
     limit: usize,

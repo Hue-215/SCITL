@@ -68,7 +68,7 @@ pub fn classify_host(url: &Url) -> HostClass {
 }
 
 /// IPv6 ULA(fc00::/7)の中にある、クラウドのIPv6版メタデータエンドポイントの範囲
-/// (アドレスとプレフィックス長)。
+/// (アドレスとプレフィックス長。長さは1〜128)。
 /// - AWS: `fd00:ec2::254`。`fd00:ec2::/32`はAWSがインスタンス向けのサービス(DNS・NTP等)に
 ///   使う範囲なので、まとめて外す
 /// - Google Cloud: `fd20:ce::254`。周りのアドレスはVPCのULAに割り当てられうるので、
@@ -313,6 +313,14 @@ mod tests {
         assert!(!rejected("http://[fd00:ec3::254]/"));
         assert!(!rejected("http://[fd20:ce::253]/"));
         assert!(!rejected("http://[fd12:3456::1]/"));
+        assert!(!rejected("http://[fd00::1]/"));
+        // /32の端
+        assert!(rejected("http://[fd00:ec2:ffff:ffff::1]/"));
+        assert!(!rejected("http://[fd00:ec1::1]/"));
+        // 分類そのもの(能力の検出の対象かもこれで決まる)
+        let class = |url: &str| classify_host(&Url::parse(url).unwrap());
+        assert_eq!(class("http://[fd00:ec2::254]/"), HostClass::Other);
+        assert_eq!(class("http://[fd20:ce::254]/"), HostClass::Other);
     }
 
     #[test]
