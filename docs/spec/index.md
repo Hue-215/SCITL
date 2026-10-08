@@ -44,8 +44,9 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
   無害化済みのまま持つので、無害化の規則を変えたら保存の形の版を上げる。`architecture/sanitize.md`・
   `architecture/transcript.md`
 - **画面は表示に徹する**: ファイル・OSの機能・入力の検証と規則・複数の処理をまとめる手順はRust側に
-  置き、画面に写さない。`principles.md` 4節「UI層は表示に徹する」・`architecture/webview-boundary.md`
-  「画面が持つもの・持たないもの」・`ui.md`
+  置き、画面に写さない(入力欄で先に止めるための値はRust側から受け取って使う)。Rust側へ移す処理は、
+  乗っ取った画面から呼ばれても困らない狭さにする。`principles.md` 4節「UI層は表示に徹する」・
+  `architecture/webview-boundary.md`「画面が持つもの・持たないもの」・`ui.md`
 - **画面からファイルのパスも中身も受け取らない**: 選ばせる・読む・書く・開くはRust側で行う。
   `architecture/attachments.md`「受け取り方」・`architecture/export.md`・`architecture/cli.md`(端末は例外)。
   添付の選択と貼り付けは、今は画面から中身を受け取っている(Issue #476)
@@ -109,6 +110,6 @@ SCITL/
   (状態遷移、ツール引数検証、ターンのオーケストレーション、サニタイズ、秘密情報アクセス)を
   すべて置く
 - **GUI** (`scitl-tauri`): コマンドはロジックを持たず、coreを1つ呼ぶだけ(`architecture/webview-boundary.md`)
-- **画面** (`frontend/`): 表示に徹し、判定・規則・手順を持たない(`architecture/webview-boundary.md`
-  「画面が持つもの・持たないもの」)
+- **画面** (`frontend/`): 表示に徹し、判定・規則・手順を持たない(入力欄で先に止める補助を除く。
+  `architecture/webview-boundary.md`「画面が持つもの・持たないもの」)
 - **CLI** (`scitl-cli`・`scitl-debug-cli`): `architecture/cli.md`
