@@ -5,9 +5,10 @@ use std::fmt::Display;
 
 use crate::text;
 
-/// 診断を1件書く。書き先は標準エラーで、Androidではアプリの標準エラーがどこにも出ないので
-/// logcatにする。どちらも端末で読まれるので、端末への出力と同じく見えない文字を見せる形にする
-/// (`docs/spec/architecture/sanitize.md`「無害化」の端末・logcatの行)。
+/// 診断を1件書く。書き先は標準エラーで、Androidではlogcatへ直に書く(標準エラーもtaoが
+/// logcatへ流すが、別のスレッドが読むので直後にプロセスが終わると取りこぼしうる。理由は
+/// `docs/spec/architecture/sanitize.md`「無害化」の表の下)。どちらも端末で読まれるので、
+/// 端末への出力と同じく見えない文字を見せる形にする(同じ表の端末・logcatの行)。
 pub fn report(message: impl Display) {
     write_line(&for_terminal(message));
 }

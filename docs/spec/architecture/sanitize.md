@@ -38,8 +38,12 @@
 端末への出力は、`scitl-cli`と`scitl-debug-cli`のコードが`scitl_cli::terminal`からだけ書く(clapが
 自分で書くヘルプ・引数のエラーも受け取ってから通す)。coreが失敗にせず先へ進めたときの診断
 (設定ファイルを読めない等)は、coreの唯一の診断の出口`diagnostics::report`が同じ処理を
-掛けて書く。書き先は標準エラーで、Androidではアプリの標準エラーがどこにも出ないのでlogcat
-(タグ`SCITL`、重さは`WARN`に固定)にする。logcatへはNDKの`liblog`を直に呼んで書き、実行時依存を
+掛けて書く。書き先は標準エラーで、Androidではlogcat(タグ`SCITL`、重さは`WARN`に固定)にする。
+Androidの標準エラーも、taoが起動時にパイプへ付け替えてlogcat(タグ`RustStdoutStderr`)へ流す
+(tao 0.35の`ndk_glue::create`で確認、2026-10)。ただ、パイプは別のスレッドが読むので、書いた直後に
+プロセスが終わると取りこぼしうる。タグもほかのクレートの出力と混ざり、文書化された振る舞いでもないので、
+診断はそちらに頼らない。panicの文言と依存のクレートが標準エラーへ書いたものは、`RustStdoutStderr`の
+側に出る。logcatへはNDKの`liblog`を直に呼んで書き、実行時依存を
 増やさないためクレート(`android_logger`等)は足さない。liblogは1件をおよそ4KBで黙って切るので、
 長い診断は文字の途中で切らずに複数件に分けて書く。`log`・`tracing`は入れず、種類や重さでの
 絞り込みは持たない。
