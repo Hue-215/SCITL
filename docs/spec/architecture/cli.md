@@ -33,7 +33,9 @@
   GUIと同じ入口(`create_task`と`open_task_chat`・`run_turn`・`retry_reply`・`generate_reply`)を、設定ファイルと資格情報ストアから
   GUIと同じく作った文脈で呼ぶ。途中経過(`TurnEvent`)を1行に1つのJSONで出し、最後に会話の
   最後の発言を出す。失敗したターンはエラー発言として保存されるので、コマンドは成功で終わる。
-  **別プロセス(GUI)が同じ会話で生成中でも断らない**(`../data-model/tables.md` 4節)
+  **別プロセス(GUI)が同じ会話で生成中でも断らない**(`../data-model/tables.md` 4節)。
+  `task create`は今、`create_task`と`open_task_chat`を順に呼んでいる。画面と同じく、タスクの作成と
+  聞き取りの開始を1つの操作にしてそれを呼ぶ形に替える(Issue #489。`prompt-shape.md`「聞き取りの開始」)
 - **秘密情報**(APIキー、プロバイダーとMCPサーバーのヘッダーの値)は引数では受け取らない。値が
   プロセスの一覧に残るため。値を持つ環境変数の名前を引数で受け取り
   (`--api-key-env VAR`、`--header NAME=VAR`)、CLIのプロセスの環境変数から
