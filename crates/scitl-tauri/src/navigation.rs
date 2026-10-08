@@ -13,7 +13,7 @@ pub fn guard<R: Runtime>() -> TauriPlugin<R> {
 }
 
 /// アプリ自身の画面のURLか。本番は埋め込み資源を配るカスタムプロトコル
-/// (`tauri://localhost`、Windowsでは`http(s)://tauri.localhost`)、開発時はVite開発サーバー。
+/// (`tauri://localhost`、Windows・Androidでは`http(s)://tauri.localhost`)、開発時はVite開発サーバー。
 fn is_app_url(url: &Url, dev_url: Option<&Url>) -> bool {
     if tauri::is_dev() {
         if let Some(dev_url) = dev_url {

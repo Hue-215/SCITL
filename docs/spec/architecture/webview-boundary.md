@@ -28,10 +28,14 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   `script-src 'self'`(CDN・inline eval不可)
 - `connect-src ipc: http://ipc.localhost`。全通信はRust側で行う設計なので、WebViewからの
   外部接続は本来ゼロのはず。許可しているのはRust側へのIPCの窓口(Linux・macOSは`ipc:`、
-  Windowsは`http://ipc.localhost`。`useHttpsScheme`を有効にしたら`https://`に替える)だけで、これ以外に広げる必要が出たら「Rustが全通信を担う」
-  境界が破れた合図。IPCの窓口を塞ぐと、Tauriは`postMessage`へ黙って切り替えて動き続けるが、
+  Windows・Androidは`http://ipc.localhost`)だけで、これ以外に広げる必要が出たら「Rustが全通信を担う」
+  境界が破れた合図。`useHttpsScheme`を有効にすると窓口は`https://ipc.localhost`になるが、CSP3では
+  スキームが`http`のソース式は`https`のURLにも当たるので、CSPを替えなくても通る(Androidで確認。
+  WindowsのWebView2も同じChromiumの判定のはずだが未確認。下の「Android」の節)。
+  IPCの窓口を塞ぐと、Tauriは`postMessage`へ黙って切り替えて動き続けるが、
   そちらは本文を必ずJSONにするため、生のバイト列を受け取るコマンド(添付の`stage_attachment`)
-  だけが本番ビルドで失敗する。開発時(devUrl)はこの差が表に出ないので、本番ビルドで確かめる
+  だけが本番ビルドで失敗する(Androidでは窓口に関わらず失敗する。下の「Android」の節)。
+  開発時(devUrl)はこの差が表に出ないので、本番ビルドで確かめる
 - 開発時のVite HMRはWebSocketを使うため、Tauri 2の `devCsp` を本番CSPと分離して設定する
   (開発と本番で同じCSPにしようとして本番を緩めるのが典型的な失敗)
 - **自前コマンドは、既定ではcapabilitiesに関係なくWebViewから到達できる**。ACLに載せるには、
@@ -82,6 +86,28 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 - Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「ローカル完結」)
 - 多重起動の防止(`tauri-plugin-single-instance`)はJSのAPIを持たず、capabilitiesに権限を
   足さない。`deep-link`のfeatureは有効にしない(`concurrency.md`「多重起動の防止」)
+
+### Android
+
+上の決まりがAndroidのWebViewでも今のまま効くかを、エミュレーター(Android 17・API 37、Android
+System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(Issue #477、2026-10)。
+
+- **CSP**: ヘッダーで効いており、起動時の違反は無い。外部への`fetch`は`connect-src`の違反として止まる
+- **IPCの宛先**: Androidの`shouldInterceptRequest`はPOSTの本文を読めないので、Tauriはコマンドを
+  **常に`postMessage`で送り**、`connect-src`の対象にならない。`http://ipc.localhost`への`fetch`を使うのは
+  Channelの8KBを超える通知の取得(`plugin:__TAURI_CHANNEL__|fetch`)だけで、CSPに止められずRustまで届く。
+  `useHttpsScheme`を有効にしたAPKでは、画面が`https://tauri.localhost`、窓口が`https://ipc.localhost`に
+  変わり、CSPを替えずに画面の読み込みもChannelの取得も違反なく動いた(遷移の判定も`https`を通す)
+- **生のバイト列を受け取るコマンドはAndroidでは必ず失敗する**。`postMessage`は本文をJSONにするので、
+  `stage_attachment`は`attachment body must be raw bytes`を返す。デスクトップで窓口を塞いだときと同じ形で、
+  窓口の有無に関わらず起きる。添付の送り方はIssue #476で決める
+- **遷移の判定**: 画面は`http://tauri.localhost`から配られ、`is_app_url`の`http(s)://tauri.localhost`に当たる。
+  外部のURLへの遷移は、`location`の書き換え・`href`を持つ`<a>`のクリック・`window.open`のどれも止まる
+  (`ERR_ABORTED`)。本文中のリンクは、確認ダイアログの「開く」を押すと`open_confirmed_link`が失敗を返す
+  (`open`クレートがAndroidで動かないため。`tech-stack.md`「対象のOS」)。どちらの場合もWebViewは
+  外部のページを読み込まない
+- **権限の設定(capabilities)**: 1つも持たない今の構成で、自前のコマンドとChannelの取得が呼べる。
+  権限の設定を初めて足すIssue #475 のあとに確かめ直す
 
 ## 画面側で持つ処理
 
