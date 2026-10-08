@@ -9,7 +9,6 @@
 //! 大きさ・MIME・内容のハッシュも正規化した後のもの。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
@@ -47,14 +46,14 @@ pub enum Rejection {
         kind: AttachmentKind,
         limit_bytes: u64,
     },
-    /// 窓に落としたものがファイルでない(フォルダ等)。
+    /// 窓に落としたもの・選んだものがファイルでない(フォルダ等)。
     NotAFile,
+    /// 送っていない添付が、1つの発言に付けられる数に達している。
+    TooMany { limit: usize },
 }
 
 #[derive(Debug, Clone)]
 struct Entry {
-    /// 預けた順の通し番号。上限を超えたときに古いものから捨てるために使う。
-    seq: u64,
     name: String,
     classified: Classified,
     bytes: Arc<[u8]>,
@@ -95,10 +94,15 @@ impl Taken {
 }
 
 /// 送信前の添付の集合。アプリの起動中だけメモリに持つ。
+///
+/// 預かる数は、1つの発言に付けられる数([`LIMITS`]の`per_message`)までにし、達したら新しく
+/// 預けようとしたものを断る(古いものを黙って捨てない)。入力欄は1つなので、預かりの数は入力欄に
+/// 並ぶ添付の数と一致する(取り消し・送信に失敗して戻した添付も、預かりの出し入れで合う)。
+/// 送信までメモリに持つので、乗っ取られた画面から際限なく預けさせない(合計量も、この数と
+/// 種別ごとの上限の積で抑えられる)。
 #[derive(Default)]
 pub(super) struct Staged {
     entries: Mutex<HashMap<String, Entry>>,
-    next_seq: AtomicU64,
 }
 
 impl Staged {
@@ -123,11 +127,13 @@ impl Staged {
         let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
         let mut entries = self.lock();
-        make_room(&mut entries);
+        // 読む前にも確かめているが(`has_room`)、並べて預けたものが先に入っているかもしれない。
+        if entries.len() >= LIMITS.per_message {
+            return Ok(too_many());
+        }
         entries.insert(
             token.clone(),
             Entry {
-                seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
                 name,
                 classified,
                 bytes: bytes.into(),
@@ -139,6 +145,17 @@ impl Staged {
             mime_type: classified.mime_type.to_string(),
             size_bytes,
         })
+    }
+
+    /// まだ預けられるか。ファイルを読む前に確かめ、預けられないものは読まない。
+    pub(super) fn has_room(&self) -> bool {
+        self.lock().len() < LIMITS.per_message
+    }
+
+    /// 預かりを空にする。画面が読み込み直されると、入力欄の添付は消えるのに預かりは残り、
+    /// 数の上限に達したまま添付できなくなるので、画面は起動のたびに呼ぶ。
+    pub(super) fn clear(&self) {
+        self.lock().clear();
     }
 
     /// 知らないトークンは何もしない(破棄と送信が行き違っても困らないように)。
@@ -187,23 +204,6 @@ impl Staged {
     }
 }
 
-/// 預かる数を、1つの発言に付けられる数までに抑える。送信までメモリに持つので、乗っ取られた
-/// 画面から際限なく預けさせない(合計量も、この数と種別ごとの上限の積で抑えられる)。
-///
-/// 超える分は断らずに一番古いものを捨てる。画面の再読み込み等で取り残された預かりが溜まっても、
-/// 再起動まで添付できなくなることがないように。画面も同じ`per_message`で入力欄の添付を
-/// 頭打ちにしているので、捨てられるのは取り残された預かりだけになる。
-fn make_room(entries: &mut HashMap<String, Entry>) {
-    while entries.len() >= LIMITS.per_message {
-        let oldest = entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.seq)
-            .map(|(token, _)| token.clone())
-            .expect("not empty");
-        entries.remove(&oldest);
-    }
-}
-
 /// 画像なら正規化したものに置き換える。デコードできない画像は拒まず「その他」として預かる
 /// (その他は中身をデコードしないので、壊れた画像を置いておいても害が無い)。
 fn normalized(classified: Classified, bytes: Vec<u8>) -> (Classified, Vec<u8>) {
@@ -225,6 +225,14 @@ fn normalized(classified: Classified, bytes: Vec<u8>) -> (Classified, Vec<u8>) {
             },
             bytes,
         ),
+    }
+}
+
+pub(super) fn too_many() -> StageOutcome {
+    StageOutcome::Rejected {
+        reason: Rejection::TooMany {
+            limit: LIMITS.per_message,
+        },
     }
 }
 
@@ -262,16 +270,25 @@ mod tests {
     }
 
     #[test]
-    fn stages_at_most_as_many_as_a_message_can_carry_dropping_the_oldest() {
+    fn refuses_new_attachments_once_a_message_is_full_and_keeps_the_staged_ones() {
         let staged = Staged::default();
         let tokens: Vec<String> = (0..LIMITS.per_message)
             .map(|i| token_of(staged.stage(format!("{i}.txt"), b"a".to_vec()).unwrap()))
             .collect();
-        let newest = token_of(staged.stage("over.txt".into(), b"a".to_vec()).unwrap());
+        assert!(!staged.has_room());
+        assert_eq!(
+            staged.stage("over.txt".into(), b"a".to_vec()).unwrap(),
+            too_many()
+        );
+        assert!(staged.take(&tokens).is_ok());
 
-        assert_eq!(staged.lock().len(), LIMITS.per_message);
-        assert!(staged.take(std::slice::from_ref(&tokens[0])).is_err());
-        assert!(staged.take(&[tokens[1].clone(), newest]).is_ok());
+        // 取り消した分だけ、また預けられる。
+        let a = token_of(staged.stage("a.txt".into(), b"a".to_vec()).unwrap());
+        staged.discard(&a);
+        assert!(staged.has_room());
+        staged.stage("b.txt".into(), b"a".to_vec()).unwrap();
+        staged.clear();
+        assert_eq!(staged.lock().len(), 0);
     }
 
     #[test]

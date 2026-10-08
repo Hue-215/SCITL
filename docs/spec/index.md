@@ -48,8 +48,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
   乗っ取った画面から呼ばれても困らない狭さにする。`principles.md` 4節「UI層は表示に徹する」・
   `architecture/webview-boundary.md`「画面が持つもの・持たないもの」・`ui.md`
 - **画面からファイルのパスも中身も受け取らない**: 選ばせる・読む・書く・開くはRust側で行う。
-  `architecture/attachments.md`「受け取り方」・`architecture/export.md`・`architecture/cli.md`(端末は例外)。
-  添付の選択と貼り付けは、今は画面から中身を受け取っている(Issue #476)
+  `architecture/attachments.md`「受け取り方」・`architecture/export.md`・`architecture/cli.md`(端末は例外)
 - **秘密情報に触れるのは`secrets.rs`だけ、HTTPは`net::hardened_client`だけを通る**:
   `architecture/network-secrets.md`・`architecture/cli.md`・`architecture/llm-adapter.md`
 

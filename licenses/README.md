@@ -13,6 +13,7 @@
 |---|---|---|
 | `rmcp` | rmcp | https://github.com/modelcontextprotocol/rust-sdk のタグ`rmcp-v3.4.0` |
 | `alloc-stdlib` | alloc-stdlib | https://github.com/dropbox/rust-alloc-no-stdlib のタグ`0.2.4` |
+| `clipboard-win` | clipboard-win | https://github.com/DoumanAsh/clipboard-win のコミット`3b27cf2`(5.4.1を出したコミット。版のタグが無い) |
 | `dlopen2` | dlopen2・dlopen2_derive | https://github.com/OpenByteDev/dlopen2 のコミット`c1ca060`(版のタグが無い) |
 | `unic` | unic-*(5クレート) | https://github.com/open-i18n/rust-unic のタグ`v0.9.0` |
 | `webview2-com` | webview2-com・webview2-com-sys・webview2-com-macros | https://github.com/wravery/webview2-rs のコミット`edc2caf`(版のタグが無い) |

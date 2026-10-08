@@ -2,13 +2,11 @@ import { Channel, invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
   BaseUrlHint,
-  PickingLimits,
   AvailableModel,
   Capability,
   Chat,
   ChatModelsView,
   DataDirError,
-  DropNotice,
   ExportSummary,
   FormOutcome,
   Language,
@@ -18,6 +16,7 @@ import type {
   MessageView,
   NewMcpEndpoint,
   ReasoningEffort,
+  ReceivedFiles,
   SettingsView,
   StageOutcome,
   TaskCreation,
@@ -66,7 +65,7 @@ export function deleteTask(taskId: number): Promise<void> {
 
 // 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)はコマンドの
 // 呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が知っている。
-// `attachments`は`stageAttachment`が返したトークン。
+// `attachments`は`stageReceivedFile`が返したトークン。
 export function sendChatMessage(
   chat: Chat,
   text: string,
@@ -83,29 +82,38 @@ export function sendChatMessage(
 
 // 添付。中身は生のバイト列で送り、名前はヘッダーに載せる(ヘッダーはASCIIしか
 // 運べないので符号化する)。パスを渡すコマンドは無い。
-export async function stageAttachment(file: File): Promise<StageOutcome> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  return invoke('stage_attachment', bytes, {
-    headers: { 'x-scitl-file-name': encodeURIComponent(file.name) },
-  })
-}
-
 export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
 }
 
-// 窓に落としたファイル。パスはOSからRust側へ直接届き、画面には名前だけが知らされる。知らせ先は
-// 1つで、渡し直すと置き換わる。受け付けたものだけを、ドロップの番号と並びの位置で指して読ませる。
-export function watchDroppedFiles(onDrop: (notice: DropNotice) => void): Promise<void> {
+// 送っていない添付をすべて捨てる。画面は起動のたびに呼ぶ(読み込み直した画面は入力欄の添付を
+// 持たないので、Rust側に残った預かりが数の上限を埋めないように)。
+export function discardAllStagedAttachments(): Promise<void> {
+  return invoke('discard_all_staged_attachments')
+}
+
+// 添付になるファイルは、画面を通らずにRust側がOSから受け取る(窓に落とした・選択画面で選んだ・
+// クリップボードの画像)。画面には名前だけが知らされ、受け付けたものだけを、受け取りの番号と
+// 並びの位置で指して読ませる。
+
+// 窓に落としたファイルの知らせ先。1つで、渡し直すと置き換わる。
+export function watchDroppedFiles(onDrop: (files: ReceivedFiles) => void): Promise<void> {
   return invoke('watch_dropped_files', { onDrop: new Channel(onDrop) })
 }
 
-export function stageDroppedFile(dropId: number, index: number): Promise<StageOutcome> {
-  return invoke('stage_dropped_file', { dropId, index })
+// OSの選択画面で選ばせる。取りやめたらnull。
+export function pickAttachments(): Promise<ReceivedFiles | null> {
+  return invoke('pick_attachments')
 }
 
-export function getAttachmentLimits(): Promise<PickingLimits> {
-  return invoke('get_attachment_limits')
+// 文字の無い貼り付けが起きたことを伝え、クリップボードの画像を受け取らせる。画像が無ければnull。
+export function pasteClipboardImage(): Promise<ReceivedFiles | null> {
+  return invoke('paste_clipboard_image')
+}
+
+// 受け取ったファイルの1つを読ませて預ける。種別・大きさ・1つの発言に付けられる数の判定はRust側。
+export function stageReceivedFile(batchId: number, index: number): Promise<StageOutcome> {
+  return invoke('stage_received_file', { batchId, index })
 }
 
 export function readTextAttachment(attachmentId: number): Promise<string> {

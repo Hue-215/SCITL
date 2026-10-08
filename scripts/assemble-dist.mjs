@@ -128,6 +128,7 @@ const LICENSE_FILE = /^(licen[sc]e|copying|copyright|notice|unlicense)/i
 // 下のフォルダ。上流のリポジトリから写したもの。入手先はlicenses/README.md)。
 const SUPPLIED = {
   'alloc-stdlib': 'alloc-stdlib',
+  'clipboard-win': 'clipboard-win',
   dlopen2: 'dlopen2',
   dlopen2_derive: 'dlopen2',
   rmcp: 'rmcp',
