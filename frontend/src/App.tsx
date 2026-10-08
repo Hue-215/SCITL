@@ -54,6 +54,7 @@ export default function App() {
   const {
     ref: logRef,
     onScroll: onLogScroll,
+    onWheel: onLogWheel,
     stick,
     follow,
   } = useStickToBottom<HTMLUListElement>()
@@ -335,6 +336,7 @@ export default function App() {
         <ChatLog
           logRef={logRef}
           onScroll={onLogScroll}
+          onWheel={onLogWheel}
           messages={messages}
           pending={pending}
           live={live}

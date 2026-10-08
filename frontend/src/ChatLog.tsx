@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject, UIEventHandler } from 'react'
+import type { ReactNode, RefObject, UIEventHandler, WheelEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
 import { ConfirmButton } from './Dialog'
 import { formatDateTime, t, turnErrorText } from './i18n'
@@ -100,6 +100,7 @@ export interface EntryEditing {
 interface ChatLogProps {
   logRef: RefObject<HTMLUListElement | null>
   onScroll: UIEventHandler<HTMLUListElement>
+  onWheel: WheelEventHandler<HTMLUListElement>
   messages: MessageView[]
   // 実行中のコマンドの楽観表示・途中経過・コマンド自体の失敗(`useChatRequests`)。
   pending: PendingEntry[]
@@ -119,6 +120,7 @@ interface ChatLogProps {
 export default function ChatLog({
   logRef,
   onScroll,
+  onWheel,
   messages,
   pending,
   live,
@@ -151,7 +153,7 @@ export default function ChatLog({
         )
       : message.undelivered_attachments
   return (
-    <ul className="chat-log" ref={logRef} onScroll={onScroll}>
+    <ul className="chat-log" ref={logRef} onScroll={onScroll} onWheel={onWheel}>
       {items.map((item, index) => {
         if (item.kind === 'plain') {
           const message = item.message
