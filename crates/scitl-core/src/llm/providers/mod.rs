@@ -517,23 +517,34 @@ fn response_too_large() -> LlmError {
 
 /// 成功の応答の本文をJSONとして読む。読めなければ送った秘密情報を伏せた[`LlmError`]にする。
 async fn read_json<T: DeserializeOwned>(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     secrets: &SentSecrets,
 ) -> Result<T, LlmError> {
+    let body = read_body(response, MAX_RESPONSE_BYTES, secrets).await?;
+    serde_json::from_slice(&body).map_err(|e| {
+        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
+    })
+}
+
+/// 応答の本文を、`limit`バイトを超えたら打ち切って読む(超えたら[`response_too_large`])。
+/// 成功の応答の本文はすべてこれで読む(上限は[`MAX_RESPONSE_BYTES`])。
+async fn read_body(
+    mut response: reqwest::Response,
+    limit: usize,
+    secrets: &SentSecrets,
+) -> Result<Vec<u8>, LlmError> {
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|e| LlmError::from_body_read(e, secrets))?
     {
-        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+        if body.len() + chunk.len() > limit {
             return Err(response_too_large());
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|e| {
-        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
-    })
+    Ok(body)
 }
 
 /// 鍵を登録していないプロバイダー(`key_ref`が無い)は空の鍵で、鍵のヘッダーを付けずに送る
@@ -655,6 +666,23 @@ pub fn validate_header_name(api_format: ApiFormat, name: &str) -> Result<(), Cor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn read_body_stops_at_the_limit() {
+        let (url, server) =
+            test_server::spawn_server(vec![(200, "0123456789"), (200, "0123456789")]);
+        let client = reqwest::Client::new();
+        let secrets = SentSecrets::default();
+
+        let response = client.get(&url).send().await.unwrap();
+        let body = read_body(response, 10, &secrets).await.unwrap();
+        assert_eq!(body, b"0123456789");
+
+        let response = client.get(&url).send().await.unwrap();
+        let err = read_body(response, 9, &secrets).await.unwrap_err();
+        assert!(matches!(err, LlmError::InvalidResponse(_)), "{err:?}");
+        server.join().unwrap();
+    }
 
     #[test]
     fn header_names_the_dialect_sets_itself_are_reserved() {
