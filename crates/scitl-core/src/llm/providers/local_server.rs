@@ -147,10 +147,7 @@ impl Probe<'_> {
             LlmError::from_status(status, body, secrets)
         })
         .await?;
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| LlmError::from_transport(e, secrets))?;
+        let body = super::read_body(response, super::MAX_RESPONSE_BYTES, secrets).await?;
         Ok(serde_json::from_slice(&body).ok())
     }
 }
