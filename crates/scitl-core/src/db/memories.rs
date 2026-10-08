@@ -156,8 +156,15 @@ mod tests {
         add(&conn, &strings(&["平日は9時から18時まで働く"])).unwrap();
         add(&conn, &strings(&["締切は2日前に置く"])).unwrap();
 
-        let contents: Vec<String> = list(&conn).unwrap().into_iter().map(|m| m.content).collect();
-        assert_eq!(contents, strings(&["平日は9時から18時まで働く", "締切は2日前に置く"]));
+        let contents: Vec<String> = list(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.content)
+            .collect();
+        assert_eq!(
+            contents,
+            strings(&["平日は9時から18時まで働く", "締切は2日前に置く"])
+        );
     }
 
     #[test]
@@ -167,7 +174,12 @@ mod tests {
 
         let added = add(
             &conn,
-            &strings(&["  夜は\n作業しない ", "夜は 作業しない", "朝\u{200B}型", "見え\u{E0041}ない"]),
+            &strings(&[
+                "  夜は\n作業しない ",
+                "夜は 作業しない",
+                "朝\u{200B}型",
+                "見え\u{E0041}ない",
+            ]),
         )
         .unwrap();
 
@@ -223,8 +235,14 @@ mod tests {
         delete(&conn, id).unwrap();
 
         assert!(list(&conn).unwrap().is_empty());
-        assert!(matches!(update(&conn, id, "夜型"), Err(CoreError::MemoryNotFound(_))));
-        assert!(matches!(delete(&conn, id), Err(CoreError::MemoryNotFound(_))));
+        assert!(matches!(
+            update(&conn, id, "夜型"),
+            Err(CoreError::MemoryNotFound(_))
+        ));
+        assert!(matches!(
+            delete(&conn, id),
+            Err(CoreError::MemoryNotFound(_))
+        ));
         // 消した本文は重複の判定に入らない。
         assert_eq!(add(&conn, &strings(&["朝型"])).unwrap().len(), 1);
     }
