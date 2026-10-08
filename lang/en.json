@@ -198,7 +198,7 @@
   "startup.app_dir_unusable": "SCITL couldn't write to the folder for its data. Check that the device has enough free storage, then start it again.",
   "startup.database": "SCITL couldn't read its data. The data may have been used by a newer version of SCITL, or its files may be damaged. If a newer version used it, start that version instead.",
   "startup.location": "Location: {dir}",
-  "startup.no_app_dir": "SCITL stopped because the OS didn't give it a place to keep its data.",
+  "startup.no_app_dir": "SCITL stopped because the OS didn't give it a place to keep its data or cache.",
   "startup.no_executable": "SCITL couldn't find where its executable is, so it couldn't decide where to keep its data.",
   "startup.reason": "Reason: {reason}",
   "startup.temporary_dir": "SCITL stopped because its executable is in a temporary folder (for example, when started from inside an archive). Its data would be kept in the temporary folder and could be lost. Extract the archive and start the executable from a folder that isn't temporary.",

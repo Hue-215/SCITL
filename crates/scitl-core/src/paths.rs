@@ -11,7 +11,7 @@ use crate::{CoreError, APP_IDENTIFIER};
 #[error("this OS has no directory for application cache")]
 pub struct NoAppDir;
 
-/// 実行ファイルのフォルダの中の、データディレクトリの名前。
+/// データディレクトリの名前。実行ファイルのフォルダ(デスクトップ)か、OSがアプリに与えた場所(Android)の中に置く。
 const DATA_DIR_NAME: &str = "data";
 
 /// データディレクトリを決められない・使えない理由。GUIは起動時に開けなかった理由として

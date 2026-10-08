@@ -297,15 +297,17 @@ WebViewのプロファイル等も置かれるので、混ざらないよう`dat
   (`NoExecutable`・`TemporaryDir`)は起きない
 - **自動バックアップと端末間の移行に含めない**。マニフェストの`android:allowBackup="false"`
   (Android 11以前)と、`android:dataExtractionRules`(`gen/android/app/src/main/res/xml/data_extraction_rules.xml`。
-  Android 12以降)で、クラウドへのバックアップ・端末間の移行・iOSへの移行のすべてから全部の領域を外す。
+  Android 12以降)で、クラウドへのバックアップと端末間の移行の両方から全部の領域を外す。
   `targetSdk`が31以上のアプリでは、`allowBackup="false"`はクラウドへのバックアップを止めるが、
   端末のメーカーによっては端末間の移行を止めない(Androidの開発者向け文書「Back up user data with
   Auto Backup」、2026-10に確認)ので、規則のファイルでも外す。規則の無い経路は全部を含むので、
-  経路ごとに外す。含めない理由は次の通り
+  経路ごとに外す。iOSへの移行(Android 16 QPR2以降)は、移行先のiOSアプリ(`bundleId`・`teamId`)を
+  規則のファイルで宣言したアプリだけが対象で、SCITLにiOSアプリは無いので規則を書かない。
+  含めない理由は次の通り
   - 会話・タスク・接続先の設定を、利用者が明示的に選んでいない場所(利用者のGoogleドライブ・
     新しい端末)へ出さない
-  - 秘密情報はAndroid Keystoreの鍵で暗号化して保存する(Issue #440)。鍵はバックアップされないので、
-    戻しても復号できない
+  - 秘密情報は、Android Keystoreの鍵で暗号化して保存する予定(Issue #440。まだ決まっていない)。
+    その形なら鍵はバックアップされないので、戻しても復号できない
   - バックアップは1アプリ25MBまでで、添付を含めるとすぐ超え、超えるとバックアップされない。
     利用者のバックアップの手段として当てにならない
   - 一般設定だけは含めてもよいが、一般設定・プロバイダー・MCP・ツールの設定が1つの`config.toml`に
