@@ -572,7 +572,8 @@ option {
 }
 
 /* 引き出したカラムと暗幕は、選択一覧(.dropdown-popup)より手前に出す。同じ順位にしておき、
-   DOMで暗幕の後に置いたカラムが暗幕より手前になる。 */
+   DOMで暗幕の後に置いたカラムが暗幕より手前になる。ダイアログ(.dialog-overlay)より手前に
+   なるが、引き出している間は内容側がinertでダイアログを開けないので重ならない。 */
 .narrow .drawer,
 .drawer-backdrop {
   z-index: 2;
@@ -632,7 +633,7 @@ option {
   font-weight: var(--font-weight-strong);
 }
 
-/* アイコン1つだけを置くボタンの箱。サイドバーの⚙と設定画面の←が同じ形。
+/* アイコン1つだけを置くボタンの箱。
    SVGアイコン導入時にグリフから箱へ移す作業をここ1箇所で済ませる。
    グリフをアイコン代わりに使うのは暫定実装で、font-size/line-heightはそのための指定
    (SVG化時はwidth/heightを内側の<svg>へ移す。tokens.css参照)。 */

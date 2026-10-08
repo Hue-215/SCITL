@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
-import { FOCUSABLE_SELECTOR } from './Dialog'
+import { FOCUSABLE_SELECTOR } from './keyboard'
 
 // 左のカラム(サイドバー・設定のメニュー)を畳む窓の幅。値はtokens.css末尾の「畳む境目」の式で
 // 求めたもの(メディアクエリの条件にはvar()を書けないため、求めた値をここに持つ)。

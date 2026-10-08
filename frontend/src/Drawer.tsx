@@ -13,7 +13,7 @@ export function Drawer({ drawer, children }: { drawer: DrawerState; children: Re
   )
 }
 
-// 畳んだカラムを引き出すボタン。広い窓では出さない。
+// 畳んだカラムを開け閉めするボタン。広い窓では出さない。
 export function DrawerToggle({ drawer, label }: { drawer: DrawerState; label: string }) {
   if (!drawer.narrow) return null
   return (
@@ -21,7 +21,7 @@ export function DrawerToggle({ drawer, label }: { drawer: DrawerState; label: st
       id={drawer.toggleId}
       type="button"
       className="icon-button"
-      onClick={drawer.open}
+      onClick={drawer.shown ? drawer.cancel : drawer.open}
       aria-expanded={drawer.shown}
       aria-controls={drawer.id}
       aria-label={label}

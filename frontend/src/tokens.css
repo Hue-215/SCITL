@@ -67,7 +67,7 @@
 
   /* アイコンサイズ: 将来のSVGアイコン導入時にwidth/heightとして使う箱寸法。
      文字サイズとは独立の刻みにする(同値は一箇所集約の原則に反するため)。
-     現状のテキストグリフ流用箇所(⚙・←)は `font-size: var(--icon-size-*); line-height: 1;`
+     現状のテキストグリフ流用箇所(.icon-button)は `font-size: var(--icon-size-*); line-height: 1;`
      と明記し、SVG化時に box(width/height)へ移すことが分かるようにする。
      sm/lgは現時点で未使用の予約段階。用法: sm=文中に混ぜるアイコン、
      md=操作ボタン既定、lg=空状態・強調。 */

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from './i18n'
+import { FOCUSABLE_SELECTOR } from './keyboard'
 
 interface DialogProps {
   title: string
@@ -10,11 +11,6 @@ interface DialogProps {
   // 枠自体は既定幅だけを持ち、外から上書きできるようにする。
   width?: string
 }
-
-// フォーカスを受け取れる要素。ダイアログのフォーカストラップと、引き出し(useDrawer.ts)を開いたときの
-// フォーカスの移し先を探すのに使う。
-export const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 // ダイアログの共通枠。余白・角丸・ボタン配置を統一する。本文は children に委ね、枠自体は
 // 内容を知らない。
