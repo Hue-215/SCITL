@@ -51,9 +51,12 @@ pub fn run() {
     // 登録しない。画面に権限は与えない。
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
-    // 選択画面が返す`content://`のURIを開く(`commands/attachments.rs`)。画面に権限は与えない。
+    // 選択画面が返す`content://`のURIを開く(`commands/attachments.rs`)と、本文中のリンクをOSへ
+    // 渡す(`commands/link.rs`。デスクトップは`open`クレート)。画面に権限は与えない。
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(tauri_plugin_fs::init());
+    let builder = builder
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init());
     builder
         .plugin(navigation::guard())
         // Rust側からだけ使う(`dialog.rs`・`commands/attachments.rs`)。画面に権限は与えない。
@@ -130,8 +133,7 @@ pub fn run() {
             commands::memories::add_memory,
             commands::memories::update_memory,
             commands::memories::delete_memory,
-            commands::link::inspect_link,
-            commands::link::open_confirmed_link,
+            commands::link::open_link,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

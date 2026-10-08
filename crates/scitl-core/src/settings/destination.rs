@@ -49,7 +49,7 @@ impl NewDestination<'_> {
                     lang,
                     "destination_dialog.provider_message",
                     &[
-                        ("name", &one_line(name)),
+                        ("name", &text::reveal_invisible_line(name)),
                         ("format", i18n::text(lang, format_key(*api_format))),
                         ("host", &host),
                         ("url", &url),
@@ -61,7 +61,11 @@ impl NewDestination<'_> {
                 i18n::format(
                     lang,
                     "destination_dialog.mcp_message",
-                    &[("name", &one_line(name)), ("host", &host), ("url", &url)],
+                    &[
+                        ("name", &text::reveal_invisible_line(name)),
+                        ("host", &host),
+                        ("url", &url),
+                    ],
                 )
             }
         };
@@ -74,21 +78,16 @@ impl NewDestination<'_> {
     }
 }
 
-/// 1行の値として見せる形。改行も`\u000A`にする。
-fn one_line(s: &str) -> String {
-    text::reveal_invisible(s).replace('\n', "\\u000A")
-}
-
 /// 正規化したURL(長さの上限で切る)と、送り先のホスト。検証を通ったURLだけが来るので、読めない
 /// ことは無いが、読めなければ入力を1行にして出す。
 fn shown_url(raw: &str) -> (String, String) {
     match reqwest::Url::parse(raw) {
         Ok(url) => (
-            one_line(&text::ellipsize(url.as_str(), MAX_URL_CHARS)),
-            one_line(url.host_str().unwrap_or_default()),
+            text::reveal_invisible_line(&text::ellipsize(url.as_str(), MAX_URL_CHARS)),
+            text::reveal_invisible_line(url.host_str().unwrap_or_default()),
         ),
         Err(_) => (
-            one_line(&text::ellipsize(raw, MAX_URL_CHARS)),
+            text::reveal_invisible_line(&text::ellipsize(raw, MAX_URL_CHARS)),
             String::new(),
         ),
     }

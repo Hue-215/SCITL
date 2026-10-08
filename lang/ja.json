@@ -55,6 +55,7 @@
   "link.generic_warning": "SCITL外部のサイトに移動します。URLが意図したものか確認してください。",
   "link.mailto_note": "メールを開きます",
   "link.open": "開く",
+  "link.open_failed": "リンクを開けませんでした: {error}",
   "link.real_url_label": "移動先URL: {url}",
   "link.scheme_blocked": "SCITLは\"{scheme}:\" のリンクに対応しません。",
   "link.special_char_body": "特殊文字を含むドメインにアクセスします。URLを再度確認してください。",

@@ -132,6 +132,12 @@ pub fn display_block(s: &str, max: usize) -> String {
     ellipsize(&cleaned, max)
 }
 
+/// [`reveal_invisible`]を1行に収める版。改行も`\u000A`の形にする(ネイティブのダイアログに
+/// 差し込む値等、改行で文を差し込ませたくない出力先)。
+pub fn reveal_invisible_line(s: &str) -> String {
+    reveal_invisible(s).replace('\n', "\\u000A")
+}
+
 /// 見えない文字(改行以外の制御文字と[`is_invisible_format`]の書式文字)を、JSONの
 /// エスケープの形(`\uXXXX`。基本多言語面の外はサロゲートの対)にして見えるようにする。
 /// 除かずに見せるのは、隠されていたこと自体を確かめられるようにするため。JSONのテキストに

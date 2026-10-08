@@ -55,6 +55,7 @@
   "link.generic_warning": "This link leaves SCITL. Please make sure the URL is what you intended.",
   "link.mailto_note": "This will open your mail app.",
   "link.open": "Open",
+  "link.open_failed": "Could not open the link: {error}",
   "link.real_url_label": "Destination URL: {url}",
   "link.scheme_blocked": "SCITL doesn't support \"{scheme}:\" links.",
   "link.special_char_body": "You're about to visit a domain containing special characters. Please double-check the URL.",
