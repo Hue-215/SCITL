@@ -37,8 +37,7 @@ pub struct StartupFailure(pub DataDirError);
 pub fn run() {
     let builder = tauri::Builder::default();
     // 2つ目の起動を、DBと設定を開く`setup`より前にここで終わらせる。そのため他の
-    // プラグインより先に登録する。モバイルではOSがアプリを1つしか起動しないので要らない
-    // (プラグインもモバイルでは中身を持たない)。
+    // プラグインより先に登録する。モバイルでは使わない(`concurrency.md`「多重起動の防止」)。
     #[cfg(desktop)]
     let builder = if single_instance_available() {
         builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
