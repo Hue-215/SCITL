@@ -1,6 +1,6 @@
 //! 疑似API(LLM役が応答を書く。別リポジトリ Hue-215/Sham_llm)を相手に、本物のアダプタとターンの
 //! 処理を通して会話を進める試験用のドライバー。GUIの送信と同じ入口(`create_task`・
-//! `open_task_chat`・`run_turn`)を呼ぶ。使い方は`.claude/skills/llm-relay/SKILL.md`。
+//! `run_turn`)を呼ぶ。使い方は`.claude/skills/llm-relay/SKILL.md`。
 //!
 //! ```text
 //! cargo run -p scitl-core --example relay_session -- <DATA_DIR> <BASE_URL> <STEP>...
@@ -32,8 +32,8 @@ use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{LlmAdapter, ResponseEvent, DEFAULT_CAPABILITIES};
 use scitl_core::mcp::{McpToolInfo, ToolCatalog};
 use scitl_core::orchestration::{
-    self, create_task, open_task_chat, run_turn, McpAccess, SystemPrompts, TaskCreation,
-    ToolLimits, TurnContext, TurnEvent,
+    self, create_task, run_turn, McpAccess, SystemPrompts, TaskCreation, ToolLimits, TurnContext,
+    TurnEvent,
 };
 use scitl_core::paths::DataLayout;
 use secrecy::SecretString;
@@ -151,13 +151,15 @@ async fn main() {
         };
         match step.as_str() {
             "@new" => {
-                let TaskCreation::Created { task } = create_task(db.clone(), &ctx).await.unwrap()
-                else {
+                let creation = create_task(db.clone(), &ctx, |task| {
+                    println!("> @new (task {})", task.id);
+                })
+                .await
+                .unwrap();
+                let TaskCreation::Created { task } = creation else {
                     panic!("the adapter is not ready");
                 };
-                println!("> @new (task {})", task.id);
                 chat = Chat::Task(task.id);
-                open_task_chat(db.clone(), &ctx, task.id).await.unwrap();
             }
             "@general" => {
                 println!("> @general");

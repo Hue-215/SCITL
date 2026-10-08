@@ -12,7 +12,7 @@ use crate::AppState;
 
 /// ターンの途中経過を`channel`へ送る受け口。送れなくても(画面が閉じた等)ターンは最後まで
 /// 走らせて保存するので、送信の失敗は捨てる。
-fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '_ {
+pub(super) fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '_ {
     move |event| {
         let _ = channel.send(event);
     }
@@ -36,23 +36,6 @@ pub async fn send_chat_message(
         &snapshot.turn_context(&state.generating, &state.attachments, &events),
         chat,
         UserInput { text, attachments },
-    )
-    .await?)
-}
-
-/// 作ったばかりのタスクで、ユーザーの発言なしにモデルの返信から聞き取りを始める。
-#[tauri::command]
-pub async fn open_task_chat(
-    state: State<'_, AppState>,
-    task_id: i64,
-    on_event: Channel<TurnEvent>,
-) -> CommandResult<()> {
-    let snapshot = state.settings.snapshot_for_turn().await;
-    let events = forward(&on_event);
-    Ok(orchestration::open_task_chat(
-        state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
-        task_id,
     )
     .await?)
 }

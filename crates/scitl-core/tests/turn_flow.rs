@@ -18,9 +18,8 @@ use scitl_core::llm::{
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     create_task, delete_message, discard_events, edit_user_message, generate_reply, lacks_reply,
-    open_task_chat, preview_request, retry_reply, run_turn, stop_response, McpAccess, PartView,
-    PreviewOptions, SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure,
-    UserInput,
+    preview_request, retry_reply, run_turn, stop_response, McpAccess, PartView, PreviewOptions,
+    SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure, UserInput,
 };
 use serde_json::json;
 
@@ -4017,17 +4016,29 @@ fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
         .collect()
 }
 
+/// タスクを作ったら、続けて聞き取りを始める。作った知らせは聞き取りより先に届く。
+async fn create_task_opening(db: &SharedConnection, ctx: &TurnContext<'_>) -> i64 {
+    let created = std::sync::OnceLock::new();
+    let creation = create_task(db.clone(), ctx, |task| {
+        assert!(roles(db, task.id).is_empty());
+        created.set(task.id).unwrap();
+    })
+    .await
+    .unwrap();
+    let TaskCreation::Created { task } = creation else {
+        panic!("expected Created, got {creation:?}");
+    };
+    assert_eq!(created.get(), Some(&task.id));
+    task.id
+}
+
 /// 聞き取りの開始。開始の発言は保存せず、以降のターンでも履歴の先頭に補う。
 #[tokio::test]
-async fn open_task_chat_answers_the_opening_message_without_saving_it() {
-    let conn = db::open_in_memory().unwrap();
-    let task_id = seed_task(&conn);
-    let db = Arc::new(Mutex::new(conn));
+async fn creating_a_task_answers_the_opening_message_without_saving_it() {
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
     let adapter = ScriptedAdapter::texts(&["どんなタスクですか", "締切はいつですか"]);
 
-    open_task_chat(db.clone(), &context(&adapter), task_id)
-        .await
-        .unwrap();
+    let task_id = create_task_opening(&db, &context(&adapter)).await;
     assert_eq!(roles(&db, task_id), vec!["assistant"]);
 
     run_turn(
@@ -4067,16 +4078,16 @@ async fn open_task_chat_answers_the_opening_message_without_saving_it() {
 
 #[tokio::test]
 async fn retrying_the_opening_reply_answers_the_opening_message_again() {
-    let conn = db::open_in_memory().unwrap();
-    let task_id = seed_task(&conn);
-    let db = Arc::new(Mutex::new(conn));
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
 
-    open_task_chat(db.clone(), &context_without_provider(), task_id)
-        .await
-        .unwrap();
+    // 聞き取りの失敗はエラー発言として残り、タスクの作成は成功で終わる。
+    let task_id = create_task_opening(&db, &context(&fails_to_authenticate())).await;
     let error_id = {
         let conn = db.lock().unwrap();
-        db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap()[0].id
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].error_kind.is_some());
+        messages[0].id
     };
 
     let adapter = ScriptedAdapter::texts(&["どんなタスクですか"]);
@@ -4096,31 +4107,6 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
 }
 
-#[tokio::test]
-async fn open_task_chat_is_refused_once_the_conversation_has_started() {
-    let conn = db::open_in_memory().unwrap();
-    let task_id = seed_task(&conn);
-    let db = Arc::new(Mutex::new(conn));
-    run_turn(
-        db.clone(),
-        &context(&ScriptedAdapter::texts(&["はい"])),
-        Chat::Task(task_id),
-        "レポート".to_string(),
-    )
-    .await
-    .unwrap();
-
-    let err = open_task_chat(
-        db.clone(),
-        &context(&ScriptedAdapter::texts(&["x"])),
-        task_id,
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(err, CoreError::InvalidMessageOperation(_)));
-    assert_eq!(roles(&db, task_id), vec!["user", "assistant"]);
-}
-
 /// チャットを使えない間はタスクを作らない。
 #[tokio::test]
 async fn create_task_is_refused_while_the_chat_cannot_run() {
@@ -4131,7 +4117,10 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
         (context_without_provider(), "no_provider"),
         (context(&unready), "no_model"),
     ] {
-        match create_task(db.clone(), &ctx).await.unwrap() {
+        let creation = create_task(db.clone(), &ctx, |_| panic!("no task is created"))
+            .await
+            .unwrap();
+        match creation {
             TaskCreation::Unavailable { error_kind } => assert_eq!(error_kind, expected),
             other => panic!("expected Unavailable, got {other:?}"),
         }
@@ -4139,12 +4128,6 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
     assert!(db::tasks::list_tasks(&db.lock().unwrap())
         .unwrap()
         .is_empty());
-
-    let adapter = ScriptedAdapter::texts(&["x"]);
-    match create_task(db.clone(), &context(&adapter)).await.unwrap() {
-        TaskCreation::Created { task } => assert!(task.title.is_none()),
-        other => panic!("expected Created, got {other:?}"),
-    }
 }
 
 /// 1回目に`tool_calls`のツールをまとめて呼び(IDは`call_0`から順)、2回目に本文を返す。

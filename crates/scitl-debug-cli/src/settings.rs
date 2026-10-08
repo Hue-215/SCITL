@@ -240,7 +240,10 @@ pub async fn run_model(session: &Session, command: ModelCommand) -> Result<(), D
         ModelCommand::Add {
             provider_id,
             models,
-        } => change(settings, move |s| s.add_models(&provider_id, &models)).await,
+        } => {
+            print_json(&settings.add_models(&provider_id, models).await?);
+            Ok(())
+        }
         ModelCommand::Remove { provider_id, model } => {
             change(settings, move |s| s.remove_model(&provider_id, &model)).await
         }
@@ -262,7 +265,8 @@ pub async fn run_mcp(session: &Session, command: McpCommand) -> Result<(), Debug
                 url,
                 headers: secrets_from_env("--header", header)?,
             };
-            change(settings, move |s| s.add_mcp_server(&name, endpoint)).await
+            print_json(&settings.add_mcp_server(name, endpoint).await?);
+            Ok(())
         }
         McpCommand::Delete { server_id } => {
             change(settings, move |s| s.delete_mcp_server(&server_id)).await

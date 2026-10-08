@@ -124,15 +124,26 @@ pub enum TaskCreation {
     },
 }
 
-/// 新規タスクの作成。チャットを使えない(モデル未選択等)ならタスクを作らずに理由を返す
-/// (続く[`open_task_chat`]が失敗し、エラー発言だけのタスクが残るため)。
-pub async fn create_task(db: SharedConnection, ctx: &TurnContext<'_>) -> Result<TaskCreation> {
+/// 新規タスクを作り、続けて聞き取りを始める([`open_task_chat`])。チャットを使えない
+/// (モデル未選択等)ならタスクを作らずに理由を返す(作っても聞き取りが失敗し、エラー発言だけの
+/// タスクが残るため)。
+///
+/// `on_created`は作った直後、聞き取りの前に呼ぶ(画面が作ったタスクの会話を開く)。聞き取りが
+/// `Err`で終わってもタスクは残し、その失敗だけを返す。モデルの呼び出しの失敗はエラー発言として
+/// 保存されるので`Err`にならない([`run_turn`]と同じ)。
+pub async fn create_task(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    on_created: impl FnOnce(&Task) + Send,
+) -> Result<TaskCreation> {
     if let Err(failure) = ready_adapter(ctx) {
         return Ok(TaskCreation::Unavailable {
             error_kind: failure.kind(),
         });
     }
-    let task = with_conn(db, tasks::create_task).await?;
+    let task = with_conn(db.clone(), tasks::create_task).await?;
+    on_created(&task);
+    open_task_chat(db, ctx, task.id).await?;
     Ok(TaskCreation::Created { task })
 }
 
@@ -140,12 +151,8 @@ pub async fn create_task(db: SharedConnection, ctx: &TurnContext<'_>) -> Result<
 /// 返信として最初のターンを生成する。開始の発言は保存せず、以降のターンも
 /// `history::build_history`が履歴の先頭に補う。
 ///
-/// まだ1行も発言の無いタスクでだけ行う。
-pub async fn open_task_chat(
-    db: SharedConnection,
-    ctx: &TurnContext<'_>,
-    task_id: i64,
-) -> Result<()> {
+/// まだ1行も発言の無いタスクでだけ行う。作ったばかりのタスクで[`create_task`]からだけ呼ぶ。
+async fn open_task_chat(db: SharedConnection, ctx: &TurnContext<'_>, task_id: i64) -> Result<()> {
     generate_new_turn(db, ctx, Chat::Task(task_id), move |conn| {
         if messages::opener(conn, task_id)?.is_some() {
             return Err(CoreError::InvalidMessageOperation(

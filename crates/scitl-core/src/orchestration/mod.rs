@@ -24,8 +24,8 @@ pub use system_prompt::SystemPrompts;
 pub use tool_limits::{ToolLimits, DEFAULT_MAX_ROUNDS_PER_TURN, DEFAULT_TOTAL_TIMEOUT_SECS};
 pub use tool_record::{ToolExecutionRecord, ToolExecutionView};
 pub use turn::{
-    create_task, delete_message, edit_user_message, generate_reply, lacks_reply, open_task_chat,
-    retry_reply, run_turn, stop_response, TaskCreation, UserInput,
+    create_task, delete_message, edit_user_message, generate_reply, lacks_reply, retry_reply,
+    run_turn, stop_response, TaskCreation, UserInput,
 };
 pub use turn_context::TurnContext;
 pub use turn_error::TurnFailure;

@@ -11,12 +11,14 @@ import type {
   ExportSummary,
   Language,
   LinkInspection,
+  McpServerAdded,
   Memory,
   MessageView,
   NewMcpEndpoint,
   ReasoningEffort,
   SettingsView,
   StageOutcome,
+  Task,
   TaskCreation,
   TaskDetailView,
   TaskListItem,
@@ -41,8 +43,16 @@ export function listTasks(): Promise<TaskListItem[]> {
   return invoke('list_tasks')
 }
 
-export function createTask(): Promise<TaskCreation> {
-  return invoke('create_task')
+// 作ったら続けて聞き取りを始める。作ったタスクは聞き取りの前に`onCreated`へ、聞き取りの
+// 途中経過は`onEvent`へ届き、返るのは聞き取りが終わってから。
+export function createTask(
+  onCreated: (task: Task) => void,
+  onEvent: (event: TurnEvent) => void,
+): Promise<TaskCreation> {
+  return invoke('create_task', {
+    onCreated: new Channel(onCreated),
+    onEvent: new Channel(onEvent),
+  })
 }
 
 // ヘッダーからのタスク操作。どれも応答を生成中のタスクでは断られる。
@@ -58,16 +68,8 @@ export function deleteTask(taskId: number): Promise<void> {
   return invoke('delete_task', { taskId })
 }
 
-// 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)
-// はコマンドの呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が
-// 知っている。
-export function openTaskChat(
-  taskId: number,
-  onEvent: (event: TurnEvent) => void,
-): Promise<void> {
-  return invoke('open_task_chat', { taskId, onEvent: new Channel(onEvent) })
-}
-
+// 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)はコマンドの
+// 呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が知っている。
 // `attachments`は`stageAttachment`が返したトークン。
 export function sendChatMessage(
   chat: Chat,
@@ -232,6 +234,7 @@ export function deleteProvider(providerId: string): Promise<SettingsView> {
 }
 
 // 1件でも登録できない名前があれば、1件も登録しない。
+// 登録したら、検出できるプロバイダーなら続けて能力を検出する(検出の失敗は追加の失敗にしない)。
 export function addModels(providerId: string, models: string[]): Promise<SettingsView> {
   return invoke('add_models', { providerId, models })
 }
@@ -295,7 +298,8 @@ export function setReasoningEffort(
   return invoke('set_reasoning_effort', { providerId, model, effort })
 }
 
-export function addMcpServer(name: string, endpoint: NewMcpEndpoint): Promise<SettingsView> {
+// 登録したら続けてツール一覧を取得する。取得に失敗しても登録は残り、理由が添えられる。
+export function addMcpServer(name: string, endpoint: NewMcpEndpoint): Promise<McpServerAdded> {
   return invoke('add_mcp_server', { name, endpoint })
 }
 

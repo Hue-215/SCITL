@@ -89,13 +89,15 @@ pub async fn delete_provider(
     with_settings(&state, move |s| s.delete_provider(&provider_id)).await
 }
 
+/// 登録したら、検出できるプロバイダーなら続けて能力を検出する。推論サーバーへの問い合わせを
+/// 待つので`with_settings`を通さない(登録の保存は`Settings::add_models`の中で逃がす)。
 #[tauri::command]
 pub async fn add_models(
     state: State<'_, AppState>,
     provider_id: String,
     models: Vec<String>,
 ) -> CommandResult<SettingsView> {
-    with_settings(&state, move |s| s.add_models(&provider_id, &models)).await
+    Ok(state.settings.add_models(&provider_id, models).await?)
 }
 
 #[tauri::command]

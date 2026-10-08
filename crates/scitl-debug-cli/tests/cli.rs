@@ -273,10 +273,13 @@ fn values_are_spelled_as_in_the_config_file_and_others_are_refused() {
 fn mcp_servers_are_registered_changed_and_removed() {
     let data = DataDir::new();
 
+    // 登録に続けてツール一覧を取りに行く。繋がらなくても登録は残り、理由が添えられる。
     let added = stdout_json(&data.run(&["mcp", "add-http", "files", "http://127.0.0.1:1/mcp"]));
-    let server = &added["mcp_servers"][0];
+    let server = &added["settings"]["mcp_servers"][0];
     assert_eq!(server["endpoint"]["url"], "http://127.0.0.1:1/mcp");
     let id = server["id"].as_str().unwrap().to_string();
+    assert_eq!(added["server_id"], id.as_str());
+    assert!(added["tools_error"].is_string());
 
     let disabled = stdout_json(&data.run(&["mcp", "disable", &id]));
     assert_eq!(disabled["mcp_servers"][0]["enabled"], false);

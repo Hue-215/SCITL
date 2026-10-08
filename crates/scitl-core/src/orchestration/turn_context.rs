@@ -15,7 +15,7 @@ pub struct TurnContext<'a> {
     /// 読めない)。使えなければ、ターンはその理由のエラー発言で終わる。
     pub adapter: Result<&'a dyn LlmAdapter, TurnFailure>,
     pub prompts: SystemPrompts<'a>,
-    /// 聞き取りから始まった会話で、最初の返信が答えた発言([`crate::orchestration::open_task_chat`])。
+    /// 聞き取りから始まった会話で、最初の返信が答えた発言([`crate::orchestration::create_task`])。
     pub opening_message: &'a str,
     /// 使うモデルの能力(`llm::resolve_capabilities`で解決済み)。
     pub capabilities: ModelCapabilities,

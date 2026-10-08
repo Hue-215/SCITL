@@ -46,6 +46,44 @@ fn http_endpoint() -> NewMcpEndpoint {
     }
 }
 
+/// 追加に続く能力の検出とツール一覧の取得に失敗しても、登録は残る。
+#[tokio::test]
+async fn adding_keeps_the_registration_when_the_following_query_fails() {
+    let (settings, _path, _dir) = temp_settings();
+    let settings = Arc::new(settings);
+    let provider = settings
+        .add_provider(NewProvider {
+            name: "local".to_string(),
+            api_format: ApiFormat::OpenAiCompat,
+            base_url: "http://127.0.0.1:1/v1".to_string(),
+            api_key: None,
+            headers: Vec::new(),
+        })
+        .unwrap()
+        .providers[0]
+        .id
+        .clone();
+
+    let view = settings
+        .add_models(&provider, vec!["m".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(view.providers[0].models.len(), 1);
+
+    let added = settings
+        .add_mcp_server(
+            "tools".to_string(),
+            NewMcpEndpoint::StreamableHttp {
+                url: "http://127.0.0.1:1/mcp".to_string(),
+                headers: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(added.settings.mcp_servers[0].id, added.server_id);
+    assert!(added.tools_error.is_some());
+}
+
 /// 予約したヘッダー名・載せられない値・重複した名前は、資格情報ストアに触れる前に断る。
 #[test]
 fn add_provider_refuses_bad_headers_before_storing_anything() {
@@ -119,16 +157,6 @@ async fn an_unreadable_key_fails_the_turn_and_is_reloaded_at_the_next_turn() {
     assert_eq!(settings.view().providers[0].key_error, None);
 }
 
-/// タスクの追加のように、ターンを始めずに使えるかだけを確かめる入口でも読み直す。
-#[tokio::test]
-async fn checking_availability_reloads_an_unreadable_key() {
-    let (settings, _path, _dir) = temp_settings();
-    add_local_provider(&settings, "local");
-    make_key_unavailable(&settings);
-
-    assert!(settings.snapshot_reloading_key().await.adapter.is_ok());
-}
-
 /// 鍵を読めない間も、鍵と無関係な設定は変えられ、変えたときに読み直す。
 #[test]
 fn a_settings_change_reloads_an_unreadable_key() {
@@ -190,9 +218,9 @@ fn chat_model_selection_switches_provider_and_model_together() {
     let (settings, path, _dir) = temp_settings();
     let a = add_local_provider(&settings, "A").providers[0].id.clone();
     let b = add_local_provider(&settings, "B").providers[1].id.clone();
-    settings.add_models(&a, &["a1"]).unwrap();
-    settings.add_models(&b, &["b1"]).unwrap();
-    settings.add_models(&b, &["b2"]).unwrap();
+    settings.register_models(&a, &["a1"]).unwrap();
+    settings.register_models(&b, &["b1"]).unwrap();
+    settings.register_models(&b, &["b2"]).unwrap();
 
     settings.select_chat_model(&b, "b2").unwrap();
     let reloaded = config::load(&path).unwrap();
@@ -227,9 +255,9 @@ fn chat_models_list_visible_models_and_the_selected_one_even_if_hidden() {
     let (settings, _, _dir) = temp_settings();
     let a = add_local_provider(&settings, "A").providers[0].id.clone();
     let b = add_local_provider(&settings, "B").providers[1].id.clone();
-    settings.add_models(&a, &["qwen3:8b"]).unwrap();
-    settings.add_models(&a, &["hidden"]).unwrap();
-    settings.add_models(&b, &["qwen2.5:7b"]).unwrap();
+    settings.register_models(&a, &["qwen3:8b"]).unwrap();
+    settings.register_models(&a, &["hidden"]).unwrap();
+    settings.register_models(&b, &["qwen2.5:7b"]).unwrap();
     settings
         .set_model_capability(&b, "qwen2.5:7b", Capability::Thinking, false)
         .unwrap();
@@ -280,9 +308,9 @@ fn first_provider_and_model_become_active_and_are_saved() {
     assert_eq!(view.active_provider_id.as_deref(), Some(id.as_str()));
     assert!(settings.snapshot().adapter.is_ok());
 
-    let view = settings.add_models(&id, &[" m1 "]).unwrap();
+    let view = settings.register_models(&id, &[" m1 "]).unwrap();
     assert_eq!(view.providers[0].active_model.as_deref(), Some("m1"));
-    let view = settings.add_models(&id, &["m2"]).unwrap();
+    let view = settings.register_models(&id, &["m2"]).unwrap();
     assert_eq!(
         view.providers[0].active_model.as_deref(),
         Some("m1"),
@@ -305,7 +333,7 @@ fn adding_several_models_registers_all_or_none() {
         .id
         .clone();
 
-    let view = settings.add_models(&id, &["b", "a"]).unwrap();
+    let view = settings.register_models(&id, &["b", "a"]).unwrap();
     let names: Vec<_> = view.providers[0]
         .models
         .iter()
@@ -319,7 +347,7 @@ fn adding_several_models_registers_all_or_none() {
     );
 
     for rejected in [&["c", "a"][..], &["c", "c"], &["c", " "]] {
-        assert!(settings.add_models(&id, rejected).is_err());
+        assert!(settings.register_models(&id, rejected).is_err());
         let config = settings.current().config;
         assert!(
             config.providers[0].model("c").is_none(),
@@ -360,7 +388,7 @@ fn selection_moves_to_a_provider_that_has_a_model() {
     assert_eq!(active().as_deref(), Some(ids[0].as_str()));
 
     // モデルの無いプロバイダーを選択中に、別のプロバイダーへモデルを登録する。
-    settings.add_models(&ids[2], &["c1"]).unwrap();
+    settings.register_models(&ids[2], &["c1"]).unwrap();
     assert_eq!(active().as_deref(), Some(ids[2].as_str()));
 
     // 最後のモデルを消す。ほかにモデルが無ければ、選択は動かさない。
@@ -368,9 +396,9 @@ fn selection_moves_to_a_provider_that_has_a_model() {
     assert_eq!(active().as_deref(), Some(ids[2].as_str()));
 
     // 選択中のプロバイダーを消す。先頭のAにはモデルが無いので、Bへ移る。
-    settings.add_models(&ids[1], &["b1"]).unwrap();
+    settings.register_models(&ids[1], &["b1"]).unwrap();
     settings.select_chat_model(&ids[1], "b1").unwrap();
-    settings.add_models(&ids[2], &["c1"]).unwrap();
+    settings.register_models(&ids[2], &["c1"]).unwrap();
     settings.select_chat_model(&ids[2], "c1").unwrap();
     let view = settings.delete_provider(&ids[2]).unwrap();
     assert_eq!(view.active_provider_id.as_deref(), Some(ids[1].as_str()));
@@ -387,8 +415,8 @@ fn selection_moves_to_a_provider_that_has_a_model() {
 fn removing_active_model_falls_back_to_first() {
     let (settings, _, _dir) = temp_settings();
     let id = add_local_provider(&settings, "A").providers[0].id.clone();
-    settings.add_models(&id, &["m1"]).unwrap();
-    settings.add_models(&id, &["m2"]).unwrap();
+    settings.register_models(&id, &["m1"]).unwrap();
+    settings.register_models(&id, &["m2"]).unwrap();
     settings.select_chat_model(&id, "m2").unwrap();
 
     let view = settings.remove_model(&id, "m2").unwrap();
@@ -450,7 +478,10 @@ fn model_name_must_be_visible() {
         .clone();
     let long = "a".repeat(input::MODEL_NAME_MAX_CHARS + 1);
     for refused in ["\u{FEFF}", "m\u{1}", long.as_str()] {
-        assert!(settings.add_models(&id, &[refused]).is_err(), "{refused:?}");
+        assert!(
+            settings.register_models(&id, &[refused]).is_err(),
+            "{refused:?}"
+        );
     }
     assert!(settings.view().providers[0].models.is_empty());
 }
@@ -470,7 +501,7 @@ fn mcp_endpoint_refuses_repeated_or_malformed_secret_names() {
             headers: pairs(headers),
         };
         assert!(
-            settings.add_mcp_server("tools", endpoint).is_err(),
+            settings.register_mcp_server("tools", endpoint).is_err(),
             "{headers:?}"
         );
     }
@@ -586,9 +617,11 @@ fn new_mcp_endpoint_refuses_stdio() {
 #[test]
 fn mcp_server_name_must_be_unique() {
     let (settings, _, _dir) = temp_settings();
-    settings.add_mcp_server("tools", http_endpoint()).unwrap();
+    settings
+        .register_mcp_server("tools", http_endpoint())
+        .unwrap();
     let err = settings
-        .add_mcp_server("tools", http_endpoint())
+        .register_mcp_server("tools", http_endpoint())
         .unwrap_err();
     assert!(matches!(err, CoreError::InvalidSettings(_)));
 }
@@ -597,8 +630,9 @@ fn mcp_server_name_must_be_unique() {
 #[test]
 fn re_enabling_an_mcp_server_tries_it_again() {
     let (settings, _, _dir) = temp_settings();
-    let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
-    let id = view.mcp_servers[0].id.clone();
+    let (id, _) = settings
+        .register_mcp_server("tools", http_endpoint())
+        .unwrap();
     while !settings.mcp_tools.record_failure(&id) {}
 
     settings.set_mcp_server_enabled(&id, false).unwrap();
@@ -610,8 +644,9 @@ fn re_enabling_an_mcp_server_tries_it_again() {
 #[test]
 fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
     let (settings, _, _dir) = temp_settings();
-    let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
-    let id = view.mcp_servers[0].id.clone();
+    let (id, _) = settings
+        .register_mcp_server("tools", http_endpoint())
+        .unwrap();
 
     let err = settings
         .set_mcp_tool_enabled(&id, "read\u{202E}file", true)
@@ -633,8 +668,9 @@ fn tools_whose_names_cannot_be_exposed_cannot_be_enabled() {
 #[test]
 fn tools_whose_schema_cannot_be_exposed_cannot_be_enabled() {
     let (settings, _, _dir) = temp_settings();
-    let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
-    let id = view.mcp_servers[0].id.clone();
+    let (id, _) = settings
+        .register_mcp_server("tools", http_endpoint())
+        .unwrap();
     let tool = |name: &str, input_schema: serde_json::Value| mcp::McpToolInfo {
         name: name.to_string(),
         description: None,
@@ -665,8 +701,9 @@ fn tools_whose_schema_cannot_be_exposed_cannot_be_enabled() {
 #[test]
 fn enabling_more_external_tools_than_the_limit_is_refused() {
     let (settings, _, _dir) = temp_settings();
-    let view = settings.add_mcp_server("tools", http_endpoint()).unwrap();
-    let id = view.mcp_servers[0].id.clone();
+    let (id, _) = settings
+        .register_mcp_server("tools", http_endpoint())
+        .unwrap();
     for i in 0..external::MAX_EXTERNAL_TOOLS {
         settings
             .set_mcp_tool_enabled(&id, &format!("t{i}"), true)
@@ -757,10 +794,12 @@ fn adapter_is_rebuilt_only_when_its_inputs_change() {
     let id = add_local_provider(&settings, "A").providers[0].id.clone();
     let before = ready_adapter(&settings);
 
-    settings.add_mcp_server("tools", http_endpoint()).unwrap();
+    settings
+        .register_mcp_server("tools", http_endpoint())
+        .unwrap();
     assert!(Arc::ptr_eq(&before, &ready_adapter(&settings)));
 
-    settings.add_models(&id, &["m1"]).unwrap();
+    settings.register_models(&id, &["m1"]).unwrap();
     let after_model = ready_adapter(&settings);
     assert!(!Arc::ptr_eq(&before, &after_model));
 
@@ -781,7 +820,7 @@ fn capability_overrides_are_kept_only_while_they_differ_from_the_default() {
     let id = add_local_provider(&settings, "Local").providers[0]
         .id
         .clone();
-    settings.add_models(&id, &["m"]).unwrap();
+    settings.register_models(&id, &["m"]).unwrap();
     let fallback = llm::DEFAULT_CAPABILITIES;
 
     let view = settings
@@ -831,7 +870,7 @@ fn detected_capabilities_are_the_layer_below_manual_settings() {
     let id = add_local_provider(&settings, "Local").providers[0]
         .id
         .clone();
-    settings.add_models(&id, &["m"]).unwrap();
+    settings.register_models(&id, &["m"]).unwrap();
     settings.detected.store(
         &id,
         "m",

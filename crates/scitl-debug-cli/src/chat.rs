@@ -155,18 +155,21 @@ pub async fn run(session: &Session, command: ChatCommand) -> Result<(), DebugErr
     Ok(())
 }
 
-/// タスクを作り、GUIの新規タスク追加と同じく続けて聞き取りを始める。
+/// タスクを作り、GUIの新規タスク追加と同じく続けて聞き取りを始める。作ったタスクは聞き取りの
+/// 途中経過より先に出す。
 pub async fn create_task(session: &Session) -> Result<(), DebugError> {
     let turns = Turns::open(session).await?;
     let ctx = turns.context(session, &print_event);
-    let task = match orchestration::create_task(session.db.clone(), &ctx).await? {
+    let creation = orchestration::create_task(session.db.clone(), &ctx, |task| {
+        print_json_line(&Outcome::TaskCreated { task })
+    })
+    .await?;
+    let task = match creation {
         TaskCreation::Created { task } => task,
         TaskCreation::Unavailable { error_kind } => {
             return Err(DebugError::ChatUnavailable(error_kind.to_string()));
         }
     };
-    print_json_line(&Outcome::TaskCreated { task: &task });
-    orchestration::open_task_chat(session.db.clone(), &ctx, task.id).await?;
     print_last_message(session, Chat::Task(task.id)).await
 }
 

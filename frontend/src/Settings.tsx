@@ -173,13 +173,17 @@ export default function Settings({ onClose }: SettingsProps) {
                   )
                 }
                 onAddServer={async (name, endpoint) => {
-                  // 追加したら続けて1回ツール一覧を取得する。失敗しても登録は残し、
-                  // エラーはそのカードに出す。追加したサーバーは、追加前に無かったidで
-                  // 見分ける。
-                  const before = new Set(settings.mcp_servers.map((s) => s.id))
-                  const next = await applyAdded(() => addMcpServer(name, endpoint))
-                  const added = next.mcp_servers.find((s) => !before.has(s.id))
-                  if (added) void fetchTools(added.id)
+                  // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
+                  const added = await addMcpServer(name, endpoint)
+                  setSettings(added.settings)
+                  setError(null)
+                  const toolsError = added.tools_error
+                  if (toolsError !== null) {
+                    setToolFetchErrors((prev) => ({
+                      ...prev,
+                      [added.server_id]: t('common.fetch_failed', { error: isolated(toolsError) }),
+                    }))
+                  }
                 }}
                 onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
                 onSetServerEnabled={(id, enabled) =>
