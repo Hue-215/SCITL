@@ -25,7 +25,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 | `architecture/i18n.md` | 画面の文言、言語ファイル、表示言語 | 当たらない |
 | `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方(外から受け取る入力)・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
 | `architecture/export.md` | Markdownエクスポート | 書き出し先の決め方(外から受け取る入力)を変えるなら当たる |
-| `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`、索引、PRAGMAと排他、マイグレーション | 当たる |
+| `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`・`memories`、索引、PRAGMAと排他、マイグレーション | 当たる |
 | `data-model/messages.md` | `messages`、ターン境界、操作の記録、`turn_transcripts`。`architecture/transcript.md`と対で読む | 当たる |
 | `tools.md` | LLMに公開するツールのスキーマ、引数検証、履歴への載せ方、外部(MCP)ツールの公開 | 公開する操作・権限を変えるなら当たる |
 | `ui.md` | 画面を触るとき(必ず読む。`principles.md` 6節も) | 当たらない |
@@ -70,7 +70,7 @@ SCITL/
 ├── crates/
 │   ├── scitl-core/                 # UI非依存のコアライブラリ
 │   │   └── src/
-│   │       ├── db/                 # tasks/steps/messages/attachmentsのrepository
+│   │       ├── db/                 # tasks/steps/messages/attachments/memoriesのrepository
 │   │       ├── attachments/        # 添付の種別の判定・実体の置き場所・送信前の添付(architecture/attachments.md)
 │   │       ├── export/             # Markdownエクスポート(architecture/export.md)
 │   │       ├── llm/                # 方言によらない型・アダプタ・能力の解決・プロンプトの形式(architecture/llm-adapter.md・prompt-shape.md)

@@ -92,6 +92,26 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
   正規化した後の実体のもので、元のファイルのものではない
 - 編集で新しい発言へ引き継ぐときは行を写し、実体は共有する(`db::attachments::copy_to_message`)
 
+### memories(メモリ)
+
+会話をまたいで共有する、利用者についての事実(`../tools.md` 2節)。どの会話・タスクにも属さない。
+
+| カラム | 型 | 制約・備考 |
+|---|---|---|
+| id | INTEGER | PRIMARY KEY |
+| content | TEXT | NOT NULL。1行の事実。空は書かない。長さと件数の上限は`../tools.md` 2節 |
+| created_at | TEXT | ISO8601。NOT NULL。並びはこの列(同じならid)の順 |
+| updated_at | TEXT | ISO8601。NOT NULL。値が実際に変わったかは比べずに進める |
+| deleted_at | TEXT | ISO8601。NULL=未削除 |
+
+- `content`は、描かれない文字(`text::is_invisible_format`)を除き、制御文字を空白にして1行に畳んで保存する
+  (`text::visible_line`)。タイトルと同じく描かれない文字を保存の時点で除くのは、全会話のモデルに渡る
+  本文に、設定画面で見えない文字列を残さないため。同じ本文は重ねて足さない(工程と同じ)
+- 書いた会話・経路の列は持たない。どこで書いたかは、その会話のツール実行記録に残る
+  (`../principles.md` 2節「監査ログ用の別テーブルを作らない」)。画面・CLIからの変更は、置く会話が
+  無いので操作の記録にしない(`../architecture/prompt-shape.md`「状態と日時の伝え方」)
+- 並べ替えの操作が無いので`order_index`は持たない。件数の上限が小さいので索引も張らない
+
 ## 3. 索引
 
 - `messages(task_id, created_at)` — 会話単位の発言取得(支配的クエリ)
