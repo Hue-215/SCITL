@@ -138,7 +138,7 @@ pub fn run() {
 /// データディレクトリと、添付を開くときの書き出し先を決めて開き、コマンド層の状態を作る。
 fn start_app_state(app: &AppHandle) -> Result<AppState, DataDirError> {
     let data = data_dir(app)?;
-    let cache = app.path().app_cache_dir().map_err(no_app_dir)?;
+    let cache = cache_dir(app)?;
     // モバイルでは利用者が置き場所を変えられないので、場所を移すよう促す失敗にしない。
     open_app_state(data, paths::revealed_attachments(&cache)).map_err(|e| {
         if cfg!(mobile) {
@@ -162,7 +162,19 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, DataDirError> {
     Ok(paths::data_dir_within(&dir))
 }
 
-fn no_app_dir(e: tauri::Error) -> DataDirError {
+/// キャッシュの場所。デスクトップではCLIと同じ場所を使うため、CLIと同じ`paths::default_cache_dir`で
+/// 決める。モバイルではOSがアプリに与えたキャッシュの場所。
+#[cfg(desktop)]
+fn cache_dir(_app: &AppHandle) -> Result<PathBuf, DataDirError> {
+    paths::default_cache_dir().map_err(no_app_dir)
+}
+
+#[cfg(mobile)]
+fn cache_dir(app: &AppHandle) -> Result<PathBuf, DataDirError> {
+    app.path().app_cache_dir().map_err(no_app_dir)
+}
+
+fn no_app_dir(e: impl std::fmt::Display) -> DataDirError {
     DataDirError::NoAppDir {
         reason: e.to_string(),
     }

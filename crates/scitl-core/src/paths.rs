@@ -15,7 +15,7 @@ pub struct NoAppDir;
 const DATA_DIR_NAME: &str = "data";
 
 /// データディレクトリを決められない・使えない理由。GUIは起動時に開けなかった理由として
-/// 画面へ渡し、画面は種類で文言を選ぶ。パスは利用者が置き場所を直すのに要るので載せる。
+/// 画面へ渡し、画面は種類で文言を選ぶ。パスは利用者が置き場所を直す・問い合わせるのに要るので載せる。
 #[derive(Debug, Clone, serde::Serialize, thiserror::Error)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -104,8 +104,8 @@ fn is_within(dir: &Path, temp_dir: &Path) -> bool {
     }
 }
 
-/// 既定のキャッシュディレクトリ。GUIはTauriの`app_cache_dir`で決めるので、CLIがデスクトップで
-/// 同じ場所を使うために、それと同じ決め方をする。
+/// デスクトップのキャッシュディレクトリ。GUIとCLIの両方がこれで決めるので、同じ場所を使う。
+/// Tauriの`app_cache_dir`と同じ決め方。
 pub fn default_cache_dir() -> Result<PathBuf, NoAppDir> {
     dirs::cache_dir()
         .map(|dir| dir.join(APP_IDENTIFIER))

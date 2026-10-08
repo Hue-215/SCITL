@@ -251,11 +251,11 @@ OSごとに置き場所を決める。決めるのはGUI(`scitl-tauri`の`start_
 
 | OS | データディレクトリ | 添付を開くときの書き出し先(キャッシュ) |
 |---|---|---|
-| デスクトップ(Linux・Windows) | 実行ファイルと同じフォルダの`data`(`paths::data_dir_beside_executable`) | Tauriの`app_cache_dir` |
+| デスクトップ(Linux・Windows) | 実行ファイルと同じフォルダの`data`(`paths::data_dir_beside_executable`) | `paths::default_cache_dir`(Tauriの`app_cache_dir`と同じ決め方) |
 | Android | アプリの内部ストレージ(Tauriの`app_data_dir`)の`data`(`paths::data_dir_within`) | Tauriの`app_cache_dir`(アプリのキャッシュの場所) |
 
-Tauriのパス解決でOSが場所を示さなければ(`DataDirError::NoAppDir`)、起動を断る。
-CLIはデスクトップにしか無く、キャッシュの場所はTauriと同じ決め方の`paths::default_cache_dir`で決める。
+OSが場所を示さなければ(`DataDirError::NoAppDir`)、起動を断る。CLIはデスクトップにしか無い。
+デスクトップのキャッシュはGUIとCLIが同じ`paths::default_cache_dir`で決めるので、同じ場所になる。
 
 #### デスクトップ
 
@@ -290,14 +290,18 @@ APKのインストール先には書けないので、**アプリの内部スト
 WebViewのプロファイル等も置かれるので、混ざらないよう`data`の下に置く。
 
 - **「フォルダごと持ち運べる」は成り立たない**。内部ストレージは利用者からもほかのアプリからも
-  見えず、アプリを消すと一緒に消える。端末間でデータを渡す手段は、エクスポート・インポートの方針
-  (Issue #412)で決める
+  見えず、アプリを消すと一緒に消える。端末間でデータを渡す手段は、複数の端末で同じデータを使う
+  方針(Issue #412)で決める。フォルダの同期をクラウドストレージに任せる案は、内部ストレージでは使えない
+- エクスポートの書き出し先(`data/export/`)も内部ストレージの中になり、利用者が取り出せない。
+  エクスポートと添付のフォルダを開く操作もAndroidでは動かない。どちらもIssue #440で扱う
 - 置き場所を利用者が変えられないので、作れない・書き込めないときは、場所を移すよう促さない
   失敗(`DataDirError::AppDirUnusable`)として画面に出す。実行ファイルの場所に関わる失敗
   (`NoExecutable`・`TemporaryDir`)は起きない
 - **自動バックアップと端末間の移行に含めない**。マニフェストの`android:allowBackup="false"`
-  (Android 11以前)と、`android:dataExtractionRules`(`gen/android/app/src/main/res/xml/data_extraction_rules.xml`。
-  Android 12以降)で、クラウドへのバックアップと端末間の移行の両方から全部の領域を外す。
+  (全版でクラウドへのバックアップを止める。Android 11以前は端末間の移行も止める)と、
+  `android:dataExtractionRules`(`gen/android/app/src/main/res/xml/data_extraction_rules.xml`。
+  Android 12以降。主に端末間の移行を止める)で、クラウドへのバックアップと端末間の移行の両方から
+  全部の領域を外す。
   `targetSdk`が31以上のアプリでは、`allowBackup="false"`はクラウドへのバックアップを止めるが、
   端末のメーカーによっては端末間の移行を止めない(Androidの開発者向け文書「Back up user data with
   Auto Backup」、2026-10に確認)ので、規則のファイルでも外す。規則の無い経路は全部を含むので、
