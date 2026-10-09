@@ -115,7 +115,10 @@ targetSdk 36で既に掛かっている決まり(Android 16以上の端末):
 - 画面がステータスバー・ナビゲーションバーの下まで広がり、オプトアウトできない(edge-to-edge)
 - 「戻る」の予測アニメーションが既定で有効になり、`onBackPressed`は呼ばれず、`KEYCODE_BACK`も
   届かない。「戻る」を受けるにはandroidxの`OnBackPressedCallback`を使う(Tauri本体がこれで受けている)。
-  マニフェストの`android:enableOnBackInvokedCallback="false"`による一時的なオプトアウトもあるが、使わない
+  マニフェストの`android:enableOnBackInvokedCallback="false"`による一時的なオプトアウトもあるが、使わない。
+  Tauri本体(`AppPlugin`)の受け手は、画面に受け手があれば画面へ知らせ、無ければWebViewの履歴を戻るか
+  `Activity.onBackPressed()`へ渡す(wryの受け手は、Tauriの`TauriActivity`が`handleBackNavigation`を
+  切るので登録されない)。`../ui.md`「指で操作する端末」の「戻る」
 
 targetSdkを37以上へ上げるときに見直すこと:
 
