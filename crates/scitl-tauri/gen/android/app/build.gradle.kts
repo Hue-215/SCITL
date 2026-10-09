@@ -68,6 +68,9 @@ android {
     compileSdk = 36
     namespace = "net.niigo.scitl"
     defaultConfig {
+        // WebViewとJava側の一部のHTTPライブラリが従う決まりで、Rustの通信には掛からない。Rust側の
+        // 平文httpの可否は`net::classify_host`が決める。LANへつなぐために`true`にしない
+        // (`docs/spec/architecture/network-secrets.md`「Androidでの平文http」)。
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "net.niigo.scitl"
         minSdk = tauriMinSdk
