@@ -134,6 +134,7 @@
   "settings.model.detect_button": "能力をサーバーから検出",
   "settings.model.detecting": "検出中…",
   "settings.model.fetch_models_button": "モデル一覧を取得",
+  "settings.model.lacks_tools_note": "⚠の付いたモデルは、推論サーバーの報告ではツール呼び出しに対応しません。SCITLはタスクや工程の読み書きをツールで行うため、そのモデルではタスクの状態を見ることも更新することもできません",
   "settings.model.lacks_tools_warning": "推論サーバーの報告では、このモデルはツール呼び出しに対応しません。SCITLはタスクや工程の読み書きをツールで行うため、このモデルではタスクの状態を見ることも更新することもできません",
   "settings.model.no_match": "「{query}」に一致するモデルはありません。",
   "settings.model.none_registered": "モデル未登録（登録するとチャットで選べます）",

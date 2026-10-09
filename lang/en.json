@@ -134,6 +134,7 @@
   "settings.model.detect_button": "Detect capabilities from the server",
   "settings.model.detecting": "Detecting…",
   "settings.model.fetch_models_button": "Fetch model list",
+  "settings.model.lacks_tools_note": "The inference server reports that the models marked ⚠ don't support tool calls. SCITL reads and updates tasks and steps through tools, so those models can neither see nor change them",
   "settings.model.lacks_tools_warning": "The inference server reports that this model doesn't support tool calls. SCITL reads and updates tasks and steps through tools, so this model can neither see nor change them",
   "settings.model.no_match": "No models match \"{query}\".",
   "settings.model.none_registered": "No models registered (registered models can be chosen in the chat)",

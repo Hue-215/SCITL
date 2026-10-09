@@ -150,7 +150,7 @@ function ImageChip({ attachment, size, warning }: ChipOf) {
         label={attachment.original_name}
         detail={size}
         tone={error ? 'error' : warning ? 'warning' : 'normal'}
-        title={
+        note={
           [warning, error && t('attachment.load_failed', { error: isolated(error) })]
             .filter(Boolean)
             .join('\n') || undefined
@@ -227,12 +227,8 @@ function OtherChip({
       detail={size}
       tone={error ? 'error' : warning ? 'warning' : 'normal'}
       leading={warning && warningMark}
-      title={
-        error
-          ? t('attachment.load_failed', { error: isolated(error) })
-          : [warning, revealable && t('attachment.reveal_tooltip')].filter(Boolean).join('\n') ||
-            undefined
-      }
+      note={(error ? t('attachment.load_failed', { error: isolated(error) }) : warning) ?? undefined}
+      title={revealable ? t('attachment.reveal_tooltip') : undefined}
       onOpen={
         revealable
           ? () => {
@@ -275,7 +271,7 @@ export function StagedAttachmentChips({
                 key={item.key}
                 {...common}
                 tone="error"
-                title={item.message}
+                note={item.message}
                 leading={<span className="chip-mark">⚠</span>}
               />
             )
@@ -292,7 +288,7 @@ export function StagedAttachmentChips({
                 {...common}
                 detail={formatBytes(item.size)}
                 tone={warning ? 'warning' : 'normal'}
-                title={warning ?? undefined}
+                note={warning ?? undefined}
                 leading={warning && <span className="chip-mark">⚠</span>}
               />
             )

@@ -412,6 +412,10 @@ function ModelTable({ provider, onUpdate, onSaveField }: ModelTableProps) {
           </table>
         </div>
       )}
+      {/* 行の⚠の説明。指で操作する端末ではツールチップが出ないので、画面に出しておく。 */}
+      {shown.some((m) => m.lacks_tools) && (
+        <p className="settings-hint">{t('settings.model.lacks_tools_note')}</p>
+      )}
       {searching && matched.length === 0 && <p className="list-empty">{noModelMatchText(query)}</p>}
     </>
   )
