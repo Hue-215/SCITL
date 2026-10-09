@@ -13,7 +13,9 @@ use scitl_core::blocking;
 use scitl_core::config::ApiFormat;
 use scitl_core::error::Result as CoreResult;
 use scitl_core::i18n::Language;
-use scitl_core::settings::{GeneralUpdate, NewMcpEndpoint, NewProvider, Settings, SettingsView};
+use scitl_core::settings::{
+    GeneralUpdate, HeaderInput, NewMcpEndpoint, NewProvider, Settings, SettingsView,
+};
 
 use crate::{load_settings, DebugError};
 
@@ -31,14 +33,14 @@ pub enum SettingsCommand {
         #[arg(long, value_name = "TEXT")]
         task_opening_message: Option<String>,
         #[arg(long, value_name = "SECONDS")]
-        response_timeout_secs: Option<u64>,
+        response_timeout_secs: Option<String>,
     },
     /// Replace the limits on tool calls. Values left out go back to their defaults.
     Tools {
         #[arg(long, value_name = "COUNT")]
-        max_rounds_per_turn: Option<u32>,
+        max_rounds_per_turn: Option<String>,
         #[arg(long, value_name = "SECONDS")]
-        total_timeout_secs: Option<u64>,
+        total_timeout_secs: Option<String>,
     },
     /// Set the display language of the desktop app.
     Language {
@@ -183,7 +185,8 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
                 system_prompt,
                 task_chat_system_prompt,
                 task_opening_message,
-                response_timeout_secs,
+                // 省いた値は既定値に戻す(空欄と同じ)。
+                response_timeout_secs: Some(response_timeout_secs.unwrap_or_default()),
             };
             change(settings, move |s| s.update_general(update)).await
         }
@@ -192,7 +195,11 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
             total_timeout_secs,
         } => {
             change(settings, move |s| {
-                s.update_tools(max_rounds_per_turn, total_timeout_secs)
+                // 省いた値は既定値に戻す(空欄と同じ)。
+                s.update_tools(
+                    Some(max_rounds_per_turn.as_deref().unwrap_or_default()),
+                    Some(total_timeout_secs.as_deref().unwrap_or_default()),
+                )
             })
             .await
         }
@@ -220,7 +227,7 @@ pub async fn run_provider(session: &Session, command: ProviderCommand) -> Result
                     .as_deref()
                     .map(|var| secret_from_env("--api-key-env", var))
                     .transpose()?,
-                headers: secrets_from_env("--header", header)?,
+                headers: HeaderInput::Pairs(secrets_from_env("--header", header)?),
             };
             change(settings, move |s| s.add_provider(new)).await
         }
@@ -263,7 +270,7 @@ pub async fn run_mcp(session: &Session, command: McpCommand) -> Result<(), Debug
         McpCommand::AddHttp { header, name, url } => {
             let endpoint = NewMcpEndpoint::StreamableHttp {
                 url,
-                headers: secrets_from_env("--header", header)?,
+                headers: HeaderInput::Pairs(secrets_from_env("--header", header)?),
             };
             print_json(&settings.add_mcp_server(name, endpoint).await?);
             Ok(())

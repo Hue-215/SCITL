@@ -39,6 +39,36 @@ pub enum ActiveAdapter {
     KeyUnavailable(String),
 }
 
+/// 方言ごとの公式のベースURL(登録フォームの初期値)。
+pub fn default_base_url(api_format: ApiFormat) -> &'static str {
+    match api_format {
+        ApiFormat::OpenAiCompat => openai_compat::DEFAULT_BASE_URL,
+        ApiFormat::Anthropic => anthropic::DEFAULT_BASE_URL,
+        ApiFormat::Gemini => gemini::DEFAULT_BASE_URL,
+    }
+}
+
+/// 登録フォームで、ベースURLの欄の下に出すヒント。登録は止めない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum BaseUrlHint {
+    /// アダプタが足すAPIの版のパスまで書いている。
+    VersionPathIncluded,
+}
+
+/// 入力中のベースURLへのヒント。URLとして読めなければ何も出さない(読めないことは登録の
+/// ときに断る)。
+pub fn base_url_hint(api_format: ApiFormat, base_url: &str) -> Option<BaseUrlHint> {
+    let url = reqwest::Url::parse(base_url.trim()).ok()?;
+    let included = match api_format {
+        ApiFormat::OpenAiCompat => false,
+        ApiFormat::Anthropic => anthropic::includes_version_path(url.path()),
+        ApiFormat::Gemini => gemini::includes_version_path(url.path()),
+    };
+    included.then_some(BaseUrlHint::VersionPathIncluded)
+}
+
 /// 登録前のAPIキーの検証。ASCIIの可視文字だけを受け付ける。空白・改行・全角文字の混入は、
 /// 方言やサーバーによって通ったり通らなかったりするので、登録の時点で断る(削らずに断るのは、
 /// 保存する値を入力どおりにするため)。値はエラー文に含めない。
@@ -666,6 +696,44 @@ pub fn validate_header_name(api_format: ApiFormat, name: &str) -> Result<(), Cor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_urls_that_include_the_version_path_get_a_hint() {
+        let hint = Some(BaseUrlHint::VersionPathIncluded);
+        for (format, url) in [
+            (ApiFormat::Anthropic, "https://api.anthropic.com/v1"),
+            (
+                ApiFormat::Anthropic,
+                " https://proxy.example/anthropic/v1/messages/ ",
+            ),
+            (
+                ApiFormat::Gemini,
+                "https://generativelanguage.googleapis.com/v1beta",
+            ),
+            (
+                ApiFormat::Gemini,
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+            ),
+            (
+                ApiFormat::Gemini,
+                "https://generativelanguage.googleapis.com/v1/interactions",
+            ),
+        ] {
+            assert_eq!(base_url_hint(format, url), hint, "{url}");
+        }
+        for (format, url) in [
+            (ApiFormat::Anthropic, "https://api.anthropic.com"),
+            (ApiFormat::Anthropic, "https://example.com/v10"),
+            (ApiFormat::Gemini, default_base_url(ApiFormat::Gemini)),
+            (
+                ApiFormat::OpenAiCompat,
+                default_base_url(ApiFormat::OpenAiCompat),
+            ),
+            (ApiFormat::Anthropic, "not a url /v1"),
+        ] {
+            assert_eq!(base_url_hint(format, url), None, "{url}");
+        }
+    }
 
     #[tokio::test]
     async fn read_body_stops_at_the_limit() {

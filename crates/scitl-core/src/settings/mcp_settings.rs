@@ -5,9 +5,13 @@ use std::sync::Arc;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use super::{input, invalid, Settings, SettingsView};
+use super::rejection::{refuse_if_any, rejected, InputRejection};
+use super::{input, invalid, HeaderInput, Settings, SettingsView};
 use crate::blocking;
-use crate::config::{validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef};
+use crate::config::{
+    validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef,
+    MCP_SERVER_NAME_MAX_CHARS,
+};
 use crate::error::{CoreError, Result};
 use crate::mcp;
 use crate::tools::external;
@@ -17,7 +21,7 @@ const SECRET_PREFIX: &str = "mcp";
 const SECRET_WHAT: &str = "MCP secret";
 
 /// サーバー追加フォームからの入力。`McpEndpoint`と同じく、接続方式ごとに必要な値だけを
-/// 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
+/// 受け取る。ヘッダーの値は秘密情報で、保存後は`key_ref`に置き換わる。値を含むため
 /// `Debug`は付けない(ログに出す経路を作らない)。
 #[derive(Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -25,9 +29,10 @@ const SECRET_WHAT: &str = "MCP secret";
 pub enum NewMcpEndpoint {
     StreamableHttp {
         url: String,
+        /// 画面からはヘッダーの欄の文字列で届く([`HeaderInput`])。
         #[serde(default)]
-        #[cfg_attr(test, ts(type = "Array<[string, string]>"))]
-        headers: Vec<(String, SecretString)>,
+        #[cfg_attr(test, ts(type = "string"))]
+        headers: HeaderInput,
     },
 }
 
@@ -72,14 +77,33 @@ impl Settings {
         endpoint: NewMcpEndpoint,
     ) -> Result<(String, SettingsView)> {
         let name = name.trim().to_string();
-        validate_mcp_server_name(&name)?;
-        let endpoint = validate_endpoint(endpoint)?;
+        let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+        let url = url.trim().to_string();
+        // 画面が欄の近くに出す誤りは、他の検証より先にまとめて見る。
+        let mut reasons = Vec::new();
+        if name.is_empty() {
+            reasons.push(InputRejection::McpServerNameRequired);
+        } else if validate_mcp_server_name(&name).is_err() {
+            reasons.push(InputRejection::McpServerNameInvalid {
+                max_chars: MCP_SERVER_NAME_MAX_CHARS,
+            });
+        } else if let Some(taken) = name_taken(&self.current().config, &name) {
+            reasons.push(taken);
+        }
+        if url.is_empty() {
+            reasons.push(InputRejection::UrlRequired);
+        }
+        let headers = headers.into_pairs().unwrap_or_else(|lines| {
+            reasons.extend(lines);
+            Vec::new()
+        });
+        refuse_if_any(reasons)?;
+        let endpoint = validate_endpoint(url, headers)?;
 
         let mut draft = self.edit();
-        if draft.config.mcp_servers.iter().any(|s| s.name == name) {
-            return Err(invalid(format!(
-                "MCP server name already registered: {name}"
-            )));
+        // 先の確かめから書き込みロックを取るまでに、同じ名前が登録されているかもしれない。
+        if let Some(taken) = name_taken(&draft.config, &name) {
+            return Err(rejected(vec![taken]));
         }
         let endpoint = store_endpoint_secrets(endpoint)?;
         let refs = endpoint_secret_refs(&endpoint).to_vec();
@@ -192,21 +216,36 @@ impl Settings {
     }
 }
 
+/// 同じ識別子のサーバーが登録済みなら、その理由。
+fn name_taken(config: &Config, name: &str) -> Option<InputRejection> {
+    config
+        .mcp_servers
+        .iter()
+        .any(|s| s.name == name)
+        .then(|| InputRejection::McpServerNameTaken {
+            name: name.to_string(),
+        })
+}
+
 /// 秘密情報に触れる前に済ませられる検証をすべて行う。
-fn validate_endpoint(endpoint: NewMcpEndpoint) -> Result<NewMcpEndpoint> {
-    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
-    let url = url.trim().to_string();
+fn validate_endpoint(url: String, headers: Vec<(String, SecretString)>) -> Result<CheckedEndpoint> {
     mcp::validate_streamable_http_url(&url)?;
     for (name, value) in &headers {
         mcp::validate_header_name(name)?;
         mcp::validate_header_value(value.expose_secret())?;
     }
     input::unique_names(&headers, "header", str::to_ascii_lowercase)?;
-    Ok(NewMcpEndpoint::StreamableHttp { url, headers })
+    Ok(CheckedEndpoint { url, headers })
 }
 
-fn store_endpoint_secrets(endpoint: NewMcpEndpoint) -> Result<McpEndpoint> {
-    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+/// 検証を済ませた接続先(streamable HTTP)。
+struct CheckedEndpoint {
+    url: String,
+    headers: Vec<(String, SecretString)>,
+}
+
+fn store_endpoint_secrets(endpoint: CheckedEndpoint) -> Result<McpEndpoint> {
+    let CheckedEndpoint { url, headers } = endpoint;
     Ok(McpEndpoint::StreamableHttp {
         url,
         header_refs: super::store_secret_refs(headers, SECRET_PREFIX, SECRET_WHAT)?,

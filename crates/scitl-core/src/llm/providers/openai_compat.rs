@@ -480,6 +480,9 @@ struct RequestFunction {
 
 const CHAT_COMPLETIONS: &str = "chat/completions";
 
+/// 公式のベースURL(登録フォームの初期値)。OpenAI互換のベースURLは版のパスまで含む。
+pub(super) const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
 /// プレビューの本文で、画像を置く位置(`ContentPart::ImageUrl`)のdata URLだけを形式と長さに
 /// 縮める(`LlmAdapter::request_preview`)。
 fn abbreviate_images(body: &mut serde_json::Value) {

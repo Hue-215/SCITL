@@ -19,6 +19,10 @@ label: string, visible: boolean, capabilities: ModelCapabilities,
  */
 default_context_length: number, 
 /**
+ * コンテキスト長の手動設定。入力欄に出す(無ければ空欄)。
+ */
+context_length_override: number | null, 
+/**
  * 能力に手動設定がある(「初期値に戻す」を出す)。
  */
 overridden: boolean, 

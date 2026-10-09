@@ -62,6 +62,16 @@ impl AnthropicAdapter {
 const MESSAGES: &str = "v1/messages";
 const MODELS: &str = "v1/models";
 
+/// 公式のベースURL(登録フォームの初期値)。
+pub(super) const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+
+/// `base_url`のパスが、アダプタの足す版のパスまで含んでいるか(OpenAI互換の癖で`/v1`まで
+/// 書いた等)。含めると存在しないパスに送ることになる。
+pub(super) fn includes_version_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    ["/v1", "/v1/messages"].iter().any(|s| path.ends_with(s))
+}
+
 /// `anthropic-version`ヘッダーの値。
 const API_VERSION: &str = "2023-06-01";
 

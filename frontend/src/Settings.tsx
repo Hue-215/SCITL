@@ -13,7 +13,8 @@ import {
   updateLanguage,
   updateToolSettings,
 } from './api'
-import type { SettingsView } from './types'
+import { rejectionText } from './rejection'
+import type { FormOutcome, SettingsView } from './types'
 import { Drawer, DrawerToggle } from './Drawer'
 import { isolated, t } from './i18n'
 import { without } from './record'
@@ -76,12 +77,31 @@ export default function Settings({ onClose }: SettingsProps) {
     }
   }
 
-  // 追加の結果は、エラーをフォームの直下に出すため、ここでは握らず呼び出し元へ返す。
-  const applyAdded = async (action: () => Promise<SettingsView>) => {
-    const next = await action()
-    setSettings(next)
+  // 欄の誤り(Rust側が断った理由)は文言にして呼び出し元へ返し、欄の近くに出させる。
+  // 受け付けたら空を返す。コマンド自体の失敗は上のエラー欄に出す。
+  const saveField = async (action: () => Promise<FormOutcome<SettingsView>>) => {
+    try {
+      const outcome = await action()
+      if (outcome.status === 'rejected') return outcome.reasons.map(rejectionText)
+      setSettings(outcome.value)
+      setError(null)
+    } catch (e) {
+      setError(failureText(e))
+    }
+    return []
+  }
+
+  // 追加のフォームは、欄の誤りもコマンド自体の失敗もフォームの直下に出すため、失敗は握らず
+  // 呼び出し元へ投げる。欄の誤りは文言にして返し、受け付けたら空を返す。
+  const applyAdded = async <T,>(
+    action: () => Promise<FormOutcome<T>>,
+    accepted: (value: T) => SettingsView,
+  ) => {
+    const outcome = await action()
+    if (outcome.status === 'rejected') return outcome.reasons.map(rejectionText)
+    setSettings(accepted(outcome.value))
     setError(null)
-    return next
+    return []
   }
 
   // MCPサーバーのツール一覧を取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す)。
@@ -150,7 +170,7 @@ export default function Settings({ onClose }: SettingsProps) {
             ) : tab === 'general' ? (
               <GeneralTab
                 settings={settings}
-                onSave={(update) => runOrReportError(() => updateGeneralSettings(update))}
+                onSave={(update) => saveField(() => updateGeneralSettings(update))}
                 onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
               />
             ) : tab === 'memory' ? (
@@ -158,33 +178,37 @@ export default function Settings({ onClose }: SettingsProps) {
             ) : tab === 'providers' ? (
               <ProvidersTab
                 settings={settings}
-                onAddProvider={async (name, format, baseUrl, apiKey, headers) => {
-                  await applyAdded(() => addProvider(name, format, baseUrl, apiKey, headers))
-                }}
+                onAddProvider={(name, format, baseUrl, apiKey, headers) =>
+                  applyAdded(
+                    () => addProvider(name, format, baseUrl, apiKey, headers),
+                    (next) => next,
+                  )
+                }
                 onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
                 onUpdateModels={runOrReportError}
+                onSaveModelField={saveField}
               />
             ) : (
               <McpTab
                 settings={settings}
                 onSaveLimits={(maxRoundsPerTurn, totalTimeoutSecs) =>
-                  runOrReportError(() =>
-                    updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }),
+                  saveField(() => updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }))
+                }
+                onAddServer={(name, endpoint) =>
+                  // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
+                  applyAdded(
+                    () => addMcpServer(name, endpoint),
+                    ({ settings: next, server_id, tools_error }) => {
+                      if (tools_error !== null) {
+                        setToolFetchErrors((prev) => ({
+                          ...prev,
+                          [server_id]: t('common.fetch_failed', { error: isolated(tools_error) }),
+                        }))
+                      }
+                      return next
+                    },
                   )
                 }
-                onAddServer={async (name, endpoint) => {
-                  // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
-                  const added = await addMcpServer(name, endpoint)
-                  setSettings(added.settings)
-                  setError(null)
-                  const toolsError = added.tools_error
-                  if (toolsError !== null) {
-                    setToolFetchErrors((prev) => ({
-                      ...prev,
-                      [added.server_id]: t('common.fetch_failed', { error: isolated(toolsError) }),
-                    }))
-                  }
-                }}
                 onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
                 onSetServerEnabled={(id, enabled) =>
                   runOrReportError(() => setMcpServerEnabled(id, enabled))

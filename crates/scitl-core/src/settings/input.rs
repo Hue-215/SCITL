@@ -2,11 +2,11 @@
 //! 画面の入力チェックには頼らず、GUIのコマンドもCLIもここを通る。
 
 use std::collections::HashSet;
-use std::fmt::Display;
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 use super::invalid;
+use super::rejection::{refuse_if_any, InputRejection, NumberField};
 use crate::error::Result;
 use crate::text;
 
@@ -43,16 +43,107 @@ pub(super) fn name(raw: &str, what: &str, max_chars: usize) -> Result<String> {
     Ok(name.to_string())
 }
 
-/// 未設定(`None`)か、1以上`max`以下の値だけを通す。
-pub(super) fn bounded<T>(value: Option<T>, what: &str, max: T) -> Result<Option<T>>
+/// 数値の欄の文字列を解釈する。空欄(空白だけを含む)は未設定(`None`)、それ以外は1以上
+/// `max`以下の整数だけを通す。IMEを切り忘れて打った全角の数字も受け付ける。断った理由は
+/// 画面が欄の近くに出す種類で返す([`InputRejection`])。
+pub(super) fn positive_integer<T>(text: &str, max: T, field: NumberField) -> Result<Option<T>>
 where
-    T: PartialOrd + Display + From<u8>,
+    T: Copy + Into<u64> + TryFrom<u64>,
 {
-    match value {
-        Some(v) if v < T::from(1) || v > max => {
-            Err(invalid(format!("{what} must be between 1 and {max}")))
+    let digits: String = text
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '０'..='９' => char::from(b'0' + (c as u32 - '０' as u32) as u8),
+            c => c,
+        })
+        .collect();
+    if digits.is_empty() {
+        return Ok(None);
+    }
+    let reject = |reason| refuse_if_any(vec![reason]).map(|()| None);
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return reject(InputRejection::NotPositiveInteger { field });
+    }
+    let max_value: u64 = max.into();
+    // 桁が多すぎて`u64`に収まらないものも、上限を超えたものとして断る。
+    match digits.parse::<u64>() {
+        Ok(0) => reject(InputRejection::NotPositiveInteger { field }),
+        Ok(n) if n <= max_value => Ok(T::try_from(n).ok()),
+        _ => reject(InputRejection::NumberTooLarge {
+            field,
+            max: max_value,
+        }),
+    }
+}
+
+/// HTTPヘッダーの入力。画面はヘッダーの欄の文字列(1行1件、`NAME=VALUE`)のまま送り、ここで
+/// 分ける([`Self::into_pairs`])。値は秘密情報なので、欄全体を秘密情報として受け取る
+/// (`architecture/network-secrets.md`「秘密情報」)。CLIは環境変数から読んだ組で渡す。
+pub enum HeaderInput {
+    Lines(SecretString),
+    Pairs(Vec<(String, SecretString)>),
+}
+
+impl Default for HeaderInput {
+    fn default() -> Self {
+        Self::Pairs(Vec::new())
+    }
+}
+
+impl FromIterator<(String, SecretString)> for HeaderInput {
+    fn from_iter<I: IntoIterator<Item = (String, SecretString)>>(pairs: I) -> Self {
+        Self::Pairs(pairs.into_iter().collect())
+    }
+}
+
+/// IPCでは欄の文字列として届く。
+impl<'de> serde::Deserialize<'de> for HeaderInput {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        SecretString::deserialize(deserializer).map(Self::Lines)
+    }
+}
+
+impl HeaderInput {
+    /// 名前と値の組にする。欄の各行は前後の空白を除いてから見て、空行は飛ばし、最初の`=`で
+    /// 名前と値に分ける(名前・値の前後の空白も除く)。`=`が無い・名前がヘッダー名として
+    /// 読めない(空を含む)行はすべて行の番号で断る(行の中身は秘密情報を含みうるので返さない)。名前と値の検証は呼び出し側。
+    /// 断った理由は、他の欄の理由とまとめられるよう、並びのまま返す。
+    pub(super) fn into_pairs(
+        self,
+    ) -> std::result::Result<Vec<(String, SecretString)>, Vec<InputRejection>> {
+        let text = match self {
+            Self::Pairs(pairs) => return Ok(pairs),
+            Self::Lines(text) => text,
+        };
+        let mut pairs = Vec::new();
+        let mut reasons = Vec::new();
+        for (i, line) in text.expose_secret().split('\n').enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // 名前がヘッダー名として読めない行は、名前を返さずに行の番号だけで断る。
+            // `Authorization: Bearer x=`のように書くと、`=`の前に値が入るため。
+            match line.split_once('=') {
+                Some((name, value))
+                    if reqwest::header::HeaderName::from_bytes(name.trim().as_bytes()).is_ok() =>
+                {
+                    pairs.push((
+                        name.trim().to_string(),
+                        SecretString::from(value.trim().to_string()),
+                    ))
+                }
+                _ => reasons.push(InputRejection::HeaderLineInvalid { line_no: i + 1 }),
+            }
         }
-        value => Ok(value),
+        if reasons.is_empty() {
+            Ok(pairs)
+        } else {
+            Err(reasons)
+        }
     }
 }
 
@@ -96,13 +187,73 @@ mod tests {
         assert!(name("あいうえおかきく", "name", 8).is_ok());
     }
 
+    const FIELD: NumberField = NumberField::ContextLength;
+
+    fn rejection(text: &str, max: u32) -> InputRejection {
+        match positive_integer(text, max, FIELD) {
+            Err(crate::error::CoreError::Rejected(r)) => r.0[0].clone(),
+            other => panic!("expected a rejection for {text:?}, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn bounded_accepts_unset_and_values_from_one_to_the_maximum() {
-        assert_eq!(bounded(None::<u64>, "n", 10).unwrap(), None);
-        assert_eq!(bounded(Some(1u64), "n", 10).unwrap(), Some(1));
-        assert_eq!(bounded(Some(10u32), "n", 10).unwrap(), Some(10));
-        assert!(bounded(Some(0u64), "n", 10).is_err());
-        assert!(bounded(Some(11u32), "n", 10).is_err());
+    fn positive_integer_reads_blank_as_unset_and_full_width_digits() {
+        assert_eq!(positive_integer("", 10u32, FIELD).unwrap(), None);
+        assert_eq!(positive_integer(" \u{3000}", 10u64, FIELD).unwrap(), None);
+        assert_eq!(positive_integer("1", 10u32, FIELD).unwrap(), Some(1));
+        assert_eq!(positive_integer(" 10 ", 10u64, FIELD).unwrap(), Some(10));
+        assert_eq!(positive_integer("１０", 10u32, FIELD).unwrap(), Some(10));
+    }
+
+    #[test]
+    fn positive_integer_refuses_other_text_and_values_out_of_range() {
+        for text in ["0", "00", "-1", "+1", "1.5", "1e3", "abc", "1 0"] {
+            assert_eq!(
+                rejection(text, 10),
+                InputRejection::NotPositiveInteger { field: FIELD },
+                "{text:?}"
+            );
+        }
+        for text in ["11", "99999999999999999999999"] {
+            assert_eq!(
+                rejection(text, 10),
+                InputRejection::NumberTooLarge {
+                    field: FIELD,
+                    max: 10
+                },
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn header_lines_are_split_at_the_first_equals_sign_and_bad_lines_are_numbered() {
+        let lines = |text: &str| HeaderInput::Lines(SecretString::from(text.to_string()));
+        let pairs = lines("\n X-Key = a=b \r\n\nAuthorization=Bearer t\n")
+            .into_pairs()
+            .unwrap();
+        let shown: Vec<_> = pairs
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.expose_secret()))
+            .collect();
+        assert_eq!(shown, [("X-Key", "a=b"), ("Authorization", "Bearer t")]);
+        assert!(lines("").into_pairs().unwrap().is_empty());
+
+        let reasons = lines("A=1\nsecret\n=v\n B =\nAuthorization: Basic dXNlcg==")
+            .into_pairs()
+            .unwrap_err();
+        assert_eq!(
+            reasons,
+            [
+                InputRejection::HeaderLineInvalid { line_no: 2 },
+                InputRejection::HeaderLineInvalid { line_no: 3 },
+                InputRejection::HeaderLineInvalid { line_no: 5 },
+            ]
+        );
+        // 行の中身(秘密情報を含みうる)はエラー文にも出さない。
+        let reasons = lines("secret").into_pairs().unwrap_err();
+        let err = refuse_if_any(reasons).unwrap_err();
+        assert!(!err.to_string().contains("secret"));
     }
 
     #[test]

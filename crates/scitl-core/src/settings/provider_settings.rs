@@ -2,7 +2,8 @@
 
 use secrecy::{ExposeSecret, SecretString};
 
-use super::{delete_secret, delete_secret_refs, input, invalid, store_secret_refs};
+use super::rejection::rejected;
+use super::{delete_secret, delete_secret_refs, input, invalid, store_secret_refs, HeaderInput};
 use super::{Settings, SettingsView};
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::error::{CoreError, Result};
@@ -19,8 +20,8 @@ pub struct NewProvider {
     pub api_format: ApiFormat,
     pub base_url: String,
     pub api_key: Option<SecretString>,
-    /// カスタムHTTPヘッダーの名前と値。値は保存後は`key_ref`に置き換わる。
-    pub headers: Vec<(String, SecretString)>,
+    /// カスタムHTTPヘッダー。値は保存後は`key_ref`に置き換わる。
+    pub headers: HeaderInput,
 }
 
 impl Settings {
@@ -42,6 +43,8 @@ impl Settings {
     /// プロバイダー自体の登録も中断し、登録に失敗したら保存した値を消す。どちらでも参照と
     /// 値の片方だけが残る状態を作らない。
     pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
+        // 欄の誤りは画面が欄の近くに出すので、他の検証より先に見る。
+        let headers = new.headers.into_pairs().map_err(rejected)?;
         let name = input::name(&new.name, "provider name", input::PROVIDER_NAME_MAX_CHARS)?;
         let base_url = new.base_url.trim().to_string();
         providers::validate_base_url(&base_url)?;
@@ -52,7 +55,7 @@ impl Settings {
         if let Some(key) = &api_key {
             providers::validate_api_key(key)?;
         }
-        validate_headers(new.api_format, &new.headers)?;
+        validate_headers(new.api_format, &headers)?;
 
         let key_ref = match api_key {
             Some(key) => {
@@ -67,7 +70,7 @@ impl Settings {
                 delete_secret(key_ref, "provider API key");
             }
         };
-        let header_refs = store_secret_refs(new.headers, HEADER_SECRET_PREFIX, HEADER_SECRET_WHAT)
+        let header_refs = store_secret_refs(headers, HEADER_SECRET_PREFIX, HEADER_SECRET_WHAT)
             .inspect_err(|_| delete_key())?;
 
         self.register_provider(ProviderConfig {

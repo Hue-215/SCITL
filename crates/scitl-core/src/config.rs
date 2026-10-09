@@ -20,6 +20,11 @@ pub enum ApiFormat {
     Gemini,
 }
 
+impl ApiFormat {
+    /// 登録フォームで選べる順。
+    pub const ALL: [Self; 3] = [Self::OpenAiCompat, Self::Anthropic, Self::Gemini];
+}
+
 /// 1つのLLMプロバイダー設定。秘密情報を含まないため、そのままログに出しても
 /// TOMLファイルとして保存してもよい。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
