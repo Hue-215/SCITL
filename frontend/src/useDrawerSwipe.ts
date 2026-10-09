@@ -30,8 +30,10 @@ function useHorizontalSwipe(toward: 'left' | 'right', onSwipe: () => void) {
         e.touches.length === 1 &&
         // ダイアログ等は画面上は外にあっても、Reactのイベントは中の部品から届く。
         e.currentTarget.contains(target) &&
-        // 入力欄の中の横の動きは、文字の選択やカーソルの移動に使う。
-        !target.closest('input, textarea, select, [contenteditable]') &&
+        // 横の動きを自分で使う部品(入力欄の中の文字の選択・カーソルの移動、開いた選択一覧)。
+        !target.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), .dropdown-popup',
+        ) &&
         !scrollsSideways(target, e.currentTarget, sign)
           ? { x: touch.clientX, y: touch.clientY }
           : null
@@ -43,7 +45,7 @@ function useHorizontalSwipe(toward: 'left' | 'right', onSwipe: () => void) {
       const dy = Math.abs(e.touches[0].clientY - from.y)
       if (dx > SWIPE_DISTANCE && dx > dy * 2) {
         start.current = null
-        // 文字を選んでいる指の動きでは開け閉めしない。
+        // 文字を選んでいる指の動きでは開け閉めしない(前に選んだ文字が残っている間も同じ)。
         if (window.getSelection()?.isCollapsed !== false) onSwipe()
       } else if (dy > SWIPE_DISTANCE) {
         start.current = null
