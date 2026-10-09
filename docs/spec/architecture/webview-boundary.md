@@ -188,6 +188,13 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   権限の検査の対象外で、capabilitiesを足さずに届く(Tauri 2.11で確認)。Tauriを更新して
   これが通らなくなると、8KBを超える通知から先の途中経過がそのターンの間止まる(完了後の
   読み直しでは出る)
+- **画面に与える権限は、Androidの「戻る」の受け手の登録と解除だけ**
+  (`crates/scitl-tauri/capabilities/android-back-button.json`。`core:app:allow-register-listener`・
+  `core:app:allow-remove-listener`、窓は`main`、`platforms`は`android`)。Tauri本体が「戻る」を画面へ
+  知らせるのは受け手が登録されているときだけで、受け手の登録は権限が無いと拒まれる(`app.register_listener
+  not allowed`、Tauri 2.11.6で確認)。`core:app:default`等のまとめた権限は使わない(アプリの名前・版の
+  取得等、要らないものまで入る)。デスクトップには「戻る」が無いので与えない(登録は失敗し、画面は
+  以後試さない。`../ui.md`「指で操作する端末」)
 - Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「ローカル完結」)
 - 多重起動の防止(`tauri-plugin-single-instance`)はJSのAPIを持たず、capabilitiesに権限を
   足さない。`deep-link`のfeatureは有効にしない(`concurrency.md`「多重起動の防止」)
@@ -211,5 +218,6 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   (`ERR_ABORTED`)。どちらの場合もWebViewは外部のページを読み込まない。本文中のリンクは、確認の
   ダイアログの「開く」を押すと`tauri-plugin-opener`がブラウザへ渡す(`open`クレートはAndroidで動かない。
   Issue #492で替えた)
-- **権限の設定(capabilities)**: 1つも持たない今の構成で、自前のコマンドとChannelの取得が呼べる。
-  権限の設定を初めて足すIssue #475 のあとに確かめ直す
+- **権限の設定(capabilities)**: 「戻る」の受け手の権限(上の「CSP / Tauri権限設定」)を足したあとも、
+  自前のコマンドとChannelの取得(`plugin:__TAURI_CHANNEL__|fetch`)が権限で拒まれずに呼べる
+  (Issue #475、2026-10)

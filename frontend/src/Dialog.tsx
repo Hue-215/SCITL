@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from './i18n'
 import { FOCUSABLE_SELECTOR } from './keyboard'
+import { useCloseOnBack } from './useCloseOnBack'
 
 interface DialogProps {
   title: string
@@ -17,6 +18,8 @@ interface DialogProps {
 export default function Dialog({ title, onClose, children, width }: DialogProps) {
   const boxRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<Element | null>(null)
+  // Androidの「戻る」はEscと同じく閉じる(確認のダイアログでは取り消しになる)。
+  useCloseOnBack(true, onClose)
 
   useEffect(() => {
     // 開いた時のフォーカス移動と、閉じた時に呼び出し元(削除ボタン等)へ戻す

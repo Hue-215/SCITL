@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
+import { useCloseOnBack } from './useCloseOnBack'
 
 export interface DropdownOption {
   key: string
@@ -74,6 +75,8 @@ export default function Dropdown({
     setOpen(false)
     toggleRef.current?.focus()
   }
+  // Androidの「戻る」はEscと同じく閉じる。
+  useCloseOnBack(open, close)
 
   // 矢印は一覧が開く向きを指し、開いている間は閉じる向きを指す。
   const arrow = (direction === 'up') === open ? '▼' : '▲'

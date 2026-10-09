@@ -26,6 +26,7 @@ import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
 import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent } from './types'
 import { useChatRequests } from './useChatRequests'
+import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
 import { useStickToBottom } from './useStickToBottom'
 
@@ -307,16 +308,16 @@ export default function App() {
   // 表示のとき。設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
   useLayoutEffect(follow, [follow, messages, pending.length, live, failure, settingsOpen])
 
+  const closeSettings = () => {
+    stick()
+    setAddBlocked(null)
+    setSettingsOpen(false)
+  }
+  // Androidの「戻る」で、設定画面からチャットへ戻る。設定画面の中で開いたものが先に閉じる。
+  useCloseOnBack(settingsOpen, closeSettings)
+
   if (settingsOpen) {
-    return (
-      <Settings
-        onClose={() => {
-          stick()
-          setAddBlocked(null)
-          setSettingsOpen(false)
-        }}
-      />
-    )
+    return <Settings onClose={closeSettings} />
   }
 
   const drawerToggle = <DrawerToggle drawer={drawer} label={t('sidebar.open_tooltip')} />
