@@ -1,6 +1,6 @@
 ---
 name: android-check
-description: SCITLをAndroidのエミュレーター(と実機)で動かして見た目と振る舞いを確かめる手順。AVDの用意(幅360dpと412dp)、エミュレーターの起動(ウィンドウ無しを含む)、APKを作って入れる・`tauri android dev`で開発サーバーの画面を読む、`adb`でのスクリーンショット・タップ・文字入力・「戻る」・スワイプ、WebViewのDevTools(CDP)で実寸を測る`cdp-eval.mjs`、実機での確認の手順。画面を触ってAndroidでの見た目を確かめるとき(ui.md 7節)、指で操作する端末の決まり(ui.md 5節)を変えたとき、Androidでの振る舞いを確かめるとき、`chrome://inspect`・`adb`・エミュレーターを使うときに開く。
+description: SCITLをAndroidのエミュレーター(と実機)で動かして見た目と振る舞いを確かめる手順。AVDの用意(幅360dpと411dp)、エミュレーターの起動(ウィンドウ無しを含む)、APKを作って入れる・`tauri android dev`で開発サーバーの画面を読む、`adb`でのスクリーンショット・タップ・文字入力・「戻る」・スワイプ、WebViewのDevTools(CDP)で実寸を測る`cdp-eval.mjs`、実機での確認の手順。画面を触ってAndroidでの見た目を確かめるとき(ui.md 7節)、指で操作する端末の決まり(ui.md 5節)を変えたとき、Androidでの振る舞いを確かめるとき、`chrome://inspect`・`adb`・エミュレーターを使うときに開く。
 ---
 
 # Androidのエミュレーターで確かめる
@@ -39,13 +39,14 @@ Google Playの入ったイメージを使うのは、AndroidのWebViewをPlayス
 ## 2. エミュレーターを起動する
 
 ```sh
-emulator -avd Small_Phone_API_37 -no-window -no-audio -no-boot-anim &   # ウィンドウ無し
-emulator -avd Medium_Phone_API_37 &                                   # ウィンドウ有り
+emulator -avd Medium_Phone_API_37 &                                   # ウィンドウ有り(emulator-5554)
+emulator -avd Small_Phone_API_37 -no-window -no-audio -no-boot-anim &   # ウィンドウ無し(emulator-5556)
 # 起動し終わるまで待つ(1になれば済み)
 until [ "$(adb -s emulator-5556 shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; do sleep 3; done
 ```
 
-- 2台を同時に立てられる。シリアルは立てた順に`emulator-5554`・`emulator-5556`…になる。
+- 2台を同時に立てられる。シリアルは立てた順に`emulator-5554`・`emulator-5556`…になる。以下の例は
+  Small Phone(`emulator-5556`)で書く。
   どれがどのAVDかは`adb -s <シリアル> emu avd name`
 - ウィンドウ無し(`-no-window`)でも、撮る・触る・測るは下の手順のとおりにできる
 - x86_64のイメージはハードウェアの仮想化(Linuxでは`/dev/kvm`)が要る。クラウドのセッションで
@@ -89,10 +90,11 @@ npx tauri android dev Small_Phone_API_37
 ### スクリーンショット
 
 ```sh
-adb -s emulator-5556 exec-out screencap -p > shot.png
+adb -s emulator-5556 exec-out screencap -p > <スクラッチパッド>/shot.png
 ```
 
-`shot.png`をReadで開けば、Claudeがそのまま見られる。画像の座標は端末の画素で、CSSの値に
+撮った画像はリポジトリの外(Claudeならスクラッチパッド)へ書く(リポジトリの中に置くと、無視の
+設定に当たらずコミットに紛れ込む)。Readで開けば、Claudeがそのまま見られる。画像の座標は端末の画素で、CSSの値に
 devicePixelRatioを掛けたもの(1節の表)。
 
 ### 触る

@@ -333,7 +333,7 @@ WebKitGTKはOSのものを使うため、対応していない環境では指定
 **Android(エミュレーター)**: Claudeがユーザーに頼まずに、撮る(`adb exec-out screencap`)・
 触る(`adb shell input`)・測る(WebViewのDevTools)ことができる。手順は`android-check`スキル。
 5節「指で操作する端末」の決まり(ソフトキーボード・安全領域・当たり判定)と、狭い幅での並びを
-触ったら、幅360dpと412dpの2つのエミュレーターで通す。ソフトキーボードと安全領域は、下のハーネスでは
+触ったら、幅360dpと411dpの2つのエミュレーター(Small PhoneとMedium Phone)で通す。ソフトキーボードと安全領域は、下のハーネスでは
 再現できない。日本語IMEの確定・指での押しやすさ・端末ごとのノッチは実機でしか確かめられないので、
 Issueの「実機」の節に挙げてまとめて見る(同じスキルの5節)。
 
@@ -343,7 +343,7 @@ Issueの「実機」の節に挙げてまとめて見る(同じスキルの5節)
    `tokens.css` / `index.css` / `theme.ts` を読み込む(実物と同じスタイルを使う)
 2. `npx vite --port <任意>` で立て、Chromiumの `--headless --dump-dom` で
    `getBoundingClientRect()` の実測値を出力させる。`--screenshot` で見た目も撮れる。
-   幅は`--window-size`で与え、デスクトップの幅に加えて、Androidの幅の**360pxと412px**でも測る。
+   幅は`--window-size`で与え、デスクトップの幅に加えて、Androidの幅の**360pxと411px**でも測る。
    指で操作する端末の決まり(`pointer: coarse`・ホバーできない)を効かせるには
    `--blink-settings=primaryPointerType=2,availablePointerTypes=2,primaryHoverType=1,availableHoverTypes=1`
    を足す(Chrome for Testing 153のchrome-headless-shellで確認)

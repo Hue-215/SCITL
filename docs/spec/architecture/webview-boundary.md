@@ -210,6 +210,10 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   開発時(`tauri android dev`)も、Tauriは画面を`http://tauri.localhost`で開いてRust側から開発サーバーへ
   中継する(`devUrl`のホストが`localhost`かIPアドレスのとき)。そのため判定は、開発時も開発サーバーの
   オリジンに加えてカスタムプロトコルを通す(通さないと最初の遷移が止まり、画面が白いままになる)。
+  `http(s)://tauri.localhost`を通すのは、それがカスタムプロトコルになるWindowsとAndroidだけで、
+  ユーザー情報やポートの付いたものは通さない(wryは`http://tauri.`の前方一致で横取りを決めるので、
+  付いたものは通常の読み込みになりうる。Linux・macOSでは`*.localhost`を手元へ解決する環境で手元の
+  サーバーの画面が出る)。
   外部のURLへの遷移は、`location`の書き換え・`href`を持つ`<a>`のクリック・`window.open`のどれも止まる
   (`ERR_ABORTED`)。どちらの場合もWebViewは外部のページを読み込まない。本文中のリンクは、確認の
   ダイアログの「開く」を押すと`tauri-plugin-opener`がブラウザへ渡す(`open`クレートはAndroidで動かない。

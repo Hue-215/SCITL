@@ -15,6 +15,10 @@ pub fn guard<R: Runtime>() -> TauriPlugin<R> {
         .build()
 }
 
+/// `http(s)://tauri.localhost`がカスタムプロトコルとして横取りされるか。WindowsとAndroidだけで、
+/// ほかでは通常の読み込みになる(`*.localhost`を手元へ解決する環境では、手元のサーバーの画面が出る)。
+const HTTP_APP_PROTOCOL: bool = cfg!(any(windows, target_os = "android"));
+
 /// アプリ自身の画面のURLか。本番は埋め込み資源を配るカスタムプロトコル
 /// (`tauri://localhost`、Windows・Androidでは`http(s)://tauri.localhost`)、開発時(`dev_url`が
 /// ある)はそれに加えてVite開発サーバー。モバイルの開発時は、Tauriが画面をカスタムプロトコルで
@@ -23,9 +27,14 @@ fn is_app_url(url: &Url, dev_url: Option<&Url>) -> bool {
     if dev_url.is_some_and(|dev_url| url.origin() == dev_url.origin()) {
         return true;
     }
+    // ユーザー情報やポートの付いたものは、カスタムプロトコルの画面ではない(wryは
+    // `http://tauri.`の前方一致で横取りを決めるので、通常の読み込みになりうる)。
+    if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+        return false;
+    }
     match url.scheme() {
         "tauri" => url.host_str() == Some("localhost"),
-        "http" | "https" => url.host_str() == Some("tauri.localhost"),
+        "http" | "https" if HTTP_APP_PROTOCOL => url.host_str() == Some("tauri.localhost"),
         _ => false,
     }
 }
@@ -43,23 +52,31 @@ mod tests {
         let dev = url("http://localhost:1420");
         for dev_url in [None, Some(&dev)] {
             assert!(is_app_url(&url("tauri://localhost/"), dev_url));
-            assert!(is_app_url(&url("http://tauri.localhost/"), dev_url));
-            assert!(is_app_url(
-                &url("https://tauri.localhost/index.html"),
-                dev_url
-            ));
+            for http in [
+                "http://tauri.localhost/",
+                "https://tauri.localhost/index.html",
+            ] {
+                assert_eq!(is_app_url(&url(http), dev_url), HTTP_APP_PROTOCOL, "{http}");
+            }
         }
     }
 
     #[test]
-    fn dev_server_passes_only_while_developing() {
+    fn dev_server_passes_only_by_its_origin() {
         let dev = url("http://localhost:1420");
         assert!(is_app_url(
             &url("http://localhost:1420/src/main.tsx"),
             Some(&dev)
         ));
         assert!(!is_app_url(&url("http://localhost:1420/"), None));
-        assert!(!is_app_url(&url("http://localhost:1421/"), Some(&dev)));
+        for other in [
+            "http://localhost:1421/",
+            "https://localhost:1420/",
+            "http://127.0.0.1:1420/",
+            "http://localhost.:1420/",
+        ] {
+            assert!(!is_app_url(&url(other), Some(&dev)), "{other}");
+        }
     }
 
     #[test]
@@ -69,6 +86,10 @@ mod tests {
             for other in [
                 "https://example.com/",
                 "http://tauri.localhost.example.com/",
+                "http://tauri.localhost:8080/",
+                "http://x@tauri.localhost/",
+                "tauri://localhost:8080/",
+                "tauri://x@localhost/",
                 "tauri://example.com/",
                 "file:///etc/passwd",
             ] {
