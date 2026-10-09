@@ -133,5 +133,7 @@ function rejectionText(outcome: StageOutcome & { status: 'rejected' }): string {
       return t('attachment.too_many', { count: outcome.limit })
     case 'unsupported':
       return t('attachment.unsupported')
+    case 'image_unreadable':
+      return t('attachment.image_unreadable')
   }
 }

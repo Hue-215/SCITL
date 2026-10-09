@@ -4,6 +4,7 @@
   "attachment.content_not_sent": "この形式は中身がモデルに渡らず、名前と大きさだけが伝わります",
   "attachment.image_not_delivered": "この画像はモデルに渡っておらず、名前と大きさだけが伝わっています",
   "attachment.image_not_sent": "選んでいるモデルは画像を読めないため、名前と大きさだけが伝わります",
+  "attachment.image_unreadable": "画像を読み取れないため添付できません（壊れているか、画素数が大きすぎます）",
   "attachment.load_failed": "読み込めませんでした: {error}",
   "attachment.loading": "読み込み中…",
   "attachment.not_a_file": "フォルダなど、ファイルでないものは添付できません",

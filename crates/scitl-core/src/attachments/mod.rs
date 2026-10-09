@@ -192,14 +192,15 @@ impl Attachments {
         blocking::run(move || Ok(store.read_image(&hash)?.data_url().to_string())).await
     }
 
-    /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。開けないOSでは、書き出す前に断る。
+    /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。画面が開ける添付([`revealable`])
+    /// だけを開き、それ以外(開けないOS・その他でない添付)は書き出す前に断る。
     pub async fn reveal(&self, db: SharedConnection, id: i64) -> Result<()> {
-        if !CAN_REVEAL {
-            return Err(CoreError::Attachment(
-                "attachments cannot be shown in a folder on this platform".to_string(),
-            ));
-        }
         let attachment = with_conn(db, move |conn| attachments::get(conn, id)).await?;
+        if !revealable(attachment.view.kind, CAN_REVEAL) {
+            return Err(CoreError::Attachment(format!(
+                "attachment {id} cannot be shown in a folder"
+            )));
+        }
         let hash = file_hash(attachment.content, id, AttachmentKind::Other)?;
         let store = self.store.clone();
         blocking::run(move || store.reveal(&attachment.view.original_name, &hash)).await

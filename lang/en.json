@@ -4,6 +4,7 @@
   "attachment.content_not_sent": "The content of this file type is not sent to the model; only its name and size are",
   "attachment.image_not_delivered": "This image did not reach the model; only its name and size did",
   "attachment.image_not_sent": "The selected model cannot read images; only the name and size are sent",
+  "attachment.image_unreadable": "Cannot attach this image because it could not be read (it may be broken or have too many pixels)",
   "attachment.load_failed": "Could not load: {error}",
   "attachment.loading": "Loading…",
   "attachment.not_a_file": "Only files can be attached, not folders",

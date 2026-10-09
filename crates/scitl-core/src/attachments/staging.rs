@@ -51,9 +51,12 @@ pub enum Rejection {
     NotAFile,
     /// 送っていない添付が、1つの発言に付けられる数に達している。
     TooMany { limit: usize },
-    /// 中身が「その他」(画像として扱う形式でもUTF-8のテキストでもない)。デコードできない
-    /// 画像を含む。モデルが中身に何もできないので受け付けない(Issue #506)。
+    /// 中身が「その他」(画像として扱う形式でもUTF-8のテキストでもない)。モデルが中身に何も
+    /// できないので受け付けない(Issue #506)。
     Unsupported,
+    /// 画像として扱う形式だが、デコードできない(壊れている・画素数が上限を超える)。形式を
+    /// 変えるよう促す[`Self::Unsupported`]の文言では、利用者が何を直せばよいか分からないので分ける。
+    ImageUnreadable,
 }
 
 #[derive(Debug, Clone)]
@@ -174,7 +177,9 @@ impl Staged {
             });
         }
         let Some((classified, bytes)) = normalized(classified, bytes) else {
-            return Ok(unsupported());
+            return Ok(StageOutcome::Rejected {
+                reason: Rejection::ImageUnreadable,
+            });
         };
         let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
@@ -256,7 +261,7 @@ impl Staged {
 }
 
 /// 画像なら正規化したものに置き換える。デコードできない画像(壊れている・画素数が上限を
-/// 超える)は`None`で、「その他」と同じく受け付けない。
+/// 超える)は`None`で、受け付けない。
 fn normalized(classified: Classified, bytes: Vec<u8>) -> Option<(Classified, Vec<u8>)> {
     if classified.kind != AttachmentKind::Image {
         return Some((classified, bytes));
@@ -433,8 +438,15 @@ mod tests {
     #[test]
     fn refuses_other_kinds_and_undecodable_images_without_staging() {
         let staged = Staged::default();
+        assert_eq!(
+            staged
+                .stage("broken.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
+                .unwrap(),
+            StageOutcome::Rejected {
+                reason: Rejection::ImageUnreadable
+            }
+        );
         for (name, bytes) in [
-            ("broken.png", b"\x89PNG\r\n\x1a\nbody".to_vec()),
             ("a.zip", b"PK\x03\x04\x14\0\0\0".to_vec()),
             ("photo.heic", b"\0\0\0\x18ftypheic".to_vec()),
             ("sjis.txt", b"\x92\xf7\x90\xd8".to_vec()),
