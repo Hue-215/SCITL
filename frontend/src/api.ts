@@ -10,7 +10,6 @@ import type {
   ExportSummary,
   FormOutcome,
   Language,
-  LinkInspection,
   McpServerAdded,
   Memory,
   MessageView,
@@ -341,14 +340,10 @@ export function fetchMcpTools(serverId: string): Promise<SettingsView> {
   return invoke('fetch_mcp_tools', { serverId })
 }
 
-// 本文中のリンク。開く側でもRustが判定し直すため、確認ダイアログを経ずにopenConfirmedLinkを
-// 呼んでも許可されないURLは開かない。
-export function inspectLink(url: string): Promise<LinkInspection> {
-  return invoke('inspect_link', { url })
-}
-
-export function openConfirmedLink(url: string): Promise<void> {
-  return invoke('open_confirmed_link', { url })
+// 本文中のリンクを開きたいと伝える。判定も、開く前の確認(ネイティブのダイアログ)も、開けな
+// かったときの知らせもRust側が行い、返るのはダイアログを閉じてから。
+export function openLink(url: string): Promise<void> {
+  return invoke('open_link', { url })
 }
 
 // 設定のメモリタブ。変更のコマンドは何も返さないので、画面は続けて一覧を読み直す。

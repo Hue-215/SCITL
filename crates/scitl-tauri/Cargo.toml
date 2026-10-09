@@ -27,9 +27,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2.4"
 tauri-plugin-clipboard-manager = "~2.3"
 
-# 選択画面で選んだ`content://`のURIを開く(Androidだけ。デスクトップはパスで届く)
+# 選択画面で選んだ`content://`のURIを開く・本文中のリンクをOSへ渡す(Androidだけ。デスクトップは
+# パスで届き、リンクは`scitl-core`が`open`クレートで開く。`open`はAndroidで動かない)
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-fs = "2"
+# 2.6からTauri 2.12を要求するので2.5に留める
+tauri-plugin-opener = "~2.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5.9"

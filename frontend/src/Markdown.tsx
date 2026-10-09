@@ -1,7 +1,7 @@
-import { memo, useRef, useState } from 'react'
+import { memo, useRef } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import LinkDialog from './LinkDialog'
+import { openLink } from './api'
 import remarkInertHtml from './remarkInertHtml'
 import remarkSoftBreaks from './remarkSoftBreaks'
 
@@ -15,14 +15,13 @@ const REMARK_PLUGINS = [remarkGfm, remarkInertHtml, remarkSoftBreaks]
 // 本文が変わらない限り描き直さない(`memo`)。会話欄は入力欄と同じ親の下にあり、1文字打つ
 // たびに全発言を解析し直すと、会話が長いほど入力が重くなるため。
 export default memo(function Markdown({ text }: { text: string }) {
-  const [linkUrl, setLinkUrl] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
   const components: Components = {
-    // リンクはWebView内で遷移させず、必ず確認ダイアログを経てOSのブラウザで開く。<a>に
+    // リンクはWebView内で遷移させず、Rust側が出す確認のダイアログを経てOSのブラウザで開く。<a>に
     // hrefを持たせないことで、クリック処理以外の経路(中クリック・ドラッグ・右
-    // クリックメニュー・エンジンによるDNS先読み)をまとめて無くす。確認には書かれた
-    // URLをそのまま渡し、許可されない通信方式でも理由を表示できるようにする。
+    // クリックメニュー・エンジンによるDNS先読み)をまとめて無くす。書かれたURLをそのまま
+    // 渡し、許可されない通信方式でも理由をRust側が知らせられるようにする。
     a: ({ href, children }) => {
       const activate = () => {
         if (href === undefined) return
@@ -33,7 +32,9 @@ export default memo(function Markdown({ text }: { text: string }) {
           rootRef.current?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' })
           return
         }
-        setLinkUrl(href)
+        // 開けないリンクとOSへ渡す失敗はRust側がダイアログで知らせる。コマンド自体の失敗(起動に
+        // 失敗した画面等)は、本文の中に出す場所が無いので出さない。
+        void openLink(href).catch(() => undefined)
       }
       return (
         <a
@@ -61,14 +62,13 @@ export default memo(function Markdown({ text }: { text: string }) {
         // 無害化の対象から漏れたHTML・画像が万一残っても描画しない
         skipHtml
         disallowedElements={['img']}
-        // URLはhref属性に置かず、確認ダイアログにだけ渡す(上のa)。既定の無害化は
+        // URLはhref属性に置かず、開く操作にだけ渡す(上のa)。既定の無害化は
         // javascript:等を空にしてしまい、開けない理由を表示できなくなるため素通しにする
         urlTransform={(url) => url}
         components={components}
       >
         {text}
       </ReactMarkdown>
-      {linkUrl !== null && <LinkDialog url={linkUrl} onClose={() => setLinkUrl(null)} />}
     </div>
   )
 })

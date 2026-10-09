@@ -1541,19 +1541,6 @@ button.danger {
   justify-content: flex-end;
 }
 
-/* URLは記号の途中でも折り返す(長いURLでダイアログが横に広がらないように)。 */
-.link-dialog-url {
-  word-break: break-all;
-  user-select: text;
-}
-
-.link-dialog-warning {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  color: var(--color-danger);
-}
-
 /* データフォルダを開けなかったときに、アプリの代わりに出す画面。本文は設定画面と同じく
    --content-max-widthで頭打ちにして中央に置く。 */
 .startup-failure {

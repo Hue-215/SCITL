@@ -13,6 +13,7 @@
 | 言語ファイル形式 | JSON | フロントエンド(Vite)が追加プラグイン無しに読み込める |
 | 多重起動の防止(デスクトップのみ) | `tauri-plugin-single-instance` | 公式プラグインで、通信はローカルのIPCだけ。自前で持つとOSごとのIPCを2通り書くことになり、攻撃面も保守量も増える(`concurrency.md`「多重起動の防止」) |
 | ネイティブのダイアログ | `tauri-plugin-dialog` | 公式プラグインで、デスクトップ(`rfd`)とAndroid(Kotlin側)の両方を持つ。画面(WebView)では作れない確認と、添付の選択画面を、Rust側から出すために使う(`webview-boundary.md`「CSP / Tauri権限設定」・`attachments.md`「受け取り方」)。依存として`tauri-plugin-fs`も入る。どちらも画面に権限(capabilities)を与えない |
+| リンクをOSへ渡す(Androidのみ) | `tauri-plugin-opener` | 公式プラグイン。`open`クレートはAndroidで動かないので、`ACTION_VIEW`のIntentで渡す(`webview-boundary.md`の外部リンクの項)。デスクトップは`open`クレートのまま。2.5に留める(Tauri 2.11のまま入る版)。画面に権限を与えない |
 | Androidの`content://`のURIを開く(Androidのみ) | `tauri-plugin-fs` | 公式プラグインで、選択画面が返すURIをAndroidのContentResolverでファイル記述子として開く。Rust側から開くためだけに登録し、画面に権限を与えない(`attachments.md`「受け取り方」) |
 | クリップボードの画像を読む(デスクトップのみ) | `tauri-plugin-clipboard-manager` | 公式プラグイン(`arboard`)。WebKitGTKは画像だけが載ったクリップボードを画面に渡さないので、画面ではなくRust側で読む(`attachments.md`「受け取り方」)。Android側は文字しか読めないので登録しない。2.4はTauri 2.12を要求するので2.3に留める。Linuxのクリップボードのために`wl-clipboard-rs`(Wayland)と`x11rb`が入り、`hashbrown`(0.15)・`foldhash`(0.1)・proc-macro経由の`quick-xml`(0.41)が既存と別の版で同居する |
 
@@ -27,8 +28,9 @@
 
 - **デスクトップ**: LinuxとWindows。macOSは対象にしない(資格情報の保存先が無い。`network-secrets.md`)
 - **Android**: 対応を進めている(Issue #440)。APKを直接入れて使う形で、ストアでの配布は考えない。
-  リンク・添付・エクスポートのフォルダを開く操作は、コンパイルは通るが動かない(`open`クレートが
-  デスクトップの`xdg-open`等を探して失敗を返す。open 5.4のソースで確認、2026-10)。iOSは対象にしない
+  添付・エクスポートのフォルダを開く操作は、コンパイルは通るが動かない(`open`クレートが
+  デスクトップの`xdg-open`等を探して失敗を返す。open 5.4のソースで確認、2026-10)。本文中のリンクは
+  `tauri-plugin-opener`で開く(Issue #492)。iOSは対象にしない
 
 ## Androidのビルド
 
