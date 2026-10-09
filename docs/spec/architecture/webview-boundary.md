@@ -194,7 +194,10 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   知らせるのは受け手が登録されているときだけで、受け手の登録は権限が無いと拒まれる(`app.register_listener
   not allowed`、Tauri 2.11.6で確認)。`core:app:default`等のまとめた権限は使わない(アプリの名前・版の
   取得等、要らないものまで入る)。デスクトップには「戻る」が無いので与えない(登録は失敗し、画面は
-  以後試さない。`../ui.md`「指で操作する端末」)
+  以後試さない。`../ui.md`「指で操作する端末」)。乗っ取られた画面にできるのは、受け手を残して「戻る」で
+  裏へ回らないようにするか、外してダイアログが閉じないようにすることだけで、ホーム・最近使ったアプリ
+  からは出られる。画面へ届くのは`canGoBack`だけで、ほかのプラグインの受け手には`core:app`の権限が
+  効かない
 - Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「ローカル完結」)
 - 多重起動の防止(`tauri-plugin-single-instance`)はJSのAPIを持たず、capabilitiesに権限を
   足さない。`deep-link`のfeatureは有効にしない(`concurrency.md`「多重起動の防止」)
