@@ -34,6 +34,10 @@ dbus-secret-service-keyring-store = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = { workspace = true }
 
+[target.'cfg(target_os = "android")'.dependencies]
+rustls-platform-verifier = { workspace = true }
+jni = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 ts-rs = { workspace = true }

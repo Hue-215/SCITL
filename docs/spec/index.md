@@ -81,7 +81,7 @@ SCITL/
 │   │       ├── tools/              # registry(面別スキーマ生成), args検証, 各ツール
 │   │       ├── orchestration/      # 応答生成と、会話をモデル・画面へ渡す形の組み立て(architecture/transcript.md)
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(streamable_http)
-│   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(architecture/network-secrets.md)
+│   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(architecture/network-secrets.md)。Androidの証明書の検証の初期化は`net/android.rs`
 │   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
 │   │       ├── config.rs           # 設定(TOML)。秘密情報は参照(`key_ref`)だけを持つ
 │   │       ├── paths.rs            # データディレクトリの場所と中の並び(GUI・CLI共通)

@@ -8,6 +8,9 @@ use url::Url;
 
 use crate::error::CoreError;
 
+#[cfg(target_os = "android")]
+pub mod android;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 全経路で名乗るUser-Agent。reqwestは既定でUser-Agentを付けないため、明示しないと
@@ -160,13 +163,21 @@ pub enum RequestTimeout {
 /// ハードニング済み`reqwest::Client`を組み立てる。通信先の検証を済ませたことを、`url`の型で
 /// 求める。
 pub fn hardened_client(
-    _url: &ExternalUrl,
+    #[cfg_attr(not(target_os = "android"), allow(unused_variables))] url: &ExternalUrl,
     timeout: RequestTimeout,
 ) -> Result<reqwest::Client, CoreError> {
+    // 証明書を検証できないうちにHTTPSで接続すると、検証の時点でpanicする([`android`])。
+    #[cfg(target_os = "android")]
+    if url.as_url().scheme() == "https" && !android::initialized() {
+        return Err(CoreError::Config(
+            "HTTPS is not available: the certificate verifier is not initialized".to_string(),
+        ));
+    }
     let mut builder = reqwest::Client::builder()
         .no_proxy()
         // リダイレクトは同一ホストも含めて一律に追わない。緩めると、登録先のLANサーバーが
-        // 公開ホストへ302を返すだけで通信先が広がる。
+        // 公開ホストへ302を返すだけで通信先が広がる。Androidで初期化前のHTTPSを上で断れるのも、
+        // 通信先が`url`のスキームから変わらないため。
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .user_agent(USER_AGENT);
