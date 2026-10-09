@@ -18,7 +18,7 @@ import {
 import { StagedAttachmentChips } from './Attachments'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
-import { isCommitEnter } from './keyboard'
+import { isSendEnter } from './keyboard'
 import type { AttachmentDeliveries, ReceivedFiles } from './types'
 import {
   type StagedAttachments,
@@ -181,7 +181,7 @@ export default function ChatCompose({
               )
             }}
             onKeyDown={(e) => {
-              if (isCommitEnter(e) && !e.shiftKey) {
+              if (isSendEnter(e)) {
                 e.preventDefault()
                 send()
               }

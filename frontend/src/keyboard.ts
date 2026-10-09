@@ -6,6 +6,17 @@ export function isCommitEnter(e: KeyboardEvent): boolean {
   return e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229
 }
 
+// 主に指で操作する端末か。窓の幅(useDrawer.ts)と同じく端末の種類では分けず、主な入力の手段
+// (指かマウスか)で決める。
+const coarsePointer = window.matchMedia('(pointer: coarse)')
+
+// チャットの入力欄で、Enterで送るか。指で操作する端末ではEnterは改行で、送るのはボタンか
+// Ctrl+Enter(ui.md「指で操作する端末」)。Shift+Enterはどの端末でも改行。
+export function isSendEnter(e: KeyboardEvent): boolean {
+  if (!isCommitEnter(e) || e.shiftKey) return false
+  return !coarsePointer.matches || e.ctrlKey || e.metaKey
+}
+
 // フォーカスを受け取れる要素。ダイアログのフォーカストラップと、引き出し(useDrawer.ts)を開いたときの
 // フォーカスの移し先を探すのに使う。
 export const FOCUSABLE_SELECTOR =

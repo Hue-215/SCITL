@@ -60,6 +60,7 @@
 | 複数行入力欄が伸びる範囲 | `--textarea-min-height`, `--textarea-max-height`(全欄共通の1組) |
 | 選択肢の一覧が伸びる上限 | `--option-list-max-height` |
 | レイアウトの基準値 | `--sidebar-width`, `--settings-rail-width`, `--content-min-width`, `--content-max-width` |
+| 画面の入れ物(`#root`)の高さ | `--viewport-height`(既定は窓の高さ。`viewport.ts`が見えている範囲の高さで上書きする。5節「指で操作する端末」) |
 
 直値を書いてよいのは、**その1箇所でしか使わない見た目上の定数**だけ(セレクトの▼の
 大きさ、グリフをアイコン代わりに使う箇所の `line-height` 等)。その場合は「他と共有しない
@@ -236,6 +237,47 @@ Classic期のベベルと同じ理屈)で表す。どちらを出すかと具体
 - 閉じている間のカラムは`visibility: hidden`で隠す(`display: none`と違い、開け閉めでスクロール
   位置を保ったまま、Tabで中へ入れなくなる)
 
+### 指で操作する端末
+
+Android等、指とソフトキーボードで操作する端末での決まり。端末の種類(OS・WebView)では分けず、
+主な入力の手段で分ける(`architecture/webview-boundary.md`「画面が持つもの・持たないもの」)。
+指で操作するかはCSSの`@media (pointer: coarse)`と、スクリプトでは同じ条件の`matchMedia`で見る。
+ホバーできるかは`@media (hover: hover)`で見る(2節「塗りと奥行き」)。
+
+- **ツールチップ(`title`)に頼らない**: 指で操作する端末では出ない。`title`には補助の説明(押すと
+  何が起きるか・アイコンの名前)だけを置き、知らないと困ること(警告・失敗の理由)は画面に出す。
+  添付のチップは名前の下に説明の行を持ち(`Chip.tsx`の`note`)、モデルの表の⚠は表の下に意味を
+  書いた一文を出す。ホバーしたときだけ現れる部品も作らない(平らなボタンも、普段から文字は見えている)
+- **Enter**: 指で操作する端末では、チャットの入力欄のEnterは改行にし、送るのは送信ボタン(つないだ
+  キーボードならCtrl+Enterでも)にする(`keyboard.ts`の`isSendEnter`)。ソフトキーボードのEnterは
+  改行のつもりで押されることが多いため。1行の入力欄(タスクの名前)はEnterで確定し、ソフトキーボードの
+  確定のキー(→)でもEnterが届く。発言の編集はどの端末でもボタン(Ctrl+Enterでも)で確定する。
+  文字を打っている間のキーは`keyCode 229`で届き、Enterだけが`keyCode 13`で届く(Gboardの英字入力で
+  確認)
+- **当たり判定**: 小さな文字で描く操作部品(発言の操作・モデル選択・添付のチップと×・思考とツール
+  呼び出しの開閉の行・チェックボックスの選択行`.choice`)は、指で操作する端末では当たり判定を
+  `--control-size-md`まで広げる。ラベルで包まずに置くチェックボックス(モデルの表)は、箱の見た目を
+  変えず、疑似要素で当たり判定だけを広げる。ラベルで包むものに広げると、並んだ行どうしで当たり判定が
+  重なる
+- **ソフトキーボード**: AndroidのWebViewは、キーボードが出るとvisual viewportだけを縮め、窓の高さ
+  (`100vh`・`100dvh`・`innerHeight`)を変えない。そのままでは入力欄を見せるために画面ごと上へずらされ、
+  見出しが隠れる。`viewport.ts`は、visual viewportが窓より低い間だけその高さを`--viewport-height`に
+  写し、`#root`の高さにする(それ以外は既定の`100dvh`のまま)。viewportの
+  `interactive-widget=resizes-content`とVirtualKeyboard API(`env(keyboard-inset-height)`)はWebViewでは
+  効かない。高さは`#root`が持つので、画面の入れ物(`.layout`・`.settings`)は`height: 100%`にし、
+  `100vh`を書かない。会話欄が縮んだときは、下端を見ていれば下端に留め、会話欄の中の欄(発言の編集)に
+  入力しているならその欄を見える位置に置く(`useStickToBottom.ts`)
+- **画面端の安全領域**: Androidでは画面がステータスバー・ナビゲーションバーの下まで広がる
+  (`MainActivity.kt`の`enableEdgeToEdge`。targetSdk 36ではオプトアウトできない。
+  `architecture/tech-stack.md`「AndroidのSDKの版」)。余白は`#root`の`padding`に
+  `env(safe-area-inset-*)`で取り、Activityの側では足さない(足すと二重になる)。キーボードが出ている間は
+  下の値が0になるので、キーボードの上に余白は残らない。viewportに`viewport-fit=cover`を指定する。
+  ダイアログの暗幕は帯の下まで覆い、ダイアログ自体は安全領域の内側に置く。引き出したカラムと
+  その暗幕は`#root`の中(安全領域の内側)に収まる
+
+この項の挙動(安全領域の値、キーボードとvisual viewport、キーの届き方)は、Android 17(API 37)の
+エミュレーター、Android System WebView 145、Gboardで確かめた(2026-10、Issue #474)。
+
 ## 6. OSネイティブ描画の扱い
 
 WebViewはOSのテーマでフォーム部品を描く。既定に頼らない(`principles.md` 6節)ため、
@@ -269,7 +311,8 @@ CSSの入れ子(`&`), `:is()`/`:where()`, `inset` を含む `box-shadow`, `box-s
 フォールバック(`--elevation: initial` で空の影になること), `display: contents`,
 `@media (hover: hover)`, チェックボックスへの `appearance: none` と `::before`, `font-synthesis`,
 `inert`, メディアクエリの範囲の書き方(`(width < …)`), `visibility: hidden` を外した直後の効果での
-`focus()`(引き出したカラムの先頭へフォーカスが移ること)。
+`focus()`(引き出したカラムの先頭へフォーカスが移ること), `dvh`, `env(safe-area-inset-*)`,
+`@media (pointer: coarse)`, `visualViewport`。
 
 確認が済んだものは、**どのバージョンで見たかを併記して残す**(次に同じ調べ直しをしないため)。
 `field-sizing: content` は WebKitGTK 2.52.6 で対応を確認済み(Issue #96)。検索欄の消去ボタンを
@@ -314,3 +357,7 @@ WebKitGTKはOSのものを使うため、対応していない環境では指定
   連結で組み立てていないか(`architecture/i18n.md`)
 - 正方形のボタンを作った → 幅だけでなく高さも`--control-size-md`で指定したか(高さを行の高さに
   委ねると正方形にならない)
+- ツールチップ(`title`)を付けた → 警告・失敗の理由のように、知らないと困ることを入れていないか
+  (5節「指で操作する端末」)
+- 小さな操作部品を作った → 指で操作する端末で当たり判定が`--control-size-md`に届くか
+- 画面の高さを決めた → `100vh`ではなく`#root`(`--viewport-height`)を基準にしたか

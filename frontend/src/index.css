@@ -39,6 +39,16 @@ body {
   line-height: var(--line-height-normal);
 }
 
+/* 画面の入れ物。高さは見えている範囲に合わせ(tokens.cssの--viewport-height)、端末の画面端の
+   安全領域(ステータスバー・ジェスチャーナビゲーションの帯・ノッチ)は余白で避ける。Android
+   では画面がシステムバーの下まで広がる(tech-stack.md「AndroidのSDKの版」)。余白はこの1箇所
+   だけで取り、Activityの側では足さない(二重になる)。背景はbodyが帯の下まで塗る。 */
+#root {
+  height: var(--viewport-height);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
 /* 見出し: 文字サイズは3段階しかないため、画面名(h1)だけを1段大きくし、節の見出し
    (h2以下)は本文サイズ+強調のウェイトで段を作る(--font-size-xlはMarkdown本文の見出し
    (.markdown)専用なのでここでは使わない)。h4以下は画面では使わず、Markdown本文にだけ
@@ -333,9 +343,43 @@ option {
   }
 }
 
+/* 指で操作する端末では、小さな文字で描く操作部品も、当たり判定をほかの部品と同じ大きさ
+   (--control-size-md)まで広げる。見た目の文字の大きさは変えない。 */
+@media (pointer: coarse) {
+  .entry-actions button,
+  .chat-model-toggle,
+  .chip,
+  .choice {
+    min-height: var(--control-size-md);
+  }
+
+  .entry-actions button,
+  .chip-remove {
+    min-width: var(--control-size-md);
+  }
+
+  /* 開閉の行(思考・ツール呼び出し)。1行なので、行の高さで文字を縦の中央に置く。 */
+  :is(.thinking, .tool-call) > summary {
+    line-height: var(--control-size-md);
+  }
+
+  /* ラベルで包まずに置くチェックボックス(モデルの表)は、箱の見た目を変えず、疑似要素で
+     当たり判定だけを広げる。疑似要素を押しても、押されたのは箱になる。ラベルで包むものは
+     行全体(.choice)で押せるので広げない(並んだ行どうしで当たり判定が重なる)。 */
+  .model-table input[type='checkbox'] {
+    position: relative;
+  }
+
+  .model-table input[type='checkbox']::after {
+    content: '';
+    position: absolute;
+    inset: calc((1em - var(--control-size-md)) / 2);
+  }
+}
+
 .layout {
   display: flex;
-  height: 100vh;
+  height: 100%;
   /* 狭い窓で引き出したサイドバー(.drawer)の位置の基準。 */
   position: relative;
 }
@@ -982,7 +1026,7 @@ option {
 .settings {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
 }
 
 .settings-header {
@@ -1456,10 +1500,25 @@ button.danger {
 
 .chip-main {
   display: inline-flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
   gap: var(--space-1);
   min-width: 0;
   padding: var(--space-1) var(--space-2);
+  text-align: start;
+}
+
+/* 名前の行(前に置く印・サムネイル、名前、大きさ)。 */
+.chip-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* 名前の下の説明(警告・失敗の理由)。チップの幅で折り返し、複数の説明は改行で分ける。 */
+.chip-note {
+  white-space: pre-line;
 }
 
 .chip-remove {
@@ -1515,11 +1574,16 @@ button.danger {
    都合、内容領域の幅基準ではなくoverlay自身の幅(100%)を基準にする。 */
 .dialog-overlay {
   position: fixed;
-  inset: 0;
+  inset: 0 0 auto;
+  /* 暗幕は見えている範囲を、システムバーの帯の下まで覆う。ダイアログは安全領域の内側に置く。 */
+  height: var(--viewport-height);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-5);
+  padding: max(var(--space-5), env(safe-area-inset-top))
+    max(var(--space-5), env(safe-area-inset-right))
+    max(var(--space-5), env(safe-area-inset-bottom))
+    max(var(--space-5), env(safe-area-inset-left));
 }
 
 .dialog {

@@ -412,6 +412,10 @@ function ModelTable({ provider, onUpdate, onSaveField }: ModelTableProps) {
           </table>
         </div>
       )}
+      {/* 行の⚠の説明。指で操作する端末ではツールチップが出ないので、画面に出しておく。 */}
+      {shown.some((m) => m.lacks_tools) && (
+        <p className="settings-hint">{t('settings.model.lacks_tools_note')}</p>
+      )}
       {searching && matched.length === 0 && <p className="list-empty">{noModelMatchText(query)}</p>}
     </>
   )
@@ -450,8 +454,8 @@ function ModelRow({ providerId, model, onUpdate, onSaveField }: ModelRowProps) {
           <span
             className="model-warning"
             role="img"
-            aria-label={t('settings.model.lacks_tools_warning')}
-            title={t('settings.model.lacks_tools_warning')}
+            aria-label={t('settings.model.lacks_tools_label')}
+            title={t('settings.model.lacks_tools_label')}
           >
             ⚠
           </span>

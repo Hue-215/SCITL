@@ -8,9 +8,11 @@ import { getDisplayLanguage, getStartupFailure } from './api'
 import { DEFAULT_LANGUAGE, initI18n } from './i18n'
 import StartupFailure from './StartupFailure'
 import { applyTheme } from './theme.ts'
+import { followVisualViewport } from './viewport'
 
 // シード色はユーザー設定を持たないため固定値。
 applyTheme('#0c6cf2')
+followVisualViewport()
 
 // データフォルダを開けなかったら、アプリの代わりに理由だけを描く。
 const failure = await getStartupFailure().catch(() => null)
