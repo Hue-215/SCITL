@@ -63,7 +63,8 @@ panicさせないよう、渡すまでは`hardened_client`がHTTPSの通信先�
 分かれたときは、Gradleの設定が`cargo metadata`の結果を見てAndroidのビルドを止める。
 
 taoが`ndk-context`を初期化する版(0.37以上)になれば、`setup`の中でその場で渡せるようになり、
-順序の議論と頼み直しが要らなくなる。
+順序の議論と頼み直しが要らなくなる。そのときは秘密情報の保存先のための初期化(「Androidの保存先」)を
+外す(二重に初期化するとpanicする)。
 
 ### 平文httpの許容範囲
 
@@ -212,6 +213,7 @@ MCPサーバーの秘密情報(ヘッダーの値)と、プロバイダーのカ
 |---|---|---|---|
 | Linux | freedesktopのSecret Service(KWallet・GNOME Keyring) | `dbus-secret-service-keyring-store`(`crypto-rust`) | デスクトップの標準の窓口で、再起動しても残る。D-Bus(`dbus`/libdbus)はTauriが既に使っている(多重起動の防止は純Rustの`zbus`を使うので、D-Busの実装は2つ同居している。接続は別々で互いに干渉しない)。`crypto-rust` でD-Bus上のやり取りを暗号化し、OpenSSLに依存しない。カーネルのキーリング(keyutils)は再起動で消えるため使わない |
 | Windows | 資格情報マネージャー | `windows-native-keyring-store` | 標準の保存先。依存の `windows-sys` は既存の版と同じ |
+| Android | Keystoreの鍵で暗号化したSharedPreferences | `android-native-keyring-store` | `keyring-core`と同じ組織のクレートで、Kotlinの部品を持たない。下の「Androidの保存先」 |
 | macOS | なし | - | 対応しない。保存先が無いことをエラーとして返す |
 
 Linuxの保存先は組み立てる時点でSecret Serviceに接続する。接続できない環境(サービスが
@@ -231,3 +233,36 @@ Linuxの保存先は組み立てる時点でSecret Serviceに接続する。接�
 確認。zbus版の`secret-service` 5.2.0も同じ)。鍵は組み立てるたびに作り直されるので、組み立て直せば
 通る。D-Busへの接続の失敗もすべて`PlatformFailure`になるので、サービスが応答しない環境では、
 D-Busの呼び出しの上限(約25秒)を2回待つことになる。
+
+### Androidの保存先(Issue #504)
+
+`android-native-keyring-store` 1.0.0は、保存先ごとにKeystoreのAES(GCM)の鍵を1つ作り、その鍵で暗号化した
+秘密情報をSharedPreferencesのファイル1つに置く。保存先の名前はサービス名(`secrets.rs`の`SERVICE`)と
+同じにする(ファイルは`keyring-scitl-task-companion`)。鍵は利用者の認証に結び付けずに作られる
+(`setUserAuthenticationRequired(false)`)ので、画面のロック中にも読め、承認を求めない。
+
+- **JNIの参照の受け渡し**: このクレートはJavaVMとContextを`ndk-context`から取るが、Tauri 2.11が使う
+  tao 0.35は`ndk-context`を初期化しない(クレートのREADMEの「Tauri Mobileは初期化済み」は今の版に
+  当たらない)。証明書の検証(「Androidの信頼ルート」)と同じWebViewのコールバックで、
+  `secrets::android::init`がApplicationのContextのグローバル参照を作って渡す。参照はプロセスの
+  終わりまで消さない
+- **渡すのは1回だけ**: `ndk-context` 0.1.1は、2回目の初期化を`assert!`でpanicさせ、初期化前の
+  読み出しも`expect`でpanicさせる(済んだかを問い合わせる手段は無い)。`secrets.rs`が済んだ印を持ち、
+  済むまでは保存先を組み立てずに`NoStorageAccess`を返す(「鍵を読めなかったとき」の扱いに乗り、
+  やり直さない)。taoが`ndk-context`を初期化する版(0.37以上)へ上げるときは、二重の初期化になるので
+  `secrets::android::init`を呼ぶのをやめる
+- **起動時の読み損ね**: 設定の読み込み(起動時)はアクティブなプロバイダーの鍵を読むが、渡すのは
+  WebViewを作った後なので、それより先に読んで「鍵を読めない」になりうる。そのままだと次のターンの
+  開始・タスクの追加・設定の変更まで、設定画面に理由が出続ける。GUIは、渡し終えたときと`AppState`を
+  登録したときの両方で、鍵を読めずにいれば読み直させる(どちらが先に済むかは決まらないので、後に
+  済んだ側の呼び出しで読み直しが起きる)
+- **バックアップ・移行・アンインストール**: 自動バックアップと端末間の移行はSharedPreferencesを含めて
+  切ってある(`../data-model/tables.md`「データディレクトリの場所」)。Keystoreの鍵は端末の外へ出ないので、
+  ファイルだけが移っても復号できない。アンインストールで鍵とファイルは消え、入れ直すと`NoEntry`になる
+- **ファイルと鍵の片方だけが残ったとき**: ファイル(の中の保存先の設定)が無いのに同じ名前の鍵が
+  Keystoreに残っていると、このクレートは保存先を作れずエラーを返し続ける(`Vault::create_key`の
+  "Encryption key already exists")。鍵だけを消す手段はこのクレートに無い(`Store::delete`はファイルが
+  無いと何もしない)。起こる経路は見つかっていない(アプリのストレージの消去で鍵も消えるかは、
+  エミュレーターでまだ確かめていない)。
+  逆に鍵だけが無いときは、クレートが鍵を作り直してファイルの設定を上書きし、前の秘密情報は
+  読めなくなる(読み出しのエラーになり、登録し直せば直る)

@@ -37,6 +37,8 @@ windows-native-keyring-store = { workspace = true }
 [target.'cfg(target_os = "android")'.dependencies]
 rustls-platform-verifier = { workspace = true }
 jni = { workspace = true }
+android-native-keyring-store = { workspace = true }
+ndk-context = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

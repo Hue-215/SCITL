@@ -115,8 +115,84 @@ fn os_store() -> keyring_core::Result<Arc<CredentialStore>> {
     Ok(windows_native_keyring_store::Store::new()?)
 }
 
+/// Android: Keystoreの鍵で暗号化し、SharedPreferencesに置く。JVMとContextを`ndk-context`から
+/// 取るので、[`android::init`]が済むまでは組み立てずにエラーを返す(組み立てるとpanicする)。
+/// 組み立ての失敗は覚えないので、済んだ後に使えば組み立てられる。
+#[cfg(target_os = "android")]
+fn os_store() -> keyring_core::Result<Arc<CredentialStore>> {
+    if !android::initialized() {
+        return Err(keyring_core::Error::NoStorageAccess(
+            "the secret store is not ready yet (the app is still starting)".into(),
+        ));
+    }
+    let configuration = std::collections::HashMap::from([("name", SERVICE)]);
+    Ok(android_native_keyring_store::Store::new_with_configuration(
+        &configuration,
+    )?)
+}
+
+/// Androidの保存先に要るJNIの参照の受け渡し(`docs/spec/architecture/network-secrets.md`
+/// 「Androidの保存先」)。
+#[cfg(target_os = "android")]
+pub mod android {
+    use std::ffi::c_void;
+    use std::sync::Mutex;
+
+    use jni::objects::JObject;
+    use jni::JavaVM;
+
+    /// `ndk-context`へ渡したか。渡すのは1回だけにする(2回目は`ndk-context`がpanicする)。
+    static INITIALIZED: Mutex<bool> = Mutex::new(false);
+
+    /// [`init`]を済ませたか。
+    pub fn initialized() -> bool {
+        *INITIALIZED
+            .lock()
+            .expect("secret store init mutex poisoned")
+    }
+
+    /// 保存先がJVMとContextを取る`ndk-context`へ、JavaVMとApplicationのContextを渡す。
+    /// 2回目からは何もしない。
+    ///
+    /// taoが`ndk-context`を初期化する版(0.37以上)になったら、これを呼ばない(二重の初期化で
+    /// panicする)。
+    ///
+    /// # Safety
+    ///
+    /// `java_vm`はこのプロセスのJavaVMでなければならない。`activity`は、呼び出したスレッドで有効な
+    /// Activityの参照(JNIの`jobject`。ローカル参照でもグローバル参照でもよい)か、nullでなければならない。
+    pub unsafe fn init(java_vm: *mut c_void, activity: *mut c_void) -> Result<(), String> {
+        let mut initialized = INITIALIZED
+            .lock()
+            .expect("secret store init mutex poisoned");
+        if *initialized {
+            return Ok(());
+        }
+        if activity.is_null() {
+            return Err("could not initialize the secret store: no activity".to_string());
+        }
+        // SAFETY: 呼び出し側が保証する。
+        let vm = unsafe { JavaVM::from_raw(java_vm.cast()) };
+        let context = vm
+            .attach_current_thread(|env| -> jni::errors::Result<jni::sys::jobject> {
+                // SAFETY: 呼び出し側が保証する。`JObject`はDropで参照を消さないので、持ち主は
+                // 呼び出し側のまま。
+                let activity = unsafe { JObject::from_raw(env, activity.cast()) };
+                let context = crate::android::application_context(env, &activity)?;
+                // `ndk-context`は参照を持つだけで消さないので、プロセスの終わりまで残す。
+                Ok(env.new_global_ref(context)?.into_raw())
+            })
+            .map_err(|e| format!("could not initialize the secret store: {e}"))?;
+        // SAFETY: `java_vm`はこのプロセスのJavaVM(呼び出し側が保証する)、`context`は消さない
+        // グローバル参照。`INITIALIZED`のロックの中で1回だけ呼ぶ。
+        unsafe { ndk_context::initialize_android_context(java_vm, context.cast()) };
+        *initialized = true;
+        Ok(())
+    }
+}
+
 /// 対応していないOSでは、保存先が無いことをエラーとして返す(黙って仮の保存先に落とさない)。
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
 fn os_store() -> keyring_core::Result<Arc<CredentialStore>> {
     Err(keyring_core::Error::NotSupportedByStore(
         "no OS credential store is supported on this platform".to_string(),
