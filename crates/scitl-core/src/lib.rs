@@ -1,6 +1,8 @@
 // 標準エラー(Androidではlogcat)へは`diagnostics`からだけ書く。
 #![deny(clippy::print_stderr)]
 
+#[cfg(target_os = "android")]
+mod android;
 pub mod attachments;
 pub mod blocking;
 pub mod config;

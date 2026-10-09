@@ -235,11 +235,12 @@ impl Settings {
 
     /// 鍵を読めずにいたら、資格情報ストアから読み直してアダプタを組み立て直す。GUIは
     /// 起動したまま使い続けるので、ここで読み直さないと、設定を変えるまで直らない。
+    /// Androidでは保存先の初期化が設定の読み込みより後になりうるので、GUIが初期化の後にも呼ぶ。
     ///
     /// 読み直しの間は設定の書き込みロックを持たない(ロックの解除を求める承認で止まっている
     /// 間、設定画面まで止めないため)。その間に設定が変わっていれば、結果は捨てる(変えた側が
     /// 組み立て直している)。
-    async fn reload_unavailable_key(&self) {
+    pub async fn reload_unavailable_key(&self) {
         let _reloading = self.reloading_key.lock().await;
         let before = self.current();
         if before.adapter.key_error().is_none() {
