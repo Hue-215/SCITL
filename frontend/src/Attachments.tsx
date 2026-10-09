@@ -3,6 +3,7 @@ import { failureText, readImageAttachment, readTextAttachment, revealAttachment 
 import Chip from './Chip'
 import Dialog from './Dialog'
 import { formatBytes, isolated, t } from './i18n'
+import Icon from './Icon'
 import type { AttachmentDeliveries, AttachmentView } from './types'
 import type { StagedAttachments } from './useStagedAttachments'
 
@@ -126,7 +127,7 @@ function AttachmentChip({
   }
 }
 
-const warningMark = <span className="chip-mark">⚠</span>
+const warningMark = <Icon name="warning" className="chip-mark" />
 
 function ImageChip({ attachment, size, warning }: ChipOf) {
   const [url, setUrl] = useState<string | null>(null)
@@ -272,7 +273,7 @@ export function StagedAttachmentChips({
                 {...common}
                 tone="error"
                 note={item.message}
-                leading={<span className="chip-mark">⚠</span>}
+                leading={<Icon name="warning" className="chip-mark" />}
               />
             )
           case 'staged': {
@@ -289,7 +290,7 @@ export function StagedAttachmentChips({
                 detail={formatBytes(item.size)}
                 tone={warning ? 'warning' : 'normal'}
                 note={warning ?? undefined}
-                leading={warning && <span className="chip-mark">⚠</span>}
+                leading={warning && <Icon name="warning" className="chip-mark" />}
               />
             )
           }

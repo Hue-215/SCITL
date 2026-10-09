@@ -4,6 +4,7 @@ import { exportMarkdown, getExportTarget, openExportFolder, updateGeneralSetting
 import type { ExportOutcome, ExportTarget, Language, SettingsView } from './types'
 import Dropdown from './Dropdown'
 import { currentLanguage, isolated, languageName, LANGUAGES, t } from './i18n'
+import { DisclosureMark } from './Icon'
 import { NumberField } from './settingsFields'
 import { useAsyncAction } from './useAsyncAction'
 
@@ -109,7 +110,10 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
       />
 
       <details className="settings-advanced">
-        <summary>{t('settings.general.advanced_settings')}</summary>
+        <summary>
+          <DisclosureMark />
+          {t('settings.general.advanced_settings')}
+        </summary>
         {/* <details>自体はflexにしないので(index.cssの.settings-advanced)、欄の間隔は
             中の入れ物のgapで持つ */}
         <div className="settings-section">

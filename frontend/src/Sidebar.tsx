@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { GENERAL_CHAT, taskChat } from './chat'
 import { isolated, t } from './i18n'
+import Icon, { DisclosureMark } from './Icon'
 import { taskName, taskProgress } from './taskName'
 import type { Chat, TaskListItem } from './types'
 
@@ -60,7 +61,7 @@ export default function Sidebar({
 
   return (
     <nav className="sidebar">
-      <div className="sidebar-general-row">
+      <div className="sidebar-top-row">
         <button
           type="button"
           className={selected.kind === 'general' ? 'sidebar-general selected' : 'sidebar-general'}
@@ -75,7 +76,7 @@ export default function Sidebar({
           aria-label={t('sidebar.settings_tooltip')}
           title={t('sidebar.settings_tooltip')}
         >
-          ⚙
+          <Icon name="settings" />
         </button>
       </div>
 
@@ -88,10 +89,11 @@ export default function Sidebar({
           <button
             type="button"
             className="list-row sidebar-archived-toggle"
+            aria-expanded={archivedOpen}
             onClick={() => setArchivedOpen((open) => !open)}
           >
+            <DisclosureMark />
             {t('sidebar.archived_label', { count: archived.length })}
-            {archivedOpen ? ' ▲' : ' ▼'}
           </button>
           {archivedOpen && (
             <TaskList tasks={archived} selectedTaskId={selectedTaskId} onSelect={onSelect} />
@@ -100,7 +102,8 @@ export default function Sidebar({
       </div>
 
       <button type="button" className="primary sidebar-add" onClick={onAddTask} disabled={adding}>
-        + {t('sidebar.new_task_button')}
+        <Icon name="add" />
+        {t('sidebar.new_task_button')}
       </button>
     </nav>
   )

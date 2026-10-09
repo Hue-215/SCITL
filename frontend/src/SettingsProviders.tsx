@@ -25,6 +25,7 @@ import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
+import Icon from './Icon'
 import type { AddResult } from './rejection'
 import { CollapseToggle, ServerNotice } from './settingsFields'
 import { useNumberInput } from './settingsInput'
@@ -457,7 +458,7 @@ function ModelRow({ providerId, model, onUpdate, onSaveField }: ModelRowProps) {
             aria-label={t('settings.model.lacks_tools_label')}
             title={t('settings.model.lacks_tools_label')}
           >
-            ⚠
+            <Icon name="warning" />
           </span>
         )}
       </td>
@@ -499,7 +500,7 @@ function ModelRow({ providerId, model, onUpdate, onSaveField }: ModelRowProps) {
               aria-label={t('settings.model.reset_caps_label', { model: isolated(shown) })}
               title={t('settings.model.reset_caps_tooltip')}
             >
-              ↺
+              <Icon name="reset_wrench" />
             </button>
           )}
           <button
@@ -509,7 +510,7 @@ function ModelRow({ providerId, model, onUpdate, onSaveField }: ModelRowProps) {
             aria-label={t('settings.model.delete_model_label', { model: isolated(shown) })}
             title={t('common.delete')}
           >
-            ×
+            <Icon name="delete_forever" />
           </button>
         </span>
       </td>

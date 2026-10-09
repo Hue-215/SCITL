@@ -28,6 +28,9 @@
   /* 同梱していないウェイトを太字として合成させない(字形が潰れる)。斜体の合成は残す
      (日本語の書体は斜体を持たず、.entry-tool等の斜体はこれで作られる)。 */
   font-synthesis: style;
+  /* AndroidのWebViewが押した部品に重ねる青い塗りを消す。押した手応えは部品自身の
+     :active・:hoverの塗りで出す。継承される値なので、根に置けば全体に効く。 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -138,8 +141,15 @@ hr {
   border-top: var(--border-width) solid var(--color-border);
 }
 
+/* 開閉の印はブラウザに描かせず、行頭に置くアイコン(DisclosureMark)で出す。ブラウザの印は
+   エンジンごとに形と大きさが違い、色しか変えられないため。summaryには必ず印を置く。 */
 summary {
   cursor: pointer;
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
 }
 
 /* フォーム部品: OSのネイティブ描画(立体感・角丸・独自フォント・セレクトの矢印)を
@@ -316,14 +326,16 @@ option {
 /* 平らなボタン: 一覧の行や補助的な操作のように、並べたときに塗りがうるさくなるもの。
    普段は塗りも影も持たず、指し示すと浮き、押すと沈む。選択中(.selected)は沈んだまま
    残す。ホバーは指し示せる端末でだけ効かせる(タッチ端末では浮いたまま残るため)。
-   対象の一覧を1回だけ書くため、状態ごとの指定は入れ子(&)で持つ。 */
+   対象の一覧を1回だけ書くため、状態ごとの指定は入れ子(&)で持つ。アイコンだけのボタンも既定は
+   平らにし、塗りを持たせたいもの(入力欄の下の添付・送信)は.raised・.primaryで外す。 */
 :is(
   .sidebar-general,
-  .icon-button,
+  .icon-button:not(.raised, .primary),
   .list-row,
   .settings-tab,
   .entry-actions button,
-  .chat-model-toggle
+  .chat-model-toggle,
+  .chat-header-description-toggle
 ) {
   background-color: transparent;
   --elevation: initial;
@@ -348,6 +360,7 @@ option {
 @media (pointer: coarse) {
   .entry-actions button,
   .chat-model-toggle,
+  .chat-header-description-toggle,
   .chip,
   .choice {
     min-height: var(--control-size-md);
@@ -396,7 +409,7 @@ option {
   /* 左右は空けない。ログの左右余白は吹き出し自身が持つ(.chat-log > *)ので、ここで
      足すと窓端から見た近い側・遠い側が2倍の関係にならず、スクロールバーも窓の端から
      内側へ浮く。 */
-  /* 下は入力欄の下のモデル選択と窓の下端の間。入力欄との間と揃える(tokens.css)。 */
+  /* 下は入力欄の下の行(添付・モデル選択・送信)と窓の下端の間。入力欄との間と揃える(tokens.css)。 */
   padding: var(--pane-padding) 0 var(--compose-bottom-gap);
   /* スクロールするのはログだけ。見出しと入力欄は常に同じ位置に留める。 */
   overflow: hidden;
@@ -416,28 +429,22 @@ option {
   gap: var(--space-1);
 }
 
-/* 名前と操作ボタンを1行に並べ、収まらなければ操作を次の行へ送る。 */
+/* 引き出すボタン(狭い窓)・名前・︙のメニューを1行に並べる。名前は残りの幅で折り返し、ボタンは
+   名前が何行になっても上端に留める。︙のメニューの一覧の位置と幅の基準(MenuButton.tsx)。 */
 .chat-header-row {
+  position: relative;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: var(--space-2);
 }
 
-/* 名前と、その前に置く引き出すボタン(狭い窓)の組。折り返さない名前の幅を基準に並べるので、
-   操作と1行に収まらなければ操作の方が次の行へ移り、名前は1行を使って折り返す。 */
-.chat-header-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
+/* 1行の名前は隣のボタンの高さの中で縦の中央に置き、折り返したら下へ伸ばす。 */
 .chat-header-row h1 {
   flex: 1;
   min-width: 0;
+  min-height: var(--control-size-md);
+  display: flex;
+  align-items: center;
   overflow-wrap: anywhere;
 }
 
@@ -455,40 +462,44 @@ option {
   width: 100%;
 }
 
+/* 締切と工程の進捗を右端に置き、説明があれば左端に開け閉めするボタンを置く。 */
 .chat-header-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-/* 入力欄の行(添付・入力欄・送信)と、その下のモデル選択を1つの格子に並べる。
-   モデル選択を入力欄の幅(添付と送信の間)に揃えるため、フォーム自身は箱を持たず、
-   子を格子へ直接並べる。 */
-.chat-compose-area {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  column-gap: var(--space-2);
-  row-gap: var(--compose-bottom-gap);
-  /* 複数行になった入力欄が伸びても送信ボタンは1行分の高さのまま下端に揃える。 */
-  align-items: end;
+/* 押せる範囲(平らなボタンの内側の余白と、描かない枠線の幅)は左へはみ出させ、印の左端を見出しの
+   列の左端(会話欄の思考・ツール呼び出しの行の印と同じ位置)に揃える。 */
+.chat-header-description-toggle {
+  flex-shrink: 0;
+  margin-inline: calc(-1 * (var(--space-2) + var(--border-width))) auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 取り消せない操作のメニュー項目。 */
+.menu-danger {
+  color: var(--color-danger);
+}
+
+/* 入力欄を内容領域の幅いっぱいに置き、その下の1行に添付・モデル選択・思考の強さ選択・送信を
+   並べる。窓の幅によらず同じ並びにする。 */
+.chat-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--compose-bottom-gap);
   flex-shrink: 0;
 }
 
-.chat-compose {
-  display: contents;
-}
-
 .chat-compose textarea {
-  /* 基盤層の--textarea-min-heightより低い、隣のボタンの当たり判定と同じ下限に置き換える。
-     1行の中身がある限り内容側の高さ(1行分とpadding・border)がこの下限を上回るため実質
-     効かないが、フォントサイズを変えたときの保険として床に置く。ボタンとの実際の
-     高さ揃えはpadding側(下記)で決まる。 */
+  /* 基盤層の--textarea-min-heightより低い、1行分の高さを下限にする。1行の中身がある限り内容側の
+     高さ(1行分とpadding・border)がこの下限を上回るため実質効かないが、フォントサイズを変えた
+     ときの保険として床に置く。 */
   min-height: var(--control-size-md);
-}
-
-/* 基盤層ではボタンの上下paddingが入力欄より狭く、揃えないと1行の高さでもボタンだけ
-   低くなる。 */
-.chat-compose button {
-  padding-block: var(--field-padding);
 }
 
 /* 入力欄の上の送信前の添付。ログが伸びても押し出されない。 */
@@ -496,18 +507,30 @@ option {
   flex-shrink: 0;
 }
 
-/* 入力欄の下で、入力欄の両端にモデル選択と思考の強さ選択を置く。 */
-.chat-model-bar {
-  grid-column: 2;
+.chat-compose-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
-/* 選択一覧(.dropdown-popup)の位置と幅の基準。左右余白の内側にあるので、一覧の端が
-   両端のボタンの端に揃う。 */
-.chat-model-bar-row {
+/* 添付と送信の間を占める。モデル選択の一覧の位置と幅の基準(ChatModelBar.tsx)。 */
+.chat-model-bar {
+  flex: 1;
+  min-width: 0;
   position: relative;
   display: flex;
-  justify-content: space-between;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* モデル選択の右の残り。思考の強さ選択をその右端(送信ボタンの隣)に寄せ、モデル名の長さで
+   動かないようにする。思考の強さ選択の一覧の基準。狭いときはモデル名の方を省略し、思考の強さは
+   縮めない。 */
+.chat-model-effort {
+  flex: 1 0 auto;
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* 入力欄の下に1行で収め、左カラム下端のボタンとの段差を小さくするため、塗りを持たない
@@ -532,6 +555,7 @@ option {
   display: flex;
   justify-content: space-between;
   gap: var(--space-1);
+  align-items: center;
   text-align: left;
   white-space: nowrap;
 }
@@ -584,6 +608,12 @@ option {
   padding-block: var(--space-1);
 }
 
+/* 左右にも上下と同じ余白を取る。スクロールバーが中身に被らないよう、スクロール領域ではなく
+   各行の側が持つ(ui.md「スクロール領域」)。 */
+.dropdown-options > * {
+  padding-inline: var(--space-1);
+}
+
 .dropdown-empty {
   padding: var(--space-2);
 }
@@ -595,24 +625,76 @@ option {
   flex-shrink: 0;
 }
 
-/* 狭い窓では内容の上に重ね、引き出したときだけ見せる。visibility で隠すのは、隠れている間に
-   Tabで中へ入れないようにするため。 */
+/* 狭い窓では内容の上に重ね、左の外から滑らせて出し入れする。閉じたら、滑り終えてから
+   visibilityで隠す(隠れている間にTabで中へ入れないようにするため)。 */
 .narrow .drawer {
   position: absolute;
   inset-block: 0;
   inset-inline-start: 0;
+  transform: translateX(-100%);
   visibility: hidden;
+  transition:
+    transform var(--motion-duration) ease-out,
+    visibility 0s linear var(--motion-duration);
   /* 重ねると下の内容が透けるので、ここだけは背景色で塗る。 */
   background: var(--color-bg);
 }
 
 .narrow .drawer.open {
+  transform: none;
   visibility: visible;
+  transition: transform var(--motion-duration) ease-out;
 }
 
+/* 暗幕の濃さは.scrimの色のまま、不透明度で引き出した割合に合わせる。 */
 .drawer-backdrop {
   position: absolute;
   inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--motion-duration) ease-out,
+    visibility 0s linear var(--motion-duration);
+}
+
+.drawer-backdrop.open {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity var(--motion-duration) ease-out;
+}
+
+/* 指に付いて動かしている間(useDrawerSwipe.ts)。引き出した割合(--drawer-progress、0〜1)の位置と
+   濃さにし、移り変わりを止めて指に遅れないようにする。指を離すと外れ、そこから開いた・閉じた
+   位置へ滑る。開いたカラムの指定(.narrow .drawer.open)より後に、同じ詳細度で書く。 */
+.narrow.drawer-dragging > .drawer,
+.drawer-dragging > .drawer-backdrop {
+  visibility: visible;
+  transition: none;
+}
+
+.narrow.drawer-dragging > .drawer {
+  transform: translateX(calc((var(--drawer-progress) - 1) * 100%));
+}
+
+.drawer-dragging > .drawer-backdrop {
+  opacity: var(--drawer-progress);
+}
+
+/* 動きを減らす設定では、滑らせずに切り替える。 */
+@media (prefers-reduced-motion: reduce) {
+  .narrow .drawer,
+  .narrow .drawer.open,
+  .drawer-backdrop,
+  .drawer-backdrop.open {
+    transition: none;
+  }
+}
+
+/* 引き出したカラムと暗幕の上では、ブラウザに縦のスクロールだけを任せ、横の指の動きは閉じる
+   スワイプ(useDrawerSwipe.ts)に使う。内容側には付けない(コードの塊・表の横スクロールが効かなくなる)。 */
+.narrow .drawer,
+.drawer-backdrop {
+  touch-action: pan-y;
 }
 
 /* 引き出したカラムと暗幕は、選択一覧(.dropdown-popup)より手前に出す。同じ順位にしておき、
@@ -649,7 +731,7 @@ option {
   padding-inline: var(--space-4);
 }
 
-.sidebar-general-row {
+.sidebar-top-row {
   display: flex;
   flex-shrink: 0;
   align-items: center;
@@ -677,10 +759,28 @@ option {
   font-weight: var(--font-weight-strong);
 }
 
-/* アイコン1つだけを置くボタンの箱。
-   SVGアイコン導入時にグリフから箱へ移す作業をここ1箇所で済ませる。
-   グリフをアイコン代わりに使うのは暫定実装で、font-size/line-heightはそのための指定
-   (SVG化時はwidth/heightを内側の<svg>へ移す。tokens.css参照)。 */
+/* アイコン(Icon.tsx)。文字に混ぜて置くときは、周りの文字と同じ大きさ・色にする。縦位置の
+   -0.125emは、アイコンの箱の下端を文字のベースラインより少し下げて字面の中央に揃えるための
+   値で、ここでしか使わないためトークン化しない。 */
+.icon {
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  vertical-align: -0.125em;
+}
+
+/* 開閉する行の行頭の印(DisclosureMark)。閉じているときは右、開いたら下を向く。 */
+.disclosure-mark {
+  margin-inline-end: var(--space-1);
+}
+
+details[open] > summary > .disclosure-mark,
+[aria-expanded='true'] > .disclosure-mark {
+  transform: rotate(90deg);
+}
+
+/* アイコン1つだけを置くボタンの箱。当たり判定の箱とアイコンの大きさは別の軸(tokens.css)。 */
 .icon-button {
   flex-shrink: 0;
   width: var(--control-size-md);
@@ -689,8 +789,11 @@ option {
   align-items: center;
   justify-content: center;
   padding: 0;
-  font-size: var(--icon-size-md);
-  line-height: 1;
+}
+
+.icon-button .icon {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
 }
 
 /* 一覧の入れ物(通常・アーカイブ)。中身の並べ方は同じなので1箇所で決める。 */
@@ -729,11 +832,21 @@ option {
 }
 
 .sidebar-archived-toggle {
+  align-items: center;
   color: var(--color-text-secondary);
+}
+
+/* 行の項目の間隔(column-gap)が印と名前の間を空けるので、印自身の余白は持たない。 */
+.sidebar-archived-toggle > .disclosure-mark {
+  margin-inline-end: 0;
 }
 
 .sidebar-add {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
   padding: var(--space-2);
   /* 窓の下端・左端と仕切り線に接するので、角を丸めると角に背景が覗く。直角のままにする。 */
   border-radius: 0;
@@ -834,10 +947,6 @@ option {
   font-size: var(--font-size-sm);
 }
 
-.entry-error-detail pre {
-  margin-top: var(--space-1);
-}
-
 /* Markdownとして描画しない本文(エラー発言・応答待ち)。改行入りの文言を空白に潰さない。 */
 .entry-content {
   white-space: pre-wrap;
@@ -934,18 +1043,23 @@ option {
 /* <details>はflexコンテナにしない(summaryの開閉描画がエンジンごとに崩れるため)。
    そのため中身の間隔だけは入れ物のgapではなくmarginで持つ。 */
 
-/* 続いた思考の折りたたみ。本文の吹き出しより控えめにし、枠線だけを持つ。 */
-.thinking {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+/* 開閉する行(思考・ツール呼び出し・エラーの詳細)を開いた中身の箱。本文の吹き出しと見分けが
+   付くよう、塗らずに輪郭線だけを持つ。 */
+.detail-box {
+  margin-top: var(--space-1);
+  padding: var(--space-2);
   border: var(--border-width) solid var(--color-border);
-  padding: var(--space-1) var(--space-3);
-  max-width: 100%;
   border-radius: var(--radius);
 }
 
+/* 続いた思考の折りたたみ。閉じた行はツール呼び出しの行と同じ見た目にする。 */
+.thinking {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  max-width: 100%;
+}
+
 .thinking-list {
-  margin-top: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -957,8 +1071,7 @@ option {
   white-space: pre-wrap;
 }
 
-/* ツール呼び出し1件の1行。枠を持たず、名前と引数の要約を等幅で並べる。summaryは既定の
-   list-itemのままにして開閉の印を残し、行内の間隔はmarginで持つ。 */
+/* ツール呼び出し1件の1行。枠を持たず、名前と引数の要約を等幅で並べる。行内の間隔はmarginで持つ。 */
 .tool-call {
   /* 操作の記録の行(.entry-toolの中)でも、押せる範囲を文字の幅に留める。 */
   align-self: flex-start;
@@ -994,26 +1107,31 @@ option {
   color: var(--color-danger);
 }
 
+/* 引数と結果を1つの箱に入れ、見出しで分ける。 */
 .tool-call-detail {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  margin-top: var(--space-1);
 }
 
 .tool-call-label {
   font-weight: var(--font-weight-strong);
 }
 
+.tool-call-detail pre {
+  color: var(--color-text);
+}
+
 .tool-call-detail pre,
 .entry-error-detail pre {
-  padding: var(--space-2);
-  border-radius: var(--radius);
-  background: var(--color-surface-alt);
-  color: var(--color-text);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* エラーの吹き出しの中では、灰色の線は塗りから浮くので警告の色で引く。 */
+.entry-error .detail-box {
+  border-color: var(--color-danger);
 }
 
 .operation-label {
@@ -1023,35 +1141,40 @@ option {
   border-radius: var(--radius);
 }
 
+/* 設定画面。左のカラム(.sidebar)と本文を並べる。狭い窓で引き出したカラム(.drawer)の位置の基準。 */
 .settings {
   display: flex;
-  flex-direction: column;
   height: 100%;
+  position: relative;
 }
 
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 見出しは本文(.settings-content > *)と同じ幅の列に置き、左端を揃える。 */
 .settings-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-4);
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding: var(--pane-padding) var(--space-4) 0;
 }
 
-.settings-body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  /* 狭い窓で引き出したメニュー(.drawer)の位置の基準。見出しは覆わない。 */
-  position: relative;
+/* 左のカラムの先頭で、戻るボタンと並べる見出し。 */
+.settings-nav-heading {
+  font-weight: var(--font-weight-strong);
 }
 
-.settings-rail {
-  width: var(--settings-rail-width);
-  flex-shrink: 0;
+.settings-tabs {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--pane-padding);
-  border-right: var(--border-width) solid var(--color-border);
 }
 
 .settings-tab {
@@ -1067,7 +1190,7 @@ option {
 
 .settings-content {
   flex: 1;
-  min-width: 0;
+  min-height: 0;
   /* 左右は空けない。ログ・サイドバーと同じ理由で、スクロールバーを窓の端に出す。 */
   padding: var(--pane-padding) 0;
   overflow-y: auto;

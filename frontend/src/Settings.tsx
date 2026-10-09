@@ -17,6 +17,7 @@ import { type AddResult, rejectionText } from './rejection'
 import type { FormOutcome, SettingsView } from './types'
 import { Drawer, DrawerToggle } from './Drawer'
 import { isolated, t } from './i18n'
+import Icon from './Icon'
 import { without } from './record'
 import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
@@ -29,7 +30,7 @@ interface SettingsProps {
   onClose: () => void
 }
 
-// 左のレールに並べるタブ(並び順のまま)。
+// 左のカラムに並べるタブ(並び順のまま)。
 const TABS = [
   { id: 'general', label: 'settings.nav.general' },
   { id: 'memory', label: 'settings.nav.memory' },
@@ -135,39 +136,49 @@ export default function Settings({ onClose }: SettingsProps) {
     }
   }
 
-  return (
-    <div className={drawer.narrow ? 'settings narrow' : 'settings'}>
-      <header className="settings-header">
-        <button
-          type="button"
-          className="icon-button"
-          onClick={onClose}
-          aria-label={t('settings.back_tooltip')}
-          title={t('settings.back_tooltip')}
-        >
-          ←
-        </button>
-        <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
-        <h1>{t('settings.heading')}</h1>
-      </header>
+  const tabLabel = TABS.find(({ id }) => id === tab)?.label ?? TABS[0].label
 
-      <div className="settings-body">
-        <Drawer drawer={drawer}>
-          <nav className="settings-rail">
+  return (
+    // 左のカラムはチャットのサイドバーと同じ形の入れ物で、設定を開いている間はサイドバーが設定の
+    // メニューに切り替わったように見せる(畳み方・引き出し方もサイドバーと同じ)。
+    <div className={drawer.narrow ? 'settings narrow' : 'settings'}>
+      <Drawer drawer={drawer}>
+        <nav className="sidebar">
+          <div className="sidebar-top-row">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={onClose}
+              aria-label={t('settings.back_tooltip')}
+              title={t('settings.back_tooltip')}
+            >
+              <Icon name="arrow_back" />
+            </button>
+            <span className="settings-nav-heading">{t('settings.heading')}</span>
+          </div>
+          <div className="settings-tabs">
             {TABS.map(({ id, label }) => (
               <button
                 key={id}
                 type="button"
                 className={tab === id ? 'settings-tab selected' : 'settings-tab'}
+                aria-current={tab === id ? 'page' : undefined}
                 onClick={() => selectTab(id)}
               >
                 {t(label)}
               </button>
             ))}
-          </nav>
-        </Drawer>
+          </div>
+        </nav>
+      </Drawer>
 
-        <div className="settings-content" inert={drawer.shown} {...swipeToOpen}>
+      <div className="settings-main" inert={drawer.shown} {...swipeToOpen}>
+        <header className="settings-header">
+          <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
+          <h1>{t(tabLabel)}</h1>
+        </header>
+
+        <div className="settings-content">
           <div className="settings-column">
             {settings?.config_error && (
               <p className="error">

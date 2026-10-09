@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { isolated, t } from './i18n'
+import { DisclosureMark } from './Icon'
 import { operationSourceLabel, type ThoughtItem } from './thinking'
 import type { MessageView, ToolExecutionView } from './types'
 
@@ -17,7 +18,7 @@ import type { MessageView, ToolExecutionView } from './types'
 /** ツール呼び出し1件の引数と結果。ターンの中の呼び出しと操作の記録のどちらでも同じ形で見せる。 */
 function ToolCallDetail({ execution }: { execution: ToolExecutionView }) {
   return (
-    <div className="tool-call-detail">
+    <div className="tool-call-detail detail-box">
       <p className="tool-call-label">{t('chat.tool_detail_args')}</p>
       <pre>{execution.arguments}</pre>
       <p className="tool-call-label">{t('chat.tool_detail_result')}</p>
@@ -41,6 +42,7 @@ function ToolLine({
   return (
     <details className="tool-call">
       <summary>
+        <DisclosureMark />
         <span className="tool-call-name">
           <bdi>{execution.tool ?? t('chat.tool_unknown')}</bdi>
         </span>
@@ -67,8 +69,11 @@ function ToolLine({
 function Thinking({ texts }: { texts: { id: number; text: string }[] }) {
   return (
     <details className="thinking">
-      <summary>{t('chat.thinking')}</summary>
-      <div className="thinking-list">
+      <summary>
+        <DisclosureMark />
+        {t('chat.thinking')}
+      </summary>
+      <div className="thinking-list detail-box">
         {texts.map((item) => (
           <p key={item.id} className="thinking-item">
             {item.text}
