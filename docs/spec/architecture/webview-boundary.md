@@ -207,6 +207,9 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   `InvokeBody::Raw`が届かない。そうしたコマンドは持たない(添付はIssue #476で、Rust側がOSの選択画面で
   選ばせて読む形にした。選んだものは`content://`のURIで届き、`tauri-plugin-fs`で開く)
 - **遷移の判定**: 画面は`http://tauri.localhost`から配られ、`is_app_url`の`http(s)://tauri.localhost`に当たる。
+  開発時(`tauri android dev`)も、Tauriは画面を`http://tauri.localhost`で開いてRust側から開発サーバーへ
+  中継する(`devUrl`のホストが`localhost`かIPアドレスのとき)。そのため判定は、開発時も開発サーバーの
+  オリジンに加えてカスタムプロトコルを通す(通さないと最初の遷移が止まり、画面が白いままになる)。
   外部のURLへの遷移は、`location`の書き換え・`href`を持つ`<a>`のクリック・`window.open`のどれも止まる
   (`ERR_ABORTED`)。どちらの場合もWebViewは外部のページを読み込まない。本文中のリンクは、確認の
   ダイアログの「開く」を押すと`tauri-plugin-opener`がブラウザへ渡す(`open`クレートはAndroidで動かない。
