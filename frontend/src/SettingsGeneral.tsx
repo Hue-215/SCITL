@@ -135,7 +135,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
 
 // 押すと確認なしで書き出し(保存画面を出すOSでは、そこで場所を選ぶ)、成否はこの欄に出す。タブ全体の
 // エラー欄を使わないのは、設定の保存とは別の操作の結果だから。フォルダを開く操作は、書き出す先が
-// フォルダのOSでだけ出す(`ExportTarget`。Rust側が決める)。
+// フォルダのOSでだけ出す(`ExportTarget`。Rust側が決める)。結果の文言は結果の種類で出し分ける。
 function ExportSection() {
   const [target, setTarget] = useState<ExportTarget | null>(null)
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null)
@@ -148,7 +148,8 @@ function ExportSection() {
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
-    void getExportTarget().then(setTarget)
+    // 取れなければフォルダを開く操作を出さないままにする。
+    void getExportTarget().then(setTarget, () => {})
   }, [])
 
   // 結果の欄には最後に行った操作の成否だけを出す。
@@ -163,7 +164,8 @@ function ExportSection() {
     void opening.run(openExportFolder)
   }
 
-  const summary = outcome?.status === 'written' ? outcome.summary : null
+  const summary =
+    outcome?.status === 'written' || outcome?.status === 'saved' ? outcome.summary : null
   return (
     <div className="settings-field settings-section-break">
       <span>{t('settings.general.export_label')}</span>
@@ -179,13 +181,10 @@ function ExportSection() {
           </button>
         )}
       </div>
-      {summary && (
-        <p>
-          {target === 'chosen_file'
-            ? t('settings.general.export_saved')
-            : t('settings.general.export_done', { folder: isolated(summary.folder) })}
-        </p>
+      {outcome?.status === 'written' && (
+        <p>{t('settings.general.export_done', { folder: isolated(outcome.summary.folder) })}</p>
       )}
+      {outcome?.status === 'saved' && <p>{t('settings.general.export_saved')}</p>}
       {summary && summary.missing_attachments > 0 && (
         <p className="error">
           {t('settings.general.export_missing_attachments', {

@@ -64,16 +64,16 @@ impl ExportTarget {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ExportOutcome {
-    Written {
-        summary: ExportSummary,
-    },
+    /// データディレクトリの`export/`のフォルダへ書いた([`ExportTarget::Folder`])。
+    Written { summary: ExportSummary },
+    /// 選んだファイルへzipで書いた([`ExportTarget::ChosenFile`])。`summary.folder`はzipの中の
+    /// フォルダの名前。
+    Saved { summary: ExportSummary },
     /// 保存画面を閉じた。何も書いていない。
     Cancelled,
     /// 選んだファイルへ書き写せなかった。選んだファイルは保存画面が作るので、書きかけ(空を含む)が
     /// 選んだ名前で残りうる。消す手段を持たないので、画面は利用者に消すよう伝える。
-    LeftIncomplete {
-        reason: String,
-    },
+    LeftIncomplete { reason: String },
 }
 
 /// 書き出しの結果。

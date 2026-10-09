@@ -6,7 +6,8 @@
 //! から書き写し、書き写すのに失敗したら、書きかけが残りうることを結果で返す。
 
 use std::fs::{self, File};
-use std::io::{self, BufWriter, ErrorKind, Write};
+use std::io::{self, BufWriter, ErrorKind};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -75,7 +76,7 @@ fn write_chosen_file(
         return Ok(ExportOutcome::Cancelled);
     };
     Ok(match archive.copy_into(open) {
-        Ok(()) => ExportOutcome::Written {
+        Ok(()) => ExportOutcome::Saved {
             summary: archive.summary.clone(),
         },
         Err(e) => ExportOutcome::LeftIncomplete {
@@ -92,7 +93,7 @@ struct Archive {
 
 impl Archive {
     /// 前に作りかけたもの(強制終了で残ったもの)を片付けてから、`staging`の中にフォルダを書き出し、
-    /// zipにまとめる。zipにしたフォルダは消す。
+    /// zipにまとめる。zipに入れたファイルはその都度消す(キャッシュに中身を2つ分載せないため)。
     fn build(snapshot: &Snapshot, store: &AttachmentStore, staging: &Path) -> Result<Self> {
         match fs::remove_dir_all(staging) {
             Err(e) if e.kind() != ErrorKind::NotFound => {
@@ -121,10 +122,25 @@ impl Archive {
         format!("scitl-export-{}.zip", self.summary.folder)
     }
 
+    /// 選んだファイルを開いて書き写す。開く手順がpanicしても(fsのAndroid側は、提供元がファイル
+    /// 記述子を返さないとpanicする)失敗として返し、書きかけが残りうることを伝えられるようにする。
     fn copy_into(&self, open: OpenChosen) -> io::Result<()> {
-        let mut out = open()?;
-        io::copy(&mut File::open(&self.path)?, &mut out)?;
-        out.flush()
+        let path = &self.path;
+        panic::catch_unwind(AssertUnwindSafe(move || {
+            let mut out = open()?;
+            io::copy(&mut File::open(path)?, &mut out)?;
+            sync(&out)
+        }))
+        .unwrap_or_else(|_| Err(io::Error::other("opening the chosen file panicked")))
+    }
+}
+
+/// 書き写した中身を記憶装置へ書き切らせる。提供元がパイプで受け取る場合は書き切る操作を持たない
+/// ので、それは失敗にしない。
+fn sync(out: &File) -> io::Result<()> {
+    match out.sync_all() {
+        Err(e) if matches!(e.kind(), ErrorKind::InvalidInput | ErrorKind::Unsupported) => Ok(()),
+        result => result,
     }
 }
 
@@ -145,9 +161,8 @@ fn zip_folder(folder: &Path, prefix: &str, dest: &Path) -> Result<()> {
     zip.finish()
         .map_err(zip_error)?
         .into_inner()
-        .map_err(|e| io_error("write the export zip")(e.into_error()))?
-        .sync_all()
-        .map_err(io_error("write the export zip"))
+        .map(drop)
+        .map_err(|e| io_error("write the export zip")(e.into_error()))
 }
 
 fn add_folder(
@@ -175,6 +190,7 @@ fn add_folder(
         zip.start_file(name, options).map_err(zip_error)?;
         io::copy(&mut File::open(&path).map_err(&read)?, zip)
             .map_err(io_error("write the export zip"))?;
+        let _ = fs::remove_file(&path);
     }
     Ok(())
 }
@@ -298,7 +314,7 @@ mod tests {
             f.open_chosen()
         });
 
-        let ExportOutcome::Written { summary } = outcome else {
+        let ExportOutcome::Saved { summary } = outcome else {
             panic!("{outcome:?}");
         };
         assert_eq!(suggested, format!("scitl-export-{}.zip", summary.folder));
@@ -353,6 +369,17 @@ mod tests {
             panic!("{outcome:?}");
         };
         assert!(reason.contains("provider went away"), "{reason}");
+        assert!(staged_files(&f.staging()).is_empty());
+    }
+
+    #[test]
+    fn reports_a_panicking_open_as_possibly_left_incomplete() {
+        let f = Fixture::new();
+        let panicking: OpenChosen = Box::new(|| panic!("no file descriptor"));
+        assert!(matches!(
+            f.export(|_| Some(panicking)),
+            ExportOutcome::LeftIncomplete { .. }
+        ));
         assert!(staged_files(&f.staging()).is_empty());
     }
 

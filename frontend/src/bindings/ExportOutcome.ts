@@ -4,4 +4,4 @@ import type { ExportSummary } from "./ExportSummary";
 /**
  * 書き出しの操作の結果。
  */
-export type ExportOutcome = { "status": "written", summary: ExportSummary, } | { "status": "cancelled" } | { "status": "left_incomplete", reason: string, };
+export type ExportOutcome = { "status": "written", summary: ExportSummary, } | { "status": "saved", summary: ExportSummary, } | { "status": "cancelled" } | { "status": "left_incomplete", reason: string, };
