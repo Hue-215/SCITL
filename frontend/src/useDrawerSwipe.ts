@@ -1,17 +1,15 @@
-import { useRef, type TouchEvent } from 'react'
+import { useEffect, useRef, type TouchEvent } from 'react'
 import type { DrawerState } from './useDrawer'
 
 // 畳んだカラムの隣の内容に付けるもの。畳んである間、内容のどこからでも右へスワイプすれば引き出す。
 // 画面の端から始めたスワイプは、Androidのジェスチャーナビゲーションでは「戻る」に取られる。
 export function useSwipeToOpen(drawer: DrawerState) {
-  const swipe = useDrawerDrag(drawer, 'open')
-  return drawer.narrow && !drawer.shown ? swipe : undefined
+  return useDrawerDrag(drawer, 'open', drawer.narrow && !drawer.shown)
 }
 
 // 引き出したカラムと暗幕に付けるもの。左へスワイプすれば閉じる。
 export function useSwipeToClose(drawer: DrawerState) {
-  const swipe = useDrawerDrag(drawer, 'close')
-  return drawer.shown ? swipe : undefined
+  return useDrawerDrag(drawer, 'close', drawer.shown)
 }
 
 // 指を離したときに、開け閉めを確定する横の移動の量(px)。足りなければ元の位置へ戻す。
@@ -35,23 +33,39 @@ interface Gesture {
 // 入れ物に`.drawer-dragging`を付け、引き出した割合(0〜1)を`--drawer-progress`で渡す(index.css)。
 // 描き直しを経ずに指に追従させるため、Reactの状態ではなく要素へ直に書く。指を離したら、
 // 開く向きへ`SWIPE_DISTANCE`以上動いていれば開け閉めを確定し、どちらでも元の書き込みを外して
-// CSSの移り変わりに任せる。
-function useDrawerDrag(drawer: DrawerState, toward: 'open' | 'close') {
+// CSSの移り変わりに任せる。`enabled`が偽の間は受け手を返さない。
+function useDrawerDrag(drawer: DrawerState, toward: 'open' | 'close', enabled: boolean) {
   const gesture = useRef<Gesture | null>(null)
   const sign = toward === 'open' ? 1 : -1
 
-  const finish = (commit: boolean) => {
+  // 動かしている途中の書き込みを外す。指を離したとき・受け手が外れたとき(動かしている途中に
+  // Escや「戻る」で閉じた、窓が広がった等で、指を離した知らせが届かなくなる)に呼ぶ。外さないと、
+  // 次に畳んだときにカラムが途中の位置に出たまま残る。
+  const reset = () => {
     const g = gesture.current
     gesture.current = null
-    if (!g?.dragging) return
+    if (!g?.dragging) return false
     g.container.classList.remove('drawer-dragging')
     g.container.style.removeProperty('--drawer-progress')
-    if (commit) {
+    return true
+  }
+
+  useEffect(() => {
+    if (!enabled) return
+    return () => {
+      reset()
+    }
+  }, [enabled])
+
+  const finish = (commit: boolean) => {
+    const moved = gesture.current?.moved ?? 0
+    if (reset() && commit && moved >= SWIPE_DISTANCE) {
       if (toward === 'open') drawer.open()
       else drawer.cancel()
     }
   }
 
+  if (!enabled) return undefined
   return {
     onTouchStart: (e: TouchEvent<HTMLElement>) => {
       const target = e.target as Element
@@ -103,7 +117,7 @@ function useDrawerDrag(drawer: DrawerState, toward: 'open' | 'close') {
         String(toward === 'open' ? shown : 1 - shown),
       )
     },
-    onTouchEnd: () => finish((gesture.current?.moved ?? 0) >= SWIPE_DISTANCE),
+    onTouchEnd: () => finish(true),
     onTouchCancel: () => finish(false),
   }
 }

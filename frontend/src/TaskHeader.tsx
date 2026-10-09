@@ -94,10 +94,10 @@ export default function TaskHeader({
           )}
         </h1>
         {/* 名前の長さや編集中かによらず、右上の同じ位置に置く。名前の変更は名前を押して行うので
-            ここには入れない */}
+            ここには入れない。編集中に押すと、名前の欄からフォーカスが外れて編集を取り消してから開く */}
         <MenuButton
           label={t('task_header.menu_label')}
-          disabled={disabled || editing}
+          disabled={disabled}
           items={[
             {
               key: 'archive',
@@ -128,7 +128,7 @@ export default function TaskHeader({
         )}
       </div>
       {task.description && descriptionOpen && (
-        <p className="chat-header-description">{task.description}</p>
+        <p>{task.description}</p>
       )}
       {confirmingDelete && (
         <ConfirmDialog

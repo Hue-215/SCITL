@@ -58,7 +58,13 @@ export function useDrawer(): DrawerState {
       }
       return
     }
-    document.getElementById(id)?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus()
+    // 今いる場所(設定の選んでいるタブ)があればそこへ、無ければ先頭へ移す。設定のカラムの先頭は
+    // 戻るボタンなので、先頭へ移すとそのままEnterで設定を閉じてしまう。
+    const column = document.getElementById(id)
+    ;(
+      column?.querySelector<HTMLElement>('[aria-current="page"]') ??
+      column?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+    )?.focus()
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') cancel()
     }
