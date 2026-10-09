@@ -608,6 +608,12 @@ option {
   padding-block: var(--space-1);
 }
 
+/* 左右にも上下と同じ余白を取る。スクロールバーが中身に被らないよう、スクロール領域ではなく
+   各行の側が持つ(ui.md「スクロール領域」)。 */
+.dropdown-options > * {
+  padding-inline: var(--space-1);
+}
+
 .dropdown-empty {
   padding: var(--space-2);
 }
