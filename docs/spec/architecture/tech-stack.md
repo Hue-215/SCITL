@@ -86,12 +86,14 @@ Chrome 119相当、Android 8・9ではChrome 138相当(2025-08)で更新が止�
 WebViewの更新が止まる版が上がったら、minSdkもそこまで上げる。依存が求める下限はこれより低い
 (Tauriの本体21、`tauri-plugin-dialog`・`tauri-plugin-opener`24、`tauri-plugin-fs`21、
 `rustls-platform-verifier-android`22。2026-10)。ライブラリの下限がアプリより高いとGradleの
-マニフェストの統合が止まるので、依存を足したときの超過はビルドで分かる。
+マニフェストの統合が止まるので、Gradleに組み込んだ依存の超過はビルドで分かる
+(`rustls-platform-verifier-android`のAARはまだ組み込んでいない。Issue #470)。
 
 **minSdkの書く場所**: tauri-cliはRust側のビルドで、NDKのclangを選ぶ版(`aarch64-linux-android29-clang`等)に
 `tauri.conf.json`の値を使う。APKの下限とネイティブのコードの版が食い違わないよう、Gradleと
-CIの`rust-android`ジョブも同じ値を読む。`tauri.conf.json`にtargetSdkの項目は無いので、
-targetSdkとcompileSdkはGradleに置く。
+CIの`rust-android`ジョブも同じ値を読む。GradleとCIが読むのは`tauri.conf.json`だけなので、
+minSdkを`tauri.android.conf.json`や`--config`で上書きしない(tauri-cliだけが上書き後の値を使い、
+食い違う)。`tauri.conf.json`にtargetSdkの項目は無いので、targetSdkとcompileSdkはGradleに置く。
 
 **targetSdkを36に留める理由**: APKを直接渡すので、Google Playのtarget SDKの下限には縛られない。
 37以上にすると、Android 17の端末ではLAN上の機器への通信に実行時の権限`ACCESS_LOCAL_NETWORK`
@@ -105,7 +107,8 @@ targetSdk 36で既に掛かっている決まり(Android 16以上の端末):
 
 - 画面がステータスバー・ナビゲーションバーの下まで広がり、オプトアウトできない(edge-to-edge)
 - 「戻る」の予測アニメーションが既定で有効になり、`onBackPressed`は呼ばれず、`KEYCODE_BACK`も
-  届かない。「戻る」を受けるにはandroidxの`OnBackPressedCallback`を使う
+  届かない。「戻る」を受けるにはandroidxの`OnBackPressedCallback`を使う(Tauri本体がこれで受けている)。
+  マニフェストの`android:enableOnBackInvokedCallback="false"`による一時的なオプトアウトもあるが、使わない
 
 targetSdkを37以上へ上げるときに見直すこと:
 
@@ -114,9 +117,11 @@ targetSdkを37以上へ上げるときに見直すこと:
   プライベートIPへの初めての送信時か)。拒否・後からの取り消し・使っていないアプリの権限の
   自動リセットのどれでも、通信の失敗として画面に出すこと。拒否されているときのTCPの接続は
   多くがタイムアウトで失敗する(公式文書)ので、失敗の種類の出し方も見直す
-- **端末の中の推論サーバー**: `127.0.0.1`への通信が権限の対象かは公式文書に書かれていない
-  (2026-10。別の仕事用プロファイルとの間のループバックを止める変更は別にある)。上げる前に、
-  権限の無い状態でエミュレーターから確かめる
+- **端末の中の推論サーバー**: Android 16の動作の変更の文書が挙げるローカルネットワークの範囲
+  (ブロードキャストできるインターフェースのリンクローカル・CGNAT・プライベートIP、マルチキャスト)に
+  ループバック(`127.0.0.0/8`)は含まれないが、対象外とする明記は無い(2026-10。別の仕事用
+  プロファイルとの間のループバックを止める変更は別にある)。上げる前に、権限の無い状態で
+  エミュレーターから確かめる
 - **証明書の検証**: Certificate Transparencyの検査が既定で有効になる。HTTPSの検証はAndroidの
   証明書の検証を呼ぶ(`rustls-platform-verifier`)ので、この検査が掛かるか、掛かって困る
   通信先が無いかを確かめる
