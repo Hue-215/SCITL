@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jni::objects::JObject;
-use jni::{jni_sig, jni_str, JavaVM};
+use jni::JavaVM;
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -34,15 +34,7 @@ pub unsafe fn init(java_vm: *mut c_void, activity: *mut c_void) -> Result<(), St
     vm.attach_current_thread(|env| -> jni::errors::Result<()> {
         // SAFETY: 呼び出し側が保証する。`JObject`はDropで参照を消さないので、持ち主は呼び出し側のまま。
         let activity = unsafe { JObject::from_raw(env, activity.cast()) };
-        // Activityは作り直されることがあるので、プロセスと同じ寿命のApplicationのContextを持たせる。
-        let context = env
-            .call_method(
-                &activity,
-                jni_str!("getApplicationContext"),
-                jni_sig!("()Landroid/content/Context;"),
-                &[],
-            )?
-            .l()?;
+        let context = crate::android::application_context(env, &activity)?;
         rustls_platform_verifier::android::init_with_env(env, context)
     })
     .map_err(|e| format!("could not initialize the certificate verifier: {e}"))?;

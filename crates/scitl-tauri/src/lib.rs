@@ -2,7 +2,7 @@ mod commands;
 mod dialog;
 mod navigation;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use scitl_core::attachments::{AttachmentStore, Attachments, ReceivedFiles};
@@ -25,6 +25,8 @@ pub struct AppState {
     pub attachments: Arc<Attachments>,
     /// Markdownエクスポートの書き出し先。画面からは変えられない。
     pub export_dir: PathBuf,
+    /// 利用者が選んだファイルへ書き写す前に、エクスポートのzipを作る場所(キャッシュの中)。
+    pub export_staging: PathBuf,
     /// 窓にファイルが落とされたことの知らせ先(`commands::attachments::watch_dropped_files`)。
     pub dropped: Mutex<Option<Channel<ReceivedFiles>>>,
 }
@@ -70,9 +72,9 @@ pub fn run() {
             show_version_in_title(app);
             #[cfg(target_os = "android")]
             match app.get_webview_window(MAIN_WINDOW) {
-                Some(window) => init_certificate_verifier(window.as_ref()),
+                Some(window) => init_jni_users(window.as_ref()),
                 None => scitl_core::diagnostics::report(
-                    "could not initialize the certificate verifier: no window",
+                    "could not initialize the certificate verifier and the secret store: no window",
                 ),
             }
             match start_app_state(app.handle()) {
@@ -82,12 +84,14 @@ pub fn run() {
                     app.manage(StartupFailure(failure))
                 }
             };
+            #[cfg(target_os = "android")]
+            reload_key_after_secret_store_init(app.handle());
             Ok(())
         })
-        // `setup`で証明書の検証を初期化できなかったときに頼み直す(`init_certificate_verifier`)。
+        // `setup`で証明書の検証・秘密情報の保存先を初期化できなかったときに頼み直す(`init_jni_users`)。
         .on_page_load(|_webview, _payload| {
             #[cfg(target_os = "android")]
-            init_certificate_verifier(_webview);
+            init_jni_users(_webview);
         })
         // 窓に落としたファイルのパスは、OSのドロップからここへ直接届く(WebViewを通らない)。
         .on_window_event(|window, event| {
@@ -120,6 +124,7 @@ pub fn run() {
             commands::attachments::read_text_attachment,
             commands::attachments::read_image_attachment,
             commands::attachments::reveal_attachment,
+            commands::export::get_export_target,
             commands::export::export_markdown,
             commands::export::open_export_folder,
             commands::settings::get_settings,
@@ -171,13 +176,7 @@ fn start_app_state(app: &AppHandle) -> Result<AppState, DataDirError> {
     let data = data_dir(app)?;
     let cache = cache_dir(app)?;
     // モバイルでは利用者が置き場所を変えられないので、場所を移すよう促す失敗にしない。
-    open_app_state(data, paths::revealed_attachments(&cache)).map_err(|e| {
-        if cfg!(mobile) {
-            e.in_app_dir()
-        } else {
-            e
-        }
-    })
+    open_app_state(data, &cache).map_err(|e| if cfg!(mobile) { e.in_app_dir() } else { e })
 }
 
 /// データディレクトリの場所(`data-model/tables.md`「データディレクトリの場所」)。デスクトップでは
@@ -211,8 +210,8 @@ fn no_app_dir(e: impl std::fmt::Display) -> DataDirError {
     }
 }
 
-/// `data`のデータディレクトリを開き、コマンド層の状態を作る。
-fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppState, DataDirError> {
+/// `data`のデータディレクトリを開き、コマンド層の状態を作る。`cache`はキャッシュの場所。
+fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError> {
     let data = DataLayout::new(data);
     paths::create_private_dir(data.root()).map_err(|e| DataDirError::Unusable {
         dir: data.root().display().to_string(),
@@ -227,7 +226,7 @@ fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppSta
     let settings = Settings::load(data.config());
     let attachments = Arc::new(Attachments::new(AttachmentStore::new(
         data.attachments(),
-        revealed_attachments,
+        paths::revealed_attachments(cache),
     )));
 
     Ok(AppState {
@@ -236,6 +235,7 @@ fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppSta
         generating: InFlightSet::new(),
         attachments,
         export_dir: data.export(),
+        export_staging: paths::export_staging(cache),
         dropped: Mutex::new(None),
     })
 }
@@ -255,41 +255,70 @@ fn show_version_in_title(app: &tauri::App) {
     let _ = window.set_title(&format!("{title} {}", app.package_info().version));
 }
 
-/// HTTPSの証明書の検証に要るJNIの参照をcoreへ渡す(`scitl_core::net::android`)。JavaVMとActivityは
-/// wryがWebViewのスレッドで呼ぶコールバックからしか得られないので、WebViewに頼み、渡すのは後になる。
+/// JNIの参照を要る部品へ渡す。HTTPSの証明書の検証(`scitl_core::net::android`)と秘密情報の保存先
+/// (`scitl_core::secrets::android`)。JavaVMとActivityはwryがWebViewのスレッドで呼ぶコールバックから
+/// しか得られないので、WebViewに頼み、渡すのは後になる。
+///
 /// HTTPSを使う経路はどれも画面からのIPCで始まり、起動時に裏で通信しないので、画面が読み込まれる
 /// までに済む。間に合わなかったときや渡せなかったときは、`net::hardened_client`がHTTPSを断る。
+/// 秘密情報は起動時の設定の読み込みで読むので、渡すより先に読んで「鍵を読めない」になりうる。
+/// 渡せたら読み直させる(`reload_key_after_secret_store_init`)。
+///
 /// 渡せなかったまま使い続けないよう、`setup`のほかにページを読み込むたびにも、済んでいなければ頼み直す。
 #[cfg(target_os = "android")]
-fn init_certificate_verifier(webview: &tauri::Webview) {
-    if scitl_core::net::android::initialized() {
+fn init_jni_users(webview: &tauri::Webview) {
+    if scitl_core::net::android::initialized() && scitl_core::secrets::android::initialized() {
         return;
     }
-    let requested = webview.with_webview(|webview| {
-        webview.jni_handle().exec(|env, activity, _webview| {
+    let app = webview.app_handle().clone();
+    let requested = webview.with_webview(move |webview| {
+        webview.jni_handle().exec(move |env, activity, _webview| {
             let java_vm = match env.get_java_vm() {
                 Ok(vm) => vm.get_java_vm_pointer(),
                 Err(e) => {
                     scitl_core::diagnostics::report(format_args!(
-                        "could not initialize the certificate verifier: {e}"
+                        "could not initialize the certificate verifier and the secret store: {e}"
                     ));
                     return;
                 }
             };
             // SAFETY: `java_vm`はこのプロセスのJavaVM。`activity`はwryが持つActivityのグローバル参照
             // (Activityが無ければnull)で、このコールバックの間は有効。
-            let result =
+            let verifier =
                 unsafe { scitl_core::net::android::init(java_vm.cast(), activity.as_raw().cast()) };
-            if let Err(e) = result {
+            if let Err(e) = verifier {
                 scitl_core::diagnostics::report(e);
+            }
+            // SAFETY: 上と同じ。
+            let secrets = unsafe {
+                scitl_core::secrets::android::init(java_vm.cast(), activity.as_raw().cast())
+            };
+            match secrets {
+                Ok(()) => reload_key_after_secret_store_init(&app),
+                Err(e) => scitl_core::diagnostics::report(e),
             }
         })
     });
     if let Err(e) = requested {
         scitl_core::diagnostics::report(format_args!(
-            "could not initialize the certificate verifier: {e}"
+            "could not initialize the certificate verifier and the secret store: {e}"
         ));
     }
+}
+
+/// 秘密情報の保存先を初期化できていれば、起動時に読み損ねた鍵を読み直させる。初期化と`AppState`の
+/// 登録のどちらが先に済むかは決まらないので、両方の後で呼ぶ(後に済んだ側の呼び出しで、初期化済みかつ
+/// 登録済みになる)。読めていれば何もしない。
+#[cfg(target_os = "android")]
+fn reload_key_after_secret_store_init(app: &AppHandle) {
+    if !scitl_core::secrets::android::initialized() {
+        return;
+    }
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let settings = Arc::clone(&state.settings);
+    tauri::async_runtime::spawn(async move { settings.reload_unavailable_key().await });
 }
 
 /// 多重起動の防止を使えるか。Linuxのプラグインはセッションバスのアドレスを解釈できないと

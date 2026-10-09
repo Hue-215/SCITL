@@ -3,8 +3,10 @@
 //! ターン(古い試行・破棄されたターン)は含めない。思考と`error_detail`も含めない。失敗した
 //! ターンで受け取り終えた中身(エラー発言の`parts`)は、画面と同じく含める。
 //!
-//! 書き出し先は呼び出し側が決める。画面からはパスを受け取らない。
+//! 書き出し先は呼び出し側が決める。画面からはパスを受け取らない。どこへ書くか(データディレクトリの
+//! フォルダか、利用者が選んだファイルか)は[`ExportTarget::CURRENT`]で決める。
 
+mod archive;
 mod markdown;
 
 use std::collections::HashMap;
@@ -27,10 +29,52 @@ use crate::error::{CoreError, Result};
 use crate::text;
 use markdown::{AttachmentLink, Entry};
 
+pub use archive::{export_to_chosen_file, OpenChosen};
+
 const ATTACHMENTS_DIR: &str = "attachments";
 /// ファイル名に入れるタイトルの長さ。フォルダまでのパスと合わせて、Windowsのパスの長さの
 /// 上限に届かないよう短めにする(タイトルの全体はファイルの中にある)。
 const TITLE_CHARS_IN_FILE_NAME: usize = 40;
+
+/// 書き出す先。画面は受け取って、押せる操作と結果の文言を出し分ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum ExportTarget {
+    /// データディレクトリの`export/`に、日時の名前のフォルダを作る([`export_markdown`])。画面は
+    /// そのフォルダを開ける([`open_folder`])。
+    Folder,
+    /// 利用者が保存画面で選んだファイルへ、そのフォルダをzipにまとめて書く
+    /// ([`export_to_chosen_file`])。データディレクトリがほかのアプリから見えず、フォルダを開く
+    /// 手段も無いAndroidで使う。
+    ChosenFile,
+}
+
+impl ExportTarget {
+    /// このOSで書き出す先。
+    pub const CURRENT: Self = if cfg!(target_os = "android") {
+        Self::ChosenFile
+    } else {
+        Self::Folder
+    };
+}
+
+/// 書き出しの操作の結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ExportOutcome {
+    /// データディレクトリの`export/`のフォルダへ書いた([`ExportTarget::Folder`])。
+    Written { summary: ExportSummary },
+    /// 選んだファイルへzipで書いた([`ExportTarget::ChosenFile`])。`summary.folder`はzipの中の
+    /// フォルダの名前。
+    Saved { summary: ExportSummary },
+    /// 保存画面を閉じた。何も書いていない。
+    Cancelled,
+    /// 選んだファイルへ書き写せなかった。選んだファイルは保存画面が作るので、書きかけ(空を含む)が
+    /// 選んだ名前で残りうる。消す手段を持たないので、画面は利用者に消すよう伝える。
+    LeftIncomplete { reason: String },
+}
 
 /// 書き出しの結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -59,7 +103,13 @@ pub async fn export_markdown(
 }
 
 /// 書き出し先のフォルダをOSで開く。まだ一度も書き出していなければ空のフォルダを作って開く。
+/// フォルダへ書き出さないOS([`ExportTarget::CURRENT`])では、作る前に断る。
 pub fn open_folder(root: &Path) -> Result<()> {
+    if ExportTarget::CURRENT != ExportTarget::Folder {
+        return Err(CoreError::Export(
+            "exports are not written to a folder on this platform".to_string(),
+        ));
+    }
     fs::create_dir_all(root).map_err(io_error("create the export folder"))?;
     open::that_detached(root).map_err(io_error("open the export folder"))
 }

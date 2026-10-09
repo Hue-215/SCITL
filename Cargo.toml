@@ -53,6 +53,11 @@ async-trait = "0.1"
 keyring-core = "1"
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 windows-native-keyring-store = "1"
+# Androidの保存先は、JavaVMとContextを`ndk-context`から取る。`ndk-context`へはsecrets.rsが渡す
+# (Tauri 2.11が使うtao 0.35は渡さない)。`ndk-context`は2回目の初期化でpanicするので、taoが
+# 初期化する版(0.37以上)へ上げるときは、secrets.rsの`android::init`を呼ぶのをやめる
+android-native-keyring-store = "1"
+ndk-context = "0.1"
 toml = "1"
 # scitl-cli・scitl-debug-cliの引数の解析。出力に色の制御文字を混ぜないよう、既定のfeatureから色付け(と、
 # 打ち間違いの候補の提示)を外す
@@ -85,6 +90,10 @@ base64 = "0.22"
 # 受け付ける画像形式(PNG・JPEG・GIF・WebP)のデコーダーだけを有効にする。既定のfeatureは
 # 使わない形式のデコーダーと並列化(rayon)を引き込むため切る
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Androidで、Markdownエクスポートを1つのzipにまとめて利用者が選んだ場所へ書く(`scitl-core/src/export/`)。
+# 書くのはdeflateだけなので既定のfeatureは切る。deflateの実装(`flate2`の`rust_backend`)は`image` → `png`の
+# 依存として既にビルドされているものを使う
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 # MCPクライアント。`default-features = false`にした上で必要なfeatureだけを明示する。
 # OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない先へ通信しうるので
 # 有効にしない。
