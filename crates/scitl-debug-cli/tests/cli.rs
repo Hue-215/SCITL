@@ -149,9 +149,9 @@ fn sent_files_are_listed_and_only_unreferenced_stored_files_are_removed() {
     let data = DataDir::new();
     let memo = data.path().join("memo.txt");
     std::fs::write(&memo, "本文").unwrap();
-    // UTF-8として読めないので「その他」になり、実体が置き場所に書かれる。
-    let binary = data.path().join("blob.bin");
-    std::fs::write(&binary, [0xFF, 0x00, 0xFE]).unwrap();
+    // 画像は実体が置き場所に書かれる。
+    let image = data.path().join("dot.png");
+    std::fs::write(&image, DOT_PNG).unwrap();
 
     let sent = data.run(&[
         "chat",
@@ -159,14 +159,14 @@ fn sent_files_are_listed_and_only_unreferenced_stored_files_are_removed() {
         "--attach",
         memo.to_str().unwrap(),
         "--attach",
-        binary.to_str().unwrap(),
+        image.to_str().unwrap(),
     ]);
     assert!(sent.status.success(), "{sent:?}");
 
     let listed = stdout_json(&data.run(&["attachment", "list"]));
     assert_eq!(listed[0]["original_name"], "memo.txt");
     assert_eq!(listed[0]["file_hash"], serde_json::Value::Null);
-    assert_eq!(listed[1]["original_name"], "blob.bin");
+    assert_eq!(listed[1]["original_name"], "dot.png");
     let kept = data
         .layout()
         .attachments()
@@ -189,6 +189,26 @@ fn sent_files_are_listed_and_only_unreferenced_stored_files_are_removed() {
     );
     assert!(!stray.exists());
     assert!(kept.exists());
+}
+
+/// 1×1のPNG。
+const DOT_PNG: &[u8] = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0d\x49\x44\x41\x54\x78\xda\x63\x64\xf8\xcf\x50\x0f\x00\x03\x86\x01\x80\x5a\x34\x7d\x6b\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82";
+
+/// 画像として扱う形式でもUTF-8のテキストでもないファイル(「その他」)は受け付けず、何も送らない。
+#[test]
+fn an_unsupported_file_sends_nothing() {
+    let data = DataDir::new();
+    let binary = data.path().join("blob.bin");
+    std::fs::write(&binary, [0xFF, 0x00, 0xFE]).unwrap();
+
+    let output = data.run(&["chat", "send", "--attach", binary.to_str().unwrap(), "見て"]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported"));
+    assert_eq!(
+        stdout_json(&data.run(&["chat", "show"])),
+        serde_json::json!([])
+    );
 }
 
 #[test]

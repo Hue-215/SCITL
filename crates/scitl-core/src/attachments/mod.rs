@@ -56,6 +56,16 @@ pub fn delivery_without_model(kind: AttachmentKind) -> Option<Delivery> {
     (without == delivery(kind, true, true)).then_some(without)
 }
 
+/// 添付の入ったフォルダを開けるか([`Attachments::reveal`])。Androidでは`open`クレートが
+/// 失敗を返し、開く手段が無い(取り出すときは、エクスポートのzipに同梱されたものを使う)。
+pub const CAN_REVEAL: bool = cfg!(not(target_os = "android"));
+
+/// 画面で押して入っているフォルダを開ける添付か。その他は今は受け付けないが、受け付けていた
+/// 頃に付けたものは、利用者が取り出せるよう開けるままにする(Issue #506)。
+pub fn revealable(kind: AttachmentKind, can_reveal: bool) -> bool {
+    can_reveal && kind == AttachmentKind::Other
+}
+
 /// クリップボードの画像(RGBAの画素の並び)を、受け取ったファイル(PNG)にする。名前は、画像を
 /// 貼り付けたときにブラウザが付けるものに揃える。預けるときの正規化と同じ長辺まで先に縮めてから
 /// 符号化する(写真を等倍のPNGにすると、画像の大きさの上限に当たりやすいため)。画素の数が正規化で
@@ -182,9 +192,15 @@ impl Attachments {
         blocking::run(move || Ok(store.read_image(&hash)?.data_url().to_string())).await
     }
 
-    /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。
+    /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。画面が開ける添付([`revealable`])
+    /// だけを開き、それ以外(開けないOS・その他でない添付)は書き出す前に断る。
     pub async fn reveal(&self, db: SharedConnection, id: i64) -> Result<()> {
         let attachment = with_conn(db, move |conn| attachments::get(conn, id)).await?;
+        if !revealable(attachment.view.kind, CAN_REVEAL) {
+            return Err(CoreError::Attachment(format!(
+                "attachment {id} cannot be shown in a folder"
+            )));
+        }
         let hash = file_hash(attachment.content, id, AttachmentKind::Other)?;
         let store = self.store.clone();
         blocking::run(move || store.reveal(&attachment.view.original_name, &hash)).await

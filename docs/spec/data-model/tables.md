@@ -294,7 +294,7 @@ WebViewのプロファイル等も置かれるので、混ざらないよう`dat
   方針(Issue #412)で決める。フォルダの同期をクラウドストレージに任せる案は、内部ストレージでは使えない
 - エクスポートは内部ストレージ(`data/export/`)には書かず、利用者が保存画面で選んだ場所へzipにまとめて
   書く。フォルダを開く操作も出さない(`../architecture/export.md`「Androidでの書き出し先」)。添付の
-  フォルダを開く操作はAndroidでは動かない(Issue #440で扱う)
+  フォルダを開く操作も、Androidでは出さない(`../architecture/attachments.md`「画面での開き方」)
 - 置き場所を利用者が変えられないので、作れない・書き込めないときは、場所を移すよう促さない
   失敗(`DataDirError::AppDirUnusable`)として画面に出す。実行ファイルの場所に関わる失敗
   (`NoExecutable`・`TemporaryDir`)は起きない

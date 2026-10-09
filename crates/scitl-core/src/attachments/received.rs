@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
-use super::classify::{classify, LIMITS};
+use super::classify::{classify_prefix, LIMITS};
 use super::staging::Rejection;
 use crate::error::{CoreError, Result};
 
@@ -171,11 +171,12 @@ fn read_limited(file: File, len: Option<u64>) -> Result<std::result::Result<Vec<
     let mut bytes = Vec::new();
     file.take(limit).read_to_end(&mut bytes).map_err(failed)?;
     if too_large || bytes.len() as u64 > largest {
-        // 種別は読んだ分だけで見る(断る理由の文言に、その種別の上限を添えるため)。
-        let kind = classify(&bytes).kind;
-        return Ok(Err(Rejection::TooLarge {
-            kind,
-            limit_bytes: LIMITS.bytes_for(kind),
+        // 種別は読んだ分だけで見る(断る理由の文言に、その種別の上限を添えるため。受け付けない
+        // 種別なら、大きさではなくそちらを理由にする)。
+        let kind = classify_prefix(&bytes).kind;
+        return Ok(Err(match LIMITS.bytes_for(kind) {
+            Some(limit_bytes) => Rejection::TooLarge { kind, limit_bytes },
+            None => Rejection::Unsupported,
         }));
     }
     Ok(Ok(bytes))
@@ -224,10 +225,8 @@ mod tests {
             .unwrap()
             .set_len(LIMITS.largest_bytes() + 1)
             .unwrap();
-        assert!(matches!(
-            read(opened(path)).unwrap(),
-            Err(Rejection::TooLarge { .. })
-        ));
+        // 中身はNULだけなので、大きさではなく受け付けない種別を理由に断る。
+        assert_eq!(read(opened(path)).unwrap(), Err(Rejection::Unsupported));
         // フォルダを開けるOS(Unix)では、開いたあとでもフォルダは断る。
         #[cfg(unix)]
         assert_eq!(
@@ -243,17 +242,25 @@ mod tests {
         assert_eq!(read_path_of(dir.path()), Err(Rejection::NotAFile));
     }
 
+    /// 上限を超えるものは読み切らずに断る。理由は先頭から見た種別で決め、受け付けない種別なら
+    /// 大きさではなくそれを理由にする。
     #[test]
     fn stops_reading_past_the_largest_limit() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("big.bin");
         let file = File::create(&path).unwrap();
         file.set_len(LIMITS.largest_bytes() + 1024).unwrap();
+        assert_eq!(read_path_of(&path), Err(Rejection::Unsupported));
+
+        // 先頭で切った位置が文字の途中でも、テキストの上限を理由にする。
+        let path = dir.path().join("big.txt");
+        let text = "締".repeat((LIMITS.largest_bytes() / 3 + 1) as usize);
+        fs::write(&path, text).unwrap();
         assert_eq!(
             read_path_of(&path),
             Err(Rejection::TooLarge {
-                kind: AttachmentKind::Other,
-                limit_bytes: LIMITS.bytes_for(AttachmentKind::Other),
+                kind: AttachmentKind::Text,
+                limit_bytes: LIMITS.text_bytes,
             })
         );
     }

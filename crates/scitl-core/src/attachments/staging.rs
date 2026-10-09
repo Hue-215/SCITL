@@ -51,6 +51,12 @@ pub enum Rejection {
     NotAFile,
     /// 送っていない添付が、1つの発言に付けられる数に達している。
     TooMany { limit: usize },
+    /// 中身が「その他」(画像として扱う形式でもUTF-8のテキストでもない)。モデルが中身に何も
+    /// できないので受け付けない(Issue #506)。
+    Unsupported,
+    /// 画像として扱う形式だが、デコードできない(壊れている・画素数が上限を超える)。形式を
+    /// 変えるよう促す[`Self::Unsupported`]の文言では、利用者が何を直せばよいか分からないので分ける。
+    ImageUnreadable,
 }
 
 #[derive(Debug, Clone)]
@@ -159,7 +165,9 @@ impl Staged {
             });
         }
         let classified = classify(&bytes);
-        let limit_bytes = LIMITS.bytes_for(classified.kind);
+        let Some(limit_bytes) = LIMITS.bytes_for(classified.kind) else {
+            return Ok(unsupported());
+        };
         if bytes.len() as u64 > limit_bytes {
             return Ok(StageOutcome::Rejected {
                 reason: Rejection::TooLarge {
@@ -168,7 +176,11 @@ impl Staged {
                 },
             });
         }
-        let (classified, bytes) = normalized(classified, bytes);
+        let Some((classified, bytes)) = normalized(classified, bytes) else {
+            return Ok(StageOutcome::Rejected {
+                reason: Rejection::ImageUnreadable,
+            });
+        };
         let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
         let mut entries = self.lock();
@@ -248,27 +260,25 @@ impl Staged {
     }
 }
 
-/// 画像なら正規化したものに置き換える。デコードできない画像は拒まず「その他」として預かる
-/// (その他は中身をデコードしないので、壊れた画像を置いておいても害が無い)。
-fn normalized(classified: Classified, bytes: Vec<u8>) -> (Classified, Vec<u8>) {
+/// 画像なら正規化したものに置き換える。デコードできない画像(壊れている・画素数が上限を
+/// 超える)は`None`で、受け付けない。
+fn normalized(classified: Classified, bytes: Vec<u8>) -> Option<(Classified, Vec<u8>)> {
     if classified.kind != AttachmentKind::Image {
-        return (classified, bytes);
+        return Some((classified, bytes));
     }
-    match normalize_image(&bytes) {
-        Some(image) => (
-            Classified {
-                kind: AttachmentKind::Image,
-                mime_type: image.mime_type,
-            },
-            image.bytes,
-        ),
-        None => (
-            Classified {
-                kind: AttachmentKind::Other,
-                mime_type: classified.mime_type,
-            },
-            bytes,
-        ),
+    let image = normalize_image(&bytes)?;
+    Some((
+        Classified {
+            kind: AttachmentKind::Image,
+            mime_type: image.mime_type,
+        },
+        image.bytes,
+    ))
+}
+
+fn unsupported() -> StageOutcome {
+    StageOutcome::Rejected {
+        reason: Rejection::Unsupported,
     }
 }
 
@@ -423,26 +433,33 @@ mod tests {
         assert_eq!(image::load_from_memory(bytes).unwrap().width(), 1568);
     }
 
+    /// その他(画像として扱わない形式・UTF-8でないテキスト・PDF)とデコードできない画像は
+    /// 預からない。
     #[test]
-    fn stages_undecodable_images_as_other() {
+    fn refuses_other_kinds_and_undecodable_images_without_staging() {
         let staged = Staged::default();
-        let broken = b"\x89PNG\r\n\x1a\nbody".to_vec();
-        let outcome = staged.stage("broken.png".into(), broken.clone()).unwrap();
-        let StageOutcome::Staged {
-            token,
-            kind,
-            mime_type,
-            ..
-        } = outcome
-        else {
-            panic!("expected staged, got {outcome:?}");
-        };
         assert_eq!(
-            (kind, mime_type.as_str()),
-            (AttachmentKind::Other, "image/png")
+            staged
+                .stage("broken.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
+                .unwrap(),
+            StageOutcome::Rejected {
+                reason: Rejection::ImageUnreadable
+            }
         );
-        let taken = staged.take(&[token]).unwrap();
-        assert_eq!(&*taken.0[0].1.bytes, broken.as_slice());
+        for (name, bytes) in [
+            ("a.zip", b"PK\x03\x04\x14\0\0\0".to_vec()),
+            ("photo.heic", b"\0\0\0\x18ftypheic".to_vec()),
+            ("sjis.txt", b"\x92\xf7\x90\xd8".to_vec()),
+            ("a.pdf", b"%PDF-1.7\n".to_vec()),
+        ] {
+            assert_eq!(
+                staged.stage(name.into(), bytes).unwrap(),
+                unsupported(),
+                "{name}"
+            );
+        }
+        assert!(staged.lock().is_empty());
+        assert_eq!(staged.reserved.load(Ordering::Acquire), 0);
     }
 
     #[test]

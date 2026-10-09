@@ -58,21 +58,29 @@ function evictImages() {
 }
 
 /**
- * 発言に付いた添付。押すと、画像は拡大、テキストは全文、その他は入っているフォルダを開く。
- * 中身をモデルへ渡していない添付(`undelivered`。判定はRust側)には警告の印を付ける。
+ * 発言に付いた添付。押すと、画像は拡大、テキストは全文、その他は入っているフォルダを開く
+ * (開ける添付(`revealable`。判定はRust側)だけ)。中身をモデルへ渡していない添付
+ * (`undelivered`。判定はRust側)には警告の印を付ける。
  */
 export function MessageAttachments({
   attachments,
   undelivered,
+  revealable,
 }: {
   attachments: AttachmentView[]
   undelivered: number[]
+  revealable: number[]
 }) {
   if (attachments.length === 0) return null
   return (
     <div className="chip-list">
       {attachments.map((a) => (
-        <AttachmentChip key={a.id} attachment={a} undelivered={undelivered.includes(a.id)} />
+        <AttachmentChip
+          key={a.id}
+          attachment={a}
+          undelivered={undelivered.includes(a.id)}
+          revealable={revealable.includes(a.id)}
+        />
       ))}
     </div>
   )
@@ -88,9 +96,11 @@ interface ChipOf {
 function AttachmentChip({
   attachment,
   undelivered,
+  revealable,
 }: {
   attachment: AttachmentView
   undelivered: boolean
+  revealable: boolean
 }) {
   const size = formatBytes(attachment.size_bytes)
   switch (attachment.kind) {
@@ -110,6 +120,7 @@ function AttachmentChip({
           attachment={attachment}
           size={size}
           warning={undelivered ? t('attachment.content_not_sent') : null}
+          revealable={revealable}
         />
       )
   }
@@ -202,7 +213,13 @@ function TextDialog({ attachment, onClose }: { attachment: AttachmentView; onClo
   )
 }
 
-function OtherChip({ attachment, size, warning }: ChipOf) {
+// 開けない添付(Android)は押せるようにしない。取り出すときはエクスポートのzipに同梱されたものを使う。
+function OtherChip({
+  attachment,
+  size,
+  warning,
+  revealable,
+}: ChipOf & { revealable: boolean }) {
   const [error, setError] = useState<string | null>(null)
   return (
     <Chip
@@ -213,12 +230,17 @@ function OtherChip({ attachment, size, warning }: ChipOf) {
       title={
         error
           ? t('attachment.load_failed', { error: isolated(error) })
-          : [warning, t('attachment.reveal_tooltip')].filter(Boolean).join('\n')
+          : [warning, revealable && t('attachment.reveal_tooltip')].filter(Boolean).join('\n') ||
+            undefined
       }
-      onOpen={() => {
-        setError(null)
-        revealAttachment(attachment.id).catch((e) => setError(failureText(e)))
-      }}
+      onOpen={
+        revealable
+          ? () => {
+              setError(null)
+              revealAttachment(attachment.id).catch((e) => setError(failureText(e)))
+            }
+          : undefined
+      }
     />
   )
 }
