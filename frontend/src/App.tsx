@@ -28,6 +28,7 @@ import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent }
 import { useChatRequests } from './useChatRequests'
 import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
+import { useSwipeToOpen } from './useDrawerSwipe'
 import { useStickToBottom } from './useStickToBottom'
 
 export default function App() {
@@ -98,6 +99,7 @@ export default function App() {
   const { reloaded } = requests
   // 狭い窓で畳むサイドバー。サイドバーで会話・タスクの追加・設定を選んだら閉じる。
   const drawer = useDrawer()
+  const swipeToOpen = useSwipeToOpen(drawer)
 
   const loadChat = useCallback(
     async (target: Chat) => {
@@ -344,7 +346,7 @@ export default function App() {
         />
       </Drawer>
 
-      <main inert={drawer.shown}>
+      <main inert={drawer.shown} {...swipeToOpen}>
         {task ? (
           <TaskHeader
             key={task.id}
