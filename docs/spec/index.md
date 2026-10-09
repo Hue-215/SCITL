@@ -82,7 +82,8 @@ SCITL/
 │   │       ├── orchestration/      # 応答生成と、会話をモデル・画面へ渡す形の組み立て(architecture/transcript.md)
 │   │       ├── mcp/                # 外部ツールサーバーのクライアント(streamable_http)
 │   │       ├── net.rs              # 全HTTP経路が通るクライアント設定(architecture/network-secrets.md)。Androidの証明書の検証の初期化は`net/android.rs`
-│   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口
+│   │       ├── secrets.rs          # OS資格情報ストアへの唯一の入口。Androidの保存先の初期化は`secrets::android`
+│   │       ├── android.rs          # AndroidでJNIの参照を受け取る部品(証明書の検証・秘密情報の保存先)の共通処理
 │   │       ├── config.rs           # 設定(TOML)。秘密情報は参照(`key_ref`)だけを持つ
 │   │       ├── paths.rs            # データディレクトリの場所と中の並び(GUI・CLI共通)
 │   │       ├── files.rs            # 書きかけのファイルを完成した名前で残さない書き込み

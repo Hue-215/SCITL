@@ -179,10 +179,17 @@ pub mod android {
                 // 呼び出し側のまま。
                 let activity = unsafe { JObject::from_raw(env, activity.cast()) };
                 let context = crate::android::application_context(env, &activity)?;
-                // `ndk-context`は参照を持つだけで消さないので、プロセスの終わりまで残す。
+                // `ndk-context`は参照を持つだけで消さないので、プロセスの終わりまで残す。nullの
+                // Contextからはnullが返る(グローバル参照は作られない)。
                 Ok(env.new_global_ref(context)?.into_raw())
             })
             .map_err(|e| format!("could not initialize the secret store: {e}"))?;
+        // nullを渡すと、印が付いたまま保存先の操作がすべて失敗し、頼み直しでも直らない。
+        if context.is_null() {
+            return Err(
+                "could not initialize the secret store: no application context".to_string(),
+            );
+        }
         // SAFETY: `java_vm`はこのプロセスのJavaVM(呼び出し側が保証する)、`context`は消さない
         // グローバル参照。`INITIALIZED`のロックの中で1回だけ呼ぶ。
         unsafe { ndk_context::initialize_android_context(java_vm, context.cast()) };

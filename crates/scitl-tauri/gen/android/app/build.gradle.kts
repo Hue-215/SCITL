@@ -34,14 +34,32 @@ val rustlsPlatformVerifierMaven = providers.exec {
         "--filter-platform", "aarch64-linux-android",
         "--manifest-path", file("../../../Cargo.toml").path,
     )
-}.standardOutput.asText.get().let { metadata ->
-    val packages = ((JsonSlurper().parseText(metadata) as Map<*, *>)["packages"] as List<*>)
-        .map { it as Map<*, *> }
+}.standardOutput.asText.get().let { text ->
+    val metadata = JsonSlurper().parseText(text) as Map<*, *>
+    val packages = (metadata["packages"] as List<*>).map { it as Map<*, *> }
     // 初期化するcoreと検証するreqwestで版が分かれると、初期化が検証する側に届かず、HTTPSが
     // 使えないままになるので、ここで止める。
     packages.filter { it["name"] == "rustls-platform-verifier" }.let { verifiers ->
         check(verifiers.size == 1) {
             "rustls-platform-verifierが1つの版にまとまっていない: ${verifiers.map { it["version"] }}"
+        }
+    }
+    // 秘密情報の保存先が読む`ndk-context`は、coreが1回だけ初期化する(network-secrets.md
+    // 「Androidの保存先」)。版が分かれると初期化が保存先に届かず、保存先が初期化前の読み出しで
+    // panicする。ほかのクレート(taoの新しい版等)が使い始めると、二重の初期化でpanicしうる。
+    // どちらも動かすまで気付けないので、ここで止める。
+    packages.filter { it["name"] == "ndk-context" }.let { contexts ->
+        check(contexts.size == 1) {
+            "ndk-contextが1つの版にまとまっていない: ${contexts.map { it["version"] }}"
+        }
+        val id = contexts.single()["id"]
+        val users = ((metadata["resolve"] as Map<*, *>)["nodes"] as List<*>)
+            .map { it as Map<*, *> }
+            .filter { node -> (node["deps"] as List<*>).any { (it as Map<*, *>)["pkg"] == id } }
+            .map { node -> packages.single { it["id"] == node["id"] }["name"] }
+            .toSet()
+        check(users == setOf("scitl-core", "android-native-keyring-store")) {
+            "ndk-contextを使うクレートが想定と違う(初期化の重複を確かめる): $users"
         }
     }
     val crate = packages.single { it["name"] == "rustls-platform-verifier-android" }
