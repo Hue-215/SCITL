@@ -73,7 +73,9 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
 
 - `npm --prefix ../../frontend ci`と`npm ci`のあと、`npx tauri android build --debug --apk --target x86_64`で
   画面を埋め込んだAPKを作り、`adb install`で入れる。実機なら`--target aarch64`
-- `npx tauri android dev`は、Viteの開発サーバーの画面を読む(デスクトップの`tauri dev`と同じ)
+- `npx tauri android dev <AVD名>`は、Viteの開発サーバーの画面を読む(デスクトップの`tauri dev`と同じ)。
+  画面は`http://tauri.localhost`で開き、Tauriが開発サーバーへ中継する。端末の指定の仕方と、見た目の
+  確かめ方は`android-check`スキル
 - 診断(`diagnostics::report`)はタグ`SCITL`、panicの文言と依存のクレートが標準エラーへ書いたものは
   タグ`RustStdoutStderr`でlogcatに出るので、`adb logcat -s SCITL RustStdoutStderr`で両方を読む
   (`sanitize.md`「無害化」の表の下)

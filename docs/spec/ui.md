@@ -324,16 +324,29 @@ WebKitGTKはOSのものを使うため、対応していない環境では指定
 
 ## 7. 見た目の確認方法
 
-**ヘッドレスでの実機自動操作は未整備。** 実機の見た目は `run` スキルでアプリを起動し、
+見た目の確認は3つある。役割が違うので、触った範囲に応じて使い分ける。
+
+**デスクトップ(WebKitGTK)**: ヘッドレスでの自動操作は未整備。`run` スキルでアプリを起動し、
 スクリーンショットをユーザーに依頼して確認する。これはOSのテーマが関わる描画
 (6節)を確かめる唯一の手段であり、コミット前に必ず通す。
 
-寸法・余白・折り返しのように**数値で決まるもの**は、実機を待たずに検算できる。
+**Android(エミュレーター)**: Claudeがユーザーに頼まずに、撮る(`adb exec-out screencap`)・
+触る(`adb shell input`)・測る(WebViewのDevTools)ことができる。手順は`android-check`スキル。
+5節「指で操作する端末」の決まり(ソフトキーボード・安全領域・当たり判定)と、狭い幅での並びを
+触ったら、幅360dpと412dpの2つのエミュレーターで通す。ソフトキーボードと安全領域は、下のハーネスでは
+再現できない。日本語IMEの確定・指での押しやすさ・端末ごとのノッチは実機でしか確かめられないので、
+Issueの「実機」の節に挙げてまとめて見る(同じスキルの5節)。
+
+**ハーネスでの実測**: 寸法・余白・折り返しのように**数値で決まるもの**は、実機を待たずに検算できる。
 
 1. `frontend/__harness.html` に、確認したい画面のマークアップを静的HTMLで書き、
    `tokens.css` / `index.css` / `theme.ts` を読み込む(実物と同じスタイルを使う)
 2. `npx vite --port <任意>` で立て、Chromiumの `--headless --dump-dom` で
-   `getBoundingClientRect()` の実測値を出力させる。`--screenshot` で見た目も撮れる
+   `getBoundingClientRect()` の実測値を出力させる。`--screenshot` で見た目も撮れる。
+   幅は`--window-size`で与え、デスクトップの幅に加えて、Androidの幅の**360pxと412px**でも測る。
+   指で操作する端末の決まり(`pointer: coarse`・ホバーできない)を効かせるには
+   `--blink-settings=primaryPointerType=2,availablePointerTypes=2,primaryHoverType=1,availableHoverTypes=1`
+   を足す(Chrome for Testing 153のchrome-headless-shellで確認)
 3. 確認したらハーネスは削除する(マークアップが二重管理になるため、コミットしない)
 
 目視では 8px と 16px の差や「2倍の関係」は判別できない。マージン・幅・中央寄せは
