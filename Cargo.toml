@@ -85,6 +85,10 @@ base64 = "0.22"
 # 受け付ける画像形式(PNG・JPEG・GIF・WebP)のデコーダーだけを有効にする。既定のfeatureは
 # 使わない形式のデコーダーと並列化(rayon)を引き込むため切る
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Androidで、Markdownエクスポートを1つのzipにまとめて利用者が選んだ場所へ書く(`scitl-core/src/export/`)。
+# 書くのはdeflateだけなので既定のfeatureは切る。deflateの実装(`flate2`の`rust_backend`)は`image` → `png`の
+# 依存として既にビルドされているものを使う
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 # MCPクライアント。`default-features = false`にした上で必要なfeatureだけを明示する。
 # OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない先へ通信しうるので
 # 有効にしない。

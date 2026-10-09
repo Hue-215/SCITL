@@ -1,7 +1,7 @@
 // 設定画面の「一般」タブ。
-import { useId, useState } from 'react'
-import { exportMarkdown, openExportFolder, updateGeneralSettings } from './api'
-import type { ExportSummary, Language, SettingsView } from './types'
+import { useEffect, useId, useState } from 'react'
+import { exportMarkdown, getExportTarget, openExportFolder, updateGeneralSettings } from './api'
+import type { ExportOutcome, ExportTarget, Language, SettingsView } from './types'
 import Dropdown from './Dropdown'
 import { currentLanguage, isolated, languageName, LANGUAGES, t } from './i18n'
 import { NumberField } from './settingsFields'
@@ -133,10 +133,12 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
   )
 }
 
-// 押すと確認なしで書き出し、成否はこの欄に出す。タブ全体のエラー欄を使わないのは、設定の
-// 保存とは別の操作の結果だから。
+// 押すと確認なしで書き出し(保存画面を出すOSでは、そこで場所を選ぶ)、成否はこの欄に出す。タブ全体の
+// エラー欄を使わないのは、設定の保存とは別の操作の結果だから。フォルダを開く操作は、書き出す先が
+// フォルダのOSでだけ出す(`ExportTarget`。Rust側が決める)。
 function ExportSection() {
-  const [summary, setSummary] = useState<ExportSummary | null>(null)
+  const [target, setTarget] = useState<ExportTarget | null>(null)
+  const [outcome, setOutcome] = useState<ExportOutcome | null>(null)
   const exporting = useAsyncAction((error) =>
     t('settings.general.export_failed', { error: isolated(error) }),
   )
@@ -144,17 +146,24 @@ function ExportSection() {
     t('settings.general.open_export_folder_failed', { error: isolated(error) }),
   )
 
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
+    void getExportTarget().then(setTarget)
+  }, [])
+
   // 結果の欄には最後に行った操作の成否だけを出す。
   const runExport = () => {
-    setSummary(null)
+    setOutcome(null)
     opening.clear()
-    void exporting.run(exportMarkdown, setSummary)
+    void exporting.run(exportMarkdown, setOutcome)
   }
   const openFolder = () => {
+    setOutcome(null)
     exporting.clear()
     void opening.run(openExportFolder)
   }
 
+  const summary = outcome?.status === 'written' ? outcome.summary : null
   return (
     <div className="settings-field settings-section-break">
       <span>{t('settings.general.export_label')}</span>
@@ -164,18 +173,29 @@ function ExportSection() {
             ? t('settings.general.exporting')
             : t('settings.general.export_button')}
         </button>
-        <button type="button" onClick={openFolder}>
-          {t('settings.general.open_export_folder')}
-        </button>
+        {target === 'folder' && (
+          <button type="button" onClick={openFolder}>
+            {t('settings.general.open_export_folder')}
+          </button>
+        )}
       </div>
-      {summary && !opening.error && (
-        <p>{t('settings.general.export_done', { folder: isolated(summary.folder) })}</p>
+      {summary && (
+        <p>
+          {target === 'chosen_file'
+            ? t('settings.general.export_saved')
+            : t('settings.general.export_done', { folder: isolated(summary.folder) })}
+        </p>
       )}
-      {summary && !opening.error && summary.missing_attachments > 0 && (
+      {summary && summary.missing_attachments > 0 && (
         <p className="error">
           {t('settings.general.export_missing_attachments', {
             count: summary.missing_attachments,
           })}
+        </p>
+      )}
+      {outcome?.status === 'left_incomplete' && (
+        <p className="error">
+          {t('settings.general.export_left_incomplete', { error: isolated(outcome.reason) })}
         </p>
       )}
       {exporting.error && <p className="error">{exporting.error}</p>}
