@@ -176,7 +176,8 @@ pub fn hardened_client(
     let mut builder = reqwest::Client::builder()
         .no_proxy()
         // リダイレクトは同一ホストも含めて一律に追わない。緩めると、登録先のLANサーバーが
-        // 公開ホストへ302を返すだけで通信先が広がる。
+        // 公開ホストへ302を返すだけで通信先が広がる。Androidで初期化前のHTTPSを上で断れるのも、
+        // 通信先が`url`のスキームから変わらないため。
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .user_agent(USER_AGENT);

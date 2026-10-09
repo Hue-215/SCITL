@@ -15,7 +15,7 @@ use jni::{jni_sig, jni_str, JavaVM};
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// [`init`]を済ませたか。
-pub(super) fn initialized() -> bool {
+pub fn initialized() -> bool {
     INITIALIZED.load(Ordering::Acquire)
 }
 
@@ -23,13 +23,16 @@ pub(super) fn initialized() -> bool {
 ///
 /// # Safety
 ///
-/// `java_vm`はこのプロセスのJavaVM、`activity`は呼び出したスレッドで有効なActivityの参照
-/// (JNIの`jobject`)でなければならない。
+/// `java_vm`はこのプロセスのJavaVMでなければならない。`activity`は、呼び出したスレッドで有効な
+/// Activityの参照(JNIの`jobject`。ローカル参照でもグローバル参照でもよい)か、nullでなければならない。
 pub unsafe fn init(java_vm: *mut c_void, activity: *mut c_void) -> Result<(), String> {
+    if activity.is_null() {
+        return Err("could not initialize the certificate verifier: no activity".to_string());
+    }
     // SAFETY: 呼び出し側が保証する。
     let vm = unsafe { JavaVM::from_raw(java_vm.cast()) };
     vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-        // SAFETY: 呼び出し側が保証する。参照の持ち主は呼び出し側のままで、ここでは消さない。
+        // SAFETY: 呼び出し側が保証する。`JObject`はDropで参照を消さないので、持ち主は呼び出し側のまま。
         let activity = unsafe { JObject::from_raw(env, activity.cast()) };
         // Activityは作り直されることがあるので、プロセスと同じ寿命のApplicationのContextを持たせる。
         let context = env

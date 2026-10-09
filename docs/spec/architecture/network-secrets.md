@@ -45,12 +45,13 @@ Androidでも信頼ルートはOSの証明書ストアで、検証はAndroidの�
 `rustls-platform-verifier`は検証のたびにJNIでKotlinの部品を呼ぶので、次の2つが要る。
 
 - **Kotlinの部品の同梱**: 部品はクレート`rustls-platform-verifier-android`がMavenの形で持っている。
-  `gen/android/app/build.gradle.kts`が`cargo metadata`からその場所と版を引き、参照先に足す。グループ
+  `gen/android/app/build.gradle.kts`が`cargo metadata`からその場所を引き、参照先に足す。グループ
   `rustls`はこの参照先からだけ取り(`exclusiveContent`)、GoogleやMaven Centralに同じ名前のものが
   出ても使わない。リリースビルドで縮めるときに消されないよう、`proguard-rules.pro`で残す
-- **JNIの参照の受け渡し**: JVMとApplicationのContextを`net::android::init`で渡す。JNIの環境は
-  WebViewのスレッドでしか得られないので、GUIの`setup`がメインの窓のWebViewに頼み、渡すのは
-  WebViewを作った後になる
+- **JNIの参照の受け渡し**: JVMとApplicationのContextを`net::android::init`で渡す。JavaVMとActivityは
+  wryがWebViewのスレッドで呼ぶコールバックからしか得られない(Tauri 2.11が使うtao 0.35は
+  `ndk-context`を初期化しない)ので、GUIの`setup`がメインの窓のWebViewに頼み、渡すのは
+  WebViewを作った後になる。渡せなかったときは、ページを読み込むたびに頼み直す
 
 渡す前にHTTPSで接続すると、クライアントの組み立ては通り、証明書の検証の時点でpanicする
 (`rustls-platform-verifier` 0.7.0)。HTTPSを使う経路はどれも画面からのIPCで始まり、起動時に裏で
@@ -59,6 +60,10 @@ panicさせないよう、渡すまでは`hardened_client`がHTTPSの通信先�
 
 渡す相手は、reqwestが使う`rustls-platform-verifier`と同じクレートでなければならない(版が分かれると
 別のクレートになり、渡したことにならない)。coreの依存の版は、reqwestが引き込む版に合わせる。
+分かれたときは、Gradleの設定が`cargo metadata`の結果を見てAndroidのビルドを止める。
+
+taoが`ndk-context`を初期化する版(0.37以上)になれば、`setup`の中でその場で渡せるようになり、
+順序の議論と頼み直しが要らなくなる。
 
 ### 平文httpの許容範囲
 
