@@ -3,6 +3,7 @@ import type { InputRejection } from "./InputRejection";
 
 /**
  * 画面の入力を受け取る操作の結果。受け付けなかった理由([`CoreError::Rejected`])は失敗に
- * せず種類で返し、画面は欄の近くに出す。それ以外の失敗はコマンドの失敗のまま。
+ * せず種類で返し、画面は欄の近くに出す。利用者が確認で取りやめたこと([`CoreError::Cancelled`])
+ * も失敗にしない(入力を残して何も出さない)。それ以外の失敗はコマンドの失敗のまま。
  */
-export type FormOutcome<T> = { "status": "accepted", value: T, } | { "status": "rejected", reasons: Array<InputRejection>, };
+export type FormOutcome<T> = { "status": "accepted", value: T, } | { "status": "rejected", reasons: Array<InputRejection>, } | { "status": "cancelled" };

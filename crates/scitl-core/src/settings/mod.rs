@@ -12,6 +12,7 @@
 //! 動かし、削除・切り替えで直せるようにする。どちらも理由を設定画面に出し、チャットでは
 //! 理由に応じたエラー発言にする。
 
+mod destination;
 mod input;
 mod mcp_settings;
 mod model_settings;
@@ -39,6 +40,7 @@ use crate::orchestration::{
 };
 use crate::secrets;
 
+pub use destination::DestinationDialog;
 pub use input::HeaderInput;
 pub use mcp_settings::{McpServerAdded, NewMcpEndpoint};
 pub use provider_settings::NewProvider;

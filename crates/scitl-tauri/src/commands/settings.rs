@@ -2,7 +2,7 @@
 //! `scitl_core::settings`にあり、ここはそれを1つ呼ぶだけ。
 
 use secrecy::SecretString;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use scitl_core::config::{ApiFormat, Capability, ReasoningEffort};
 use scitl_core::i18n::Language;
@@ -13,7 +13,7 @@ use scitl_core::settings::{
 };
 
 use super::{with_settings, CommandResult};
-use crate::AppState;
+use crate::{dialog, AppState};
 
 /// ロックを一瞬取るだけでI/Oを伴わないため、同期コマンドのままにする。
 #[tauri::command]
@@ -73,9 +73,11 @@ pub async fn update_tool_settings(
     .await
 }
 
-/// ヘッダーの欄は文字列のまま、秘密情報として受け取る(分けるのはcore)。
+/// ヘッダーの欄は文字列のまま、秘密情報として受け取る(分けるのはcore)。保存の前に、通信先を
+/// ネイティブのダイアログで利用者に確かめる(取りやめたら`FormOutcome::Cancelled`)。
 #[tauri::command]
 pub async fn add_provider(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     api_format: ApiFormat,
@@ -90,8 +92,9 @@ pub async fn add_provider(
         api_key,
         headers,
     };
+    let confirm = dialog::confirm_destination(&app);
     with_settings(&state, move |s| {
-        FormOutcome::from_result(s.add_provider(new))
+        FormOutcome::from_result(s.add_provider(new, confirm))
     })
     .await
 }

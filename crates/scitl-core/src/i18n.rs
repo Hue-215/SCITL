@@ -73,6 +73,37 @@ pub fn text(lang: Language, key: &str) -> &str {
         .map_or(key, String::as_str)
 }
 
+/// `key`の文言の`{名前}`を`values`の値に置き換える。1回の走査で置き換えるので、差し込んだ値に
+/// `{…}`が含まれていても置き換えない。渡さなかった名前は`{名前}`のまま残る
+/// (`architecture/i18n.md`「言語ファイル」。画面の`t()`と同じ規則)。
+pub fn format(lang: Language, key: &str, values: &[(&str, &str)]) -> String {
+    let template = text(lang, key);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let name_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after.len());
+        let value = (after[name_len..].starts_with('}'))
+            .then(|| values.iter().find(|(n, _)| *n == &after[..name_len]))
+            .flatten();
+        match value {
+            Some((_, value)) => {
+                out.push_str(value);
+                rest = &after[name_len + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -229,6 +260,19 @@ mod tests {
         assert!(placeholders("a}").is_err());
         assert!(placeholders("{}").is_err());
         assert!(placeholders("{a b}").is_err());
+    }
+
+    #[test]
+    fn format_replaces_named_values_in_one_pass() {
+        // 言語ファイルに無いキーは、キーそのものを文言として扱う。
+        let format =
+            |template: &str, values: &[(&str, &str)]| format(Language::Ja, template, values);
+        assert_eq!(
+            format("{a} and {b}", &[("a", "{b}"), ("b", "2")]),
+            "{b} and 2"
+        );
+        assert_eq!(format("{missing} {", &[]), "{missing} {");
+        assert_eq!(format("{a}{a}", &[("a", "x")]), "xx");
     }
 
     /// 画面と写し合う値を、ts-rsの生成物と同じ置き場所(`frontend/src/bindings/`)へ書き出す。

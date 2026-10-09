@@ -1,4 +1,5 @@
 mod commands;
+mod dialog;
 mod navigation;
 
 use std::path::PathBuf;
@@ -48,6 +49,8 @@ pub fn run() {
     };
     builder
         .plugin(navigation::guard())
+        // Rust側からだけ使う(`dialog.rs`)。画面に権限は与えない。
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             show_version_in_title(app);
             match start_app_state(app.handle()) {
@@ -211,7 +214,7 @@ fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppSta
 }
 
 /// `tauri.conf.json`で作るウィンドウのラベル。
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 
 /// ウィンドウ名(`tauri.conf.json`の`title`)の後ろに版を付ける。版は`Cargo.toml`の
 /// ワークスペースの`version`で、版を書く場所を増やさないためここで組み立てる。

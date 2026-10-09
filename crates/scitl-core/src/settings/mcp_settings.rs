@@ -5,8 +5,9 @@ use std::sync::Arc;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use super::destination::NewDestination;
 use super::rejection::{refuse_if_any, rejected, InputRejection};
-use super::{input, invalid, HeaderInput, Settings, SettingsView};
+use super::{input, invalid, DestinationDialog, HeaderInput, Settings, SettingsView};
 use crate::blocking;
 use crate::config::{
     validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef,
@@ -49,14 +50,17 @@ pub struct McpServerAdded {
 impl Settings {
     /// サーバーを登録し([`Self::register_mcp_server`])、続けて1回ツール一覧を取得する
     /// (公開するツールを選べるように)。取得に失敗しても登録は残し、理由を結果に添える。
+    /// 確かめ方(`confirm`)は[`Self::register_mcp_server`]。確かめる間は待つので、登録と同じく
+    /// `blocking::run`の中で呼ぶ。
     pub async fn add_mcp_server(
         self: &Arc<Self>,
         name: String,
         endpoint: NewMcpEndpoint,
+        confirm: impl FnOnce(&DestinationDialog) -> bool + Send + 'static,
     ) -> Result<McpServerAdded> {
         let settings = Arc::clone(self);
         let (server_id, added) =
-            blocking::run(move || settings.register_mcp_server(&name, endpoint)).await?;
+            blocking::run(move || settings.register_mcp_server(&name, endpoint, confirm)).await?;
         let (settings, tools_error) = match self.fetch_mcp_tools(&server_id).await {
             Ok(fetched) => (fetched, None),
             Err(e) => (added, Some(e.to_string())),
@@ -71,10 +75,15 @@ impl Settings {
     /// 検証→重複確認→秘密情報の保存→登録の順。重複確認から登録までを書き込みロックの中で
     /// 行うので、同名の登録が割り込んで秘密情報が孤児になることはない。登録に失敗したら
     /// 保存した秘密情報を消す。登録したサーバーのIDと、登録後の設定を返す。
+    ///
+    /// 検証を通ったら、秘密情報を保存する前に`confirm`で利用者に通信先を確かめ、承認されなければ
+    /// 何も保存せずに[`CoreError::Cancelled`]を返す(`Settings::add_provider`と同じ)。確かめる
+    /// 間は書き込みロックを持たない。
     pub(super) fn register_mcp_server(
         &self,
         name: &str,
         endpoint: NewMcpEndpoint,
+        confirm: impl FnOnce(&DestinationDialog) -> bool,
     ) -> Result<(String, SettingsView)> {
         let name = name.trim().to_string();
         let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
@@ -99,6 +108,13 @@ impl Settings {
         });
         refuse_if_any(reasons)?;
         let endpoint = validate_endpoint(url, headers)?;
+        let destination = NewDestination::McpServer {
+            name: &name,
+            url: &endpoint.url,
+        };
+        if !confirm(&destination.dialog(self.display_language())) {
+            return Err(CoreError::Cancelled);
+        }
 
         let mut draft = self.edit();
         // 先の確かめから書き込みロックを取るまでに、同じ名前が登録されているかもしれない。

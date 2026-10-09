@@ -13,7 +13,7 @@ import {
   updateLanguage,
   updateToolSettings,
 } from './api'
-import { rejectionText } from './rejection'
+import { type AddResult, rejectionText } from './rejection'
 import type { FormOutcome, SettingsView } from './types'
 import { Drawer, DrawerToggle } from './Drawer'
 import { isolated, t } from './i18n'
@@ -83,8 +83,10 @@ export default function Settings({ onClose }: SettingsProps) {
     try {
       const outcome = await action()
       if (outcome.status === 'rejected') return outcome.reasons.map(rejectionText)
-      setSettings(outcome.value)
-      setError(null)
+      if (outcome.status === 'accepted') {
+        setSettings(outcome.value)
+        setError(null)
+      }
     } catch (e) {
       setError(failureText(e))
     }
@@ -92,16 +94,23 @@ export default function Settings({ onClose }: SettingsProps) {
   }
 
   // 追加のフォームは、欄の誤りもコマンド自体の失敗もフォームの直下に出すため、失敗は握らず
-  // 呼び出し元へ投げる。欄の誤りは文言にして返し、受け付けたら空を返す。
+  // 呼び出し元へ投げる。欄の誤りは文言にして返す。
   const applyAdded = async <T,>(
     action: () => Promise<FormOutcome<T>>,
     accepted: (value: T) => SettingsView,
-  ) => {
+  ): Promise<AddResult> => {
     const outcome = await action()
-    if (outcome.status === 'rejected') return outcome.reasons.map(rejectionText)
-    setSettings(accepted(outcome.value))
-    setError(null)
-    return []
+    switch (outcome.status) {
+      case 'rejected':
+        return { added: false, errors: outcome.reasons.map(rejectionText) }
+      // 確認のダイアログで取りやめた。入力を残し、何も出さない。
+      case 'cancelled':
+        return { added: false, errors: [] }
+      case 'accepted':
+        setSettings(accepted(outcome.value))
+        setError(null)
+        return { added: true, errors: [] }
+    }
   }
 
   // MCPサーバーのツール一覧を取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す)。

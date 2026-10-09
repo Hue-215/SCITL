@@ -4,6 +4,7 @@ import type { FormEvent } from 'react'
 import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import { isolated, t } from './i18n'
+import type { AddResult } from './rejection'
 import { CollapseToggle, NumberField, ServerNotice } from './settingsFields'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
@@ -16,8 +17,8 @@ interface McpTabProps {
     maxRoundsPerTurn: string | null,
     totalTimeoutSecs: string | null,
   ) => Promise<string[]>
-  // 欄の誤りは理由の文言で返る(フォームの下に出す)。受け付けたら空。
-  onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<string[]>
+  // 欄の誤りは理由の文言で返る(フォームの下に出す)。
+  onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<AddResult>
   onDeleteServer: (serverId: string) => void
   onSetServerEnabled: (serverId: string, enabled: boolean) => void
   onSetToolEnabled: (serverId: string, toolName: string, enabled: boolean) => void
@@ -198,7 +199,7 @@ function McpServerCard({
 
 interface AddMcpServerFormProps {
   nameMaxChars: number
-  onAdd: (name: string, endpoint: NewMcpEndpoint) => Promise<string[]>
+  onAdd: (name: string, endpoint: NewMcpEndpoint) => Promise<AddResult>
 }
 
 // 欄の解釈と検証(識別子の規則・重複、URL・ヘッダーの欄)はRust側が行い、断った理由を返す。
@@ -219,9 +220,9 @@ function AddMcpServerForm({ nameMaxChars, onAdd }: AddMcpServerFormProps) {
     setErrors([])
     void submission.run(
       () => onAdd(name, endpoint),
-      (rejected) => {
+      ({ added, errors: rejected }) => {
         setErrors(rejected)
-        if (rejected.length > 0) return
+        if (!added) return
         setName('')
         setUrl('')
         setHeadersText('')

@@ -115,13 +115,15 @@ pub(crate) fn refuse_if_any(reasons: Vec<InputRejection>) -> Result<()> {
 }
 
 /// 画面の入力を受け取る操作の結果。受け付けなかった理由([`CoreError::Rejected`])は失敗に
-/// せず種類で返し、画面は欄の近くに出す。それ以外の失敗はコマンドの失敗のまま。
+/// せず種類で返し、画面は欄の近くに出す。利用者が確認で取りやめたこと([`CoreError::Cancelled`])
+/// も失敗にしない(入力を残して何も出さない)。それ以外の失敗はコマンドの失敗のまま。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum FormOutcome<T> {
     Accepted { value: T },
     Rejected { reasons: Vec<InputRejection> },
+    Cancelled,
 }
 
 impl<T> FormOutcome<T> {
@@ -129,6 +131,7 @@ impl<T> FormOutcome<T> {
         match result {
             Ok(value) => Ok(Self::Accepted { value }),
             Err(CoreError::Rejected(Rejections(reasons))) => Ok(Self::Rejected { reasons }),
+            Err(CoreError::Cancelled) => Ok(Self::Cancelled),
             Err(e) => Err(e),
         }
     }

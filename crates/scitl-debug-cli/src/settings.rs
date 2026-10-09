@@ -229,7 +229,8 @@ pub async fn run_provider(session: &Session, command: ProviderCommand) -> Result
                     .transpose()?,
                 headers: HeaderInput::Pairs(secrets_from_env("--header", header)?),
             };
-            change(settings, move |s| s.add_provider(new)).await
+            // 利用者自身が端末で打つので、通信先は確かめない(`cli.md`)。
+            change(settings, move |s| s.add_provider(new, |_| true)).await
         }
         ProviderCommand::Delete { provider_id } => {
             change(settings, move |s| s.delete_provider(&provider_id)).await
@@ -272,7 +273,8 @@ pub async fn run_mcp(session: &Session, command: McpCommand) -> Result<(), Debug
                 url,
                 headers: HeaderInput::Pairs(secrets_from_env("--header", header)?),
             };
-            print_json(&settings.add_mcp_server(name, endpoint).await?);
+            // 利用者自身が端末で打つので、通信先は確かめない(`cli.md`)。
+            print_json(&settings.add_mcp_server(name, endpoint, |_| true).await?);
             Ok(())
         }
         McpCommand::Delete { server_id } => {

@@ -25,6 +25,7 @@ import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
+import type { AddResult } from './rejection'
 import { CollapseToggle, ServerNotice } from './settingsFields'
 import { useNumberInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
@@ -52,14 +53,14 @@ type SaveField = (action: () => Promise<FormOutcome<SettingsView>>) => Promise<s
 
 interface ProvidersTabProps {
   settings: SettingsView
-  // 欄の誤りは理由の文言で返る(フォームの下に出す)。受け付けたら空。
+  // 欄の誤りは理由の文言で返る(フォームの下に出す)。
   onAddProvider: (
     name: string,
     apiFormat: ApiFormat,
     baseUrl: string,
     apiKey: string | null,
     headers: string,
-  ) => Promise<string[]>
+  ) => Promise<AddResult>
   onDeleteProvider: (providerId: string) => void
   // モデルの操作(追加・削除・表の各列)は種類が多いため、個別のコールバックを並べずに
   // 呼び出しごと受け取り、結果の反映とエラー表示を親に任せる。
@@ -521,7 +522,7 @@ interface AddProviderFormProps {
     baseUrl: string,
     apiKey: string | null,
     headers: string,
-  ) => Promise<string[]>
+  ) => Promise<AddResult>
 }
 
 function AddProviderForm({ choices, onAdd }: AddProviderFormProps) {
@@ -547,9 +548,9 @@ function AddProviderForm({ choices, onAdd }: AddProviderFormProps) {
         setErrors([])
         void submission.run(
           () => onAdd(name, apiFormat, baseUrl, apiKey || null, headersText),
-          (rejected) => {
+          ({ added, errors: rejected }) => {
             setErrors(rejected)
-            if (rejected.length > 0) return
+            if (!added) return
             setName('')
             setApiKey('')
             setHeadersText('')
