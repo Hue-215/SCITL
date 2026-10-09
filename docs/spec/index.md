@@ -97,7 +97,7 @@ SCITL/
 │   ├── scitl-cli/                  # タスクの確認・操作と会話の表示。scitl-coreのみに依存
 │   ├── scitl-debug-cli/            # scitl-cliのコマンドに、応答生成・設定・登録を足す
 │   └── scitl-tauri/                # 薄いIPCシェル
-│       ├── tauri.conf.json         # CSP・devCsp
+│       ├── tauri.conf.json         # CSP・devCsp・AndroidのminSdk
 │       ├── gen/android/            # Androidのプロジェクト(architecture/tech-stack.md「Androidのビルド」)
 │       └── src/commands/
 ├── frontend/                       # React + TypeScript + Vite。表示だけを持つ

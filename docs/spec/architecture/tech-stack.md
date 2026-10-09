@@ -27,7 +27,8 @@
 ## 対象のOS
 
 - **デスクトップ**: LinuxとWindows。macOSは対象にしない(資格情報の保存先が無い。`network-secrets.md`)
-- **Android**: 対応を進めている(Issue #440)。APKを直接入れて使う形で、ストアでの配布は考えない。
+- **Android**: 対応を進めている(Issue #440)。Android 10以上(「AndroidのSDKの版」)。
+  APKを直接入れて使う形で、ストアでの配布は考えない。
   添付・エクスポートのフォルダを開く操作は、コンパイルは通るが動かない(`open`クレートが
   デスクトップの`xdg-open`等を探して失敗を返す。open 5.4のソースで確認、2026-10)。本文中のリンクは
   `tauri-plugin-opener`で開く(Issue #492)。iOSは対象にしない
@@ -70,6 +71,57 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
 - 診断(`diagnostics::report`)はタグ`SCITL`、panicの文言と依存のクレートが標準エラーへ書いたものは
   タグ`RustStdoutStderr`でlogcatに出るので、`adb logcat -s SCITL RustStdoutStderr`で両方を読む
   (`sanitize.md`「無害化」の表の下)
+
+## AndroidのSDKの版
+
+| 値 | 版 | 書く場所 |
+|---|---|---|
+| minSdk(入れられる最も古い版) | 29(Android 10) | `tauri.conf.json`の`bundle.android.minSdkVersion` |
+| targetSdk(どの版の動き方の決まりに従うか) | 36(Android 16) | `gen/android/app/build.gradle.kts` |
+| compileSdk | 36 | `gen/android/app/build.gradle.kts`。targetSdk以上にする |
+
+**minSdkを29にする理由**: AndroidのWebViewはChromeと同じ版の系列で更新され、Android 7.xでは
+Chrome 119相当、Android 8・9ではChrome 138相当(2025-08)で更新が止まった。画面はモデルの出力を
+描画する境界(`webview-boundary.md`)なので、既知の脆弱性が直らないWebViewでは動かさない。
+WebViewの更新が止まる版が上がったら、minSdkもそこまで上げる。依存が求める下限はこれより低い
+(Tauriの本体21、`tauri-plugin-dialog`・`tauri-plugin-opener`24、`tauri-plugin-fs`21、
+`rustls-platform-verifier-android`22。2026-10)。ライブラリの下限がアプリより高いとGradleの
+マニフェストの統合が止まるので、依存を足したときの超過はビルドで分かる。
+
+**minSdkの書く場所**: tauri-cliはRust側のビルドで、NDKのclangを選ぶ版(`aarch64-linux-android29-clang`等)に
+`tauri.conf.json`の値を使う。APKの下限とネイティブのコードの版が食い違わないよう、Gradleと
+CIの`rust-android`ジョブも同じ値を読む。`tauri.conf.json`にtargetSdkの項目は無いので、
+targetSdkとcompileSdkはGradleに置く。
+
+**targetSdkを36に留める理由**: APKを直接渡すので、Google Playのtarget SDKの下限には縛られない。
+37以上にすると、Android 17の端末ではLAN上の機器への通信に実行時の権限`ACCESS_LOCAL_NETWORK`
+(権限のグループは「付近のデバイス」)が要る。36以下なら`INTERNET`だけで暗黙に許される
+(一時的な措置とされている)。許可を求める処理はKotlinで書くことになる(RustからはOSの許可の
+ダイアログを出せず、公式に汎用の権限のプラグインも無い)ので、ローカルの推論サーバーへつなぐ
+Android対応の最初の段階では上げない。36以下の間は、`ACCESS_LOCAL_NETWORK`をマニフェストに
+書かず、実行時にも求めない(公式文書の指示。https://developer.android.com/privacy-and-security/local-network-permission)。
+
+targetSdk 36で既に掛かっている決まり(Android 16以上の端末):
+
+- 画面がステータスバー・ナビゲーションバーの下まで広がり、オプトアウトできない(edge-to-edge)
+- 「戻る」の予測アニメーションが既定で有効になり、`onBackPressed`は呼ばれず、`KEYCODE_BACK`も
+  届かない。「戻る」を受けるにはandroidxの`OnBackPressedCallback`を使う
+
+targetSdkを37以上へ上げるときに見直すこと:
+
+- **ローカルネットワークの権限**: マニフェストでの宣言と、実行時に許可を求める処理(Tauriの
+  プラグインの権限の仕組み`@Permission`を使うKotlin)。求める時機(プロバイダーの登録時か、
+  プライベートIPへの初めての送信時か)。拒否・後からの取り消し・使っていないアプリの権限の
+  自動リセットのどれでも、通信の失敗として画面に出すこと。拒否されているときのTCPの接続は
+  多くがタイムアウトで失敗する(公式文書)ので、失敗の種類の出し方も見直す
+- **端末の中の推論サーバー**: `127.0.0.1`への通信が権限の対象かは公式文書に書かれていない
+  (2026-10。別の仕事用プロファイルとの間のループバックを止める変更は別にある)。上げる前に、
+  権限の無い状態でエミュレーターから確かめる
+- **証明書の検証**: Certificate Transparencyの検査が既定で有効になる。HTTPSの検証はAndroidの
+  証明書の検証を呼ぶ(`rustls-platform-verifier`)ので、この検査が掛かるか、掛かって困る
+  通信先が無いかを確かめる
+- 大きい画面(最小幅600dp以上)では向き・縦横比・サイズ変更の制限が無視され、36で使えた
+  オプトアウトが無くなる。SCITLは制限を掛けていないので影響しない見込み
 
 ## ライセンス
 

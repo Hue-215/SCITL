@@ -169,11 +169,10 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # C/C++を含むクレート(SQLite・aws-lc-sys)はNDKのclangでビルドする。clangの名前の数字は
-      # APIレベルで、`gen/android/app/build.gradle.kts`の`minSdk`から読む。
+      # APIレベルで、tauri-cliと同じく`tauri.conf.json`の`bundle.android.minSdkVersion`から読む。
       - name: clippy(aarch64-linux-android)
         run: |
-          min_sdk=$(sed -n 's/^ *minSdk = \([0-9]*\)$/\1/p' crates/scitl-tauri/gen/android/app/build.gradle.kts)
-          test -n "$min_sdk"
+          min_sdk=$(jq -er '.bundle.android.minSdkVersion' crates/scitl-tauri/tauri.conf.json)
           bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export CC_aarch64_linux_android="$bin/aarch64-linux-android${min_sdk}-clang"
           export AR_aarch64_linux_android="$bin/llvm-ar"
