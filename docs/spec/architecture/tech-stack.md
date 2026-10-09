@@ -87,8 +87,7 @@ Chrome 119相当、Android 8・9ではChrome 138相当(2025-08)で更新が止�
 WebViewの更新が止まる版が上がったら、minSdkもそこまで上げる。依存が求める下限はこれより低い
 (Tauriの本体21、`tauri-plugin-dialog`・`tauri-plugin-opener`24、`tauri-plugin-fs`21、
 `rustls-platform-verifier-android`22。2026-10)。ライブラリの下限がアプリより高いとGradleの
-マニフェストの統合が止まるので、Gradleに組み込んだ依存の超過はビルドで分かる
-(`rustls-platform-verifier-android`のAARはまだ組み込んでいない。Issue #470)。
+マニフェストの統合が止まるので、Gradleに組み込んだ依存の超過はビルドで分かる。
 
 **minSdkの書く場所**: tauri-cliはRust側のビルドで、NDKのclangを選ぶ版(`aarch64-linux-android29-clang`等)に
 `tauri.conf.json`の値を使う。APKの下限とネイティブのコードの版が食い違わないよう、Gradleと

@@ -93,19 +93,29 @@ taoが`ndk-context`を初期化する版(0.37以上)になれば、`setup`の中
 
 Androidでも、平文httpを許すかは`classify_host`だけが決める。
 
-- **Java側の平文HTTPの制限は掛からない**: マニフェストの`usesCleartextTraffic`とNetwork Security
-  Configは、Java側の通信(`HttpURLConnection`等)が従う決まりで、Rustのソケットには掛からない。
-  `usesCleartextTraffic`は`gen/android/app/build.gradle.kts`がビルドの種類ごとに決め、リリースビルドは
-  `false`のまま。デバッグビルドの`true`は、`tauri android dev`で画面がViteの開発サーバーを平文httpで
-  読むためのもので、Rust側の通信には関係しない。`false`にしたデバッグAPKをエミュレーター(API 37・
-  targetSdk 36)で動かし、平文httpのまま、モデル一覧の取得・能力の検出・ツールの実行と保存を含む
-  ターンの往復が通ること、LAN上の別マシンのMCPサーバー(`http://192.168.x.x`)からツールの一覧を
-  取れることを確かめた(2026-10)。エミュレーターの通信はホストを経由するので、実機のWi-Fiから
-  LANへ届くかは実機で確かめる
-- **ローカルネットワークの権限**: targetSdk 36では、LANへの通信は`INTERNET`だけで許される。
-  37以上へ上げるときの見直しは`tech-stack.md`「AndroidのSDKの版」
-- **エミュレーターから見たホスト**: `10.0.2.2`はホストのループバックへ届く。プライベートIPなので、
-  今の判定のまま平文httpが通る。ホストの推論サーバーは`127.0.0.1`で待ち受けたままでよい
+- **Java側の平文HTTPの制限は掛からない**: マニフェストの`usesCleartextTraffic`と、Network Security Configの
+  平文の可否(`cleartextTrafficPermitted`)は、Javaの一部のHTTPライブラリとWebViewが自分から参照する決まりで、
+  ネイティブのソケットには掛からない(https://developer.android.com/guide/topics/manifest/application-element#usesCleartextTraffic)。
+  `false`にしたデバッグAPKをエミュレーター(Android 17・API 37、targetSdk 36)で動かし、平文httpのまま
+  次が通ることを確かめた(2026-10)
+  - `http://10.0.2.2`(ホストのllama.cpp)との、モデル一覧の取得・能力の検出・ツールの実行と保存を含む
+    ターンの往復
+  - LAN上の別マシンのMCPサーバー(`http://192.168.x.x`)からのツールの一覧の取得
+
+  エミュレーターの通信はホストを経由するので、実機のWi-FiからLANへ届くかは確かめていない
+- **`usesCleartextTraffic`の値**: `gen/android/app/build.gradle.kts`がビルドの種類ごとに決める。
+  リリースビルドの`false`は、画面(WebView)とJava側の平文httpを止める守りとして残す(CSPと二重)。
+  LANへの平文httpのために`true`にしない(Rust側の通信には効かず、守りだけが外れる)。デバッグビルドの
+  `true`は、`tauri android dev`で画面がViteの開発サーバーを平文httpで読むため
+- **Network Security Configの証明書の設定は別**: trust-anchors・debug-overridesなどの証明書の検証の
+  設定は、Androidの証明書の検証(`TrustManager`)を通してRust側のHTTPSにも効きうる(「Androidの信頼ルート」)。
+  今は置いていない
+- **ローカルネットワークの権限**: targetSdk 36では、LANへの通信は`INTERNET`だけで許される(一時的な
+  措置とされている)。Android 17のエミュレーターでも、上の確認のとき権限無しで通った。37以上へ
+  上げるときの見直しは`tech-stack.md`「AndroidのSDKの版」
+- **エミュレーターから見たホスト**: `10.0.2.2`はホストのループバックへ届く(エミュレーターの中の
+  `127.0.0.1`・`localhost`はエミュレーター自身)。プライベートIPなので、今の判定のまま平文httpが通る。
+  ホストの推論サーバーは`127.0.0.1`で待ち受けたままでよい
 
 ## 秘密情報
 
