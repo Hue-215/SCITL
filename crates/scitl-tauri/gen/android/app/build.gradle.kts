@@ -1,3 +1,4 @@
+import groovy.json.JsonSlurper
 import java.util.Properties
 
 plugins {
@@ -13,13 +14,23 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// minSdkはtauri.conf.jsonの`bundle.android.minSdkVersion`だけに書く。tauri-cliはRust側のビルドで
+// NDKのclangを選ぶのにその値を使うので、APKの下限と食い違わないよう、ここでも同じ値を読む
+// (docs/spec/architecture/tech-stack.md「AndroidのSDKの版」)。
+val tauriMinSdk = JsonSlurper().parse(file("../../../tauri.conf.json")).let { config ->
+    val bundle = (config as? Map<*, *>)?.get("bundle") as? Map<*, *>
+    val android = bundle?.get("android") as? Map<*, *>
+    android?.get("minSdkVersion") as? Int
+        ?: error("tauri.conf.jsonにbundle.android.minSdkVersionが無い(無いとtauri-cliは黙って24を使う)")
+}
+
 android {
     compileSdk = 36
     namespace = "net.niigo.scitl"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "net.niigo.scitl"
-        minSdk = 24
+        minSdk = tauriMinSdk
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
