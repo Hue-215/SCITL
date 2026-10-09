@@ -352,6 +352,11 @@ const copies = [
   [join(root, 'LICENSE'), 'LICENSE'],
   // 同梱フォント。
   [join(root, 'frontend', 'public', 'fonts', 'NotoJP-LICENSE.txt'), join('THIRD-PARTY-LICENSES', 'NotoJP-LICENSE.txt')],
+  // 同梱アイコン(frontend/src/Icon.tsx)。
+  [
+    join(root, 'frontend', 'src', 'icons', 'MaterialSymbols-LICENSE.txt'),
+    join('THIRD-PARTY-LICENSES', 'MaterialSymbols-LICENSE.txt'),
+  ],
 ]
 for (const [from] of copies) {
   if (!existsSync(from)) fail(`missing: ${from}`)

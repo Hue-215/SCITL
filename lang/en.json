@@ -1,5 +1,4 @@
 {
-  "attachment.add_button": "Attach",
   "attachment.add_tooltip": "Attach files",
   "attachment.content_not_sent": "The content of this file type is not sent to the model; only its name and size are",
   "attachment.image_not_delivered": "This image did not reach the model; only its name and size did",
@@ -226,6 +225,8 @@
   "task_header.archive": "Archive",
   "task_header.delete_dialog_message": "This deletes \"{title}\" and hides its conversation.",
   "task_header.delete_dialog_title": "Delete this task?",
+  "task_header.description_toggle": "Description",
+  "task_header.menu_label": "Task actions",
   "task_header.meta": "{deadline} · {steps}",
   "task_header.rename_hint": "Click to rename",
   "task_header.title_input_label": "Task name",

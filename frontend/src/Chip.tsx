@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import Icon from './Icon'
 
 interface ChipProps {
   // 利用者が付けた名前(ファイル名等)でありうるので、要素の境界で閉じ込める。
@@ -61,7 +62,7 @@ export default function Chip({
           aria-label={removeLabel}
           disabled={disabled}
         >
-          {/* グリフをアイコン代わりに使う(tokens.cssの--icon-size-*の注記) */}×
+          <Icon name="close" />
         </button>
       )}
     </span>

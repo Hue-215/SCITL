@@ -18,6 +18,7 @@ import {
 import { StagedAttachmentChips } from './Attachments'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
+import Icon from './Icon'
 import { isSendEnter } from './keyboard'
 import type { AttachmentDeliveries, ReceivedFiles } from './types'
 import {
@@ -87,6 +88,7 @@ export default function ChatCompose({
   generating,
   stopping,
   onSend,
+  onGenerateReply,
   onStop,
   onError,
   onModelChanged,
@@ -98,6 +100,9 @@ export default function ChatCompose({
   // 止める指示を出したあと。停止ボタンを押せなくする。
   stopping: boolean
   onSend: (message: ComposedMessage) => void
+  // 会話が返信の無いまま終わっている(最後のターンを止めた場合を含む)ときだけ渡す。入力欄が空の
+  // 間、送信ボタンの位置に応答を生成するボタンを出す。
+  onGenerateReply: (() => void) | null
   onStop: () => void
   onError: (message: string) => void
   // モデルの選択を変えられたとき。
@@ -124,6 +129,9 @@ export default function ChatCompose({
   // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。空白だけの
   // 本文で送信を押せなくするのは入力の補助で、受け付けるかはRust側が決める。
   const canSend = !disabled && !staged.busy && (draft.trim() !== '' || staged.ready)
+  // 何も書いていない(添付も無い)ときだけ、送信の代わりに応答を生成する操作を出す。
+  const offerGenerate =
+    onGenerateReply !== null && draft.trim() === '' && !staged.ready && !staged.busy
 
   // 本文は打ったまま送る(前後の空白を削るかはRust側が決める)。
   const send = () => {
@@ -133,21 +141,99 @@ export default function ChatCompose({
     onSend({ text: draft, attachments, restore: () => staged.restore(attachments) })
   }
 
+  // 右端のボタンは、生成中は停止、書いていなければ応答を生成、それ以外は送信。それぞれ別の要素に
+  // する(同じ要素だと、送信を押したフォーカスが残り、応答待ちの間のEnterで止めてしまう)。
+  let action: ReactNode
+  if (generating) {
+    action = (
+      <button
+        key="stop"
+        type="button"
+        className="icon-button primary"
+        disabled={stopping}
+        aria-label={t('chat.stop_button')}
+        title={t('chat.stop_button')}
+        onClick={(e) => {
+          // 送信をダブルクリックした2回目が、入れ替わった停止ボタンに当たっても止めない。
+          if (e.detail > 1) return
+          onStop()
+        }}
+      >
+        <Icon name="stop" />
+      </button>
+    )
+  } else if (offerGenerate) {
+    action = (
+      <button
+        key="generate"
+        type="button"
+        className="icon-button primary"
+        disabled={disabled}
+        aria-label={t('chat.generate_reply_button')}
+        title={t('chat.generate_reply_button')}
+        onClick={onGenerateReply}
+      >
+        <Icon name="arrow_forward" />
+      </button>
+    )
+  } else {
+    action = (
+      <button
+        key="send"
+        type="submit"
+        className="icon-button primary"
+        disabled={!canSend}
+        aria-label={t('chat.send_button')}
+        title={t('chat.send_button')}
+      >
+        <Icon name="arrow_upward" />
+      </button>
+    )
+  }
+
   return (
     <>
       <StagedAttachmentChips staged={staged} deliveries={deliveries} disabled={disabled} />
 
-      <div className="chat-compose-area">
-        <form
-          className="chat-compose"
-          onSubmit={(e) => {
-            e.preventDefault()
-            send()
+      <form
+        className="chat-compose"
+        onSubmit={(e) => {
+          e.preventDefault()
+          send()
+        }}
+      >
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
+            // 一緒に、その見た目の画像も載せるため。文字(空白だけを除く)が無ければ、
+            // クリップボードの画像をRust側に読ませる(画面は`clipboardData`のファイルを読まない)。
+            if (e.clipboardData.getData('text/plain').trim() !== '' || !canAdd) return
+            void pasteClipboardImage().then(
+              (files) => {
+                if (files) receive(files)
+              },
+              (err: unknown) => onError(failureText(err)),
+            )
           }}
-        >
+          onKeyDown={(e) => {
+            if (isSendEnter(e)) {
+              e.preventDefault()
+              send()
+            }
+          }}
+          disabled={disabled}
+          placeholder={t('chat.input_hint')}
+          aria-label={t('chat.input_hint')}
+        />
+
+        <div className="chat-compose-bar">
           <button
             type="button"
+            className="icon-button raised"
             disabled={!canAdd || picking}
+            aria-label={t('attachment.add_tooltip')}
             title={t('attachment.add_tooltip')}
             // 選ぶのも読むのもRust側(OSの選択画面)。画面はファイルに触れない。開いている間は
             // 押せなくする(2つ開くと、後に閉じた方の受け取りが先の分を置き換える)。
@@ -163,57 +249,12 @@ export default function ChatCompose({
                 .finally(() => setPicking(false))
             }}
           >
-            {t('attachment.add_button')}
+            <Icon name="attach_file" />
           </button>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onPaste={(e) => {
-              // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
-              // 一緒に、その見た目の画像も載せるため。文字(空白だけを除く)が無ければ、
-              // クリップボードの画像をRust側に読ませる(画面は`clipboardData`のファイルを読まない)。
-              if (e.clipboardData.getData('text/plain').trim() !== '' || !canAdd) return
-              void pasteClipboardImage().then(
-                (files) => {
-                  if (files) receive(files)
-                },
-                (err: unknown) => onError(failureText(err)),
-              )
-            }}
-            onKeyDown={(e) => {
-              if (isSendEnter(e)) {
-                e.preventDefault()
-                send()
-              }
-            }}
-            disabled={disabled}
-            placeholder={t('chat.input_hint')}
-          />
-          {generating ? (
-            // 送信ボタンとは別の要素にする(同じ要素だと、送信を押したフォーカスが残り、
-            // 応答待ちの間のEnterで止めてしまう)。
-            <button
-              key="stop"
-              type="button"
-              className="primary"
-              disabled={stopping}
-              onClick={(e) => {
-                // 送信をダブルクリックした2回目が、入れ替わった停止ボタンに当たっても止めない。
-                if (e.detail > 1) return
-                onStop()
-              }}
-            >
-              {t('chat.stop_button')}
-            </button>
-          ) : (
-            <button key="send" type="submit" className="primary" disabled={!canSend}>
-              {t('chat.send_button')}
-            </button>
-          )}
-        </form>
-
-        <ChatModelBar onError={onError} onChanged={onModelChanged} onDeliveries={setDeliveries} />
-      </div>
+          <ChatModelBar onError={onError} onChanged={onModelChanged} onDeliveries={setDeliveries} />
+          {action}
+        </div>
+      </form>
     </>
   )
 }

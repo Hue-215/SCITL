@@ -1,8 +1,10 @@
 import { useState, type ReactNode } from 'react'
 import { MAX_TITLE_CHARS } from './bindings/SharedConstants'
-import { ConfirmButton } from './Dialog'
+import { ConfirmDialog } from './Dialog'
 import { isolated, t } from './i18n'
+import { DisclosureMark } from './Icon'
 import { isCommitEnter } from './keyboard'
+import MenuButton from './MenuButton'
 import { taskName, taskProgress } from './taskName'
 import type { TaskDetailView } from './types'
 
@@ -23,8 +25,8 @@ interface TaskHeaderProps {
   onDelete: () => void
 }
 
-// タスクチャットのヘッダー。名前のその場での変更・締切と工程の進捗・アーカイブの切り替え・
-// 削除。タスクを切り替えたら編集中の状態を捨てるよう、呼び出し側はタスクのidを`key`に渡す。
+// タスクチャットのヘッダー。名前のその場での変更・締切と工程の進捗・説明の開け閉め・
+// アーカイブの切り替えと削除(︙のメニュー)。タスクを切り替えたら編集中の状態を捨てるよう、呼び出し側はタスクのidを`key`に渡す。
 export default function TaskHeader({
   task,
   drawerToggle,
@@ -35,6 +37,9 @@ export default function TaskHeader({
 }: TaskHeaderProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // 説明は場所を取るので畳んでおき、進捗の行の「説明」で開く。
+  const [descriptionOpen, setDescriptionOpen] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const name = taskName(task)
   const archived = task.archived_at !== null
 
@@ -50,62 +55,93 @@ export default function TaskHeader({
   return (
     <header className="chat-header">
       <div className="chat-header-row">
-        <div className="chat-header-name">
-          {drawerToggle}
-          <h1>
-            {editing ? (
-              <input
-                className="chat-header-title-input"
-                value={draft}
-                maxLength={MAX_TITLE_CHARS}
-                // 未設定のタスクは、画面で呼んでいる名前(フォールバック)を手掛かりに出す。
-                placeholder={name}
-                aria-label={t('task_header.title_input_label')}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (isCommitEnter(e)) {
-                    e.preventDefault()
-                    commit()
-                  } else if (e.key === 'Escape') {
-                    setEditing(false)
-                  }
-                }}
-                // フォーカスを外したら取り消す。確定はEnterだけ。
-                onBlur={() => setEditing(false)}
-                autoFocus
-              />
-            ) : (
-              <button
-                type="button"
-                className="chat-header-title"
-                disabled={disabled}
-                title={t('task_header.rename_hint')}
-                onClick={() => {
-                  setDraft(task.title ?? '')
-                  setEditing(true)
-                }}
-              >
-                {name}
-              </button>
-            )}
-          </h1>
-        </div>
-        <div className="button-row">
-          <button type="button" disabled={disabled} onClick={() => onSetArchived(!archived)}>
-            {archived ? t('task_header.unarchive') : t('task_header.archive')}
-          </button>
-          <ConfirmButton
-            label={t('common.delete')}
-            confirmTitle={t('task_header.delete_dialog_title')}
-            confirmMessage={t('task_header.delete_dialog_message', { title: isolated(name) })}
-            confirmLabel={t('common.delete')}
-            onConfirm={onDelete}
-            disabled={disabled}
-          />
-        </div>
+        {drawerToggle}
+        <h1>
+          {editing ? (
+            <input
+              className="chat-header-title-input"
+              value={draft}
+              maxLength={MAX_TITLE_CHARS}
+              // 未設定のタスクは、画面で呼んでいる名前(フォールバック)を手掛かりに出す。
+              placeholder={name}
+              aria-label={t('task_header.title_input_label')}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (isCommitEnter(e)) {
+                  e.preventDefault()
+                  commit()
+                } else if (e.key === 'Escape') {
+                  setEditing(false)
+                }
+              }}
+              // フォーカスを外したら取り消す。確定はEnterだけ。
+              onBlur={() => setEditing(false)}
+              autoFocus
+            />
+          ) : (
+            <button
+              type="button"
+              className="chat-header-title"
+              disabled={disabled}
+              title={t('task_header.rename_hint')}
+              onClick={() => {
+                setDraft(task.title ?? '')
+                setEditing(true)
+              }}
+            >
+              {name}
+            </button>
+          )}
+        </h1>
+        {/* 名前の長さや編集中かによらず、右上の同じ位置に置く。名前の変更は名前を押して行うので
+            ここには入れない */}
+        <MenuButton
+          label={t('task_header.menu_label')}
+          disabled={disabled || editing}
+          items={[
+            {
+              key: 'archive',
+              label: archived ? t('task_header.unarchive') : t('task_header.archive'),
+              onSelect: () => onSetArchived(!archived),
+            },
+            {
+              key: 'delete',
+              label: t('common.delete'),
+              danger: true,
+              onSelect: () => setConfirmingDelete(true),
+            },
+          ]}
+        />
       </div>
-      <p className="chat-header-meta">{t('task_header.meta', taskProgress(task))}</p>
-      {task.description && <p>{task.description}</p>}
+      <div className="chat-header-meta">
+        <p>{t('task_header.meta', taskProgress(task))}</p>
+        {task.description && (
+          <button
+            type="button"
+            className="chat-header-description-toggle"
+            aria-expanded={descriptionOpen}
+            onClick={() => setDescriptionOpen((open) => !open)}
+          >
+            <DisclosureMark />
+            {t('task_header.description_toggle')}
+          </button>
+        )}
+      </div>
+      {task.description && descriptionOpen && (
+        <p className="chat-header-description">{task.description}</p>
+      )}
+      {confirmingDelete && (
+        <ConfirmDialog
+          title={t('task_header.delete_dialog_title')}
+          message={t('task_header.delete_dialog_message', { title: isolated(name) })}
+          confirmLabel={t('common.delete')}
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => {
+            setConfirmingDelete(false)
+            onDelete()
+          }}
+        />
+      )}
     </header>
   )
 }

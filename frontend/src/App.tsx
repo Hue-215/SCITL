@@ -24,6 +24,7 @@ import { t, turnErrorText } from './i18n'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
+import { stoppedTurnAtEnd } from './thinking'
 import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent } from './types'
 import { useChatRequests } from './useChatRequests'
 import { useCloseOnBack } from './useCloseOnBack'
@@ -302,6 +303,15 @@ export default function App() {
     if (selectedRef.current === chatKey(taskChat(taskId))) selectChat(GENERAL_CHAT)
   }
 
+  // 入力欄の「応答を生成」。返信の無いまま終わった会話には新しく生成し、最後のターンをユーザーが
+  // 止めていたら、そのターンを作り直す。
+  const stoppedId = stoppedTurnAtEnd(messages)
+  const generateAction = lacksReply
+    ? () => void generateReply()
+    : stoppedId !== null
+      ? () => void retry(stoppedId)
+      : null
+
   const pending = requests.pendingOf(chat)
   const live = requests.liveOf(chat)
   const failure = requests.failureOf(chat)
@@ -370,10 +380,8 @@ export default function App() {
         ) : (
           <header className="chat-header">
             <div className="chat-header-row">
-              <div className="chat-header-name">
-                {drawerToggle}
-                <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
-              </div>
+              {drawerToggle}
+              <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
             </div>
           </header>
         )}
@@ -403,7 +411,6 @@ export default function App() {
           }}
           onRetry={(messageId) => void retry(messageId)}
           onRemove={(messageId) => void remove(messageId)}
-          onGenerateReply={lacksReply ? () => void generateReply() : null}
         />
 
         <ChatCompose
@@ -411,6 +418,7 @@ export default function App() {
           generating={requests.isGenerating(chat)}
           stopping={requests.isStopping(chat)}
           onSend={(message) => void send(message)}
+          onGenerateReply={generateAction}
           onStop={stop}
           onError={setError}
           onModelChanged={() => setAddBlocked(null)}

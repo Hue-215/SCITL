@@ -2,6 +2,7 @@ import type { ReactNode, RefObject, UIEventHandler, WheelEventHandler } from 're
 import { MessageAttachments, PendingAttachments } from './Attachments'
 import { ConfirmButton } from './Dialog'
 import { formatDateTime, t, turnErrorText } from './i18n'
+import { DisclosureMark } from './Icon'
 import Markdown from './Markdown'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
 import {
@@ -78,15 +79,6 @@ function TurnSegmentView({
   )
 }
 
-// 返信の無い会話の末尾に出す、応答を生成する操作。止めたターンが会話の最後にあるときも同じ形で出す。
-function GenerateReplyButton({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
-  return (
-    <button type="button" disabled={disabled} onClick={onClick}>
-      {t('chat.generate_reply_button')}
-    </button>
-  )
-}
-
 // 編集中のユーザー発言。編集できるのは1件ずつ。
 export interface EntryEditing {
   id: number | null
@@ -112,8 +104,6 @@ interface ChatLogProps {
   editing: EntryEditing
   onRetry: (messageId: number) => void
   onRemove: (messageId: number) => void
-  // 会話が返信の無いまま終わっているときだけ渡す。会話の末尾に応答を生成する操作を出す。
-  onGenerateReply: (() => void) | null
 }
 
 // 会話欄。保存済みの発言・応答待ちの表示・コマンドの失敗を並べる。
@@ -129,15 +119,8 @@ export default function ChatLog({
   editing,
   onRetry,
   onRemove,
-  onGenerateReply,
 }: ChatLogProps) {
   const items = groupMessages(messages)
-  // 会話の最後のやり取り(ユーザー発言かターン)の位置。後ろに並ぶ操作の記録は数えない。送信中は
-  // 楽観表示のユーザー発言が後ろに来るので、保存済みの項目はどれも最後ではない。
-  const lastExchange =
-    pending.length > 0
-      ? items.length
-      : items.findLastIndex((i) => i.kind === 'turn' || i.message.role === 'user')
   // 応答を生成中に答えているユーザー発言(最後のユーザー発言)。画像を渡したかがまだ決まって
   // いないので、画像に渡していない印を出さない。送信中は答えている発言がまだ楽観表示にしか無い
   // (保存済みの最後のユーザー発言は、前の発言)。
@@ -154,7 +137,7 @@ export default function ChatLog({
       : message.undelivered_attachments
   return (
     <ul className="chat-log" ref={logRef} onScroll={onScroll} onWheel={onWheel}>
-      {items.map((item, index) => {
+      {items.map((item) => {
         if (item.kind === 'plain') {
           const message = item.message
           // 応答生成以外の経路(画面・MCP等)での操作の記録はターンに含めず、経路のラベルを
@@ -254,24 +237,15 @@ export default function ChatLog({
             {actions}
           </>
         )
-        // ユーザーが止めたターンは失敗として見せない。会話の最後なら返信の無い会話と同じく
-        // 応答を生成する操作(中身は作り直し)を、続けて発言したあとなら止めたことだけを出す。
+        // ユーザーが止めたターンは失敗として見せず、止めたことだけを出す。会話の最後なら、入力欄の
+        // 「応答を生成」がこのターンを作り直す(`stoppedTurnAtEnd`)。
         if (finalMessage.role === 'error' && finalMessage.error_kind === 'stopped') {
           return (
             <li key={`turn-${item.turnId}`} className="turn-group">
               {segments.map((segment, i) => (
                 <TurnSegmentView key={i} segment={segment} />
               ))}
-              {index === lastExchange ? (
-                <div className="button-row">
-                  <GenerateReplyButton
-                    onClick={() => onRetry(finalMessage.id)}
-                    disabled={disableActions}
-                  />
-                </div>
-              ) : (
-                <p className="entry-stopped">{t('chat.stopped_note')}</p>
-              )}
+              <p className="entry-stopped">{t('chat.stopped_note')}</p>
             </li>
           )
         }
@@ -303,8 +277,11 @@ export default function ChatLog({
                     プレーンテキストのまま出す */}
                 {finalMessage.error_detail && (
                   <details className="entry-error-detail">
-                    <summary>{t('chat.error_detail_summary')}</summary>
-                    <pre>{finalMessage.error_detail}</pre>
+                    <summary>
+                      <DisclosureMark />
+                      {t('chat.error_detail_summary')}
+                    </summary>
+                    <pre className="detail-box">{finalMessage.error_detail}</pre>
                   </details>
                 )}
                 {footer}
@@ -339,11 +316,6 @@ export default function ChatLog({
       {failure && (
         <li className="entry entry-error">
           <span className="entry-content">{failure}</span>
-        </li>
-      )}
-      {onGenerateReply && pending.length === 0 && (
-        <li className="button-row">
-          <GenerateReplyButton onClick={onGenerateReply} disabled={disableActions} />
         </li>
       )}
     </ul>

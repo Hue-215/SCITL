@@ -57,6 +57,19 @@ export function finalEntryOf(entries: MessageView[]): MessageView {
 }
 
 /**
+ * 会話の最後のやり取り(ユーザー発言かターン。後ろに並ぶ操作の記録は数えない)が、ユーザーが止めた
+ * ターンなら、その返信の行(止めたことを記録したエラー発言)のid。入力欄の「応答を生成」は、返信の
+ * 無い会話と同じくこのターンを作り直す(再試行)。
+ */
+export function stoppedTurnAtEnd(messages: MessageView[]): number | null {
+  const items = groupMessages(messages)
+  const last = items.findLast((i) => i.kind === 'turn' || i.message.role === 'user')
+  if (last?.kind !== 'turn') return null
+  const final = finalEntryOf(last.entries)
+  return final.role === 'error' && final.error_kind === 'stopped' ? final.id : null
+}
+
+/**
  * 操作の記録の行末に出す経路のラベル(`messages.source`)。知らない値は汎用のラベルにし、
  * 値そのものは出さない(MCP経由の`mcp:`の後ろは外部のクライアントが名乗る名前になる)。
  */

@@ -1,5 +1,4 @@
 {
-  "attachment.add_button": "添付",
   "attachment.add_tooltip": "ファイルを添付する",
   "attachment.content_not_sent": "この形式は中身がモデルに渡らず、名前と大きさだけが伝わります",
   "attachment.image_not_delivered": "この画像はモデルに渡っておらず、名前と大きさだけが伝わっています",
@@ -226,6 +225,8 @@
   "task_header.archive": "アーカイブ",
   "task_header.delete_dialog_message": "「{title}」を削除します。会話もあわせて表示されなくなります。",
   "task_header.delete_dialog_title": "タスクを削除しますか?",
+  "task_header.description_toggle": "説明",
+  "task_header.menu_label": "タスクの操作",
   "task_header.meta": "{deadline} · {steps}",
   "task_header.rename_hint": "クリックして名前を変更",
   "task_header.title_input_label": "タスク名",
