@@ -1,7 +1,8 @@
+use tauri::ipc::Channel;
 use tauri::State;
 
 use scitl_core::db::messages::OperationSource;
-use scitl_core::orchestration::{self, discard_events, operations, TaskCreation};
+use scitl_core::orchestration::{self, operations, TaskCreation, TaskOpeningEvent};
 
 use super::{with_db, CommandResult};
 use crate::AppState;
@@ -27,16 +28,25 @@ pub async fn list_tasks(
     with_db(&state, scitl_core::db::tasks::list_tasks).await
 }
 
-/// 新規タスク追加ボタン。作れたら、画面は続けて`open_task_chat`で聞き取りを始める。
-/// チャットを使えない間は作らずに理由を返す。
+/// 新規タスク追加ボタン。作ったら続けて聞き取りを始める([`orchestration::create_task`])。
+/// 作ったタスクと聞き取りの途中経過は、この順で`on_event`へ送る。送れなくても(画面が
+/// 閉じた等)聞き取りは最後まで走らせるので、送信の失敗は捨てる。チャットを使えない間は
+/// 作らずに理由を返す。
 #[tauri::command]
-pub async fn create_task(state: State<'_, AppState>) -> CommandResult<TaskCreation> {
-    // 使えるかどうかは設定と鍵だけで決まるので、推論サーバーへ問い合わせる`snapshot_for_turn`は
-    // 使わない。鍵は読み直す(読めずにいたままだと、解錠しても送信するまで追加できない)。
-    let snapshot = state.settings.snapshot_reloading_key().await;
+pub async fn create_task(
+    state: State<'_, AppState>,
+    on_event: Channel<TaskOpeningEvent>,
+) -> CommandResult<TaskCreation> {
+    let snapshot = state.settings.snapshot_for_turn().await;
+    let events = |event| {
+        let _ = on_event.send(TaskOpeningEvent::Turn { event });
+    };
     Ok(orchestration::create_task(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &discard_events),
+        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        |task| {
+            let _ = on_event.send(TaskOpeningEvent::Created { task: task.clone() });
+        },
     )
     .await?)
 }

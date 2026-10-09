@@ -1,7 +1,10 @@
 //! モデルの登録・選択と、能力(自動検出・手動設定)の扱い。
 
+use std::sync::Arc;
+
 use super::provider_settings::find_provider_mut;
 use super::{input, invalid, view, AvailableModel, ChatModelsView, Settings, SettingsView};
+use crate::blocking;
 use crate::config::{
     Capability, Config, ModelConfig, ModelOverrides, ProviderConfig, ReasoningEffort,
 };
@@ -100,11 +103,40 @@ impl Settings {
         llm::fallback_capabilities(self.detected.get(provider_id, model).as_ref())
     }
 
+    /// モデルを登録し([`Self::register_models`])、能力を検出できるプロバイダーなら続けて
+    /// 検出する(追加したモデルの能力もすぐ設定画面の表に出すため)。サーバーに繋がらなくても
+    /// 登録は済んでいるので、検出の失敗は追加の失敗にしない(ターンの開始時にもう一度
+    /// 問い合わせる)。
+    pub async fn add_models(
+        self: &Arc<Self>,
+        provider_id: &str,
+        models: Vec<String>,
+    ) -> Result<SettingsView> {
+        let settings = Arc::clone(self);
+        let id = provider_id.to_string();
+        let added = blocking::run(move || settings.register_models(&id, &models)).await?;
+        // 登録のあとに消されていたら、検出せずに登録の結果を返す。
+        let detectable = self
+            .provider(provider_id)
+            .is_ok_and(|p| providers::can_detect_capabilities(&p));
+        if !detectable {
+            return Ok(added);
+        }
+        self.detect_model_capabilities(provider_id)
+            .await
+            .or_else(|e| {
+                crate::diagnostics::report(format_args!(
+                    "failed to detect capabilities of the added models: {e}"
+                ));
+                Ok(added)
+            })
+    }
+
     /// 手動追加(1件)と、取得した一覧から選んだ分(複数件)の両方が通る。1件でも登録できない
     /// 名前があれば何も登録しない。モデルが無かったプロバイダーでは、最初の1件を
     /// アクティブにする。アクティブなプロバイダーにモデルが無ければ、選択をこのプロバイダーへ
     /// 移す([`Config::reselect_active_provider`])。
-    pub fn add_models<S: AsRef<str>>(
+    pub(super) fn register_models<S: AsRef<str>>(
         &self,
         provider_id: &str,
         models: &[S],

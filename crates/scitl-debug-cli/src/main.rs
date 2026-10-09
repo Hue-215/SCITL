@@ -199,6 +199,9 @@ enum DebugError {
     /// ターンならエラー発言になる理由(プロバイダー・モデルの未選択等)。
     #[error("chat is unavailable: {0}")]
     ChatUnavailable(String),
+    /// タスクは作ったが、聞き取りを始められなかった。
+    #[error("the task was created but the interview could not start: {0}")]
+    OpeningFailed(String),
     #[error("environment variable {0} is not set, is empty or is not valid Unicode")]
     MissingEnv(String),
     /// 秘密情報の引数に、環境変数の名前でないものが書かれた。値そのものかもしれないので、

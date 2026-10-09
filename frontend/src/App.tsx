@@ -10,7 +10,6 @@ import {
   getTaskDetail,
   listChatMessages,
   listTasks,
-  openTaskChat,
   renameTask,
   retryChatMessage,
   sendChatMessage,
@@ -25,7 +24,7 @@ import { t, turnErrorText } from './i18n'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
-import type { Chat, MessageView, TaskDetailView, TaskListItem } from './types'
+import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent } from './types'
 import { useChatRequests } from './useChatRequests'
 import { useDrawer } from './useDrawer'
 import { useStickToBottom } from './useStickToBottom'
@@ -134,34 +133,56 @@ export default function App() {
     void loadChat(chat)
   }, [chat, loadChat])
 
-  // 作ったらユーザーの発言を待たずに聞き取りを始める。
+  // 作ったらユーザーの発言を待たずに聞き取りを始める(Rust側の1つの操作)。作ったタスクの
+  // 会話を開き、聞き取りの応答待ちを会話ごとの表示に載せる。
   const addTask = async () => {
     if (adding) return
     setAdding(true)
     setAddBlocked(null)
-    let id: number
+    // 聞き取りの途中経過の行き先。会話を開くまでは無い。
+    let forward: ((event: TurnEvent) => void) | null = null
+    let opened = false
+    // 作った知らせはコマンドの完了より遅れて届くことがあるので、知らせと完了の早いほうで
+    // 1回だけ開く。
+    const open = (task: Task) => {
+      if (opened) return
+      opened = true
+      setAdding(false)
+      void loadTasks()
+      selectChat(taskChat(task.id))
+      void requests.run(
+        taskChat(task.id),
+        [{ role: 'pending', content: t('chat.pending_reply') }],
+        (onEvent) => {
+          forward = onEvent
+          // 聞き取りを始められなかった理由は、その会話の失敗として出す。
+          return creation.then((result) => {
+            if (result.status === 'created' && result.opening_error !== null) {
+              throw result.opening_error
+            }
+          })
+        },
+        settle,
+      )
+    }
+    const creation = createTask((event) => {
+      if (event.type === 'created') open(event.task)
+      else forward?.(event.event)
+    })
     try {
-      const result = await createTask()
-      if (result.status === 'unavailable') {
+      const result = await creation
+      if (result.status === 'created') {
+        open(result.task)
+      } else {
         // モデル未選択等でチャットを使えない間は作らない。理由はエラー発言と同じ文言で出す。
         setAddBlocked(turnErrorText(result.error_kind, result.error_kind))
-        return
       }
-      id = result.task.id
-      await loadTasks()
-      selectChat(taskChat(id))
     } catch (e) {
+      // 作る前の失敗だけが届く(作ったあとの失敗は結果に添えられる)。
       setError(failureText(e))
-      return
     } finally {
       setAdding(false)
     }
-    await requests.run(
-      taskChat(id),
-      [{ role: 'pending', content: t('chat.pending_reply') }],
-      (onEvent) => openTaskChat(id, onEvent),
-      settle,
-    )
   }
 
   // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする。他の会話は応答待ちの

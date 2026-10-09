@@ -38,7 +38,7 @@ use crate::orchestration::{
 };
 use crate::secrets;
 
-pub use mcp_settings::NewMcpEndpoint;
+pub use mcp_settings::{McpServerAdded, NewMcpEndpoint};
 pub use provider_settings::NewProvider;
 pub use view::{AvailableModel, ChatModelsView, SettingsView};
 
@@ -222,13 +222,6 @@ impl Settings {
     pub async fn snapshot_for_turn(&self) -> Snapshot {
         self.reload_unavailable_key().await;
         self.detect_active_model_once().await;
-        self.snapshot()
-    }
-
-    /// 鍵だけを読み直す[`Self::snapshot`]。チャットを使えるかを確かめるだけで、ターンを
-    /// 始めない入口(タスクの追加)に使う。推論サーバーへは問い合わせない。
-    pub async fn snapshot_reloading_key(&self) -> Snapshot {
-        self.reload_unavailable_key().await;
         self.snapshot()
     }
 

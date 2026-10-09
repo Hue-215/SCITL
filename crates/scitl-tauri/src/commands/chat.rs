@@ -40,23 +40,6 @@ pub async fn send_chat_message(
     .await?)
 }
 
-/// 作ったばかりのタスクで、ユーザーの発言なしにモデルの返信から聞き取りを始める。
-#[tauri::command]
-pub async fn open_task_chat(
-    state: State<'_, AppState>,
-    task_id: i64,
-    on_event: Channel<TurnEvent>,
-) -> CommandResult<()> {
-    let snapshot = state.settings.snapshot_for_turn().await;
-    let events = forward(&on_event);
-    Ok(orchestration::open_task_chat(
-        state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
-        task_id,
-    )
-    .await?)
-}
-
 /// ユーザー発言を編集し、そこから応答を生成し直す([`edit_user_message`])。
 #[tauri::command]
 pub async fn edit_chat_message(

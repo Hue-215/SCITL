@@ -73,7 +73,6 @@ pub fn run() {
             commands::tasks::rename_task,
             commands::tasks::set_task_archived,
             commands::tasks::delete_task,
-            commands::chat::open_task_chat,
             commands::chat::send_chat_message,
             commands::chat::list_chat_messages,
             commands::chat::chat_lacks_reply,

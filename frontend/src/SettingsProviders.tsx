@@ -140,14 +140,8 @@ function ProviderCard({
   // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように)。
   const listing = useAsyncAction((error) => t('common.fetch_failed', { error: isolated(error) }))
 
-  // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
-  // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
-  const add = (models: string[]) =>
-    onUpdateModels(async () => {
-      const added = await addModels(provider.id, models)
-      if (!provider.can_detect_capabilities) return added
-      return detectModelCapabilities(provider.id).catch(() => added)
-    })
+  // 追加したモデルの能力の検出は、Rust側が追加に続けて行う。
+  const add = (models: string[]) => onUpdateModels(() => addModels(provider.id, models))
 
   return (
     <li className="provider-card">

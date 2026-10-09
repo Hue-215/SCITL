@@ -114,38 +114,63 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum TaskCreation {
+    /// 作って聞き取りを終えた。`opening_error`は聞き取りを始められなかった理由(`CoreError`の
+    /// 表示文)で、そのときもタスクは残る。作ったかどうかを、作った知らせの届き方に頼らずに
+    /// 結果だけで分かるよう、`Err`にはしない。
     Created {
         task: Task,
+        opening_error: Option<String>,
     },
     /// チャットを使えないので作らなかった。`error_kind`はエラー発言と同じ種別コードで、
     /// 画面は同じ文言を出す。
-    Unavailable {
-        error_kind: &'static str,
-    },
+    Unavailable { error_kind: &'static str },
 }
 
-/// 新規タスクの作成。チャットを使えない(モデル未選択等)ならタスクを作らずに理由を返す
-/// (続く[`open_task_chat`]が失敗し、エラー発言だけのタスクが残るため)。
-pub async fn create_task(db: SharedConnection, ctx: &TurnContext<'_>) -> Result<TaskCreation> {
+/// 新規タスクを作り、続けて聞き取りを始める(`open_task_chat`)。チャットを使えない
+/// (モデル未選択等)ならタスクを作らずに理由を返す(作っても聞き取りが失敗し、エラー発言だけの
+/// タスクが残るため)。
+///
+/// `on_created`は作った直後、聞き取りの前に呼ぶ(画面が作ったタスクの会話を開く)。聞き取りが
+/// 失敗してもタスクは残し、理由を結果に添える。モデルの呼び出しの失敗はエラー発言として
+/// 保存されるので、ここには来ない([`run_turn`]と同じ)。`Err`は作る前の失敗だけ。
+pub async fn create_task(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    on_created: impl FnOnce(&Task) + Send,
+) -> Result<TaskCreation> {
     if let Err(failure) = ready_adapter(ctx) {
         return Ok(TaskCreation::Unavailable {
             error_kind: failure.kind(),
         });
     }
-    let task = with_conn(db, tasks::create_task).await?;
-    Ok(TaskCreation::Created { task })
+    let task = with_conn(db.clone(), tasks::create_task).await?;
+    on_created(&task);
+    let opening_error = open_task_chat(db, ctx, task.id)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    Ok(TaskCreation::Created {
+        task,
+        opening_error,
+    })
+}
+
+/// [`create_task`]をIPCで呼ぶときに画面へ送る途中経過。作ったタスクを聞き取りの途中経過と
+/// 同じ経路で先に送る(経路を分けると、届く順が保証されない)。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TaskOpeningEvent {
+    Created { task: Task },
+    Turn { event: TurnEvent },
 }
 
 /// 聞き取りの開始。ユーザーの発言なしに、開始の発言([`TurnContext::opening_message`])への
 /// 返信として最初のターンを生成する。開始の発言は保存せず、以降のターンも
 /// `history::build_history`が履歴の先頭に補う。
 ///
-/// まだ1行も発言の無いタスクでだけ行う。
-pub async fn open_task_chat(
-    db: SharedConnection,
-    ctx: &TurnContext<'_>,
-    task_id: i64,
-) -> Result<()> {
+/// まだ1行も発言の無いタスクでだけ行う。作ったばかりのタスクで[`create_task`]からだけ呼ぶ。
+async fn open_task_chat(db: SharedConnection, ctx: &TurnContext<'_>, task_id: i64) -> Result<()> {
     generate_new_turn(db, ctx, Chat::Task(task_id), move |conn| {
         if messages::opener(conn, task_id)?.is_some() {
             return Err(CoreError::InvalidMessageOperation(

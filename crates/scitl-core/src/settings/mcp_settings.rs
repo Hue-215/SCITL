@@ -1,9 +1,12 @@
 //! 外部ツールサーバー(MCP)の登録と、公開するツールの選択。
 
+use std::sync::Arc;
+
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{input, invalid, Settings, SettingsView};
+use crate::blocking;
 use crate::config::{validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef};
 use crate::error::{CoreError, Result};
 use crate::mcp;
@@ -28,11 +31,46 @@ pub enum NewMcpEndpoint {
     },
 }
 
+/// [`Settings::add_mcp_server`]の結果。`tools_error`は、登録のあとのツール一覧の取得に
+/// 失敗した理由(画面は追加したサーバーのカードに出す)。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct McpServerAdded {
+    pub settings: SettingsView,
+    pub server_id: String,
+    pub tools_error: Option<String>,
+}
+
 impl Settings {
+    /// サーバーを登録し([`Self::register_mcp_server`])、続けて1回ツール一覧を取得する
+    /// (公開するツールを選べるように)。取得に失敗しても登録は残し、理由を結果に添える。
+    pub async fn add_mcp_server(
+        self: &Arc<Self>,
+        name: String,
+        endpoint: NewMcpEndpoint,
+    ) -> Result<McpServerAdded> {
+        let settings = Arc::clone(self);
+        let (server_id, added) =
+            blocking::run(move || settings.register_mcp_server(&name, endpoint)).await?;
+        let (settings, tools_error) = match self.fetch_mcp_tools(&server_id).await {
+            Ok(fetched) => (fetched, None),
+            Err(e) => (added, Some(e.to_string())),
+        };
+        Ok(McpServerAdded {
+            settings,
+            server_id,
+            tools_error,
+        })
+    }
+
     /// 検証→重複確認→秘密情報の保存→登録の順。重複確認から登録までを書き込みロックの中で
     /// 行うので、同名の登録が割り込んで秘密情報が孤児になることはない。登録に失敗したら
-    /// 保存した秘密情報を消す。
-    pub fn add_mcp_server(&self, name: &str, endpoint: NewMcpEndpoint) -> Result<SettingsView> {
+    /// 保存した秘密情報を消す。登録したサーバーのIDと、登録後の設定を返す。
+    pub(super) fn register_mcp_server(
+        &self,
+        name: &str,
+        endpoint: NewMcpEndpoint,
+    ) -> Result<(String, SettingsView)> {
         let name = name.trim().to_string();
         validate_mcp_server_name(&name)?;
         let endpoint = validate_endpoint(endpoint)?;
@@ -45,14 +83,16 @@ impl Settings {
         }
         let endpoint = store_endpoint_secrets(endpoint)?;
         let refs = endpoint_secret_refs(&endpoint).to_vec();
+        let id = ulid::Ulid::new().to_string();
         draft.config.mcp_servers.push(McpServerConfig {
-            id: ulid::Ulid::new().to_string(),
+            id: id.clone(),
             name,
             enabled: true,
             endpoint,
             enabled_tools: Default::default(),
         });
-        draft.commit().inspect_err(|_| delete_secret_refs(&refs))
+        let view = draft.commit().inspect_err(|_| delete_secret_refs(&refs))?;
+        Ok((id, view))
     }
 
     /// 保存済みの秘密情報も消す。`delete_provider`と同じく、設定の保存が済んでから消す。
