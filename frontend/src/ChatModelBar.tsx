@@ -67,9 +67,9 @@ export default function ChatModelBar({
   const choices = view?.choices ?? []
 
   return (
-    // 一覧の位置と幅の基準(Dropdown.tsx)は、モデル選択では自分の入れ物全体、思考の強さ選択では
-    // その中の自分から右の部分にする。どちらの一覧もボタンの左端から開き、右の送信ボタンの手前まで
-    // 広がれる。
+    // モデル選択は左端、思考の強さ選択は右端(送信ボタンの隣)に置く。一覧の位置と幅の基準
+    // (Dropdown.tsx)は、モデル選択では自分の入れ物全体、思考の強さ選択ではモデル選択の右の残り
+    // にする。モデル選択の一覧はボタンの左端から、思考の強さ選択の一覧はボタンの右端から開く。
     <div className="chat-model-bar">
       <Dropdown
         toggleClassName="chat-model-toggle"
@@ -124,7 +124,7 @@ export default function ChatModelBar({
             )
           }}
           direction="up"
-          align="start"
+          align="end"
         />
       </div>
     </div>

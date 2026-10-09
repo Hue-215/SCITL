@@ -113,9 +113,10 @@
   --bubble-margin-near: var(--space-4);
   --bubble-margin-far: calc(var(--bubble-margin-near) * 2);
 
-  /* 入力欄とその下のモデル選択の間隔。モデル選択と窓の下端の間も同じ値にする
-     (上下の余白が揃っていないと、どちらかに寄って見えるため)。 */
-  --compose-bottom-gap: var(--space-1);
+  /* 入力欄の下の行(添付・モデル選択・送信)と窓の下端の間。左右の余白(吹き出しの近い側
+     マージン)の半分にし、その関係を式で持つ。詰めすぎるとボタンが窓の下端に貼り付いて見える。
+     入力欄とその下の行の間も同じ値にする(上下の余白が揃っていないと、どちらかに寄って見えるため)。 */
+  --compose-bottom-gap: calc(var(--bubble-margin-near) / 2);
 
   /* 画面の部品が動く時間(引き出すカラムの出入り)。 */
   --motion-duration: 0.2s;

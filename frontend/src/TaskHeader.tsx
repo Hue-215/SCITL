@@ -114,7 +114,6 @@ export default function TaskHeader({
         />
       </div>
       <div className="chat-header-meta">
-        <p>{t('task_header.meta', taskProgress(task))}</p>
         {task.description && (
           <button
             type="button"
@@ -126,6 +125,8 @@ export default function TaskHeader({
             {t('task_header.description_toggle')}
           </button>
         )}
+        {/* 説明を開くと左端から下へ続くので、開け閉めする行を左に、締切と進捗を右に置く */}
+        <p>{t('task_header.meta', taskProgress(task))}</p>
       </div>
       {task.description && descriptionOpen && (
         <p>{task.description}</p>

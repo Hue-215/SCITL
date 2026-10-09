@@ -462,18 +462,20 @@ option {
   width: 100%;
 }
 
-/* 締切と工程の進捗。説明があれば、行の右端に開け閉めするボタンを置く。 */
+/* 締切と工程の進捗を右端に置き、説明があれば左端に開け閉めするボタンを置く。 */
 .chat-header-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-2);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
+/* 押せる範囲(平らなボタンの余白)は左へはみ出させ、印の左端を見出しの列の左端に揃える。 */
 .chat-header-description-toggle {
   flex-shrink: 0;
+  margin-inline: calc(-1 * var(--space-2)) auto;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
@@ -520,12 +522,14 @@ option {
   gap: var(--space-1);
 }
 
-/* 思考の強さ選択から右の部分。思考の強さ選択の一覧の基準。狭いときはモデル名の方を省略し、
-   思考の強さは縮めない。 */
+/* モデル選択の右の残り。思考の強さ選択をその右端(送信ボタンの隣)に寄せ、モデル名の長さで
+   動かないようにする。思考の強さ選択の一覧の基準。狭いときはモデル名の方を省略し、思考の強さは
+   縮めない。 */
 .chat-model-effort {
   flex: 1 0 auto;
   position: relative;
   display: flex;
+  justify-content: flex-end;
 }
 
 /* 入力欄の下に1行で収め、左カラム下端のボタンとの段差を小さくするため、塗りを持たない
