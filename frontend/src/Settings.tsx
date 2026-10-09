@@ -23,6 +23,7 @@ import { McpTab } from './SettingsMcp'
 import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
 import { useDrawer } from './useDrawer'
+import { useSwipeToOpen } from './useDrawerSwipe'
 
 interface SettingsProps {
   onClose: () => void
@@ -45,6 +46,7 @@ export default function Settings({ onClose }: SettingsProps) {
   const [error, setError] = useState<string | null>(null)
   // 狭い窓で畳む左のメニュー。タブを選んだら閉じる。
   const drawer = useDrawer()
+  const swipeToOpen = useSwipeToOpen(drawer)
 
   const reload = async () => {
     try {
@@ -165,7 +167,7 @@ export default function Settings({ onClose }: SettingsProps) {
           </nav>
         </Drawer>
 
-        <div className="settings-content" inert={drawer.shown}>
+        <div className="settings-content" inert={drawer.shown} {...swipeToOpen}>
           <div className="settings-column">
             {settings?.config_error && (
               <p className="error">
