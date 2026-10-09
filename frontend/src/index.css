@@ -472,10 +472,11 @@ option {
   color: var(--color-text-secondary);
 }
 
-/* 押せる範囲(平らなボタンの余白)は左へはみ出させ、印の左端を見出しの列の左端に揃える。 */
+/* 押せる範囲(平らなボタンの内側の余白と、描かない枠線の幅)は左へはみ出させ、印の左端を見出しの
+   列の左端(会話欄の思考・ツール呼び出しの行の印と同じ位置)に揃える。 */
 .chat-header-description-toggle {
   flex-shrink: 0;
-  margin-inline: calc(-1 * var(--space-2)) auto;
+  margin-inline: calc(-1 * (var(--space-2) + var(--border-width))) auto;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
