@@ -12,12 +12,13 @@
 | 設定ファイル形式 | TOML | 秘密情報は含まず参照のみを持つ(`network-secrets.md`「秘密情報」) |
 | 言語ファイル形式 | JSON | フロントエンド(Vite)が追加プラグイン無しに読み込める |
 | 多重起動の防止(デスクトップのみ) | `tauri-plugin-single-instance` | 公式プラグインで、通信はローカルのIPCだけ。自前で持つとOSごとのIPCを2通り書くことになり、攻撃面も保守量も増える(`concurrency.md`「多重起動の防止」) |
-| ネイティブのダイアログ | `tauri-plugin-dialog` | 公式プラグインで、デスクトップ(`rfd`)とAndroid(Kotlin側)の両方を持つ。画面(WebView)では作れない確認と、添付の選択画面を、Rust側から出すために使う(`webview-boundary.md`「CSP / Tauri権限設定」・`attachments.md`「受け取り方」)。依存として`tauri-plugin-fs`も入る。どちらも画面に権限(capabilities)を与えない |
+| ネイティブのダイアログ | `tauri-plugin-dialog` | 公式プラグインで、デスクトップ(`rfd`)とAndroid(Kotlin側)の両方を持つ。画面(WebView)では作れない確認と、添付の選択画面・エクスポートの保存画面を、Rust側から出すために使う(`webview-boundary.md`「CSP / Tauri権限設定」・`attachments.md`「受け取り方」・`export.md`「Androidでの書き出し先」)。依存として`tauri-plugin-fs`も入る。どちらも画面に権限(capabilities)を与えない |
 | リンクをOSへ渡す(Androidのみ) | `tauri-plugin-opener` | 公式プラグイン。`open`クレートはAndroidで動かないので、`ACTION_VIEW`のIntentで渡す(`webview-boundary.md`の外部リンクの項)。デスクトップは`open`クレートのまま。2.5に留める(Tauri 2.11のまま入る版)。画面に権限を与えない |
-| Androidの`content://`のURIを開く(Androidのみ) | `tauri-plugin-fs` | 公式プラグインで、選択画面が返すURIをAndroidのContentResolverでファイル記述子として開く。Rust側から開くためだけに登録し、画面に権限を与えない(`attachments.md`「受け取り方」) |
+| Androidの`content://`のURIを開く(Androidのみ) | `tauri-plugin-fs` | 公式プラグインで、選択画面・保存画面が返すURIをAndroidのContentResolverでファイル記述子として開く(読み込み用・書き込み用)。Rust側から開くためだけに登録し、画面に権限を与えない(`attachments.md`「受け取り方」・`export.md`「Androidでの書き出し先」) |
 | HTTPSの証明書の検証の初期化(Androidのみ) | `rustls-platform-verifier`・`jni` 0.22 | reqwestが証明書の検証に使うクレートへ、JNIの参照を渡す(`network-secrets.md`「Androidの信頼ルート」)。どちらも既にreqwestの依存として入っており、版はreqwestの引き込むものに合わせる。`jni`はTauri(tao・wry)の使う0.21と同居する |
 | 秘密情報の保存先(Androidのみ) | `android-native-keyring-store`・`ndk-context` | `keyring-core`と同じ組織の保存先で、Keystoreの鍵で暗号化してSharedPreferencesに置く(`network-secrets.md`「Androidの保存先」)。Kotlinの部品を持たず、JavaVMとContextを`ndk-context`から取る。`jni`はTauriと同じ0.21を使い、ほかの依存(`regex`・`tracing`等)も既にある版で足りる |
 | クリップボードの画像を読む(デスクトップのみ) | `tauri-plugin-clipboard-manager` | 公式プラグイン(`arboard`)。WebKitGTKは画像だけが載ったクリップボードを画面に渡さないので、画面ではなくRust側で読む(`attachments.md`「受け取り方」)。Android側は文字しか読めないので登録しない。2.4はTauri 2.12を要求するので2.3に留める。Linuxのクリップボードのために`wl-clipboard-rs`(Wayland)と`x11rb`が入り、`hashbrown`(0.15)・`foldhash`(0.1)・proc-macro経由の`quick-xml`(0.41)が既存と別の版で同居する |
+| zipを書く | `zip` 8.6 | Androidで、エクスポートを1つのzipにまとめて保存画面で選んだ場所へ書く(`export.md`「Androidでの書き出し先」)。書くのはdeflateだけで、既定のfeature(ほかの圧縮方式・暗号化)は切る。新しく入るのは`zip`と`typed-path`だけで、`crc32fast`・`indexmap`・`memchr`は既にある版、deflateの`flate2`(`rust_backend`)は`image` → `png`の依存として既にあるものを使う。9.0はリリースされたばかり(2026-10)なので8に留める |
 
 トークン数の見積もりは、現状は文字数からのフォールバック(`llm::token_estimate`)だけを持つ
 (Issue #66)。トークナイザはモデルごとに違い、クレートを足しても登録されたモデルに合う保証が
@@ -34,6 +35,8 @@
   添付・エクスポートのフォルダを開く操作は、コンパイルは通るが動かない(`open`クレートが
   デスクトップの`xdg-open`等を探して失敗を返す。open 5.4のソースで確認、2026-10)。本文中のリンクは
   `tauri-plugin-opener`で開く(Issue #492)。iOSは対象にしない
+  - エクスポートは、Androidではフォルダを開く操作を出さず、保存画面で選んだ場所へzipで書く
+    (`export.md`「Androidでの書き出し先」)
 
 ## Androidのビルド
 

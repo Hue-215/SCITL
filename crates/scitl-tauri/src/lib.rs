@@ -2,7 +2,7 @@ mod commands;
 mod dialog;
 mod navigation;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use scitl_core::attachments::{AttachmentStore, Attachments, ReceivedFiles};
@@ -25,6 +25,8 @@ pub struct AppState {
     pub attachments: Arc<Attachments>,
     /// Markdownエクスポートの書き出し先。画面からは変えられない。
     pub export_dir: PathBuf,
+    /// 利用者が選んだファイルへ書き写す前に、エクスポートのzipを作る場所(キャッシュの中)。
+    pub export_staging: PathBuf,
     /// 窓にファイルが落とされたことの知らせ先(`commands::attachments::watch_dropped_files`)。
     pub dropped: Mutex<Option<Channel<ReceivedFiles>>>,
 }
@@ -122,6 +124,7 @@ pub fn run() {
             commands::attachments::read_text_attachment,
             commands::attachments::read_image_attachment,
             commands::attachments::reveal_attachment,
+            commands::export::get_export_target,
             commands::export::export_markdown,
             commands::export::open_export_folder,
             commands::settings::get_settings,
@@ -173,13 +176,7 @@ fn start_app_state(app: &AppHandle) -> Result<AppState, DataDirError> {
     let data = data_dir(app)?;
     let cache = cache_dir(app)?;
     // モバイルでは利用者が置き場所を変えられないので、場所を移すよう促す失敗にしない。
-    open_app_state(data, paths::revealed_attachments(&cache)).map_err(|e| {
-        if cfg!(mobile) {
-            e.in_app_dir()
-        } else {
-            e
-        }
-    })
+    open_app_state(data, &cache).map_err(|e| if cfg!(mobile) { e.in_app_dir() } else { e })
 }
 
 /// データディレクトリの場所(`data-model/tables.md`「データディレクトリの場所」)。デスクトップでは
@@ -213,8 +210,8 @@ fn no_app_dir(e: impl std::fmt::Display) -> DataDirError {
     }
 }
 
-/// `data`のデータディレクトリを開き、コマンド層の状態を作る。
-fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppState, DataDirError> {
+/// `data`のデータディレクトリを開き、コマンド層の状態を作る。`cache`はキャッシュの場所。
+fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError> {
     let data = DataLayout::new(data);
     paths::create_private_dir(data.root()).map_err(|e| DataDirError::Unusable {
         dir: data.root().display().to_string(),
@@ -229,7 +226,7 @@ fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppSta
     let settings = Settings::load(data.config());
     let attachments = Arc::new(Attachments::new(AttachmentStore::new(
         data.attachments(),
-        revealed_attachments,
+        paths::revealed_attachments(cache),
     )));
 
     Ok(AppState {
@@ -238,6 +235,7 @@ fn open_app_state(data: PathBuf, revealed_attachments: PathBuf) -> Result<AppSta
         generating: InFlightSet::new(),
         attachments,
         export_dir: data.export(),
+        export_staging: paths::export_staging(cache),
         dropped: Mutex::new(None),
     })
 }

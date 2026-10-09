@@ -185,6 +185,12 @@ pub fn revealed_attachments(cache_dir: &Path) -> PathBuf {
     cache_dir.join("revealed-attachments")
 }
 
+/// キャッシュディレクトリの中の、利用者が選んだファイルへ書き写す前にエクスポートのzipを作る場所
+/// (`export::export_to_chosen_file`)。
+pub fn export_staging(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("export-staging")
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;

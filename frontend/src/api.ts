@@ -7,7 +7,8 @@ import type {
   Chat,
   ChatModelsView,
   DataDirError,
-  ExportSummary,
+  ExportOutcome,
+  ExportTarget,
   FormOutcome,
   Language,
   McpServerAdded,
@@ -128,8 +129,12 @@ export function revealAttachment(attachmentId: number): Promise<void> {
   return invoke('reveal_attachment', { attachmentId })
 }
 
-// 書き出し先は画面からは選ばない。
-export function exportMarkdown(): Promise<ExportSummary> {
+// 書き出し先は画面からは選ばない(選ぶOSでは、Rust側が保存画面を出す)。
+export function getExportTarget(): Promise<ExportTarget> {
+  return invoke('get_export_target')
+}
+
+export function exportMarkdown(): Promise<ExportOutcome> {
   return invoke('export_markdown')
 }
 
