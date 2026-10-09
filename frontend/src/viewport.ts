@@ -1,22 +1,22 @@
 /**
- * 画面の入れ物の高さ(`--viewport-height`)を、見えている範囲の高さに合わせ続ける。
- *
- * AndroidのWebView(M139以降)は、ソフトキーボードが出るとvisual viewportだけを縮め、窓の
- * 高さ(`100vh`・`innerHeight`)は変えない。窓の高さのままだと、入力欄がキーボードの下に隠れるか、
- * 入力欄を見せるために画面ごと上へずらされて見出しが隠れる。`interactive-widget`の指定と
- * VirtualKeyboard APIは、WebViewでは効かない(System WebView 145で確認)。
- *
- * 指で拡大している間はvisual viewportの高さが拡大率の分だけ縮むので、掛け戻して窓の高さを保つ。
+ * 見えている範囲が窓より低い間(ソフトキーボードが出ている間)だけ、その高さを`--viewport-height`に
+ * 写す。それ以外は上書きを外し、tokens.cssの既定(窓の高さ)に任せる。指で拡大している間に縮む分は
+ * 拡大率を掛け戻す。なぜ要るかはui.md「指で操作する端末」。
  */
 export function followVisualViewport(): void {
   const viewport = window.visualViewport
-  // 無ければtokens.cssの既定(窓の高さ)のまま。
   if (!viewport) return
-  const update = () =>
-    document.documentElement.style.setProperty(
-      '--viewport-height',
-      `${viewport.height * viewport.scale}px`,
-    )
+  const root = document.documentElement.style
+  let written = ''
+  const update = () => {
+    const height = Math.round(viewport.height * viewport.scale)
+    const value = height < window.innerHeight ? `${height}px` : ''
+    if (value === written) return
+    written = value
+    if (value) root.setProperty('--viewport-height', value)
+    else root.removeProperty('--viewport-height')
+  }
   update()
   viewport.addEventListener('resize', update)
+  window.addEventListener('resize', update)
 }

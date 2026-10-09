@@ -454,8 +454,8 @@ function ModelRow({ providerId, model, onUpdate, onSaveField }: ModelRowProps) {
           <span
             className="model-warning"
             role="img"
-            aria-label={t('settings.model.lacks_tools_warning')}
-            title={t('settings.model.lacks_tools_warning')}
+            aria-label={t('settings.model.lacks_tools_label')}
+            title={t('settings.model.lacks_tools_label')}
           >
             ⚠
           </span>

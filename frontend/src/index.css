@@ -255,21 +255,6 @@ input[type='checkbox']:checked::before {
   transform: translateY(-0.05em) rotate(-45deg);
 }
 
-/* 指で操作する端末では、箱の見た目は文字の大きさのまま、当たり判定だけをほかの部品と同じ
-   大きさ(--control-size-md)まで広げる。ラベルで包まずに置く箇所(モデルの表)があるため。
-   疑似要素を押しても、押されたのは箱になる。 */
-@media (pointer: coarse) {
-  input[type='checkbox'] {
-    position: relative;
-  }
-
-  input[type='checkbox']::after {
-    content: '';
-    position: absolute;
-    inset: calc((1em - var(--control-size-md)) / 2);
-  }
-}
-
 /* 見た目の異なる部品(塗り・枠のみ・文字だけ)でも同じ弱め方になるよう、
    色ではなく不透明度で表す。 */
 button:disabled,
@@ -363,12 +348,32 @@ option {
 @media (pointer: coarse) {
   .entry-actions button,
   .chat-model-toggle,
-  .chip {
+  .chip,
+  .choice {
     min-height: var(--control-size-md);
   }
 
+  .entry-actions button,
   .chip-remove {
     min-width: var(--control-size-md);
+  }
+
+  /* 開閉の行(思考・ツール呼び出し)。1行なので、行の高さで文字を縦の中央に置く。 */
+  :is(.thinking, .tool-call) > summary {
+    line-height: var(--control-size-md);
+  }
+
+  /* ラベルで包まずに置くチェックボックス(モデルの表)は、箱の見た目を変えず、疑似要素で
+     当たり判定だけを広げる。疑似要素を押しても、押されたのは箱になる。ラベルで包むものは
+     行全体(.choice)で押せるので広げない(並んだ行どうしで当たり判定が重なる)。 */
+  .model-table input[type='checkbox'] {
+    position: relative;
+  }
+
+  .model-table input[type='checkbox']::after {
+    content: '';
+    position: absolute;
+    inset: calc((1em - var(--control-size-md)) / 2);
   }
 }
 

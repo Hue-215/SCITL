@@ -252,17 +252,21 @@ Android等、指とソフトキーボードで操作する端末での決まり�
   キーボードならCtrl+Enterでも)にする(`keyboard.ts`の`isSendEnter`)。ソフトキーボードのEnterは
   改行のつもりで押されることが多いため。1行の入力欄(タスクの名前)はEnterで確定し、ソフトキーボードの
   確定のキー(→)でもEnterが届く。発言の編集はどの端末でもボタン(Ctrl+Enterでも)で確定する。
-  IMEの変換中のキーは`keyCode 229`で届くので、Enterと取り違えない(Gboardの英字入力で確認。
-  日本語の変換の確定は実機で確かめる)
-- **当たり判定**: 小さな文字で描く操作部品(発言の操作・モデル選択・添付のチップと×)は、指で操作する
-  端末では当たり判定を`--control-size-md`まで広げる。チェックボックスは箱の見た目を変えず、疑似要素で
-  当たり判定だけを広げる(モデルの表のようにラベルで包まない箇所があるため)
-- **ソフトキーボード**: AndroidのWebView(M139以降)は、キーボードが出るとvisual viewportだけを縮め、
-  窓の高さ(`100vh`・`innerHeight`)を変えない。そのままでは入力欄を見せるために画面ごと上へずらされ、
-  見出しが隠れる。`viewport.ts`がvisual viewportの高さを`--viewport-height`に写し、`#root`の高さに
-  する。viewportの`interactive-widget=resizes-content`とVirtualKeyboard API(`env(keyboard-inset-height)`)は
-  WebViewでは効かない(Android System WebView 145で確認)。高さは`#root`が持つので、画面の入れ物
-  (`.layout`・`.settings`)は`height: 100%`にし、`100vh`を書かない
+  文字を打っている間のキーは`keyCode 229`で届き、Enterだけが`keyCode 13`で届く(Gboardの英字入力で
+  確認)
+- **当たり判定**: 小さな文字で描く操作部品(発言の操作・モデル選択・添付のチップと×・思考とツール
+  呼び出しの開閉の行・チェックボックスの選択行`.choice`)は、指で操作する端末では当たり判定を
+  `--control-size-md`まで広げる。ラベルで包まずに置くチェックボックス(モデルの表)は、箱の見た目を
+  変えず、疑似要素で当たり判定だけを広げる。ラベルで包むものに広げると、並んだ行どうしで当たり判定が
+  重なる
+- **ソフトキーボード**: AndroidのWebViewは、キーボードが出るとvisual viewportだけを縮め、窓の高さ
+  (`100vh`・`100dvh`・`innerHeight`)を変えない。そのままでは入力欄を見せるために画面ごと上へずらされ、
+  見出しが隠れる。`viewport.ts`は、visual viewportが窓より低い間だけその高さを`--viewport-height`に
+  写し、`#root`の高さにする(それ以外は既定の`100dvh`のまま)。viewportの
+  `interactive-widget=resizes-content`とVirtualKeyboard API(`env(keyboard-inset-height)`)はWebViewでは
+  効かない。高さは`#root`が持つので、画面の入れ物(`.layout`・`.settings`)は`height: 100%`にし、
+  `100vh`を書かない。会話欄が縮んだときは、下端を見ていれば下端に留め、会話欄の中の欄(発言の編集)に
+  入力しているならその欄を見える位置に置く(`useStickToBottom.ts`)
 - **画面端の安全領域**: Androidでは画面がステータスバー・ナビゲーションバーの下まで広がる
   (`MainActivity.kt`の`enableEdgeToEdge`。targetSdk 36ではオプトアウトできない。
   `architecture/tech-stack.md`「AndroidのSDKの版」)。余白は`#root`の`padding`に
@@ -270,6 +274,9 @@ Android等、指とソフトキーボードで操作する端末での決まり�
   下の値が0になるので、キーボードの上に余白は残らない。viewportに`viewport-fit=cover`を指定する。
   ダイアログの暗幕は帯の下まで覆い、ダイアログ自体は安全領域の内側に置く。引き出したカラムと
   その暗幕は`#root`の中(安全領域の内側)に収まる
+
+この項の挙動(安全領域の値、キーボードとvisual viewport、キーの届き方)は、Android 17(API 37)の
+エミュレーター、Android System WebView 145、Gboardで確かめた(2026-10、Issue #474)。
 
 ## 6. OSネイティブ描画の扱い
 

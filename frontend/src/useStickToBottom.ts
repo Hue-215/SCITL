@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { WheelEvent } from 'react'
 
 // 会話欄を新しい発言に追従させる。下端にいる間だけ追従し、ユーザーが上へ
@@ -24,6 +24,32 @@ export function useStickToBottom<T extends HTMLElement>() {
   const forced = useRef(true)
   // 前に見たスクロール位置。上へ動いたか下へ動いたかを、これと比べて決める。
   const lastTop = useRef(0)
+  // 会話欄の高さが変わったとき(ソフトキーボードが出た・窓を縮めた)、下端にいれば下端に
+  // 留める。スクロール位置は上端からの距離で残るので、縮むと最新の発言が下へ押し出される。
+  // 会話欄の中で入力している(発言の編集)ときは、下端ではなくその欄を見える位置に置く。
+  const onResize = useCallback(() => {
+    const el = ref.current
+    if (el === null) return
+    const focused = document.activeElement
+    if (focused !== null && focused !== el && el.contains(focused)) {
+      focused.scrollIntoView({ block: 'nearest' })
+    } else if (stuck.current) {
+      el.scrollTop = el.scrollHeight
+    } else {
+      return
+    }
+    lastTop.current = el.scrollTop
+  }, [])
+  const resizeObserver = useRef<ResizeObserver | null>(null)
+  // 見ている会話欄。設定画面から戻ると作り直されるので、`follow`で見直す。
+  const observed = useRef<T | null>(null)
+  useEffect(
+    () => () => {
+      resizeObserver.current?.disconnect()
+      observed.current = null
+    },
+    [],
+  )
 
   // 前に見た位置からの動きで、追従を続けるかを決める。スクロールイベントのほか、
   // `follow`が位置を動かす前にも呼ぶ。スクロールイベントは次の描画の機会まで遅れて
@@ -68,13 +94,19 @@ export function useStickToBottom<T extends HTMLElement>() {
   const follow = useCallback(() => {
     const el = ref.current
     if (el === null) return
+    if (observed.current !== el) {
+      resizeObserver.current ??= new ResizeObserver(onResize)
+      resizeObserver.current.disconnect()
+      resizeObserver.current.observe(el)
+      observed.current = el
+    }
     if (forced.current) forced.current = false
     else observe(el)
     if (!stuck.current) return
     el.scrollTop = el.scrollHeight
     // ここで動かした分は、ユーザーの動きとして判定しない。
     lastTop.current = el.scrollTop
-  }, [observe])
+  }, [observe, onResize])
 
   return { ref, onScroll, onWheel, stick, follow }
 }

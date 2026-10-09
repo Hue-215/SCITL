@@ -10,9 +10,8 @@ export function isCommitEnter(e: KeyboardEvent): boolean {
 // (指かマウスか)で決める。
 const coarsePointer = window.matchMedia('(pointer: coarse)')
 
-// チャットの入力欄で、Enterで送るか。指で操作する端末では、ソフトキーボードのEnterは
-// 改行のつもりで押されるので改行にし、送るのはボタン(つないだキーボードならCtrl+Enterでも)にする。
-// Shift+Enterはどの端末でも改行。
+// チャットの入力欄で、Enterで送るか。指で操作する端末ではEnterは改行で、送るのはボタンか
+// Ctrl+Enter(ui.md「指で操作する端末」)。Shift+Enterはどの端末でも改行。
 export function isSendEnter(e: KeyboardEvent): boolean {
   if (!isCommitEnter(e) || e.shiftKey) return false
   return !coarsePointer.matches || e.ctrlKey || e.metaKey
