@@ -12,7 +12,9 @@
 | 設定ファイル形式 | TOML | 秘密情報は含まず参照のみを持つ(`network-secrets.md`「秘密情報」) |
 | 言語ファイル形式 | JSON | フロントエンド(Vite)が追加プラグイン無しに読み込める |
 | 多重起動の防止(デスクトップのみ) | `tauri-plugin-single-instance` | 公式プラグインで、通信はローカルのIPCだけ。自前で持つとOSごとのIPCを2通り書くことになり、攻撃面も保守量も増える(`concurrency.md`「多重起動の防止」) |
-| ネイティブのダイアログ | `tauri-plugin-dialog` | 公式プラグインで、デスクトップ(`rfd`)とAndroid(Kotlin側)の両方を持つ。画面(WebView)では作れない確認を、Rust側から出すために使う(`webview-boundary.md`「CSP / Tauri権限設定」)。依存として`tauri-plugin-fs`も入る。どちらも画面に権限(capabilities)を与えない |
+| ネイティブのダイアログ | `tauri-plugin-dialog` | 公式プラグインで、デスクトップ(`rfd`)とAndroid(Kotlin側)の両方を持つ。画面(WebView)では作れない確認と、添付の選択画面を、Rust側から出すために使う(`webview-boundary.md`「CSP / Tauri権限設定」・`attachments.md`「受け取り方」)。依存として`tauri-plugin-fs`も入る。どちらも画面に権限(capabilities)を与えない |
+| Androidの`content://`のURIを開く(Androidのみ) | `tauri-plugin-fs` | 公式プラグインで、選択画面が返すURIをAndroidのContentResolverでファイル記述子として開く。Rust側から開くためだけに登録し、画面に権限を与えない(`attachments.md`「受け取り方」) |
+| クリップボードの画像を読む(デスクトップのみ) | `tauri-plugin-clipboard-manager` | 公式プラグイン(`arboard`)。WebKitGTKは画像だけが載ったクリップボードを画面に渡さないので、画面ではなくRust側で読む(`attachments.md`「受け取り方」)。Android側は文字しか読めないので登録しない。2.4はTauri 2.12を要求するので2.3に留める。Linuxのクリップボードのために`wl-clipboard-rs`(Wayland)と`x11rb`が入り、`hashbrown`(0.15)・`foldhash`(0.1)・proc-macro経由の`quick-xml`(0.41)が既存と別の版で同居する |
 
 トークン数の見積もりは、現状は文字数からのフォールバック(`llm::token_estimate`)だけを持つ
 (Issue #66)。トークナイザはモデルごとに違い、クレートを足しても登録されたモデルに合う保証が
@@ -74,6 +76,9 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
   `dtoa-short`はビルド時のみ。npmのMPL-2.0は開発依存の`lightningcss`だけ。GPL・LGPL・AGPLは無い。
   同梱フォントはSIL OFL 1.1(同梱は可、フォント自体はOFLのまま)。ライセンスはMIT予定なので、
   コピーレフトのライブラリは使わない
+- **BSL-1.0(Boost Software License)は許容する**(MITと同じ許容型で、コピーレフトではない。バイナリでの
+  配布には表示も求めない)。入るのはWindowsのクリップボードを読む`clipboard-win`と、その依存の`error-code`
+  (`tauri-plugin-clipboard-manager`経由。Issue #476)
 - **Windowsの実行ファイルには、MicrosoftのWebView2 SDKのローダーが入る**(`webview2-com-sys`が
   `WebView2LoaderStatic.lib`を静的にリンクする)。SDKのライセンスはBSD-3-Clauseと同じ形の条項で、
   バイナリでの配布にも著作権表示とライセンス文の同梱を求める。クレートのライセンス(MIT)とは別に、

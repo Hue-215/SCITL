@@ -5,7 +5,7 @@ mod navigation;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use scitl_core::attachments::{AttachmentStore, Attachments, DropNotice};
+use scitl_core::attachments::{AttachmentStore, Attachments, ReceivedFiles};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::SharedConnection;
 use scitl_core::in_flight::InFlightSet;
@@ -26,7 +26,7 @@ pub struct AppState {
     /// Markdownエクスポートの書き出し先。画面からは変えられない。
     pub export_dir: PathBuf,
     /// 窓にファイルが落とされたことの知らせ先(`commands::attachments::watch_dropped_files`)。
-    pub dropped: Mutex<Option<Channel<DropNotice>>>,
+    pub dropped: Mutex<Option<Channel<ReceivedFiles>>>,
 }
 
 /// データディレクトリを開けなかった理由。このときは`AppState`を置かず、画面はこれだけを表示する
@@ -47,9 +47,16 @@ pub fn run() {
     } else {
         builder
     };
+    // クリップボードの画像を読む(`commands/attachments.rs`)。Androidでは画像を読めないので
+    // 登録しない。画面に権限は与えない。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    // 選択画面が返す`content://`のURIを開く(`commands/attachments.rs`)。画面に権限は与えない。
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_fs::init());
     builder
         .plugin(navigation::guard())
-        // Rust側からだけ使う(`dialog.rs`)。画面に権限は与えない。
+        // Rust側からだけ使う(`dialog.rs`・`commands/attachments.rs`)。画面に権限は与えない。
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             show_version_in_title(app);
@@ -84,11 +91,12 @@ pub fn run() {
             commands::chat::retry_chat_message,
             commands::chat::stop_chat_response,
             commands::chat::delete_chat_message,
-            commands::attachments::stage_attachment,
             commands::attachments::discard_staged_attachment,
-            commands::attachments::get_attachment_limits,
+            commands::attachments::discard_all_staged_attachments,
             commands::attachments::watch_dropped_files,
-            commands::attachments::stage_dropped_file,
+            commands::attachments::pick_attachments,
+            commands::attachments::paste_clipboard_image,
+            commands::attachments::stage_received_file,
             commands::attachments::read_text_attachment,
             commands::attachments::read_image_attachment,
             commands::attachments::reveal_attachment,
@@ -286,5 +294,27 @@ mod tests {
         assert!(windows
             .iter()
             .any(|window| window["label"] == super::MAIN_WINDOW));
+    }
+
+    /// CSPの`connect-src`が、IPCの窓口(Linux・macOSは`ipc:`、Windows・Androidは
+    /// `http://ipc.localhost`)を許していること。塞いでもTauriは`postMessage`へ黙って切り替えて
+    /// 動き続け、目に見える症状は8KBを超える途中経過がそのターンの間止まることだけなので、ここで
+    /// 止める(`architecture/webview-boundary.md`「CSP / Tauri権限設定」)。
+    #[test]
+    fn csp_lets_the_webview_reach_the_ipc_endpoints() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        for key in ["csp", "devCsp"] {
+            let csp = conf["app"]["security"][key].as_str().unwrap();
+            let connect_src: Vec<&str> = csp
+                .split(';')
+                .find_map(|directive| directive.trim().strip_prefix("connect-src "))
+                .unwrap_or_else(|| panic!("{key} has no connect-src"))
+                .split_whitespace()
+                .collect();
+            for endpoint in ["ipc:", "http://ipc.localhost"] {
+                assert!(connect_src.contains(&endpoint), "{key}: {connect_src:?}");
+            }
+        }
     }
 }

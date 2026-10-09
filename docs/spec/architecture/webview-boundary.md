@@ -47,9 +47,6 @@ AndroidはAndroid System WebView)。ブラウザの機能(ファイル・クリ�
 
 **今の食い違い**(直すIssueが閉じるまでここに残す):
 
-- 添付の選択と貼り付けは、画面がファイルの中身を読んでIPCで送っている。クリップボードの画像の読み直しは
-  User-Agentに`Linux`を含むとき(WebKitGTK向けだがAndroidでも当たる)に行っている。受け付ける数・
-  大きさの判定も画面にある(Issue #476。`attachments.md`「今の選択と貼り付け」)
 
 ## IPCコマンドの設計
 
@@ -85,11 +82,13 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   境界が破れた合図。`useHttpsScheme`を有効にすると窓口は`https://ipc.localhost`になるが、CSP3では
   スキームが`http`のソース式は`https`のURLにも当たるので、CSPを替えなくても通る(Androidで確認。
   WindowsのWebView2も同じChromiumの判定のはずだが未確認。下の「Android」の節)。
-  IPCの窓口を塞ぐと、Tauriは`postMessage`へ黙って切り替えて動き続けるが、
-  そちらは本文を必ずJSONにするため、生のバイト列を受け取るコマンド(添付の`stage_attachment`)
-  だけが本番ビルドで失敗する(Androidでは窓口に関わらず失敗する。下の「Android」の節)。
-  開発時(devUrl)はこの差が表に出ないので、本番ビルドで確かめる。このコマンドは、画面からファイルの
-  中身を受け取らない形にするときに無くす(Issue #476)
+  IPCの窓口を塞ぐと、Tauriは`postMessage`へ黙って切り替えて動き続け、目に見える症状は、Channelの
+  8KBを超える通知の取得(`plugin:__TAURI_CHANNEL__|fetch`)が止まり、長い途中経過がそのターンの間
+  出なくなることだけになる(生のバイト列を受け取るコマンドはIssue #476で無くした)。気付けないので、
+  `csp`・`devCsp`の`connect-src`に両方の窓口があることを`cargo test`で確かめる
+  (`scitl-tauri`の`csp_lets_the_webview_reach_the_ipc_endpoints`。メンテナの判断)。CSPを変えたときに
+  実際に届くかは、本番ビルドで長い返信(8KBを超える思考や本文)の途中経過が出続けるかで確かめる
+  (開発時(devUrl)は差が表に出ない)
 - 開発時のVite HMRはWebSocketを使うため、Tauri 2の `devCsp` を本番CSPと分離して設定する
   (開発と本番で同じCSPにしようとして本番を緩めるのが典型的な失敗)
 - **自前コマンドは、既定ではcapabilitiesに関係なくWebViewから到達できる**。ACLに載せるには、
@@ -126,7 +125,10 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
     載る)と、乗っ取った側が画面に置いた`<input type="file">`で利用者が選んだファイルは、ページの
     スクリプトから読める。どちらも利用者の操作を要し、WebView自身の機能なのでRust側では止められない。
     読んだ中身を外へ出すには、上の確認を経て通信先を登録させる必要がある
-  - 今は添付の選択と貼り付けで、画面がファイルの中身を読んでコマンドで送っている(Issue #476)
+  - 添付の選択画面とクリップボードの画像を読むコマンド(`pick_attachments`・`paste_clipboard_image`)は、
+    WebViewの制約を受けず、乗っ取られた画面からいつでも呼べる(呼べる時機は絞らない。メンテナの判断。
+    Issue #476)。選択画面は利用者が選ばない限り何も読まず、クリップボードは画像だけを読む。読んだものは
+    預かりに入るだけで、外へ出すには送信と、上の確認を経た通信先が要る(`attachments.md`「受け取り方」)
 - **Tauriのドロップの受け口を切らない**(`dragDropEnabled`は既定の有効のまま)。窓に落とした
   ファイルのパスはRust側にだけ届き、画面へは名前だけを知らせ、画面が受け付けたものをRust側が読む
   (`attachments.md`「受け取り方」)。切ってWebView標準のドロップにすると、落としたフォルダ以下をWebViewが読めるように
@@ -134,8 +136,8 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   (`SetAllowExternalDrop(false)`)も外れる。受け口はパスを`tauri://drag-enter`・`tauri://drag-drop`の
   イベントとしても出すが、画面はイベントを聞く権限を持たない(下の「途中経過の通知」の項)ので、
   WebViewには届かない。知らせ先を受け取る`watch_dropped_files`はChannelだけを、読ませる
-  `stage_dropped_file`はドロップの番号と並びの位置だけを引数に取り、パスを受け取らない。WebViewを
-  乗っ取られても、読めるのは利用者が最後に落としたファイルだけになる
+  `stage_received_file`は受け取りの番号と並びの位置だけを引数に取り、パスを受け取らない。WebViewを
+  乗っ取られても、読めるのは利用者が最後に落とした・選んだファイルだけになる
   - 受け口は、落としたフォルダをassetプロトコルの許可範囲にも足す(Tauri 2.11で確認)。今は
     `protocol-asset`のfeatureを有効にしていないので害は無いが、**有効にすると、落としたフォルダ以下を
     WebViewが読めるようになる**。有効にするなら、この扱いを先に見直す
@@ -147,13 +149,13 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 - **WebViewのクリップボードの設定を有効にしない**(Tauriの`enable_clipboard_access`。既定の無効のまま)。
   無効なら、画面がClipboard APIでクリップボードを読めるのはキー操作の貼り付けの中だけになる(WebKitGTK
   2.52.6で確認)。有効にすると、乗っ取られた画面がボタンのクリックだけでクリップボードの画像やファイルの
-  URI(`text/uri-list`)を読めるようになり、WindowsではWebView2の読み取りの許可も自動で通る。今の
-  貼り付けの画像の読み直し(`attachments.md`「今の選択と貼り付け」)はこの制限の中で動いている
-  - Issue #476では、クリップボードの画像をRust側が読む形にする。そのコマンドはこの制限を受けず、
-    乗っ取られた画面からいつでも呼べる(上の「画面が持つもの・持たないもの」の、移すだけでは減らない
-    場合)。読めるのは画像だけで、送るには送信の操作も要るが、呼べる時機を貼り付けの操作に結び付けて
-    絞れるかを#476で決める。この設定は、そのあとも無効のままにする(有効にすると、画面自身も読める
-    ようになる)
+  URI(`text/uri-list`)を読めるようになり、WindowsではWebView2の読み取りの許可も自動で通る。画面は
+  クリップボードを読まない(貼り付けの画像はRust側が`tauri-plugin-clipboard-manager`で読む。
+  `attachments.md`「受け取り方」)ので、有効にする理由は無い
+  - Rust側のクリップボードを読むコマンド(`paste_clipboard_image`)はこの制限を受けず、乗っ取られた画面から
+    いつでも呼べる(上の「画面が持つもの・持たないもの」の、移すだけでは減らない場合)。読めるのは画像
+    だけで、呼べる時機は絞らない(メンテナの判断。Issue #476)。clipboard-managerのプラグインは画面向けの
+    コマンド(文字・画像の読み書き)も持つが、画面に権限を与えないので届かない
 - 外部リンクはWebViewから直接開かせない。確認ダイアログに出す判定(スキーム許可リスト・
   ホモグラフ・ユーザー情報)はRust側の `inspect_link` が返し、開く側の `open_confirmed_link` は
   同じ判定を**Rust側でやり直し**、許可された形に正規化したURLだけをOSに委譲する
@@ -182,8 +184,8 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   `useHttpsScheme`を有効にしたAPKでは、画面が`https://tauri.localhost`、窓口が`https://ipc.localhost`に
   変わり、CSPを替えずに画面の読み込みもChannelの取得も違反なく動いた(遷移の判定も`https`を通す)
 - **生のバイト列を受け取るコマンドはAndroidでは必ず失敗する**。`postMessage`は本文をJSONにするので、
-  `stage_attachment`は`attachment body must be raw bytes`を返す。デスクトップで窓口を塞いだときと同じ形で、
-  窓口の有無に関わらず起きる。Issue #476で、画面から中身を送らない形(Rust側で選ばせて読む)に替える
+  `InvokeBody::Raw`が届かない。そうしたコマンドは持たない(添付はIssue #476で、Rust側がOSの選択画面で
+  選ばせて読む形にした。選んだものは`content://`のURIで届き、`tauri-plugin-fs`で開く)
 - **遷移の判定**: 画面は`http://tauri.localhost`から配られ、`is_app_url`の`http(s)://tauri.localhost`に当たる。
   外部のURLへの遷移は、`location`の書き換え・`href`を持つ`<a>`のクリック・`window.open`のどれも止まる
   (`ERR_ABORTED`)。本文中のリンクは、確認ダイアログの「開く」を押すと`open_confirmed_link`が失敗を返す

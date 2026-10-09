@@ -25,8 +25,8 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 thiserror = "2"
 secrecy = { version = "0.10", features = ["serde"] }
 url = "2"
-# URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、添付のファイル名の
-# ヘッダー)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
+# URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、Androidの選択画面が
+# 返す`content://`のURIから取る添付の名前)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
 # (`cargo tree -d -i percent-encoding`で確認)
 percent-encoding = "2.3.2"
 # UTC日時の文字列化と、締切の日付が実在するかの確認(`scitl-core/src/db/`)、モデルへ渡す送信日時を

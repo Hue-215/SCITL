@@ -1,8 +1,6 @@
 //! 添付の種別と形式の判定、受け付ける大きさの上限。拡張子や画面の申告は信用せず、
 //! 中身だけから決める(拡張子を偽ったファイルを画像としてモデルや画面に渡さないため)。
 
-use serde::Serialize;
-
 use crate::db::attachments::AttachmentKind;
 
 /// 受け付ける大きさの上限。
@@ -39,23 +37,6 @@ impl Limits {
     pub fn largest_bytes(&self) -> u64 {
         self.text_bytes.max(self.image_bytes).max(self.other_bytes)
     }
-
-    /// 画面がファイルの中身を読む前に確かめる上限。
-    pub fn for_picking(&self) -> PickingLimits {
-        PickingLimits {
-            largest_bytes: self.largest_bytes(),
-            per_message: self.per_message,
-        }
-    }
-}
-
-/// 画面へ渡す上限。種別は中身を読むまで分からないので、種別ごとの上限は渡さず
-/// (預けたときの判定の結果として返る)、どの種別でも受け付けない大きさだけを渡す。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
-pub struct PickingLimits {
-    pub largest_bytes: u64,
-    pub per_message: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

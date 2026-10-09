@@ -19,7 +19,7 @@ fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '
 }
 
 /// 発言を送り、応答を生成する([`run_turn`])。`chat`は表示中の会話で、ターンの途中経過は
-/// `on_event`へ送る。`attachments`は`stage_attachment`が返したトークン。
+/// `on_event`へ送る。`attachments`は`stage_received_file`が返したトークン。
 #[tauri::command]
 pub async fn send_chat_message(
     state: State<'_, AppState>,
