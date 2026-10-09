@@ -39,6 +39,27 @@ User-Agentを求める通信先がある(OpenCode Go等)。送るのは名前と
   送り続けるサーバーでは切れないが、利用者が画面から止められる(`concurrency.md`「応答生成の停止」)
 - **無し**(`None`): MCP。段ごとの上限を呼び出し側の`tokio::time::timeout`が持ち、長寿命のSSEストリームも使う
 
+### Androidの信頼ルート(Issue #470)
+
+Androidでも信頼ルートはOSの証明書ストアで、検証はAndroidの証明書の検証(`TrustManager`)が行う。
+`rustls-platform-verifier`は検証のたびにJNIでKotlinの部品を呼ぶので、次の2つが要る。
+
+- **Kotlinの部品の同梱**: 部品はクレート`rustls-platform-verifier-android`がMavenの形で持っている。
+  `gen/android/app/build.gradle.kts`が`cargo metadata`からその場所と版を引き、参照先に足す。グループ
+  `rustls`はこの参照先からだけ取り(`exclusiveContent`)、GoogleやMaven Centralに同じ名前のものが
+  出ても使わない。リリースビルドで縮めるときに消されないよう、`proguard-rules.pro`で残す
+- **JNIの参照の受け渡し**: JVMとApplicationのContextを`net::android::init`で渡す。JNIの環境は
+  WebViewのスレッドでしか得られないので、GUIの`setup`がメインの窓のWebViewに頼み、渡すのは
+  WebViewを作った後になる
+
+渡す前にHTTPSで接続すると、クライアントの組み立ては通り、証明書の検証の時点でpanicする
+(`rustls-platform-verifier` 0.7.0)。HTTPSを使う経路はどれも画面からのIPCで始まり、起動時に裏で
+通信しないので、画面が読み込まれるまでに渡し終わる。それでも間に合わなかったときや渡せなかったときに
+panicさせないよう、渡すまでは`hardened_client`がHTTPSの通信先を断る(平文httpは断らない)。
+
+渡す相手は、reqwestが使う`rustls-platform-verifier`と同じクレートでなければならない(版が分かれると
+別のクレートになり、渡したことにならない)。coreの依存の版は、reqwestが引き込む版に合わせる。
+
 ### 平文httpの許容範囲
 
 平文httpは、ホストがループバック(`localhost`を含む)またはプライベートIPの**リテラル**

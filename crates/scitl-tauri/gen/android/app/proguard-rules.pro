@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# HTTPSの証明書の検証でRustからJNIで呼ぶ(`rustls-platform-verifier`)。JNIからの呼び出しは
+# 見えないので、使われていないとみなして消されないようにする。
+-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }

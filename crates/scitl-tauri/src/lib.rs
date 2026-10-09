@@ -68,6 +68,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             show_version_in_title(app);
+            #[cfg(target_os = "android")]
+            init_certificate_verifier(app);
             match start_app_state(app.handle()) {
                 Ok(state) => app.manage(state),
                 Err(failure) => {
@@ -241,6 +243,42 @@ fn show_version_in_title(app: &tauri::App) {
         return;
     };
     let _ = window.set_title(&format!("{title} {}", app.package_info().version));
+}
+
+/// HTTPSの証明書の検証に要るJNIの参照をcoreへ渡す(`scitl_core::net::android`)。JNIの環境と
+/// ActivityはWebViewのスレッドでしか得られないので、メインの窓のWebViewに頼み、渡すのは後になる。
+/// HTTPSを使う経路はどれも画面からのIPCで始まり、起動時に裏で通信しないので、画面が読み込まれる
+/// までに済む。間に合わなかったときや渡せなかったときは、`net::hardened_client`がHTTPSを断る。
+#[cfg(target_os = "android")]
+fn init_certificate_verifier(app: &tauri::App) {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
+        scitl_core::diagnostics::report("could not initialize the certificate verifier: no window");
+        return;
+    };
+    let requested = window.with_webview(|webview| {
+        webview.jni_handle().exec(|env, activity, _webview| {
+            let java_vm = match env.get_java_vm() {
+                Ok(vm) => vm.get_java_vm_pointer(),
+                Err(e) => {
+                    scitl_core::diagnostics::report(format_args!(
+                        "could not initialize the certificate verifier: {e}"
+                    ));
+                    return;
+                }
+            };
+            // SAFETY: どちらもこのコールバックの間、WebViewのスレッドで有効なJNIの参照。
+            let result =
+                unsafe { scitl_core::net::android::init(java_vm.cast(), activity.as_raw().cast()) };
+            if let Err(e) = result {
+                scitl_core::diagnostics::report(e);
+            }
+        })
+    });
+    if let Err(e) = requested {
+        scitl_core::diagnostics::report(format_args!(
+            "could not initialize the certificate verifier: {e}"
+        ));
+    }
 }
 
 /// 多重起動の防止を使えるか。Linuxのプラグインはセッションバスのアドレスを解釈できないと

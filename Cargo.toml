@@ -22,6 +22,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # (信頼ルートはOSの証明書ストア)を選ぶ。ハードニング設定は`scitl-core/src/net.rs`の
 # `hardened_client`1箇所に集約する
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# Androidで、reqwestが証明書の検証に使う`rustls-platform-verifier`へJNIの参照を渡す
+# (`scitl-core/src/net/android.rs`)。reqwestが引き込むものと同じ版でなければ、渡した先と検証する側が
+# 別のクレートになり、渡したことにならない。上流の版が上がったら合わせて上げる
+# (`cargo tree -i rustls-platform-verifier --target aarch64-linux-android`で確認)。`jni`は
+# `rustls-platform-verifier`の要求する版で、Tauri(tao・wry)の使う0.21と同居する
+rustls-platform-verifier = "0.7"
+jni = "0.22"
 thiserror = "2"
 secrecy = { version = "0.10", features = ["serde"] }
 url = "2"

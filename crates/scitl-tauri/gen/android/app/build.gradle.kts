@@ -24,6 +24,33 @@ val tauriMinSdk = JsonSlurper().parse(file("../../../tauri.conf.json")).let { co
         ?: error("tauri.conf.jsonにbundle.android.minSdkVersionが無い(無いとtauri-cliは黙って24を使う)")
 }
 
+// HTTPSの証明書の検証でRustから呼ぶKotlinの部品。クレート`rustls-platform-verifier-android`が
+// Mavenの形で同梱しているので、cargoの解決結果からその場所と版を引く
+// (docs/spec/architecture/network-secrets.md「Androidの信頼ルート」)。
+val rustlsPlatformVerifier = providers.exec {
+    commandLine(
+        "cargo", "metadata", "--format-version", "1", "--locked",
+        "--filter-platform", "aarch64-linux-android",
+        "--manifest-path", file("../../../Cargo.toml").path,
+    )
+}.standardOutput.asText.get().let { metadata ->
+    val packages = (JsonSlurper().parseText(metadata) as Map<*, *>)["packages"] as List<*>
+    val crate = packages.map { it as Map<*, *> }
+        .single { it["name"] == "rustls-platform-verifier-android" }
+    val maven = File(crate["manifest_path"] as String).parentFile.resolve("maven")
+    maven to (crate["version"] as String)
+}
+
+repositories {
+    // このグループは同梱のMavenからだけ取る。GoogleやMaven Centralに同じ名前のものが出ても使わない。
+    exclusiveContent {
+        forRepository {
+            maven { url = uri(rustlsPlatformVerifier.first) }
+        }
+        filter { includeGroup("rustls") }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "net.niigo.scitl"
@@ -74,6 +101,7 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    implementation("rustls:rustls-platform-verifier:${rustlsPlatformVerifier.second}")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
