@@ -17,7 +17,12 @@ parts: Array<PartView>,
 /**
  * 添付のうち、中身(テキストの本文・画像)をモデルへ渡していないもののid([`undelivered`])。
  */
-undelivered_attachments: Array<number>, id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, error_kind: string | null, error_detail: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
+undelivered_attachments: Array<number>, 
+/**
+ * 添付のうち、押して入っているフォルダを開けるもののid(`attachments::revealable`)。
+ * 開けないOS(Android)では空。
+ */
+revealable_attachments: Array<number>, id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, error_kind: string | null, error_detail: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
 /**
  * 発言に付いた添付。付けた順。
  */

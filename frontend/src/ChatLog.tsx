@@ -191,6 +191,7 @@ export default function ChatLog({
                 <MessageAttachments
                   attachments={message.attachments}
                   undelivered={undeliveredOf(message)}
+                  revealable={message.revealable_attachments}
                 />
                 <div className="button-row entry-actions">
                   <button type="button" onClick={editing.cancel}>
@@ -217,6 +218,7 @@ export default function ChatLog({
               <MessageAttachments
                 attachments={message.attachments}
                 undelivered={undeliveredOf(message)}
+                revealable={message.revealable_attachments}
               />
               <time className="entry-time">{formatDateTime(message.created_at)}</time>
               {canEditOrDelete && (

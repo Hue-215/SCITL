@@ -11,6 +11,7 @@
   "attachment.reveal_tooltip": "入っているフォルダを開く",
   "attachment.too_large": "大きすぎるため添付できません（上限 {limit}）",
   "attachment.too_many": "1つの発言に添付できるのは{count}件までです",
+  "attachment.unsupported": "この形式は添付できません。画像はPNG・JPEG、テキストはUTF-8で保存したものを添付できます",
   "chat.command_failed": "操作に失敗しました: {error}",
   "chat.delete_dialog_message": "この発言と、それより後ろの発言をすべて削除します。",
   "chat.delete_dialog_title": "この発言以降を削除しますか?",

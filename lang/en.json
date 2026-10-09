@@ -11,6 +11,7 @@
   "attachment.reveal_tooltip": "Show in folder",
   "attachment.too_large": "Too large to attach (limit {limit})",
   "attachment.too_many": "A message can carry at most {count} attachments",
+  "attachment.unsupported": "This file type cannot be attached. Images can be attached as PNG or JPEG, and text when saved as UTF-8",
   "chat.command_failed": "The operation failed: {error}",
   "chat.delete_dialog_message": "This deletes this message and every message after it.",
   "chat.delete_dialog_title": "Delete this message and everything after it?",
