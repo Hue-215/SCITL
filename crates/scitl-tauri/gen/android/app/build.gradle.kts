@@ -51,10 +51,11 @@ val scitlVersionCode = Regex("""^(\d+)\.(\d+)\.(\d+)""").find(scitlVersionName)
     }
     ?: error("版がx.y.zの形で始まっておらず、versionCodeを決められない: $scitlVersionName")
 
-// HTTPSの証明書の検証でRustから呼ぶKotlinの部品。クレート`rustls-platform-verifier-android`が
-// Mavenの形で同梱しているので、cargoの解決結果からその場所を引き、中にある唯一の版を使う
-// (docs/spec/architecture/network-secrets.md「Androidの信頼ルート」)。
-val rustlsPlatformVerifierMaven = cargoPackages.let { packages ->
+// HTTPSの証明書の検証でRustから呼ぶKotlinの部品。版は、cargoの解決結果のクレート
+// `rustls-platform-verifier-android`の版に合わせる(違う版を使うと、JNIの呼び出しが合わずに落ちうる)。
+// 部品は上流がGitHubに置くMavenのリポジトリから取る(docs/spec/architecture/network-secrets.md
+// 「Androidの信頼ルート」)。
+val rustlsPlatformVerifierVersion = cargoPackages.let { packages ->
     // 初期化するcoreと検証するreqwestで版が分かれると、初期化が検証する側に届かず、HTTPSが
     // 使えないままになるので、ここで止める。
     packages.filter { it["name"] == "rustls-platform-verifier" }.let { verifiers ->
@@ -80,23 +81,18 @@ val rustlsPlatformVerifierMaven = cargoPackages.let { packages ->
             "ndk-contextを使うクレートが想定と違う(初期化の重複を確かめる): $users"
         }
     }
-    val crate = packages.single { it["name"] == "rustls-platform-verifier-android" }
-    File(crate["manifest_path"] as String).parentFile.resolve("maven")
+    packages.single { it["name"] == "rustls-platform-verifier-android" }["version"] as String
 }
-// 同梱のMavenは`maven-metadata.xml`を持たず、`latest.release`では版を引けないので、版のフォルダを見る。
-val rustlsPlatformVerifierVersion = rustlsPlatformVerifierMaven
-    .resolve("rustls/rustls-platform-verifier")
-    .listFiles { file -> file.isDirectory }!!
-    .single()
-    .name
 
 repositories {
-    // このグループは同梱のMavenからだけ取る。GoogleやMaven Centralに同じ名前のものが出ても使わない。
+    // このグループは上流のリポジトリからだけ取る。GoogleやMaven Centralに同じ名前のものが出ても使わない。
+    // リポジトリはブランチ`maven-archive`で、書き換えられうるので、取った中身は
+    // `gradle/verification-metadata.xml`のSHA-256と照らす(合わなければビルドが止まる)。
     exclusiveContent {
         forRepository {
-            maven { url = uri(rustlsPlatformVerifierMaven) }
+            maven { url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/") }
         }
-        filter { includeGroup("rustls") }
+        filter { includeGroup("org.rustls") }
     }
 }
 
@@ -104,10 +100,6 @@ android {
     compileSdk = 36
     namespace = "net.niigo.scitl"
     defaultConfig {
-        // WebViewとJava側の一部のHTTPライブラリが従う決まりで、Rustの通信には掛からない。Rust側の
-        // 平文httpの可否は`net::classify_host`が決める。LANへつなぐために`true`にしない
-        // (`docs/spec/architecture/network-secrets.md`「Androidでの平文http」)。
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "net.niigo.scitl"
         minSdk = tauriMinSdk
         targetSdk = 36
@@ -116,7 +108,6 @@ android {
     }
     buildTypes {
         getByName("debug") {
-            manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false
@@ -156,7 +147,7 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
-    implementation("rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
+    implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
