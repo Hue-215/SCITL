@@ -1,13 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  discardStagedAttachment,
-  failureText,
-  getAttachmentLimits,
-  stageAttachment,
-  stageDroppedFile,
-} from './api'
+import { useCallback, useRef, useState } from 'react'
+import { discardStagedAttachment, failureText, stageReceivedFile } from './api'
 import { formatBytes, isolated, t } from './i18n'
-import type { AttachmentKind, DropNotice, PickingLimits, StageOutcome } from './types'
+import type { AttachmentKind, ReceivedFiles, StageOutcome } from './types'
 
 /** 送信前の添付1件。 */
 export type StagedItem = { key: string; name: string } & (
@@ -25,10 +19,11 @@ export interface TakenAttachments {
 
 export interface StagedAttachments {
   items: StagedItem[]
-  /** 選んだ・貼り付けたファイルを、中身を渡して預ける。 */
-  add: (files: File[]) => void
-  /** 窓に落としたファイルを、Rust側が受け取ったドロップの番号と位置で指して預ける。 */
-  addDropped: (notice: DropNotice) => void
+  /**
+   * Rust側が受け取ったファイル(落とした・選んだ・貼り付けた)を、受け取りの番号と位置で指して
+   * 預ける。受け付けるか(種別・大きさ・1つの発言に付けられる数)はRust側が決める。
+   */
+  addReceived: (files: ReceivedFiles) => void
   remove: (key: string) => void
   /** 送る添付を取り出し、一覧を空にする。受け付けなかったものも一緒に消える。 */
   take: () => TakenAttachments
@@ -37,59 +32,27 @@ export interface StagedAttachments {
    * 預かりに戻す(`orchestration::run_turn`)ので、同じトークンで送り直せる。
    */
   restore: (taken: TakenAttachments) => void
-  /** 添付を選べる(上限を受け取ってから。受け取る前は大きさ・数の確かめができない)。 */
-  canAdd: boolean
   /** まだ判定を待っているものがある(送信できない)。 */
   busy: boolean
   /** 送れるものがある。 */
   ready: boolean
 }
 
-/** 預ける元のファイル1つ。`size`は預ける前に分かるときだけ持つ(落としたファイルは分からない)。 */
-interface Source {
-  name: string
-  size: number | null
-  stage: () => Promise<StageOutcome>
-}
-
-/** 入力欄の送信前の添付。選んだファイルはRust側で判定させて預け、トークンで持つ。 */
+/** 入力欄の送信前の添付。受け取ったファイルはRust側で判定させて預け、トークンで持つ。 */
 export function useStagedAttachments(): StagedAttachments {
   const [items, setItems] = useState<StagedItem[]>([])
-  const [limits, setLimits] = useState<PickingLimits | null>(null)
   // 判定を待つ間に取り消した添付。戻ってきたトークンをその場で破棄する。
   const withdrawn = useRef(new Set<string>())
   const nextKey = useRef(0)
-
-  useEffect(() => {
-    getAttachmentLimits().then(setLimits, () => undefined)
-  }, [])
 
   const settle = (key: string, next: StagedItem) => {
     setItems((prev) => prev.map((item) => (item.key === key ? next : item)))
   }
 
-  const addSources = (sources: Source[]) => {
-    const counted = items.filter((i) => i.state !== 'rejected').length
-    const added: StagedItem[] = sources.map(({ name, size, stage }, i) => {
+  const addReceived = ({ batch_id, names }: ReceivedFiles) => {
+    const added: StagedItem[] = names.map((name, index) => {
       const key = String(nextKey.current++)
-      if (limits && counted + i >= limits.per_message) {
-        return {
-          key,
-          name,
-          state: 'rejected',
-          message: t('attachment.too_many', { count: limits.per_message }),
-        }
-      }
-      // どの種別でも受け付けない大きさなら、中身を読む前に弾く(種別ごとの上限はRust側が見る)。
-      if (limits && size !== null && size > limits.largest_bytes) {
-        return {
-          key,
-          name,
-          state: 'rejected',
-          message: t('attachment.too_large', { limit: formatBytes(limits.largest_bytes) }),
-        }
-      }
-      stage().then(
+      stageReceivedFile(batch_id, index).then(
         (outcome) => {
           if (withdrawn.current.delete(key)) {
             if (outcome.status === 'staged') void discardStagedAttachment(outcome.token)
@@ -124,24 +87,6 @@ export function useStagedAttachments(): StagedAttachments {
     setItems((prev) => [...prev, ...added])
   }
 
-  const add = (files: File[]) =>
-    addSources(
-      files.map((file) => ({
-        name: file.name,
-        size: file.size,
-        stage: () => stageAttachment(file),
-      })),
-    )
-
-  const addDropped = (notice: DropNotice) =>
-    addSources(
-      notice.names.map((name, index) => ({
-        name,
-        size: null,
-        stage: () => stageDroppedFile(notice.drop_id, index),
-      })),
-    )
-
   const remove = (key: string) => {
     const item = items.find((i) => i.key === key)
     if (!item) return
@@ -168,12 +113,10 @@ export function useStagedAttachments(): StagedAttachments {
 
   return {
     items,
-    add,
-    addDropped,
+    addReceived,
     remove,
     take,
     restore,
-    canAdd: limits !== null,
     busy: items.some((i) => i.state === 'staging'),
     ready: items.some((i) => i.state === 'staged'),
   }
@@ -186,5 +129,11 @@ function rejectionText(outcome: StageOutcome & { status: 'rejected' }): string {
       return t('attachment.too_large', { limit: formatBytes(outcome.limit_bytes) })
     case 'not_a_file':
       return t('attachment.not_a_file')
+    case 'too_many':
+      return t('attachment.too_many', { count: outcome.limit })
+    case 'unsupported':
+      return t('attachment.unsupported')
+    case 'image_unreadable':
+      return t('attachment.image_unreadable')
   }
 }

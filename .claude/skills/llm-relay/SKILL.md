@@ -124,11 +124,12 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
 | `chat reply [--task <ID>]` | 返信の無いまま終わった会話の応答を生成する。何も消さない |
 | `chat preview [--task <ID>] [--message <本文>] [--external-tools]` | 次のターンで送るリクエストの本文を表示する。送信も保存もしない |
 | `attachment list` / `attachment orphans [--delete]` | 添付の一覧、どの添付からも指されていないファイル |
-| `export` | 全タスクと総合チャットをMarkdownでデータディレクトリの下へ書き出す |
+| `export` | 全タスク・総合チャット・メモリをMarkdownでデータディレクトリの下へ書き出す |
+| `memory list` / `add <本文>...` / `update <ID> <本文>` / `delete <ID>` | 会話をまたいで共有するメモリの表示・変更。変更したら変更後の一覧を出す |
 | `settings show` / `general` / `tools` / `language <コード>` | 設定の表示・変更 |
-| `provider add` / `delete <P>` / `models <P>` | プロバイダーの登録・削除・提供モデルの問い合わせ |
-| `model add <P> <モデル>...` / `remove` / `select` | モデルの登録・削除・選択 |
-| `mcp add-http` / `delete` / `enable` / `disable` / `enable-tool` / `disable-tool` / `fetch-tools` | 外部ツール(MCP)サーバーの登録と管理。秘密情報は`NAME=VAR`(VARは環境変数の名前)で渡す |
+| `provider add` / `delete <P>` / `models <P>` | プロバイダーの登録・削除・提供モデルの問い合わせ。カスタムヘッダーは`--header NAME=VAR`で渡す(値の`{session_id}`は会話ごとのIDに置き換わる) |
+| `model add <P> <モデル>...` / `remove` / `select` | モデルの登録・削除・選択。`add`は画面と同じく、検出できるプロバイダーなら続けて能力を検出する |
+| `mcp add-http` / `delete` / `enable` / `disable` / `enable-tool` / `disable-tool` / `fetch-tools` | 外部ツール(MCP)サーバーの登録と管理。秘密情報は`NAME=VAR`(VARは環境変数の名前)で渡す。`add-http`は画面と同じく続けてツール一覧を取得し、設定を`settings`に、取得の失敗を`tools_error`に入れて出す |
 
 #### 出力と終了コード
 
@@ -232,9 +233,8 @@ rm -rf "$D"
 
 ## 4. ドライバーで動かす
 
-`crates/scitl-core/examples/relay_session.rs`は、GUIと同じ入口(`create_task`・`open_task_chat`・
-`run_turn`)を台本どおりに呼ぶ。設定ファイルと資格情報ストアを使わずにアダプタとターンの文脈を
-直に組み立てるので、Secret Serviceの無い環境でも動き、設定からは起こしにくい場面(実体の無い
+`crates/scitl-core/examples/relay_session.rs`は、GUIと同じ入口(`create_task`・`run_turn`)を
+台本どおりに呼ぶ。設定ファイルと資格情報ストアを使わずにアダプタとターンの文脈を直に組み立てるので、Secret Serviceの無い環境でも動き、設定からは起こしにくい場面(実体の無い
 外部ツールの定義を出し入れする、コンテキスト長を狭める)を作れる。設定の読み方まで含めて確かめる
 ときは2節を使う。
 

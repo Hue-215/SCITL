@@ -1,6 +1,6 @@
 // 設定画面の複数のタブが共有する入力欄と部品。
 import { t } from './i18n'
-import { usePositiveIntegerInput } from './settingsInput'
+import { useNumberInput } from './settingsInput'
 
 interface NumberFieldProps {
   label: string
@@ -8,29 +8,34 @@ interface NumberFieldProps {
   value: number | null
   // 未設定のときに使われる値。プレースホルダに出す。
   defaultValue: number
-  onSave: (value: number | null) => void
+  // 欄の文字列のまま保存する。断られたら理由の文言を返す(`useNumberInput`)。
+  onSave: (text: string) => Promise<string[]>
 }
 
 export function NumberField({ label, value, defaultValue, onSave }: NumberFieldProps) {
-  const { invalid, inputProps } = usePositiveIntegerInput(value, onSave)
+  const { errors, inputProps } = useNumberInput(value, onSave)
 
   return (
     <label className="settings-field">
       <span>{label}</span>
       <input {...inputProps} placeholder={t('settings.unset_default_hint', { value: defaultValue })} />
-      {invalid && <p className="error">{t('errors.positive_integer')}</p>}
+      {errors.map((e) => (
+        <p key={e} className="error">
+          {e}
+        </p>
+      ))}
     </label>
   )
 }
 
 interface CollapseToggleProps {
-  // 畳んでいるときの文言(何を何件表示するか)。
+  // 畳んでいるときの文言(何を何件表示するか、または「すべて表示」)。
   showLabel: string
   expanded: boolean
   onToggle: () => void
 }
 
-// 件数の多い一覧(モデル表・MCPのツール一覧)を既定で畳むための開閉ボタン。
+// 件数の多い一覧(モデル表・MCPのツール一覧)と長いコードの塊を既定で畳むための開閉ボタン。
 export function CollapseToggle({ showLabel, expanded, onToggle }: CollapseToggleProps) {
   return (
     <button type="button" onClick={onToggle} aria-expanded={expanded}>

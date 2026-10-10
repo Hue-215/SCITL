@@ -1,6 +1,9 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
+use secrecy::SecretString;
+
+use super::super::test_server::now;
 use super::*;
 use crate::llm::{InlineImage, SentAt, ToolSchema};
 
@@ -41,11 +44,15 @@ fn spawn_capturing(body: &'static str) -> (String, std::thread::JoinHandle<Strin
 
 async fn send_with_key(api_key: &str) -> String {
     let (base_url, handle) = spawn_capturing(MINIMAL_COMPLETION);
-    let adapter =
-        OpenAiCompatAdapter::new(base_url, SecretString::from(api_key), "model", TEST_TIMEOUT)
-            .unwrap();
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from(api_key)),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
     adapter
-        .send(&[], ToolOffer::NONE, None, &mut |_| {})
+        .send(None, &[], ToolOffer::NONE, None, &mut |_| {})
         .await
         .unwrap();
     handle.join().unwrap()
@@ -55,7 +62,7 @@ async fn send_with_key(api_key: &str) -> String {
 fn request_preview_is_the_body_send_would_post_without_the_key() {
     let adapter = OpenAiCompatAdapter::new(
         "http://127.0.0.1:1/v1",
-        SecretString::from("sk-preview-secret"),
+        Credentials::key_only(SecretString::from("sk-preview-secret")),
         "local-model",
         TEST_TIMEOUT,
     )
@@ -84,7 +91,7 @@ fn request_preview_is_the_body_send_would_post_without_the_key() {
 fn request_preview_abbreviates_only_images() {
     let adapter = OpenAiCompatAdapter::new(
         "http://127.0.0.1:1/v1",
-        SecretString::from(""),
+        Credentials::key_only(SecretString::from("")),
         "local-model",
         TEST_TIMEOUT,
     )
@@ -131,12 +138,14 @@ async fn api_key_is_sent_as_bearer() {
 async fn a_key_that_cannot_be_sent_in_a_header_is_refused_before_sending() {
     let adapter = OpenAiCompatAdapter::new(
         "http://127.0.0.1:1/v1",
-        SecretString::from("sk-a\nb"),
+        Credentials::key_only(SecretString::from("sk-a\nb")),
         "model",
         TEST_TIMEOUT,
     )
     .unwrap();
-    let result = adapter.send(&[], ToolOffer::NONE, None, &mut |_| {}).await;
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |_| {})
+        .await;
     assert!(
         matches!(&result, Err(CoreError::Llm(LlmError::InvalidRequest(detail)))
             if detail.as_str() == "the API key contains characters that cannot be sent in a header"),
@@ -149,11 +158,16 @@ async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
     let (base_url, handle) = spawn_capturing(
         r#"{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"update_task","arguments":"{\"title\": "}}]},"finish_reason":"tool_calls"}]}"#,
     );
-    let adapter =
-        OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT).unwrap();
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
     let mut events = Vec::new();
     adapter
-        .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
         .await
         .unwrap();
     handle.join().unwrap();
@@ -165,16 +179,72 @@ async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
     )));
 }
 
+/// 空の欄を省かずに`null`で返すサーバー(Issue #458)。
+#[tokio::test]
+async fn null_fields_in_a_completion_read_as_absent() {
+    let (base_url, handle) = spawn_capturing(
+        r#"{"choices":[{"message":{"content":"ok","tool_calls":null,"reasoning_content":null},"finish_reason":"stop"}]}"#,
+    );
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .await;
+    handle.join().unwrap();
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::TextDelta {
+                text: "ok".to_string()
+            },
+            ResponseEvent::Done {
+                finish_reason: FinishReason::Stop
+            },
+        ]
+    );
+}
+
+#[test]
+fn null_choices_are_no_reply() {
+    let parsed: CompletionResponse = serde_json::from_str(r#"{"choices":null}"#).unwrap();
+    assert!(parsed.choices.is_empty());
+}
+
+/// 引数が`null`なら`null`として渡し、空のオブジェクトに置き換えない。
+#[test]
+fn null_tool_arguments_are_passed_up_as_null() {
+    let parsed: ResponseToolCall = serde_json::from_str(
+        r#"{"id":"call_1","type":"function","function":{"name":"get_task_list","arguments":null}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        ToolArguments::parse(raw_arguments(parsed.function.arguments)),
+        ToolArguments::from(serde_json::Value::Null)
+    );
+}
+
 #[tokio::test]
 async fn a_content_filter_stop_is_a_refusal_without_passing_the_partial_reply() {
     let (base_url, handle) = spawn_capturing(
         r#"{"choices":[{"message":{"content":"partial"},"finish_reason":"content_filter"}]}"#,
     );
-    let adapter =
-        OpenAiCompatAdapter::new(base_url, SecretString::from(""), "model", TEST_TIMEOUT).unwrap();
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap();
     let mut events = Vec::new();
     let result = adapter
-        .send(&[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
         .await;
     handle.join().unwrap();
 
@@ -190,14 +260,81 @@ async fn lists_models_under_the_base_url_sorted_without_duplicates() {
     let (base_url, handle) = spawn_capturing(
         r#"{"object":"list","data":[{"id":"gpt-b","object":"model"},{"id":"gpt-a"},{"id":"gpt-b"},{"id":" "}]}"#,
     );
-    let names = list_models(&base_url, &SecretString::from("sk-test"))
-        .await
-        .unwrap();
+    let names = list_models(
+        &base_url,
+        &Credentials::key_only(SecretString::from("sk-test")),
+    )
+    .await
+    .unwrap();
     let headers = handle.join().unwrap();
 
     assert_eq!(names, ["gpt-a", "gpt-b"]);
     assert!(headers.starts_with("get /v1/models http/1.1"));
     assert!(headers.contains("authorization: bearer sk-test"));
+}
+
+fn with_headers(headers: &[(&str, &str)]) -> Credentials {
+    Credentials::new(
+        SecretString::from("sk-test"),
+        headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), SecretString::from(*value)))
+            .collect(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn sends_custom_headers_with_the_session_id_in_place_of_the_placeholder() {
+    let (base_url, handle) = spawn_capturing(MINIMAL_COMPLETION);
+    let credentials = with_headers(&[
+        ("X-Opencode-Session", "{session_id}"),
+        ("X-Title", "SCITL {other}"),
+    ]);
+    let adapter = OpenAiCompatAdapter::new(base_url, credentials, "model", TEST_TIMEOUT).unwrap();
+    let session = SessionId::for_conversation("general").unwrap();
+    adapter
+        .send(Some(&session), &[], ToolOffer::NONE, None, &mut |_| {})
+        .await
+        .unwrap();
+    let headers = handle.join().unwrap();
+
+    assert!(
+        headers.contains(&format!("x-opencode-session: {}\r\n", session.as_str())),
+        "{headers}"
+    );
+    // 置き換えるのは`{session_id}`だけ。
+    assert!(headers.contains("x-title: scitl {other}\r\n"), "{headers}");
+    assert!(headers.contains("authorization: bearer sk-test"));
+}
+
+#[tokio::test]
+async fn listing_models_leaves_out_only_the_headers_that_need_a_session() {
+    let (base_url, handle) = spawn_capturing(r#"{"data":[]}"#);
+    let credentials = with_headers(&[("X-Opencode-Session", "{session_id}"), ("X-Title", "SCITL")]);
+    list_models(&base_url, &credentials).await.unwrap();
+    let headers = handle.join().unwrap();
+
+    assert!(!headers.contains("x-opencode-session"), "{headers}");
+    assert!(headers.contains("x-title: scitl\r\n"), "{headers}");
+}
+
+#[tokio::test]
+async fn an_echoed_custom_header_value_is_redacted_from_the_error() {
+    let (base_url, handle) = super::super::test_server::spawn_server(vec![(
+        400,
+        r#"{"error":{"message":"bad gateway token gw-secret-5678 for session"}}"#,
+    )]);
+    let credentials = with_headers(&[("cf-aig-authorization", "gw-secret-5678")]);
+    let adapter = OpenAiCompatAdapter::new(base_url, credentials, "model", TEST_TIMEOUT).unwrap();
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |_| {})
+        .await;
+    handle.join().unwrap();
+
+    let error = result.unwrap_err().to_string();
+    assert!(!error.contains("gw-secret-5678"), "{error}");
+    assert!(error.contains("[redacted]"), "{error}");
 }
 
 #[tokio::test]
@@ -211,7 +348,11 @@ async fn listing_models_reports_a_rejected_key_as_an_auth_error() {
             b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
         );
     });
-    let result = list_models(&format!("http://{addr}/v1"), &SecretString::from("")).await;
+    let result = list_models(
+        &format!("http://{addr}/v1"),
+        &Credentials::key_only(SecretString::from("")),
+    )
+    .await;
     server.join().unwrap();
 
     assert!(matches!(result, Err(CoreError::Llm(LlmError::Auth(_)))));
@@ -219,7 +360,12 @@ async fn listing_models_reports_a_rejected_key_as_an_auth_error() {
 
 /// 思考の強さを指定したリクエストが400で返った。
 fn bad_request(body: &str) -> LlmError {
-    http_error(reqwest::StatusCode::BAD_REQUEST, body, "", true)
+    http_error(
+        reqwest::StatusCode::BAD_REQUEST,
+        body,
+        &SentSecrets::default(),
+        true,
+    )
 }
 
 #[test]
@@ -294,11 +440,21 @@ fn tells_a_rejected_value_from_a_rejected_parameter() {
 fn reasoning_effort_in_the_body_alone_does_not_mean_it_was_rejected() {
     let body = r#"{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model.","param":"reasoning_effort","code":"unsupported_parameter"}}"#;
     assert!(matches!(
-        http_error(reqwest::StatusCode::BAD_REQUEST, body, "", false),
+        http_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+            &SentSecrets::default(),
+            false
+        ),
         LlmError::Http(_)
     ));
     assert!(matches!(
-        http_error(reqwest::StatusCode::TOO_MANY_REQUESTS, body, "", true),
+        http_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            body,
+            &SentSecrets::default(),
+            true
+        ),
         LlmError::RateLimit(_)
     ));
 }
@@ -312,7 +468,12 @@ fn other_error_bodies_fall_back_to_the_status_code() {
     ));
     assert!(matches!(bad_request("not json"), LlmError::Http(_)));
     assert!(matches!(
-        http_error(reqwest::StatusCode::UNAUTHORIZED, "", "", true),
+        http_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            "",
+            &SentSecrets::default(),
+            true
+        ),
         LlmError::Auth(_)
     ));
 }
@@ -320,9 +481,12 @@ fn other_error_bodies_fall_back_to_the_status_code() {
 #[test]
 fn context_exceeded_keeps_the_sanitized_body_as_detail() {
     let body = r#"{"error":{"code":"context_length_exceeded","message":"sk-secret"}}"#;
-    let LlmError::ContextExceeded(detail) =
-        http_error(reqwest::StatusCode::BAD_REQUEST, body, "sk-secret", true)
-    else {
+    let LlmError::ContextExceeded(detail) = http_error(
+        reqwest::StatusCode::BAD_REQUEST,
+        body,
+        &SentSecrets::new(["sk-secret"]),
+        true,
+    ) else {
         panic!("expected LlmError::ContextExceeded");
     };
     assert!(detail.as_str().starts_with("HTTP 400: "));
@@ -749,4 +913,473 @@ fn serializes_tool_response_and_omits_missing_tool_call_id() {
         without_id,
         serde_json::json!({"role": "tool", "content": "{}"})
     );
+}
+
+/// SSEの応答を返すサーバー([`super::super::test_server::spawn_event_stream`])。`base_url`に`/v1`を足す。
+fn spawn_streaming(
+    pieces: Vec<(Duration, &'static [u8])>,
+) -> (String, std::thread::JoinHandle<serde_json::Value>) {
+    let (base_url, handle) = super::super::test_server::spawn_event_stream(pieces);
+    let handle = std::thread::spawn(move || handle.join().unwrap().body);
+    (format!("{base_url}/v1"), handle)
+}
+
+/// 間を空けて書く断片。
+fn after(step: Duration, pieces: &[&'static str]) -> Vec<(Duration, &'static [u8])> {
+    pieces.iter().map(|p| (step, p.as_bytes())).collect()
+}
+
+async fn send_streamed(
+    pieces: Vec<(Duration, &'static [u8])>,
+    timeout: Duration,
+) -> (
+    Result<Replay, CoreError>,
+    Vec<ResponseEvent>,
+    serde_json::Value,
+) {
+    let (base_url, handle) = spawn_streaming(pieces);
+    let adapter = OpenAiCompatAdapter::new(
+        base_url,
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        timeout,
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    let result = adapter
+        .send(None, &[], ToolOffer::NONE, None, &mut |e| events.push(e))
+        .await;
+    (result, events, handle.join().unwrap())
+}
+
+fn text(t: &str) -> ResponseEvent {
+    ResponseEvent::TextDelta {
+        text: t.to_string(),
+    }
+}
+
+fn reasoning(t: &str) -> ResponseEvent {
+    ResponseEvent::ReasoningDelta {
+        text: t.to_string(),
+    }
+}
+
+fn done(finish_reason: FinishReason) -> ResponseEvent {
+    ResponseEvent::Done { finish_reason }
+}
+
+#[tokio::test]
+async fn asks_for_a_stream_and_passes_deltas_in_the_order_they_arrive() {
+    let (result, events, body) = send_streamed(
+        [
+            now(&[
+                ": keep-alive\n\n",
+                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"考え\"}}]}\n\n",
+                // 行の途中で切れても、繋いで読む。
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"中\"}}]}\n\ndata: {\"choi",
+            ]),
+            // 「え」の途中で切れても、繋いで読む。
+            vec![
+                (
+                    Duration::from_millis(20),
+                    &b"ces\":[{\"delta\":{\"content\":\"\xE7\xAD\x94\xE3\x81"[..],
+                ),
+                (Duration::from_millis(20), &b"\x88\"}}]}\n\n"[..]),
+            ],
+            now(&[
+                "data: {\"choices\":[{\"delta\":{\"content\":\"です\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                // 使用量だけのイベントは読み飛ばす。
+                "data: {\"choices\":[],\"usage\":{\"total_tokens\":3}}\n\n",
+                "data: [DONE]\n\n",
+            ]),
+        ]
+        .concat(),
+        TEST_TIMEOUT,
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(body["stream"], true);
+    assert_eq!(
+        events,
+        vec![
+            reasoning("考え"),
+            reasoning("中"),
+            text("答え"),
+            text("です"),
+            done(FinishReason::Stop),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn assembles_tool_call_fragments_by_index() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"list_tasks\",\"arguments\":\"\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"update_task\",\"arguments\":\"{\\\"ti\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"tle\\\": \\\"a\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            ResponseEvent::ToolCall {
+                id: Some("call_b".to_string()),
+                name: "update_task".to_string(),
+                arguments: serde_json::json!({ "title": "a" }).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn assembles_tool_call_fragments_without_an_index() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"list_tasks\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"function\":{\"name\":\"list_steps\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: None,
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            ResponseEvent::ToolCall {
+                id: Some("call_b".to_string()),
+                name: "list_steps".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn reads_a_repeated_id_or_empty_fields_without_an_index_as_the_continuation() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"function\":{\"name\":\"list_tasks\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"function\":{\"arguments\":\"\\\"a\\\":\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"\",\"function\":{\"name\":\"\",\"arguments\":\"1}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({ "a": 1 }).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+/// 引数を運ばない呼び出しは、ストリーミングしないときの`"arguments": null`と同じく`null`にする。
+#[tokio::test]
+async fn a_streamed_tool_call_without_arguments_passes_null() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"get_task_list\",\"arguments\":null}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "get_task_list".to_string(),
+                arguments: serde_json::Value::Null.into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_tool_call_without_a_name_is_an_invalid_response() {
+    let (result, _, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_finish_reason_completes_the_stream_without_the_done_marker() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"length\"}]}",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("ok"), done(FinishReason::Length)]);
+}
+
+#[tokio::test]
+async fn a_stream_cut_before_the_end_is_a_connection_failure() {
+    let (result, events, _) = send_streamed(
+        now(&["data: {\"choices\":[{\"delta\":{\"content\":\"途中\"}}]}\n\n"]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::Connection(_)))),
+        "{result:?}"
+    );
+    // 流れた断片は画面に出たままになるが、`Err`なので呼び出し側は保存しない。
+    assert_eq!(events, vec![text("途中")]);
+}
+
+#[tokio::test]
+async fn stops_reading_at_the_finish_reason() {
+    // 終了理由の後に`[DONE]`を送らず、接続も閉じないサーバー。
+    let (result, events, _) = send_streamed(
+        [
+            now(&["data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"]),
+            after(Duration::from_millis(1500), &["data: [DONE]\n\n"]),
+        ]
+        .concat(),
+        Duration::from_millis(300),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("ok"), done(FinishReason::Stop)]);
+}
+
+#[tokio::test]
+async fn skips_empty_data() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data:\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("ok"), done(FinishReason::Stop)]);
+}
+
+#[tokio::test]
+async fn a_stream_with_no_reply_is_an_empty_response() {
+    let (result, events, _) = send_streamed(now(&["data: [DONE]\n\n"]), TEST_TIMEOUT).await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::EmptyResponse))),
+        "{result:?}"
+    );
+    assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn an_error_in_the_stream_is_classified_from_its_body() {
+    let (result, _, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+            "data: {\"error\":{\"message\":\"the request exceeds the available context size\",\"type\":\"exceed_context_size_error\"}}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::ContextExceeded(_)))),
+        "{result:?}"
+    );
+
+    let (result, _, _) = send_streamed(
+        now(&["data: {\"error\":{\"message\":\"upstream failed\"}}\n\n"]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::Http(_)))),
+        "{result:?}"
+    );
+
+    // 本文の`code`が状態コードなら、それで分類する。
+    let (result, _, _) = send_streamed(
+        now(&["data: {\"error\":{\"code\":429,\"message\":\"slow down\"}}\n\n"]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(&result, Err(CoreError::Llm(LlmError::RateLimit(detail))) if detail.as_str().starts_with("HTTP 429")),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_content_filter_stop_in_the_stream_is_a_refusal() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::Refused(_)))),
+        "{result:?}"
+    );
+    // 断られたと分かるのは最後なので、本文は流れたあと。`Done`は渡さない。
+    assert_eq!(events, vec![text("partial")]);
+}
+
+#[tokio::test]
+async fn a_stream_that_stops_arriving_times_out() {
+    let (result, events, _) = send_streamed(
+        [
+            now(&["data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"]),
+            after(Duration::from_millis(1500), &["data: [DONE]\n\n"]),
+        ]
+        .concat(),
+        Duration::from_millis(300),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::Timeout(_)))),
+        "{result:?}"
+    );
+    assert_eq!(events, vec![text("a")]);
+}
+
+#[tokio::test]
+async fn a_stream_that_keeps_arriving_outlasts_the_timeout() {
+    let step = Duration::from_millis(150);
+    let (result, events, _) = send_streamed(
+        after(
+            step,
+            &[
+                "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"c\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            ],
+        ),
+        Duration::from_millis(400),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![text("a"), text("b"), text("c"), done(FinishReason::Stop)]
+    );
+}
+
+#[tokio::test]
+async fn parallel_calls_sent_with_the_same_index_stay_separate() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"list_tasks\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_b\",\"function\":{\"name\":\"list_steps\",\"arguments\":\"{\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::ToolCall {
+                id: Some("call_a".to_string()),
+                name: "list_tasks".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            ResponseEvent::ToolCall {
+                id: Some("call_b".to_string()),
+                name: "list_steps".to_string(),
+                arguments: serde_json::json!({}).into(),
+            },
+            done(FinishReason::ToolCall),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn too_many_tool_calls_are_an_invalid_response() {
+    let fragments: String = (0..=MAX_TOOL_CALLS)
+        .map(|i| format!("{{\"index\":{i},\"function\":{{\"name\":\"list_tasks\"}}}}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let event: &'static str = Box::leak(
+        format!("data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{fragments}]}}}}]}}\n\n")
+            .into_boxed_str(),
+    );
+    let (result, events, _) = send_streamed(
+        now(&[
+            event,
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(CoreError::Llm(LlmError::InvalidResponse(_)))),
+        "{result:?}"
+    );
+    assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn an_empty_finish_reason_does_not_end_the_stream() {
+    let (result, events, _) = send_streamed(
+        now(&[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"},\"finish_reason\":\"\"}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"b\"},\"finish_reason\":\"stop\"}]}\n\n",
+        ]),
+        TEST_TIMEOUT,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(events, vec![text("a"), text("b"), done(FinishReason::Stop)]);
 }

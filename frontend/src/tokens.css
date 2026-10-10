@@ -9,7 +9,7 @@
  *   --color-primary, --color-primary-container, --color-on-primary-container, --color-primary-button,
  *   --color-danger, --color-danger-container, --color-on-danger-container
  * 同じく theme.ts が発行する奥行きのトークン(buildElevationと対応):
- *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
+ *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-pinned, --shadow-focus
  */
 
 /* ウェイトを足し引きしたら、下の--font-weight-*とui.md「書体とウェイト」の表も直す。 */
@@ -65,17 +65,16 @@
   --line-height-tight: 1.25;
   --line-height-normal: 1.5;
 
-  /* アイコンサイズ: 将来のSVGアイコン導入時にwidth/heightとして使う箱寸法。
+  /* アイコンサイズ: アイコン(Icon.tsxのSVG)の箱寸法(width/height)。
      文字サイズとは独立の刻みにする(同値は一箇所集約の原則に反するため)。
-     現状のテキストグリフ流用箇所(⚙・←)は `font-size: var(--icon-size-*); line-height: 1;`
-     と明記し、SVG化時に box(width/height)へ移すことが分かるようにする。
-     sm/lgは現時点で未使用の予約段階。用法: sm=文中に混ぜるアイコン、
-     md=操作ボタン既定、lg=空状態・強調。 */
+     文中に混ぜるアイコンは周りの文字の大きさ(1em)に合わせるので、ここの値を使わない。
+     sm/lgは現時点で未使用の予約段階。用法: md=アイコンだけのボタン(.icon-button)、
+     lg=空状態・強調。 */
   --icon-size-sm: 1rem;
   --icon-size-md: 1.5rem;
   --icon-size-lg: 2rem;
 
-  /* アイコンボタンの当たり判定(正方形の箱寸法)。グリフ/アイコンのサイズとは別軸。 */
+  /* アイコンボタンの当たり判定(正方形の箱寸法)。アイコンのサイズとは別軸。 */
   --control-size-md: 2.25rem;
 
   /* 値を入れる欄(入力欄・選択)の内側の余白。隣に並ぶボタンを欄と同じ高さにするときも
@@ -114,16 +113,19 @@
   --bubble-margin-near: var(--space-4);
   --bubble-margin-far: calc(var(--bubble-margin-near) * 2);
 
-  /* 入力欄とその下のモデル選択の間隔。モデル選択と窓の下端の間も同じ値にする
-     (上下の余白が揃っていないと、どちらかに寄って見えるため)。 */
-  --compose-bottom-gap: var(--space-1);
+  /* 入力欄の下の行(添付・モデル選択・送信)と窓の下端の間。左右の余白(吹き出しの近い側
+     マージン)の半分にし、その関係を式で持つ。詰めすぎるとボタンが窓の下端に貼り付いて見える。
+     入力欄とその下の行の間も同じ値にする(上下の余白が揃っていないと、どちらかに寄って見えるため)。 */
+  --compose-bottom-gap: calc(var(--bubble-margin-near) / 2);
+
+  /* 画面の部品が動く時間(引き出すカラムの出入り)。 */
+  --motion-duration: 0.2s;
 
   /* レスポンシブ計算の基準値。吹き出し・設定本文の幅は入れ物に追従させるため、CSSで直接
-     使うのは上限値(--content-max-width)だけで、--content-min-widthは下の最小幅の導出式の
+     使うのは上限値(--content-max-width)だけで、--content-min-widthは下の窓の幅の導出式の
      入力として持つ。 */
   --sidebar-width: 16rem;
-  --settings-rail-width: 12rem;
-  --content-min-width: 22rem;
+  --content-min-width: 19.5rem;
   --content-max-width: 42rem;
 
   /* 複数行入力欄(textarea)が内容に応じて自動で伸びる範囲。全箇所で共通の
@@ -143,22 +145,41 @@
   /* 選択肢の一覧が伸びる上限(開いた選択一覧、取得したモデルの候補欄)。候補欄では
      検索欄と7行ほどが収まる。 */
   --option-list-max-height: 20rem;
+
+  /* 長いコードの塊を畳んだときに見せる高さ。補助文の大きさ(--font-size-sm)でおよそ12行。
+     途中の行で切れてよい(続きがあることが分かる)ので、行数からは決めていない。 */
+  --code-collapsed-max-height: 15rem;
+
+  /* 画面の入れ物(#root)の高さ。窓の高さを既定にし、viewport.tsが見えている範囲(Androidでは
+     ソフトキーボードを除いた範囲)の高さで上書きし続ける。 */
+  --viewport-height: 100dvh;
 }
 
 /*
- * ウィンドウ最小幅(crates/scitl-tauri/tauri.conf.json の app.windows[].minWidth)の
- * 導出式。この値はJSON側にコメントを書けないため、ここに残す。
+ * 窓の幅に関わる値の導出式。値を写す先(JSONとメディアクエリの条件)には式もvar()も
+ * 書けないため、ここに残す。px は16px/rem換算。
  *
- *   --sidebar-width(16rem。box-sizing: border-boxのため仕切り線1pxはこの内側)
- *   + --content-min-width(22rem)
+ * 内容領域(.layout main)の最小幅:
+ *   --content-min-width(19.5rem)
  *   + バブルのマージン合計(--bubble-margin-near + --bubble-margin-far = 3rem)
- *   = 41rem = 656px(16px/rem換算)
+ *   = 22.5rem = 360px
+ *
+ * ウィンドウ最小幅(crates/scitl-tauri/tauri.conf.json の app.windows[].minWidth):
+ *   窓が狭いときはサイドバーを畳むので、内容領域の最小幅と同じ 22.5rem = 360px
+ *
+ * サイドバーを畳む境目(useDrawer.ts の NARROW_QUERY。サイドバーを出したままで内容領域が
+ * 最小幅を保てる幅):
+ *   --sidebar-width(16rem。box-sizing: border-boxのため仕切り線1pxはこの内側)
+ *   + 内容領域の最小幅(22.5rem)
+ *   = 38.5rem = 616px
+ *   設定画面の左のカラムもサイドバーと同じ入れ物(.sidebar)なので、同じ境目で畳めば
+ *   設定の本文も内容領域の最小幅を下回らない。
  *
  * .layout main は左右paddingを持たない。持たせるとバブルのマージンに上乗せされて
  * 近い側・遠い側の2倍の関係が窓端から見て崩れ、スクロールバーも窓の端から浮くため。
  *
- * トークンやマージン設計(.chat-log > * 等)を変えたときは、この式とminWidthの両方を
- * 見直すこと。minHeightの480pxはこの式と独立した目視での妥当値。
+ * トークンやマージン設計(.chat-log > * 等)を変えたときは、この式とminWidth・
+ * NARROW_QUERYを見直すこと。minHeightの480pxはこの式と独立した目視での妥当値。
  *
  * なお場所を取る形式のスクロールバーが出る環境では、その幅(15px前後)だけログ領域が
  * 狭くなる。吹き出しは入れ物に追従するので縮むだけで、はみ出しはしない。

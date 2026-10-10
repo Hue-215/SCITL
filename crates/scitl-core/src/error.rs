@@ -10,6 +10,8 @@ pub enum CoreError {
     TaskNotFound(i64),
     #[error("task step {0} not found")]
     TaskStepNotFound(i64),
+    #[error("memory {0} not found")]
+    MemoryNotFound(i64),
     #[error("message {0} not found")]
     MessageNotFound(i64),
     #[error("attachment {0} not found")]
@@ -44,6 +46,13 @@ pub enum CoreError {
     /// 設定・登録の操作が規則に反する(空の名前、未登録のID、重複、範囲外の値)。
     #[error("invalid settings: {0}")]
     InvalidSettings(String),
+    /// 画面の入力を受け付けなかった。画面が欄の近くに表示言語で出す理由で、種類のまま返す
+    /// (`settings::FormOutcome`)。
+    #[error("input rejected: {0}")]
+    Rejected(crate::settings::Rejections),
+    /// 新しい通信先の登録を、利用者が確認のダイアログで取りやめた(`settings::DestinationDialog`)。
+    #[error("the registration was cancelled")]
+    Cancelled,
     #[error("MCP server error: {0}")]
     Mcp(String),
     /// リンクを開けない(許可されていない・解釈できないURL、OS側の起動失敗)。

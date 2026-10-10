@@ -2,11 +2,16 @@
 /target/
 node_modules/
 frontend/dist/
-crates/scitl-tauri/gen/
+# Tauriがビルドのたびに作る権限のスキーマ。`gen/android`(Androidのプロジェクト)は手を入れて管理するので含めない
+crates/scitl-tauri/gen/schemas/
 
 # 秘密情報
 .env
 .env.*
+# Androidの署名の鍵(リポジトリの外に置く決まり。誤って置いたときの保険)
+*.p12
+*.jks
+*.keystore
 
 # ローカルのデータベース(通常は実行ファイルの隣の`data`に置かれるが、リポジトリ内に作った場合の保険)
 *.sqlite3

@@ -12,17 +12,21 @@
 //! 動かし、削除・切り替えで直せるようにする。どちらも理由を設定画面に出し、チャットでは
 //! 理由に応じたエラー発言にする。
 
+mod destination;
 mod input;
 mod mcp_settings;
 mod model_settings;
 mod provider_settings;
+mod rejection;
 pub mod view;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::attachments::Attachments;
-use crate::config::{self, Config, ToolConfig};
+use secrecy::SecretString;
+
+use crate::config::{self, Config, SecretRef};
 use crate::db::messages::Chat;
 use crate::error::{CoreError, Result};
 use crate::i18n::Language;
@@ -32,12 +36,15 @@ use crate::llm::{DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{
     self, default_opening_message, default_task_chat_prompt, stored_prompt, McpAccess,
-    SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure,
+    SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure, TurnFinished,
 };
 use crate::secrets;
 
-pub use mcp_settings::NewMcpEndpoint;
+pub use destination::DestinationDialog;
+pub use input::HeaderInput;
+pub use mcp_settings::{McpServerAdded, NewMcpEndpoint};
 pub use provider_settings::NewProvider;
+pub use rejection::{FormOutcome, InputRejection, NumberField, Rejections};
 pub use view::{AvailableModel, ChatModelsView, SettingsView};
 
 /// 設定画面「一般」タブの入力(表示言語を除く)。プロンプトは`Option<String>`が並ぶので、
@@ -46,7 +53,10 @@ pub struct GeneralUpdate {
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
     pub task_opening_message: Option<String>,
-    pub response_timeout_secs: Option<u64>,
+    /// 数値の欄の文字列のまま受け取る(空欄は未設定。解釈は`input::positive_integer`)。
+    /// `None`は保存済みの値のまま変えない(プロンプトだけを保存するときに、書き換えていない
+    /// 欄を検証し直さない)。
+    pub response_timeout_secs: Option<String>,
 }
 
 #[derive(Clone)]
@@ -113,6 +123,7 @@ impl Snapshot {
         generating: &'a InFlightSet<Chat>,
         attachments: &'a Attachments,
         events: TurnEvents<'a>,
+        finished: TurnFinished<'a>,
     ) -> TurnContext<'a> {
         TurnContext {
             adapter: match &self.adapter {
@@ -132,6 +143,7 @@ impl Snapshot {
             generating,
             attachments,
             events,
+            finished,
         }
     }
 }
@@ -223,20 +235,14 @@ impl Settings {
         self.snapshot()
     }
 
-    /// 鍵だけを読み直す[`Self::snapshot`]。チャットを使えるかを確かめるだけで、ターンを
-    /// 始めない入口(タスクの追加)に使う。推論サーバーへは問い合わせない。
-    pub async fn snapshot_reloading_key(&self) -> Snapshot {
-        self.reload_unavailable_key().await;
-        self.snapshot()
-    }
-
     /// 鍵を読めずにいたら、資格情報ストアから読み直してアダプタを組み立て直す。GUIは
     /// 起動したまま使い続けるので、ここで読み直さないと、設定を変えるまで直らない。
+    /// Androidでは保存先の初期化が設定の読み込みより後になりうるので、GUIが初期化の後にも呼ぶ。
     ///
     /// 読み直しの間は設定の書き込みロックを持たない(ロックの解除を求める承認で止まっている
     /// 間、設定画面まで止めないため)。その間に設定が変わっていれば、結果は捨てる(変えた側が
     /// 組み立て直している)。
-    async fn reload_unavailable_key(&self) {
+    pub async fn reload_unavailable_key(&self) {
         let _reloading = self.reloading_key.lock().await;
         let before = self.current();
         if before.adapter.key_error().is_none() {
@@ -294,11 +300,16 @@ impl Settings {
     /// (`orchestration::stored_prompt`)。表示言語は[`Self::update_language`]が別に持つので、
     /// ここでは変えない。
     pub fn update_general(&self, update: GeneralUpdate) -> Result<SettingsView> {
-        let response_timeout_secs = input::bounded(
-            update.response_timeout_secs,
-            "response timeout (seconds)",
-            input::MAX_TIMEOUT_SECS,
-        )?;
+        let response_timeout_secs = update
+            .response_timeout_secs
+            .map(|text| {
+                input::positive_integer(
+                    &text,
+                    input::MAX_TIMEOUT_SECS,
+                    NumberField::ResponseTimeoutSecs,
+                )
+            })
+            .transpose()?;
         let mut draft = self.edit();
         let general = &mut draft.config.general;
         general.system_prompt = stored_prompt(update.system_prompt, None);
@@ -311,7 +322,9 @@ impl Settings {
             update.task_opening_message,
             Some(default_opening_message(language)),
         );
-        general.response_timeout_secs = response_timeout_secs;
+        if let Some(secs) = response_timeout_secs {
+            general.response_timeout_secs = secs;
+        }
         draft.commit()
     }
 
@@ -326,27 +339,39 @@ impl Settings {
         draft.commit()
     }
 
-    /// 空欄(`None`)は「未設定」として既定値に戻す。
+    /// 数値の欄の文字列のまま受け取る。空欄は「未設定」として既定値に戻し、`None`は保存済みの
+    /// 値のまま変えない(画面は書き換えた欄だけを送り、もう一方を検証し直さない)。
     pub fn update_tools(
         &self,
-        max_rounds_per_turn: Option<u32>,
-        total_timeout_secs: Option<u64>,
+        max_rounds_per_turn: Option<&str>,
+        total_timeout_secs: Option<&str>,
     ) -> Result<SettingsView> {
-        let max_rounds_per_turn = input::bounded(
-            max_rounds_per_turn,
-            "max rounds per turn",
-            input::MAX_ROUNDS_PER_TURN,
-        )?;
-        let total_timeout_secs = input::bounded(
-            total_timeout_secs,
-            "tool timeout (seconds)",
-            input::MAX_TIMEOUT_SECS,
-        )?;
+        let max_rounds_per_turn = max_rounds_per_turn
+            .map(|text| {
+                input::positive_integer(
+                    text,
+                    input::MAX_ROUNDS_PER_TURN,
+                    NumberField::MaxRoundsPerTurn,
+                )
+            })
+            .transpose()?;
+        let total_timeout_secs = total_timeout_secs
+            .map(|text| {
+                input::positive_integer(
+                    text,
+                    input::MAX_TIMEOUT_SECS,
+                    NumberField::TotalTimeoutSecs,
+                )
+            })
+            .transpose()?;
         let mut draft = self.edit();
-        draft.config.tools = ToolConfig {
-            max_rounds_per_turn,
-            total_timeout_secs,
-        };
+        let tools = &mut draft.config.tools;
+        if let Some(rounds) = max_rounds_per_turn {
+            tools.max_rounds_per_turn = rounds;
+        }
+        if let Some(secs) = total_timeout_secs {
+            tools.total_timeout_secs = secs;
+        }
         draft.commit()
     }
 }
@@ -420,6 +445,33 @@ fn delete_secret(key_ref: &str, what: &str) {
         crate::diagnostics::report(format_args!(
             "failed to delete {what} from secret store: {e}"
         ));
+    }
+}
+
+/// 秘密情報の値を保存し、`(name, key_ref)`の組に変換する。`key_ref`は`{prefix}:<ULID>`。
+/// 途中で失敗したらそれまでに保存した分を削除してからエラーを返す(孤児を残さない)。
+/// `what`は削除に失敗したときの診断に出す名前。
+fn store_secret_refs(
+    pairs: Vec<(String, SecretString)>,
+    prefix: &str,
+    what: &str,
+) -> Result<Vec<SecretRef>> {
+    let mut refs = Vec::with_capacity(pairs.len());
+    for (name, value) in pairs {
+        let key_ref = format!("{prefix}:{}", ulid::Ulid::new());
+        if let Err(e) = secrets::store(&key_ref, &value) {
+            delete_secret_refs(&refs, what);
+            return Err(e);
+        }
+        refs.push(SecretRef { name, key_ref });
+    }
+    Ok(refs)
+}
+
+/// 1件が失敗しても残りは試す。
+fn delete_secret_refs(refs: &[SecretRef], what: &str) {
+    for r in refs {
+        delete_secret(&r.key_ref, &format!("{what} '{}'", r.name));
     }
 }
 

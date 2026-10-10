@@ -9,16 +9,18 @@ use scitl_core::db::messages::{Chat, Kind, ReplyPart, Role};
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
+use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{
     AdapterIdentity, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    Replay, RequestPreview, ResponseEvent, SentAt, ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
+    Replay, RequestPreview, ResponseEvent, SentAt, SentSecrets, SessionId, ToolArguments,
+    ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
-    create_task, delete_message, discard_events, edit_user_message, generate_reply, lacks_reply,
-    open_task_chat, preview_request, retry_reply, run_turn, stop_response, McpAccess, PartView,
-    PreviewOptions, SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure,
-    UserInput,
+    create_task, delete_message, discard_events, discard_finished, edit_user_message,
+    generate_reply, lacks_reply, preview_request, retry_reply, run_turn, stop_response,
+    FinishedTurn, McpAccess, PartView, PreviewOptions, SystemPrompts, TaskCreation, ToolLimits,
+    TurnContext, TurnEvent, TurnFailure, TurnOutcome, UserInput,
 };
 use serde_json::json;
 
@@ -267,6 +269,7 @@ impl LlmAdapter for ScriptedAdapter {
 
     async fn send(
         &self,
+        _session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         _reasoning_effort: Option<ReasoningEffort>,
@@ -356,6 +359,7 @@ impl LlmAdapter for StoppingAdapter<'_> {
 
     async fn send(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
@@ -368,7 +372,7 @@ impl LlmAdapter for StoppingAdapter<'_> {
             }
         }
         self.script
-            .send(messages, tools, reasoning_effort, on_event)
+            .send(session, messages, tools, reasoning_effort, on_event)
             .await
     }
 }
@@ -416,7 +420,7 @@ fn fails_to_authenticate() -> ScriptedAdapter {
     ScriptedAdapter::failing(LlmError::from_status(
         reqwest::StatusCode::UNAUTHORIZED,
         "invalid api key",
-        "",
+        &SentSecrets::default(),
     ))
 }
 
@@ -477,6 +481,7 @@ fn context_without_provider() -> TurnContext<'static> {
         generating: Box::leak(Box::new(InFlightSet::new())),
         attachments: Box::leak(Box::new(unwritable_attachments())),
         events: &discard_events,
+        finished: &discard_finished,
     }
 }
 
@@ -1569,6 +1574,7 @@ async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
 
         async fn send(
             &self,
+            _session: Option<&SessionId>,
             _messages: &[ChatMessage],
             _tools: ToolOffer<'_>,
             _reasoning_effort: Option<ReasoningEffort>,
@@ -1577,7 +1583,12 @@ async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
             on_event(ResponseEvent::TextDelta {
                 text: "途中まで".to_string(),
             });
-            Err(LlmError::from_status(reqwest::StatusCode::BAD_GATEWAY, "", "").into())
+            Err(LlmError::from_status(
+                reqwest::StatusCode::BAD_GATEWAY,
+                "",
+                &SentSecrets::default(),
+            )
+            .into())
         }
     }
 
@@ -3844,6 +3855,209 @@ fn stopping_a_chat_that_is_not_generating_does_nothing() {
     assert!(!stop_response(&generating, Chat::General));
 }
 
+/// 応答を生成している間だけ、長く掛かる処理として知らせる(Androidではこの間だけフォアグラウンド
+/// サービスにする)。同じ集合で処理中になる発言の削除は、すぐに済むので知らせない。
+#[tokio::test]
+async fn only_generating_a_response_counts_as_long_running() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let generating = InFlightSet::watching_long_running({
+        let reported = reported.clone();
+        move |any| reported.lock().unwrap().push(any)
+    });
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&ScriptedAdapter::texts(&["応答"]))
+        },
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*reported.lock().unwrap(), [true, false]);
+
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
+    };
+    delete_message(db.clone(), &generating, chat, user_message_id)
+        .await
+        .unwrap();
+    assert_eq!(*reported.lock().unwrap(), [true, false]);
+}
+
+/// 終わった応答生成を受け口へ知らせる。返信なら最後のラウンドの本文を、失敗なら種別を載せる。
+/// 利用者が止めたターンは知らせない。
+#[tokio::test]
+async fn a_finished_turn_is_reported_with_its_reply_or_failure() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    conn.execute(
+        "UPDATE tasks SET title = '旅行の計画' WHERE id = ?1",
+        [task_id],
+    )
+    .unwrap();
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Mutex::new(Vec::new());
+    let record = |finished: FinishedTurn| reported.lock().unwrap().push(finished);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["応答"]))
+        },
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context_without_provider()
+        },
+        Chat::General,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let generating = InFlightSet::new();
+    let stopping = StoppingAdapter::new(
+        ScriptedAdapter::new(Vec::new()),
+        &generating,
+        Chat::General,
+        0,
+        true,
+    );
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            finished: &record,
+            ..context(&stopping)
+        },
+        Chat::General,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [
+            FinishedTurn {
+                chat,
+                task_name: Some("旅行の計画".to_string()),
+                outcome: TurnOutcome::Replied {
+                    text: "応答".to_string()
+                },
+            },
+            FinishedTurn {
+                chat: Chat::General,
+                task_name: None,
+                outcome: TurnOutcome::Failed {
+                    kind: "no_provider".to_string()
+                },
+            },
+        ]
+    );
+}
+
+/// 再試行は、作り直した試行の返信を1回だけ知らせる。名前の無いタスクは、最初の発言から作った
+/// 呼び名で知らせる。
+#[tokio::test]
+async fn a_retry_is_reported_once_with_the_reply_of_the_new_attempt() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Mutex::new(Vec::new());
+    let record = |finished: FinishedTurn| reported.lock().unwrap().push(finished);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["最初の応答"]))
+        },
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let first_reply = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
+    };
+    retry_reply(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["作り直した応答"]))
+        },
+        chat,
+        first_reply,
+    )
+    .await
+    .unwrap();
+
+    let replied = |text: &str| FinishedTurn {
+        chat,
+        task_name: Some("質問".to_string()),
+        outcome: TurnOutcome::Replied {
+            text: text.to_string(),
+        },
+    };
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [replied("最初の応答"), replied("作り直した応答")]
+    );
+}
+
+/// 止めたターンも、長く掛かる処理から抜ける(サービスを残さない)。
+#[tokio::test]
+async fn a_stopped_turn_is_no_longer_long_running() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let generating = InFlightSet::watching_long_running({
+        let reported = reported.clone();
+        move |any| reported.lock().unwrap().push(any)
+    });
+    let adapter =
+        StoppingAdapter::new(ScriptedAdapter::new(Vec::new()), &generating, chat, 0, true);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&adapter)
+        },
+        chat,
+        "こんにちは".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    stopped_reply(&db::messages::list_for_chat(&conn, chat).unwrap());
+    assert_eq!(*reported.lock().unwrap(), [true, false]);
+}
+
 /// 生成中のタスクでは発言を削除できない。生成中のターンが読んだ履歴とDBの発言が食い違うため。
 #[tokio::test]
 async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
@@ -4007,17 +4221,68 @@ fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
         .collect()
 }
 
-/// 聞き取りの開始。開始の発言は保存せず、以降のターンでも履歴の先頭に補う。
+/// 送信・編集の本文の前後の空白は、どの経路から来ても削って保存する。
 #[tokio::test]
-async fn open_task_chat_answers_the_opening_message_without_saving_it() {
+async fn sent_and_edited_text_is_saved_without_surrounding_whitespace() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["応答A"])),
+        Chat::Task(task_id),
+        " \n元の質問\n\n ".to_string(),
+    )
+    .await
+    .unwrap();
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        assert_eq!(text_of(&messages[0]), "元の質問");
+        messages[0].id
+    };
+
+    edit_user_message(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["応答B"])),
+        Chat::Task(task_id),
+        user_message_id,
+        "\u{3000}編集後\n 2行目 \n".to_string(),
+    )
+    .await
+    .unwrap();
+    let conn = db.lock().unwrap();
+    let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+    assert_eq!(text_of(&messages[0]), "編集後\n 2行目");
+}
+
+/// タスクを作ったら、続けて聞き取りを始める。作った知らせは聞き取りより先に届く。
+async fn create_task_opening(db: &SharedConnection, ctx: &TurnContext<'_>) -> i64 {
+    let created = std::sync::OnceLock::new();
+    let creation = create_task(db.clone(), ctx, |task| {
+        assert!(roles(db, task.id).is_empty());
+        created.set(task.id).unwrap();
+    })
+    .await
+    .unwrap();
+    let TaskCreation::Created {
+        task,
+        opening_error: None,
+    } = creation
+    else {
+        panic!("expected Created, got {creation:?}");
+    };
+    assert_eq!(created.get(), Some(&task.id));
+    task.id
+}
+
+/// 聞き取りの開始。開始の発言は保存せず、以降のターンでも履歴の先頭に補う。
+#[tokio::test]
+async fn creating_a_task_answers_the_opening_message_without_saving_it() {
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
     let adapter = ScriptedAdapter::texts(&["どんなタスクですか", "締切はいつですか"]);
 
-    open_task_chat(db.clone(), &context(&adapter), task_id)
-        .await
-        .unwrap();
+    let task_id = create_task_opening(&db, &context(&adapter)).await;
     assert_eq!(roles(&db, task_id), vec!["assistant"]);
 
     run_turn(
@@ -4057,16 +4322,16 @@ async fn open_task_chat_answers_the_opening_message_without_saving_it() {
 
 #[tokio::test]
 async fn retrying_the_opening_reply_answers_the_opening_message_again() {
-    let conn = db::open_in_memory().unwrap();
-    let task_id = seed_task(&conn);
-    let db = Arc::new(Mutex::new(conn));
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
 
-    open_task_chat(db.clone(), &context_without_provider(), task_id)
-        .await
-        .unwrap();
+    // 聞き取りの失敗はエラー発言として残り、タスクの作成は成功で終わる。
+    let task_id = create_task_opening(&db, &context(&fails_to_authenticate())).await;
     let error_id = {
         let conn = db.lock().unwrap();
-        db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap()[0].id
+        let messages = db::messages::list_for_chat(&conn, Chat::Task(task_id)).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].error_kind.is_some());
+        messages[0].id
     };
 
     let adapter = ScriptedAdapter::texts(&["どんなタスクですか"]);
@@ -4086,31 +4351,6 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
 }
 
-#[tokio::test]
-async fn open_task_chat_is_refused_once_the_conversation_has_started() {
-    let conn = db::open_in_memory().unwrap();
-    let task_id = seed_task(&conn);
-    let db = Arc::new(Mutex::new(conn));
-    run_turn(
-        db.clone(),
-        &context(&ScriptedAdapter::texts(&["はい"])),
-        Chat::Task(task_id),
-        "レポート".to_string(),
-    )
-    .await
-    .unwrap();
-
-    let err = open_task_chat(
-        db.clone(),
-        &context(&ScriptedAdapter::texts(&["x"])),
-        task_id,
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(err, CoreError::InvalidMessageOperation(_)));
-    assert_eq!(roles(&db, task_id), vec!["user", "assistant"]);
-}
-
 /// チャットを使えない間はタスクを作らない。
 #[tokio::test]
 async fn create_task_is_refused_while_the_chat_cannot_run() {
@@ -4121,7 +4361,10 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
         (context_without_provider(), "no_provider"),
         (context(&unready), "no_model"),
     ] {
-        match create_task(db.clone(), &ctx).await.unwrap() {
+        let creation = create_task(db.clone(), &ctx, |_| panic!("no task is created"))
+            .await
+            .unwrap();
+        match creation {
             TaskCreation::Unavailable { error_kind } => assert_eq!(error_kind, expected),
             other => panic!("expected Unavailable, got {other:?}"),
         }
@@ -4129,12 +4372,6 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
     assert!(db::tasks::list_tasks(&db.lock().unwrap())
         .unwrap()
         .is_empty());
-
-    let adapter = ScriptedAdapter::texts(&["x"]);
-    match create_task(db.clone(), &context(&adapter)).await.unwrap() {
-        TaskCreation::Created { task } => assert!(task.title.is_none()),
-        other => panic!("expected Created, got {other:?}"),
-    }
 }
 
 /// 1回目に`tool_calls`のツールをまとめて呼び(IDは`call_0`から順)、2回目に本文を返す。
@@ -4151,8 +4388,8 @@ fn calls_tools_then_confirms(tool_calls: Vec<(&str, serde_json::Value)>) -> Scri
     ScriptedAdapter::new(vec![calls(tool_calls), text("確認しました")]).repeating_last()
 }
 
-/// 総合チャット。発言はどのタスクにも属さず、モデルには読み取り専用のツールとタスク
-/// 一覧だけを渡す。更新系のツールを呼ばれても実行しない。
+/// 総合チャット。発言はどのタスクにも属さず、モデルにはタスクについて読み取り専用のツールと
+/// メモリのツールだけを渡す。タスクの更新系のツールを呼ばれても実行しない。
 #[tokio::test]
 async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     let conn = db::open_in_memory().unwrap();
@@ -4175,7 +4412,15 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     let offered = adapter.offered();
     assert_eq!(
         offered[0],
-        vec!["get_task_list", "get_task_detail", "read_attachment"]
+        vec![
+            "get_task_list",
+            "get_task_detail",
+            "read_attachment",
+            "get_memories",
+            "add_memories",
+            "update_memory",
+            "delete_memory",
+        ]
     );
     // タスクの一覧は添えず、モデルが読み取りのツールで読む。
     let first = &adapter.sent_messages()[0];
@@ -4199,6 +4444,42 @@ async fn the_general_chat_reads_tasks_but_cannot_change_them() {
     assert!(db::messages::list_for_chat(&conn, Chat::Task(task_id))
         .unwrap()
         .is_empty());
+}
+
+/// メモリはどの会話にも属さない。あるタスクの会話で書いたものを、総合チャットで読める。
+#[tokio::test]
+async fn memories_written_in_a_task_are_read_in_the_general_chat() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let writer = calls_tools_then_confirms(vec![("add_memories", json!({ "contents": ["朝型"] }))]);
+    run_turn(
+        db.clone(),
+        &context(&writer),
+        Chat::Task(task_id),
+        "朝のほうが集中できる".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let reader = calls_tools_then_confirms(vec![("get_memories", json!({}))]);
+    run_turn(
+        db.clone(),
+        &context(&reader),
+        Chat::General,
+        "私のこと覚えてる?".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    let read = db::messages::list_for_chat(&conn, Chat::General)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.kind == Kind::ToolExecution)
+        .unwrap();
+    let result = &serde_json::from_str::<serde_json::Value>(&read.content).unwrap()["result"];
+    assert_eq!(result[0]["content"], "朝型");
 }
 
 /// 総合チャットの応答生成も1本に絞るが、タスクの会話は妨げない。
@@ -4810,6 +5091,66 @@ async fn preview_reports_why_the_chat_cannot_be_used() {
     );
 }
 
+/// 送るたびに受け取ったセッションIDを覚える。応答は`script`に任せる。
+struct SessionRecorder {
+    script: ScriptedAdapter,
+    sessions: Mutex<Vec<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl LlmAdapter for SessionRecorder {
+    fn readiness(&self) -> Readiness {
+        self.script.readiness()
+    }
+
+    async fn send(
+        &self,
+        session: Option<&SessionId>,
+        messages: &[ChatMessage],
+        tools: ToolOffer<'_>,
+        reasoning_effort: Option<ReasoningEffort>,
+        on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+    ) -> Result<Replay, CoreError> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .push(session.map(|s| s.as_str().to_string()));
+        self.script
+            .send(session, messages, tools, reasoning_effort, on_event)
+            .await
+    }
+}
+
+/// セッションIDは会話ごとに1つで、ターンをまたいでも変わらない。
+#[tokio::test]
+async fn each_conversation_sends_its_own_stable_session_id() {
+    let adapter = SessionRecorder {
+        script: ScriptedAdapter::repeating(text("ok")),
+        sessions: Mutex::new(Vec::new()),
+    };
+    let conn = db::open_in_memory().unwrap();
+    let first = Chat::Task(seed_task(&conn));
+    let second = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    for chat in [first, first, second, Chat::General] {
+        run_turn(db.clone(), &context(&adapter), chat, "hi".to_string())
+            .await
+            .unwrap();
+    }
+
+    let sessions: Vec<String> = adapter
+        .sessions
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(Option::unwrap)
+        .collect();
+    assert_eq!(sessions[0], sessions[1]);
+    assert_ne!(sessions[0], sessions[2]);
+    assert_ne!(sessions[0], sessions[3]);
+    assert_ne!(sessions[2], sessions[3]);
+}
+
 /// `responses`の数だけ接続を受け、順に本文を200で返す。受けたリクエストの本文を返す。
 fn spawn_messages_server(
     responses: Vec<&'static str>,
@@ -4869,7 +5210,7 @@ async fn anthropic_thinking_blocks_are_sent_back_unchanged_within_the_turn() {
     ]);
     let adapter = AnthropicAdapter::new(
         base_url,
-        secrecy::SecretString::from("sk-test".to_string()),
+        Credentials::key_only(secrecy::SecretString::from("sk-test".to_string())),
         "claude-test",
         std::time::Duration::from_secs(30),
     )

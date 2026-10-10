@@ -15,7 +15,7 @@ use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet, StopSignal};
 use crate::llm::{
-    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent,
+    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, SessionId,
     ToolArguments, ToolCallRequest,
 };
 use crate::mcp::McpSessions;
@@ -23,6 +23,7 @@ use crate::orchestration::history;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::tool_record::{ToolExecutionRecord, ToolExecutionView};
 use crate::orchestration::transcript::SavedTurn;
+use crate::orchestration::turn_end;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::turn_request::TurnRequest;
 use crate::orchestration::{TurnContext, TurnEvent, TurnEvents};
@@ -65,7 +66,7 @@ pub async fn run_turn(
         return Err(e);
     }
 
-    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
 }
 
 /// ユーザー発言と添付を1つのトランザクションで書く。実体は行より先に置き場所へ書く
@@ -93,13 +94,14 @@ async fn save_user_message(
 }
 
 /// ユーザー発言の行を書く。会話が存在するかは呼び出し側が確かめる([`require_chat`])。
+/// 本文の前後の空白は削る(送信・編集のどの経路から来ても、同じ入力なら同じ本文を保存する)。
 pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> Result<i64> {
     messages::insert_message(
         conn,
         NewMessage {
             chat,
             role: Role::User,
-            content: text,
+            content: text.trim(),
             kind: Kind::Normal,
             origin: Origin::User,
             error_kind: None,
@@ -114,38 +116,63 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum TaskCreation {
+    /// 作って聞き取りを終えた。`opening_error`は聞き取りを始められなかった理由(`CoreError`の
+    /// 表示文)で、そのときもタスクは残る。作ったかどうかを、作った知らせの届き方に頼らずに
+    /// 結果だけで分かるよう、`Err`にはしない。
     Created {
         task: Task,
+        opening_error: Option<String>,
     },
     /// チャットを使えないので作らなかった。`error_kind`はエラー発言と同じ種別コードで、
     /// 画面は同じ文言を出す。
-    Unavailable {
-        error_kind: &'static str,
-    },
+    Unavailable { error_kind: &'static str },
 }
 
-/// 新規タスクの作成。チャットを使えない(モデル未選択等)ならタスクを作らずに理由を返す
-/// (続く[`open_task_chat`]が失敗し、エラー発言だけのタスクが残るため)。
-pub async fn create_task(db: SharedConnection, ctx: &TurnContext<'_>) -> Result<TaskCreation> {
+/// 新規タスクを作り、続けて聞き取りを始める(`open_task_chat`)。チャットを使えない
+/// (モデル未選択等)ならタスクを作らずに理由を返す(作っても聞き取りが失敗し、エラー発言だけの
+/// タスクが残るため)。
+///
+/// `on_created`は作った直後、聞き取りの前に呼ぶ(画面が作ったタスクの会話を開く)。聞き取りが
+/// 失敗してもタスクは残し、理由を結果に添える。モデルの呼び出しの失敗はエラー発言として
+/// 保存されるので、ここには来ない([`run_turn`]と同じ)。`Err`は作る前の失敗だけ。
+pub async fn create_task(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    on_created: impl FnOnce(&Task) + Send,
+) -> Result<TaskCreation> {
     if let Err(failure) = ready_adapter(ctx) {
         return Ok(TaskCreation::Unavailable {
             error_kind: failure.kind(),
         });
     }
-    let task = with_conn(db, tasks::create_task).await?;
-    Ok(TaskCreation::Created { task })
+    let task = with_conn(db.clone(), tasks::create_task).await?;
+    on_created(&task);
+    let opening_error = open_task_chat(db, ctx, task.id)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    Ok(TaskCreation::Created {
+        task,
+        opening_error,
+    })
+}
+
+/// [`create_task`]をIPCで呼ぶときに画面へ送る途中経過。作ったタスクを聞き取りの途中経過と
+/// 同じ経路で先に送る(経路を分けると、届く順が保証されない)。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TaskOpeningEvent {
+    Created { task: Task },
+    Turn { event: TurnEvent },
 }
 
 /// 聞き取りの開始。ユーザーの発言なしに、開始の発言([`TurnContext::opening_message`])への
 /// 返信として最初のターンを生成する。開始の発言は保存せず、以降のターンも
 /// `history::build_history`が履歴の先頭に補う。
 ///
-/// まだ1行も発言の無いタスクでだけ行う。
-pub async fn open_task_chat(
-    db: SharedConnection,
-    ctx: &TurnContext<'_>,
-    task_id: i64,
-) -> Result<()> {
+/// まだ1行も発言の無いタスクでだけ行う。作ったばかりのタスクで[`create_task`]からだけ呼ぶ。
+async fn open_task_chat(db: SharedConnection, ctx: &TurnContext<'_>, task_id: i64) -> Result<()> {
     generate_new_turn(db, ctx, Chat::Task(task_id), move |conn| {
         if messages::opener(conn, task_id)?.is_some() {
             return Err(CoreError::InvalidMessageOperation(
@@ -198,7 +225,7 @@ async fn generate_new_turn(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
 }
 
 /// ユーザー発言の編集。対象の発言以降(自身を含む)の通常発言をすべて論理削除し、編集後の
@@ -231,7 +258,7 @@ pub async fn edit_user_message(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
 }
 
 /// ターンの返信(アシスタント発言またはエラー発言)の再試行。対象の発言以降(自身を含む)の
@@ -279,7 +306,7 @@ pub async fn retry_reply(
     })
     .await?;
 
-    generate_turn_response(db, ctx, attempt, generating.stop_signal()).await
+    generate_turn_response(db, ctx, attempt, &generating).await
 }
 
 /// 発言と、それより後ろの通常発言をまとめて論理削除する(編集・再試行と同じく、その地点から
@@ -385,15 +412,36 @@ fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
 /// `stop`で止めた場合も同じく、止めたことを表すエラー発言を書いて`Ok`で返す([`stop_response`])。
 /// 失敗までに受け取り終えたラウンドの中身と実行したツールは、エラー発言に添えて残す
 /// ([`ReplyParts`])。
+///
+/// 走っている間、`generating`の長く掛かる部分に入っていることにする
+/// ([`InFlight::long_running`]。`architecture/concurrency.md`「Androidで裏へ回ったとき」)。
+/// 返信かエラー発言を書き終えたら、終わったことを知らせる([`TurnContext::finished`])。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     attempt: Attempt,
+    generating: &InFlight<'_, Chat>,
+) -> Result<()> {
+    // 応答を待つのはここから先だけ。発言の削除・タスクの操作も同じ集合で処理中になるが、すぐに済む。
+    let _long_running = generating.long_running();
+    let stop = generating.stop_signal();
+    let result = respond(db.clone(), ctx, &attempt, stop).await;
+    if result.is_ok() {
+        report_finished(db, ctx, &attempt).await;
+    }
+    result
+}
+
+/// [`generate_turn_response`]の中身。返信かエラー発言を書いて返る。
+async fn respond(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    attempt: &Attempt,
     stop: &StopSignal,
 ) -> Result<()> {
     let adapter = match ready_adapter(ctx) {
         Ok(adapter) => adapter,
-        Err(failure) => return fail_turn(db, &attempt, failure, &ReplyParts::default()).await,
+        Err(failure) => return fail_turn(db, attempt, failure, &ReplyParts::default()).await,
     };
 
     let mut sessions = McpSessions::new();
@@ -404,17 +452,34 @@ async fn generate_turn_response(
                     db.clone(),
                     adapter,
                     ctx,
-                    &attempt,
+                    attempt,
                     &external,
                     &mut sessions,
                     stop,
                 )
                 .await
             }
-            None => fail_turn(db, &attempt, TurnFailure::Stopped, &ReplyParts::default()).await,
+            None => fail_turn(db, attempt, TurnFailure::Stopped, &ReplyParts::default()).await,
         };
     sessions.close().await;
     result
+}
+
+/// 終わったことを受け口へ知らせる([`TurnContext::finished`])。返信の行は書き終えているので、
+/// 知らせる中身を作れなくてもターンは失敗にしない。
+async fn report_finished(db: SharedConnection, ctx: &TurnContext<'_>, attempt: &Attempt) {
+    let attempt = attempt.clone();
+    let finished = with_conn(db, move |conn| {
+        turn_end::finished_turn(conn, attempt.chat, &attempt.turn_id, attempt.attempt_no)
+    })
+    .await;
+    match finished {
+        Ok(Some(finished)) => (ctx.finished)(finished),
+        Ok(None) => {}
+        Err(e) => {
+            crate::diagnostics::report(format_args!("could not report that the turn finished: {e}"))
+        }
+    }
 }
 
 /// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
@@ -619,6 +684,21 @@ pub(super) async fn prepare_external_tools(
     Some(ExternalToolset::build(fetched, &reserved).with_unavailable(unavailable, &reserved))
 }
 
+/// 会話ごとのセッションID([`SessionId`])。会話のキーは、タスクのチャットならタスクのIDと
+/// 作成日時、総合チャットなら固定の文字列。作成日時も含めるのは、主キーが`AUTOINCREMENT`
+/// ではなく、行を消す操作ができると、消した番号が次のタスクに使い回されうるため(今の削除は
+/// 論理削除で、行は消さない)。総合チャットは1つしかなく作り直されない。
+fn session_id(conn: &Connection, chat: Chat) -> Result<Option<SessionId>> {
+    let conversation = match chat {
+        Chat::General => "general".to_string(),
+        Chat::Task(task_id) => {
+            let task = tasks::get_task(conn, task_id)?;
+            format!("task:{task_id}:{}", task.created_at)
+        }
+    };
+    Ok(SessionId::for_conversation(&conversation))
+}
+
 /// LLM呼び出しとツール呼び出しの往復。切断の都合で[`generate_turn_response`]から
 /// 分けてあるだけで、1ターンの流れとしては地続き。
 ///
@@ -640,7 +720,10 @@ async fn run_tool_rounds(
         let db = db.clone();
         let reply_parts = &mut reply_parts;
         let chat = attempt.chat;
-        let stored = with_conn(db.clone(), move |conn| history::load(conn, chat)).await?;
+        let (stored, session) = with_conn(db.clone(), move |conn| {
+            Ok((history::load(conn, chat)?, session_id(conn, chat)?))
+        })
+        .await?;
         let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
         // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
         // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
@@ -658,6 +741,7 @@ async fn run_tool_rounds(
             let notify = ctx.events;
             let sent = stop
                 .unless_requested(adapter.send(
+                    session.as_ref(),
                     &messages_to_send,
                     offered,
                     ctx.reasoning_effort,

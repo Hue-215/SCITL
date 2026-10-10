@@ -1,24 +1,28 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import type {
   ApiFormat,
-  PickingLimits,
+  BaseUrlHint,
   AvailableModel,
   Capability,
   Chat,
   ChatModelsView,
   DataDirError,
-  DropNotice,
-  ExportSummary,
+  ExportOutcome,
+  ExportTarget,
+  FormOutcome,
   Language,
-  LinkInspection,
+  McpServerAdded,
+  Memory,
   MessageView,
   NewMcpEndpoint,
   ReasoningEffort,
+  ReceivedFiles,
   SettingsView,
   StageOutcome,
   TaskCreation,
   TaskDetailView,
   TaskListItem,
+  TaskOpeningEvent,
   TurnEvent,
 } from './types'
 
@@ -40,8 +44,10 @@ export function listTasks(): Promise<TaskListItem[]> {
   return invoke('list_tasks')
 }
 
-export function createTask(): Promise<TaskCreation> {
-  return invoke('create_task')
+// 作ったら続けて聞き取りを始める。作ったタスクと聞き取りの途中経過は、この順で`onEvent`へ
+// 届く。返るのは聞き取りが終わってからで、返ったときに作った知らせがまだ届いていないこともある。
+export function createTask(onEvent: (event: TaskOpeningEvent) => void): Promise<TaskCreation> {
+  return invoke('create_task', { onEvent: new Channel(onEvent) })
 }
 
 // ヘッダーからのタスク操作。どれも応答を生成中のタスクでは断られる。
@@ -57,17 +63,9 @@ export function deleteTask(taskId: number): Promise<void> {
   return invoke('delete_task', { taskId })
 }
 
-// 聞き取りの開始・送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)
-// はコマンドの呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が
-// 知っている。
-export function openTaskChat(
-  taskId: number,
-  onEvent: (event: TurnEvent) => void,
-): Promise<void> {
-  return invoke('open_task_chat', { taskId, onEvent: new Channel(onEvent) })
-}
-
-// `attachments`は`stageAttachment`が返したトークン。
+// 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)はコマンドの
+// 呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が知っている。
+// `attachments`は`stageReceivedFile`が返したトークン。
 export function sendChatMessage(
   chat: Chat,
   text: string,
@@ -84,29 +82,44 @@ export function sendChatMessage(
 
 // 添付。中身は生のバイト列で送り、名前はヘッダーに載せる(ヘッダーはASCIIしか
 // 運べないので符号化する)。パスを渡すコマンドは無い。
-export async function stageAttachment(file: File): Promise<StageOutcome> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  return invoke('stage_attachment', bytes, {
-    headers: { 'x-scitl-file-name': encodeURIComponent(file.name) },
-  })
-}
-
 export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
 }
 
-// 窓に落としたファイル。パスはOSからRust側へ直接届き、画面には名前だけが知らされる。知らせ先は
-// 1つで、渡し直すと置き換わる。受け付けたものだけを、ドロップの番号と並びの位置で指して読ませる。
-export function watchDroppedFiles(onDrop: (notice: DropNotice) => void): Promise<void> {
+// 送っていない添付をすべて捨てる。画面は起動のたびに呼ぶ(読み込み直した画面は入力欄の添付を
+// 持たないので、Rust側に残った預かりが数の上限を埋めないように)。
+export function discardAllStagedAttachments(): Promise<void> {
+  return invoke('discard_all_staged_attachments')
+}
+
+// 添付になるファイルは、画面を通らずにRust側がOSから受け取る(窓に落とした・選択画面で選んだ・
+// クリップボードの画像)。画面には名前だけが知らされ、受け付けたものだけを、受け取りの番号と
+// 並びの位置で指して読ませる。
+
+// 窓に落としたファイルの知らせ先。1つで、渡し直すと置き換わる。
+export function watchDroppedFiles(onDrop: (files: ReceivedFiles) => void): Promise<void> {
   return invoke('watch_dropped_files', { onDrop: new Channel(onDrop) })
 }
 
-export function stageDroppedFile(dropId: number, index: number): Promise<StageOutcome> {
-  return invoke('stage_dropped_file', { dropId, index })
+// 通知を押して開くことになった会話の知らせ先(Android)。1つで、渡し直すと置き換わる。どの会話を
+// 開くかはRust側が確かめて決め、画面はそれを表示するだけ。
+export function watchRequestedChats(onRequest: (chat: Chat) => void): Promise<void> {
+  return invoke('watch_requested_chats', { onRequest: new Channel(onRequest) })
 }
 
-export function getAttachmentLimits(): Promise<PickingLimits> {
-  return invoke('get_attachment_limits')
+// OSの選択画面で選ばせる。取りやめたらnull。
+export function pickAttachments(): Promise<ReceivedFiles | null> {
+  return invoke('pick_attachments')
+}
+
+// 文字の無い貼り付けが起きたことを伝え、クリップボードの画像を受け取らせる。画像が無ければnull。
+export function pasteClipboardImage(): Promise<ReceivedFiles | null> {
+  return invoke('paste_clipboard_image')
+}
+
+// 受け取ったファイルの1つを読ませて預ける。種別・大きさ・1つの発言に付けられる数の判定はRust側。
+export function stageReceivedFile(batchId: number, index: number): Promise<StageOutcome> {
+  return invoke('stage_received_file', { batchId, index })
 }
 
 export function readTextAttachment(attachmentId: number): Promise<string> {
@@ -122,8 +135,12 @@ export function revealAttachment(attachmentId: number): Promise<void> {
   return invoke('reveal_attachment', { attachmentId })
 }
 
-// 書き出し先は画面からは選ばない。
-export function exportMarkdown(): Promise<ExportSummary> {
+// 書き出し先は画面からは選ばない(選ぶOSでは、Rust側が保存画面を出す)。
+export function getExportTarget(): Promise<ExportTarget> {
+  return invoke('get_export_target')
+}
+
+export function exportMarkdown(): Promise<ExportOutcome> {
   return invoke('export_markdown')
 }
 
@@ -198,31 +215,41 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
 }
 
 // プロンプトはどれも`string | null`で並ぶため、取り違えないようオブジェクト引数にする。
+// 数値の欄(`responseTimeoutSecs`等)は入力欄の文字列のまま送る。空欄は「未設定」で、Rust側の
+// 既定値に戻る。nullは保存済みの値のまま変えない(書き換えた欄だけを送る)。解釈と検証は
+// Rust側が行い、欄の誤りは`rejected`で返る。
 export function updateGeneralSettings(args: {
   systemPrompt: string | null
   taskChatSystemPrompt: string | null
   taskOpeningMessage: string | null
-  responseTimeoutSecs: number | null
-}): Promise<SettingsView> {
+  responseTimeoutSecs: string | null
+}): Promise<FormOutcome<SettingsView>> {
   return invoke('update_general_settings', args)
 }
 
-// ツール呼び出しの上限。nullは「未設定」で、Rust側の既定値に戻る。updateGeneralSettingsと
-// 同じ理由(number | nullが並ぶ)でオブジェクト引数にする。
+// ツール呼び出しの上限。数値の欄の扱いはupdateGeneralSettingsと同じ。引数の取り違えを
+// 避けるためオブジェクト引数にする。
 export function updateToolSettings(args: {
-  maxRoundsPerTurn: number | null
-  totalTimeoutSecs: number | null
-}): Promise<SettingsView> {
+  maxRoundsPerTurn: string | null
+  totalTimeoutSecs: string | null
+}): Promise<FormOutcome<SettingsView>> {
   return invoke('update_tool_settings', args)
 }
 
+// `headers`はヘッダーの欄の文字列のまま送る(1行1件の解釈はRust側)。
 export function addProvider(
   name: string,
   apiFormat: ApiFormat,
   baseUrl: string,
   apiKey: string | null,
-): Promise<SettingsView> {
-  return invoke('add_provider', { name, apiFormat, baseUrl, apiKey })
+  headers: string,
+): Promise<FormOutcome<SettingsView>> {
+  return invoke('add_provider', { name, apiFormat, baseUrl, apiKey, headers })
+}
+
+// 入力中のベースURLへのヒント(版のパスまで書いた等)。判定はRust側(アダプタの知識)。
+export function getBaseUrlHint(apiFormat: ApiFormat, baseUrl: string): Promise<BaseUrlHint | null> {
+  return invoke('get_base_url_hint', { apiFormat, baseUrl })
 }
 
 export function deleteProvider(providerId: string): Promise<SettingsView> {
@@ -230,6 +257,7 @@ export function deleteProvider(providerId: string): Promise<SettingsView> {
 }
 
 // 1件でも登録できない名前があれば、1件も登録しない。
+// 登録したら、検出できるプロバイダーなら続けて能力を検出する(検出の失敗は追加の失敗にしない)。
 export function addModels(providerId: string, models: string[]): Promise<SettingsView> {
   return invoke('add_models', { providerId, models })
 }
@@ -260,11 +288,12 @@ export function setModelCapability(
   return invoke('set_model_capability', { providerId, model, capability, supported })
 }
 
+// `contextLength`は入力欄の文字列のまま送る(空欄は手動設定を外す)。
 export function setModelContextLength(
   providerId: string,
   model: string,
-  contextLength: number | null,
-): Promise<SettingsView> {
+  contextLength: string,
+): Promise<FormOutcome<SettingsView>> {
   return invoke('set_model_context_length', { providerId, model, contextLength })
 }
 
@@ -293,7 +322,11 @@ export function setReasoningEffort(
   return invoke('set_reasoning_effort', { providerId, model, effort })
 }
 
-export function addMcpServer(name: string, endpoint: NewMcpEndpoint): Promise<SettingsView> {
+// 登録したら続けてツール一覧を取得する。取得に失敗しても登録は残り、理由が添えられる。
+export function addMcpServer(
+  name: string,
+  endpoint: NewMcpEndpoint,
+): Promise<FormOutcome<McpServerAdded>> {
   return invoke('add_mcp_server', { name, endpoint })
 }
 
@@ -318,12 +351,27 @@ export function fetchMcpTools(serverId: string): Promise<SettingsView> {
   return invoke('fetch_mcp_tools', { serverId })
 }
 
-// 本文中のリンク。開く側でもRustが判定し直すため、確認ダイアログを経ずにopenConfirmedLinkを
-// 呼んでも許可されないURLは開かない。
-export function inspectLink(url: string): Promise<LinkInspection> {
-  return invoke('inspect_link', { url })
+// 本文中のリンクを開きたいと伝える。判定も、開く前の確認(ネイティブのダイアログ)も、開けな
+// かったときの知らせもRust側が行い、返るのはダイアログを閉じてから。
+export function openLink(url: string): Promise<void> {
+  return invoke('open_link', { url })
 }
 
-export function openConfirmedLink(url: string): Promise<void> {
-  return invoke('open_confirmed_link', { url })
+// 設定のメモリタブ。変更のコマンドは何も返さないので、画面は続けて一覧を読み直す。
+export function listMemories(): Promise<Memory[]> {
+  return invoke('list_memories')
+}
+
+// 空・長すぎる本文と、上限の件数を超える追加は断られる。新しく足したメモリを返し、既にある
+// 本文と同じなら空の配列になる。
+export function addMemory(content: string): Promise<Memory[]> {
+  return invoke('add_memory', { content })
+}
+
+export function updateMemory(memoryId: number, content: string): Promise<void> {
+  return invoke('update_memory', { memoryId, content })
+}
+
+export function deleteMemory(memoryId: number): Promise<void> {
+  return invoke('delete_memory', { memoryId })
 }

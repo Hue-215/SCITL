@@ -1,8 +1,9 @@
 // 設定画面の「プロバイダー」タブ。
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import {
   addModels,
   detectModelCapabilities,
+  getBaseUrlHint,
   listProviderModels,
   removeModel,
   resetModelCapabilities,
@@ -12,8 +13,10 @@ import {
 } from './api'
 import type {
   ApiFormat,
+  ApiFormatChoice,
   AvailableModel,
   Capability,
+  FormOutcome,
   ModelView,
   ProviderView,
   SettingsView,
@@ -22,16 +25,12 @@ import { matchQuery } from './search'
 import { ConfirmButton } from './Dialog'
 import Dropdown from './Dropdown'
 import { isolated, type MessageKey, t } from './i18n'
+import Icon from './Icon'
+import type { AddResult } from './rejection'
 import { CollapseToggle, ServerNotice } from './settingsFields'
-import { usePositiveIntegerInput } from './settingsInput'
+import { useNumberInput } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
-
-const DEFAULT_BASE_URL_BY_FORMAT: Record<ApiFormat, string> = {
-  open_ai_compat: 'https://api.openai.com/v1',
-  anthropic: 'https://api.anthropic.com',
-  gemini: 'https://generativelanguage.googleapis.com',
-}
 
 const API_FORMAT_LABELS: Record<ApiFormat, MessageKey> = {
   open_ai_compat: 'settings.provider.formats.open_ai_compat',
@@ -39,28 +38,10 @@ const API_FORMAT_LABELS: Record<ApiFormat, MessageKey> = {
   gemini: 'settings.provider.formats.gemini',
 }
 
-// Anthropic・Gemini形式のベースURLはAPIの版のパスを含まない(アダプタが`v1/messages`・
-// `v1beta/interactions`を足す)。OpenAI互換の癖で版まで書くと、存在しないパスに送ることになる。
-// 登録は止めず、ヒントで知らせる。
-const EXTRA_PATH_HINTS: Partial<Record<ApiFormat, { pattern: RegExp; hint: MessageKey }>> = {
-  anthropic: {
-    pattern: /\/v1(\/messages)?\/?$/,
-    hint: 'settings.provider.base_url_extra_path_anthropic',
-  },
-  gemini: {
-    pattern: /\/v1(beta)?(\/interactions|\/openai)?\/?$/,
-    hint: 'settings.provider.base_url_extra_path_gemini',
-  },
-}
-
-function extraPathHint(format: ApiFormat, baseUrl: string): MessageKey | null {
-  const rule = EXTRA_PATH_HINTS[format]
-  if (!rule) return null
-  try {
-    return rule.pattern.test(new URL(baseUrl.trim()).pathname) ? rule.hint : null
-  } catch {
-    return null
-  }
+// ベースURLへのヒント(Rust側が判定した種類)の文言。方言ごとに例のURLが違う。
+const VERSION_PATH_HINTS: Partial<Record<ApiFormat, MessageKey>> = {
+  anthropic: 'settings.provider.base_url_extra_path_anthropic',
+  gemini: 'settings.provider.base_url_extra_path_gemini',
 }
 
 // 検索欄のあるモデルの一覧(登録済みの表・取得したモデルの候補)で、絞り込んだ結果が空のときの一文。
@@ -68,18 +49,25 @@ function noModelMatchText(query: string): string {
   return t('settings.model.no_match', { query: isolated(query.trim()) })
 }
 
+// 欄の誤り(Rust側が断った理由)の文言を返す保存。受け付けたら空。
+type SaveField = (action: () => Promise<FormOutcome<SettingsView>>) => Promise<string[]>
+
 interface ProvidersTabProps {
   settings: SettingsView
+  // 欄の誤りは理由の文言で返る(フォームの下に出す)。
   onAddProvider: (
     name: string,
     apiFormat: ApiFormat,
     baseUrl: string,
     apiKey: string | null,
-  ) => Promise<void>
+    headers: string,
+  ) => Promise<AddResult>
   onDeleteProvider: (providerId: string) => void
   // モデルの操作(追加・削除・表の各列)は種類が多いため、個別のコールバックを並べずに
   // 呼び出しごと受け取り、結果の反映とエラー表示を親に任せる。
   onUpdateModels: (action: () => Promise<SettingsView>) => Promise<void>
+  // 入力欄の文字列を送る操作(コンテキスト長)。欄の誤りは欄の下に出す。
+  onSaveModelField: SaveField
 }
 
 export function ProvidersTab({
@@ -87,6 +75,7 @@ export function ProvidersTab({
   onAddProvider,
   onDeleteProvider,
   onUpdateModels,
+  onSaveModelField,
 }: ProvidersTabProps) {
   const [newModelByProvider, setNewModelByProvider] = useState<Record<string, string>>({})
 
@@ -104,6 +93,7 @@ export function ProvidersTab({
             }
             onDeleteProvider={() => onDeleteProvider(provider.id)}
             onUpdateModels={onUpdateModels}
+            onSaveModelField={onSaveModelField}
           />
         ))}
         {settings.providers.length === 0 && (
@@ -111,7 +101,7 @@ export function ProvidersTab({
         )}
       </ul>
 
-      <AddProviderForm onAdd={onAddProvider} />
+      <AddProviderForm choices={settings.api_formats} onAdd={onAddProvider} />
     </div>
   )
 }
@@ -122,6 +112,7 @@ interface ProviderCardProps {
   onSetNewModel: (value: string) => void
   onDeleteProvider: () => void
   onUpdateModels: (action: () => Promise<SettingsView>) => Promise<void>
+  onSaveModelField: SaveField
 }
 
 function ProviderCard({
@@ -130,6 +121,7 @@ function ProviderCard({
   onSetNewModel,
   onDeleteProvider,
   onUpdateModels,
+  onSaveModelField,
 }: ProviderCardProps) {
   const hasModel = provider.models.length > 0
   // 検出の失敗は、モデルの操作と同じく親のエラー欄に出る(`onUpdateModels`)。
@@ -139,14 +131,8 @@ function ProviderCard({
   // 取得の失敗はカード内に出す(どのプロバイダーで失敗したかが分かるように)。
   const listing = useAsyncAction((error) => t('common.fetch_failed', { error: isolated(error) }))
 
-  // 追加したモデルの能力もすぐ表に出す。サーバーに繋がらなくても追加は済んでいるので、
-  // 検出の失敗は追加の失敗として出さない(ターンの開始時にもう一度問い合わせる)。
-  const add = (models: string[]) =>
-    onUpdateModels(async () => {
-      const added = await addModels(provider.id, models)
-      if (!provider.can_detect_capabilities) return added
-      return detectModelCapabilities(provider.id).catch(() => added)
-    })
+  // 追加したモデルの能力の検出は、Rust側が追加に続けて行う。
+  const add = (models: string[]) => onUpdateModels(() => addModels(provider.id, models))
 
   return (
     <li className="provider-card">
@@ -170,6 +156,14 @@ function ProviderCard({
             : t('settings.provider.api_key_unset'),
         })}
       </p>
+      {provider.header_names.length > 0 && (
+        <p className="provider-card-meta">
+          {t('settings.tools.secret_names_display', {
+            label: t('settings.tools.header_names_label'),
+            names: provider.header_names.map(isolated).join(', '),
+          })}
+        </p>
+      )}
       {provider.error && (
         <p className="error">
           {t('settings.provider.unusable', { error: isolated(provider.error) })}
@@ -182,7 +176,7 @@ function ProviderCard({
       )}
 
       {hasModel ? (
-        <ModelTable provider={provider} onUpdate={onUpdateModels} />
+        <ModelTable provider={provider} onUpdate={onUpdateModels} onSaveField={onSaveModelField} />
       ) : (
         <p className="list-empty">{t('settings.model.none_registered')}</p>
       )}
@@ -356,11 +350,12 @@ const CAPABILITY_COLUMNS: CapabilityColumn[] = [
 interface ModelTableProps {
   provider: ProviderView
   onUpdate: (action: () => Promise<SettingsView>) => void
+  onSaveField: SaveField
 }
 
 // モデル表。能力は解決済みの値を描くだけで、手動設定の正規化(初期値と同じ値なら手動設定を
 // 外す)はRust側が持つ。
-function ModelTable({ provider, onUpdate }: ModelTableProps) {
+function ModelTable({ provider, onUpdate, onSaveField }: ModelTableProps) {
   const models = provider.models
   const { collapsible, collapsed, toggle } = useCollapse(models.length)
   const [query, setQuery] = useState('')
@@ -411,11 +406,16 @@ function ModelTable({ provider, onUpdate }: ModelTableProps) {
                   providerId={provider.id}
                   model={model}
                   onUpdate={onUpdate}
+                  onSaveField={onSaveField}
                 />
               ))}
             </tbody>
           </table>
         </div>
+      )}
+      {/* 行の⚠の説明。指で操作する端末ではツールチップが出ないので、画面に出しておく。 */}
+      {shown.some((m) => m.lacks_tools) && (
+        <p className="settings-hint">{t('settings.model.lacks_tools_note')}</p>
       )}
       {searching && matched.length === 0 && <p className="list-empty">{noModelMatchText(query)}</p>}
     </>
@@ -426,16 +426,14 @@ interface ModelRowProps {
   providerId: string
   model: ModelView
   onUpdate: (action: () => Promise<SettingsView>) => void
+  onSaveField: SaveField
 }
 
-function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
+function ModelRow({ providerId, model, onUpdate, onSaveField }: ModelRowProps) {
   const { name, label: shown } = model
-  // 欄には手動設定だけを出し、既定値はプレースホルダに回す。手動設定が既定値と同じなら
-  // Rust側で外されるので、解決済みの値が既定値と違うことが手動設定があることと同じになる。
-  const resolvedLength = model.capabilities.context_length
-  const contextLength = usePositiveIntegerInput(
-    resolvedLength === model.default_context_length ? null : resolvedLength,
-    (value) => onUpdate(() => setModelContextLength(providerId, name, value)),
+  // 欄には手動設定だけを出し、既定値はプレースホルダに回す。
+  const contextLength = useNumberInput(model.context_length_override, (text) =>
+    onSaveField(() => setModelContextLength(providerId, name, text)),
   )
 
   return (
@@ -457,10 +455,10 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
           <span
             className="model-warning"
             role="img"
-            aria-label={t('settings.model.lacks_tools_warning')}
-            title={t('settings.model.lacks_tools_warning')}
+            aria-label={t('settings.model.lacks_tools_label')}
+            title={t('settings.model.lacks_tools_label')}
           >
-            ⚠
+            <Icon name="warning" />
           </span>
         )}
       </td>
@@ -486,9 +484,11 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
           })}
           aria-label={t('settings.model.context_length_label', { model: isolated(shown) })}
         />
-        {contextLength.invalid && (
-          <p className="error model-context-length-error">{t('errors.positive_integer')}</p>
-        )}
+        {contextLength.errors.map((e) => (
+          <p key={e} className="error model-context-length-error">
+            {e}
+          </p>
+        ))}
       </td>
       <td>
         <span className="model-actions">
@@ -500,7 +500,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
               aria-label={t('settings.model.reset_caps_label', { model: isolated(shown) })}
               title={t('settings.model.reset_caps_tooltip')}
             >
-              ↺
+              <Icon name="reset_wrench" />
             </button>
           )}
           <button
@@ -510,7 +510,7 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
             aria-label={t('settings.model.delete_model_label', { model: isolated(shown) })}
             title={t('common.delete')}
           >
-            ×
+            <Icon name="delete_forever" />
           </button>
         </span>
       </td>
@@ -519,21 +519,26 @@ function ModelRow({ providerId, model, onUpdate }: ModelRowProps) {
 }
 
 interface AddProviderFormProps {
+  // 選べる方言と、選んだときに入れる既定のベースURL(Rust側から受け取る)。
+  choices: ApiFormatChoice[]
   onAdd: (
     name: string,
     apiFormat: ApiFormat,
     baseUrl: string,
     apiKey: string | null,
-  ) => Promise<void>
+    headers: string,
+  ) => Promise<AddResult>
 }
 
-function AddProviderForm({ onAdd }: AddProviderFormProps) {
+function AddProviderForm({ choices, onAdd }: AddProviderFormProps) {
   const apiFormatLabelId = useId()
   const [name, setName] = useState('')
-  const [apiFormat, setApiFormat] = useState<ApiFormat>('open_ai_compat')
-  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL_BY_FORMAT.open_ai_compat)
+  const [apiFormat, setApiFormat] = useState<ApiFormat>(choices[0].api_format)
+  const [baseUrl, setBaseUrl] = useState(choices[0].default_base_url)
   const [apiKey, setApiKey] = useState('')
-  const pathHint = extraPathHint(apiFormat, baseUrl)
+  const [headersText, setHeadersText] = useState('')
+  const [errors, setErrors] = useState<string[]>([])
+  const pathHint = useBaseUrlHint(apiFormat, baseUrl)
   // 失敗はフォームの直下に出し、入力は残す(Rust側の検証で弾かれても打ち直さずに済むように)。
   // 入力を空にするのは成功したときだけ。
   const submission = useAsyncAction()
@@ -543,12 +548,17 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
       className="settings-section settings-section-break"
       onSubmit={(e) => {
         e.preventDefault()
-        if (submission.running || !name.trim() || !baseUrl.trim()) return
+        if (submission.running) return
+        // 前の送信の欄の誤りは、この送信がコマンドごと失敗しても残さない。
+        setErrors([])
         void submission.run(
-          () => onAdd(name.trim(), apiFormat, baseUrl.trim(), apiKey || null),
-          () => {
+          () => onAdd(name, apiFormat, baseUrl, apiKey || null, headersText),
+          ({ added, errors: rejected }) => {
+            setErrors(rejected)
+            if (!added) return
             setName('')
             setApiKey('')
+            setHeadersText('')
           },
         )
       }}
@@ -563,12 +573,13 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
         <Dropdown
           labelledBy={apiFormatLabelId}
           label={t(API_FORMAT_LABELS[apiFormat])}
-          options={Object.entries(API_FORMAT_LABELS).map(([key, label]) => ({ key, label: t(label) }))}
+          options={choices.map((c) => ({ key: c.api_format, label: t(API_FORMAT_LABELS[c.api_format]) }))}
           selectedKey={apiFormat}
           onSelect={(key) => {
-            const format = key as ApiFormat
-            setApiFormat(format)
-            setBaseUrl(DEFAULT_BASE_URL_BY_FORMAT[format])
+            const choice = choices.find((c) => c.api_format === key)
+            if (!choice) return
+            setApiFormat(choice.api_format)
+            setBaseUrl(choice.default_base_url)
           }}
           direction="down"
           align="start"
@@ -588,6 +599,20 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
           placeholder={t('settings.provider.api_key_placeholder')}
         />
       </label>
+      <label className="settings-field">
+        <span>{t('settings.tools.headers_hint', { sample: t('settings.tools.kv_sample') })}</span>
+        <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} />
+      </label>
+      {/* 入力の誤りは、欄の間隔で離さずにまとめて出す */}
+      {errors.length > 0 && (
+        <div>
+          {errors.map((e) => (
+            <p key={e} className="error">
+              {e}
+            </p>
+          ))}
+        </div>
+      )}
       {submission.error && <p className="error">{submission.error}</p>}
       <button type="submit" disabled={submission.running}>
         {submission.running ? t('common.adding') : t('common.add')}
@@ -596,3 +621,27 @@ function AddProviderForm({ onAdd }: AddProviderFormProps) {
   )
 }
 
+// 入力中のベースURLへのヒントの文言。判定はRust側(アダプタの知識)に問い合わせ、入力が
+// 変わったら古い問い合わせの答えは捨てる。問い合わせに失敗したら何も出さない(登録の
+// 可否はRust側が登録のときに決める)。
+function useBaseUrlHint(apiFormat: ApiFormat, baseUrl: string): MessageKey | null {
+  const [hint, setHint] = useState<{ key: string; message: MessageKey | null }>({
+    key: '',
+    message: null,
+  })
+  const key = `${apiFormat} ${baseUrl}`
+  useEffect(() => {
+    let current = true
+    getBaseUrlHint(apiFormat, baseUrl)
+      .then((found) => {
+        if (!current) return
+        setHint({ key, message: found === null ? null : (VERSION_PATH_HINTS[apiFormat] ?? null) })
+      })
+      .catch(() => {})
+    return () => {
+      current = false
+    }
+  }, [apiFormat, baseUrl, key])
+  // 答えが来るまでは、前の入力へのヒントを出さない。
+  return hint.key === key ? hint.message : null
+}

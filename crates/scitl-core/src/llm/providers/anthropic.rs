@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use reqwest::StatusCode;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
@@ -13,36 +12,48 @@ use crate::config::{ApiFormat, ReasoningEffort};
 use crate::error::CoreError;
 use crate::llm::{
     AdapterIdentity, ChatMessage, DetectedCapabilities, ErrorDetail, FinishReason, LlmAdapter,
-    LlmError, PromptText, Readiness, Replay, RequestPreview, ResponseEvent, ToolArguments,
-    ToolOffer,
+    LlmError, PromptText, Readiness, Replay, RequestPreview, ResponseEvent, SentSecrets, SessionId,
+    ToolArguments, ToolOffer,
 };
 use crate::net::ExternalUrl;
 
-use super::{built, received, KeyHeader, RequestPart};
+use super::{built, received, Credentials, KeyHeader, RequestPart};
+
+mod stream;
+
+/// SCITL自身が付けるヘッダー(鍵と版)。カスタムヘッダーには使わせない
+/// ([`super::validate_header_name`])。
+pub(super) const OWN_HEADERS: &[&str] = &["x-api-key", "anthropic-version"];
 
 /// Anthropic形式のアダプタ。
 pub struct AnthropicAdapter {
     client: reqwest::Client,
     base_url: ExternalUrl,
-    api_key: SecretString,
+    credentials: Credentials,
     model: String,
 }
 
 impl AnthropicAdapter {
     /// `base_url`は`/v1`を含まない(`https://api.anthropic.com`)。`request_timeout`は
-    /// 設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)。
+    /// 設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)で、データの届かない
+    /// 時間の上限として使う。
     pub fn new(
         base_url: impl Into<String>,
-        api_key: SecretString,
+        credentials: Credentials,
         model: impl Into<String>,
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        let client = crate::net::hardened_client(&base_url, Some(request_timeout))?;
+        // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
+        // 届き続けている間は切らない)。
+        let client = crate::net::hardened_client(
+            &base_url,
+            crate::net::RequestTimeout::BetweenReads(request_timeout),
+        )?;
         Ok(Self {
             client,
             base_url,
-            api_key,
+            credentials,
             model: model.into(),
         })
     }
@@ -51,22 +62,34 @@ impl AnthropicAdapter {
 const MESSAGES: &str = "v1/messages";
 const MODELS: &str = "v1/models";
 
+/// 公式のベースURL(登録フォームの初期値)。
+pub(super) const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+
+/// `base_url`のパスが、アダプタの足す版のパスまで含んでいるか(OpenAI互換の癖で`/v1`まで
+/// 書いた等)。含めると存在しないパスに送ることになる。
+pub(super) fn includes_version_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    ["/v1", "/v1/messages"].iter().any(|s| path.ends_with(s))
+}
+
 /// `anthropic-version`ヘッダーの値。
 const API_VERSION: &str = "2023-06-01";
 
-/// 1回の応答で生成してよいトークン数の上限。Anthropic形式では必須。ストリーミングしない
-/// 呼び出しで応答の待ち時間が長くなりすぎない値にする。
+/// 1回の応答で生成してよいトークン数の上限。Anthropic形式では必須。出力の上限がこれより
+/// 小さい古いモデルもあるので、大きくはしない(設定で変えられるようにするのはIssue #271)。
 const MAX_TOKENS: u32 = 16_000;
 
-/// 鍵と版のヘッダーを付けて送る。
+/// 鍵と版、カスタムヘッダーを付けて送る。`session`は[`super::send_with_key`]と同じ。
 async fn send(
     request: reqwest::RequestBuilder,
-    api_key: &SecretString,
+    credentials: &Credentials,
+    session: Option<&SessionId>,
 ) -> Result<reqwest::Response, LlmError> {
     super::send_with_key(
         request.header("anthropic-version", API_VERSION),
-        api_key,
+        credentials,
         KeyHeader::Named("x-api-key"),
+        session,
     )
     .await
 }
@@ -74,9 +97,15 @@ async fn send(
 // ---- モデル一覧と能力 ----
 
 /// `GET /v1/models`で、提供されるモデルのIDを取得する。名前順に並べ、重複と空の名前を除く。
-pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<String>, CoreError> {
+pub async fn list_models(
+    base_url: &str,
+    credentials: &Credentials,
+) -> Result<Vec<String>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut names = Vec::new();
     let mut after: Option<String> = None;
     loop {
@@ -85,8 +114,8 @@ pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<S
         if let Some(after) = &after {
             url.query_pairs_mut().append_pair("after_id", after);
         }
-        let page: ModelPage =
-            super::read_success_json(send(client.get(url), api_key).await?, api_key).await?;
+        let response = send(client.get(url), credentials, None).await?;
+        let page: ModelPage = super::read_success_json(response, credentials.secrets()).await?;
         names.extend(
             page.data
                 .into_iter()
@@ -106,22 +135,25 @@ pub async fn list_models(base_url: &str, api_key: &SecretString) -> Result<Vec<S
 /// `models`の能力を`GET /v1/models/{id}`で問い合わせる。知らないモデル(404)は結果に含めない。
 pub async fn detect(
     base_url: &str,
-    api_key: &SecretString,
+    credentials: &Credentials,
     models: &[String],
 ) -> Result<HashMap<String, DetectedCapabilities>, CoreError> {
     let base_url = super::parse_base_url(base_url)?;
-    let client = crate::net::hardened_client(&base_url, Some(super::METADATA_TIMEOUT))?;
+    let client = crate::net::hardened_client(
+        &base_url,
+        crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
+    )?;
     let mut found = HashMap::new();
     for model in models {
         let mut url = super::endpoint(&base_url, MODELS)?;
         url.path_segments_mut()
             .map_err(|()| CoreError::ProviderConfig("failed to build endpoint".to_string()))?
             .push(model);
-        let response = send(client.get(url), api_key).await?;
+        let response = send(client.get(url), credentials, None).await?;
         if response.status() == StatusCode::NOT_FOUND {
             continue;
         }
-        let info: ModelInfo = super::read_success_json(response, api_key).await?;
+        let info: ModelInfo = super::read_success_json(response, credentials.secrets()).await?;
         found.insert(model.clone(), info.detected());
     }
     Ok(found)
@@ -182,6 +214,7 @@ struct RequestBody<'a> {
     output_config: Option<Value>,
     /// 伸びていく会話の末尾に、キャッシュの目印を自動で置かせる。
     cache_control: Value,
+    stream: bool,
 }
 
 #[derive(Serialize)]
@@ -254,6 +287,8 @@ fn request_body<'a>(
         thinking,
         output_config,
         cache_control: ephemeral(),
+        // 無視して1つのJSONで返す中継もある(`AnthropicAdapter::send`)。
+        stream: true,
     }
 }
 
@@ -383,7 +418,7 @@ struct MessageResponse {
     #[serde(rename = "type")]
     kind: Option<String>,
     /// 受け取ったまま送り返すため、生のJSONで持つ([`Replay`])。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::null_as_default")]
     content: Vec<Box<RawValue>>,
     stop_reason: Option<String>,
     stop_details: Option<Value>,
@@ -396,12 +431,12 @@ impl MessageResponse {
     /// エラー本文も`{}`も「ブロックが0個の返信」として読め、中身の残らない空の応答になる。
     /// 200でエラーを返すのは互換サーバー・中継で、エラーの種類の名前が揃う保証が無いので、
     /// 種類は見ずにプロバイダーのエラーとし、中身を詳細に残す。
-    fn reject_non_message(&self, api_key: &str) -> Result<(), LlmError> {
+    fn reject_non_message(&self, secrets: &SentSecrets) -> Result<(), LlmError> {
         if let Some(error) = &self.error {
             return Err(LlmError::Http(ErrorDetail::http(
                 StatusCode::OK,
                 &error.to_string(),
-                api_key,
+                secrets,
             )));
         }
         match self.kind.as_deref() {
@@ -420,8 +455,13 @@ impl MessageResponse {
 
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
 /// ここで判定し、残りは状態コードによる共通の分類に任せる。
-fn http_error(status: StatusCode, body: &str, api_key: &str, thinking: Thinking) -> LlmError {
-    let detail = || ErrorDetail::http(status, body, api_key);
+fn http_error(
+    status: StatusCode,
+    body: &str,
+    secrets: &SentSecrets,
+    thinking: Thinking,
+) -> LlmError {
+    let detail = || ErrorDetail::http(status, body, secrets);
     let message = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v.pointer("/error/message")?.as_str().map(str::to_lowercase))
@@ -437,7 +477,7 @@ fn http_error(status: StatusCode, body: &str, api_key: &str, thinking: Thinking)
             return LlmError::ReasoningEffortRejected(detail());
         }
     }
-    LlmError::from_status(status, body, api_key)
+    LlmError::from_status(status, body, secrets)
 }
 
 /// 思考を切れないモデルが、切る指定を拒んだか。
@@ -448,24 +488,105 @@ fn rejects_disabled_thinking(error: &LlmError) -> bool {
 impl AnthropicAdapter {
     async fn post(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         thinking: Thinking,
-    ) -> Result<MessageResponse, LlmError> {
+    ) -> Result<reqwest::Response, LlmError> {
         let body = request_body(&self.model, messages, tools, thinking);
         let endpoint = super::endpoint(&self.base_url, MESSAGES).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
-        let response = send(self.client.post(endpoint).json(&body), &self.api_key).await?;
-        let key = self.api_key.expose_secret();
-        let response = super::reject_failure(response, |status, body| {
-            http_error(status, body, key, thinking)
+        let request = self.client.post(endpoint).json(&body);
+        let response = send(request, &self.credentials, session).await?;
+        let secrets = self.credentials.secrets();
+        super::reject_failure(response, secrets, |status, body| {
+            http_error(status, body, secrets, thinking)
         })
-        .await?;
-        let response: MessageResponse = super::read_json(response, &self.api_key).await?;
-        response.reject_non_message(key)?;
-        Ok(response)
+        .await
     }
+}
+
+fn finish_reason(stop_reason: Option<&str>) -> FinishReason {
+    match stop_reason {
+        Some("tool_use") => FinishReason::ToolCall,
+        Some("max_tokens" | "model_context_window_exceeded") => FinishReason::Length,
+        _ => FinishReason::Stop,
+    }
+}
+
+/// `tool_use`のブロックの呼び出し。
+fn tool_call(block: &Value) -> ResponseEvent {
+    ResponseEvent::ToolCall {
+        id: block.get("id").and_then(Value::as_str).map(str::to_string),
+        name: block
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        arguments: ToolArguments::from(block.get("input").cloned().unwrap_or(json!({}))),
+    }
+}
+
+/// ストリーミングせずに1つのJSONで返った応答を、イベントに分けて渡す。
+fn emit_message(
+    response: MessageResponse,
+    secrets: &SentSecrets,
+    on_event: &mut (dyn FnMut(ResponseEvent) + Send),
+) -> Result<Replay, LlmError> {
+    response.reject_non_message(secrets)?;
+    // 断った応答は、途中まで書いた本文も渡さない(イベントを渡す前に判定する)。
+    if response.stop_reason.as_deref() == Some("refusal") {
+        let details = response
+            .stop_details
+            .map(|d| d.to_string())
+            .unwrap_or_default();
+        return Err(LlmError::Refused(ErrorDetail::http(
+            StatusCode::OK,
+            &details,
+            secrets,
+        )));
+    }
+
+    let blocks = super::read_elements(&response.content, secrets)?;
+    let mut replay = false;
+    for block in &blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("thinking") => {
+                replay = true;
+                if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        on_event(ResponseEvent::ReasoningDelta {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            }
+            Some("redacted_thinking") => replay = true,
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        on_event(ResponseEvent::TextDelta {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            }
+            Some("tool_use") => on_event(tool_call(block)),
+            _ => {}
+        }
+    }
+    on_event(ResponseEvent::Done {
+        finish_reason: finish_reason(response.stop_reason.as_deref()),
+    });
+
+    // 思考ブロックは、ツールの往復の次の呼び出しで受け取ったまま返す必要がある。並びも
+    // 変えられないので、応答のブロックをすべてそのまま返す。
+    Ok(if replay {
+        Replay::new(response.content)
+    } else {
+        Replay::default()
+    })
 }
 
 #[async_trait::async_trait]
@@ -511,85 +632,30 @@ impl LlmAdapter for AnthropicAdapter {
 
     async fn send(
         &self,
+        session: Option<&SessionId>,
         messages: &[ChatMessage],
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
         on_event: &mut (dyn FnMut(ResponseEvent) + Send),
     ) -> Result<Replay, CoreError> {
         let thinking = Thinking::from_effort(reasoning_effort);
-        let response = match self.post(messages, tools, thinking).await {
+        let (response, thinking) = match self.post(session, messages, tools, thinking).await {
             // 思考を切れないモデルでは、いちばん弱い思考で呼び直す。まだイベントを渡して
             // いないので、呼び直しても画面に二重に出ない。
             Err(e) if thinking == Thinking::Disabled && rejects_disabled_thinking(&e) => {
-                self.post(messages, tools, Thinking::Adaptive("low"))
-                    .await?
+                let low = Thinking::Adaptive("low");
+                (self.post(session, messages, tools, low).await?, low)
             }
-            result => result?,
+            result => (result?, thinking),
         };
-
-        // 断った応答は、途中まで書いた本文も渡さない(イベントを渡す前に判定する)。
-        if response.stop_reason.as_deref() == Some("refusal") {
-            let details = response
-                .stop_details
-                .map(|d| d.to_string())
-                .unwrap_or_default();
-            let key = self.api_key.expose_secret();
-            return Err(LlmError::Refused(ErrorDetail::http(StatusCode::OK, &details, key)).into());
-        }
-
-        let blocks = super::read_elements(&response.content, &self.api_key)?;
-        let mut replay = false;
-        for block in &blocks {
-            match block.get("type").and_then(Value::as_str) {
-                Some("thinking") => {
-                    replay = true;
-                    if let Some(text) = block.get("thinking").and_then(Value::as_str) {
-                        if !text.is_empty() {
-                            on_event(ResponseEvent::ReasoningDelta {
-                                text: text.to_string(),
-                            });
-                        }
-                    }
-                }
-                Some("redacted_thinking") => replay = true,
-                Some("text") => {
-                    if let Some(text) = block.get("text").and_then(Value::as_str) {
-                        if !text.is_empty() {
-                            on_event(ResponseEvent::TextDelta {
-                                text: text.to_string(),
-                            });
-                        }
-                    }
-                }
-                Some("tool_use") => on_event(ResponseEvent::ToolCall {
-                    id: block.get("id").and_then(Value::as_str).map(str::to_string),
-                    name: block
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    arguments: ToolArguments::from(
-                        block.get("input").cloned().unwrap_or(json!({})),
-                    ),
-                }),
-                _ => {}
-            }
-        }
-
-        let finish_reason = match response.stop_reason.as_deref() {
-            Some("tool_use") => FinishReason::ToolCall,
-            Some("max_tokens" | "model_context_window_exceeded") => FinishReason::Length,
-            _ => FinishReason::Stop,
-        };
-        on_event(ResponseEvent::Done { finish_reason });
-
-        // 思考ブロックは、ツールの往復の次の呼び出しで受け取ったまま返す必要がある。並びも
-        // 変えられないので、応答のブロックをすべてそのまま返す。
-        Ok(if replay {
-            Replay::new(response.content)
+        let secrets = self.credentials.secrets();
+        let replay = if super::sse::is_event_stream(&response) {
+            stream::read(response, secrets, thinking, on_event).await?
         } else {
-            Replay::default()
-        })
+            let parsed: MessageResponse = super::read_json(response, secrets).await?;
+            emit_message(parsed, secrets, on_event)?
+        };
+        Ok(replay)
     }
 }
 
@@ -598,13 +664,22 @@ mod tests {
     use super::super::test_server::{spawn_server, spawn_server_with_headers};
     use super::*;
     use crate::llm::{InlineImage, ToolCallRequest, ToolSchema};
+    use secrecy::SecretString;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn reads_null_content_as_no_blocks() {
+        let parsed: MessageResponse =
+            serde_json::from_str(r#"{"type":"message","content":null,"stop_reason":"end_turn"}"#)
+                .unwrap();
+        assert!(parsed.content.is_empty());
+    }
 
     fn adapter(base_url: &str, key: &str) -> AnthropicAdapter {
         AnthropicAdapter::new(
             base_url,
-            SecretString::from(key),
+            Credentials::key_only(SecretString::from(key)),
             "claude-test",
             TEST_TIMEOUT,
         )
@@ -911,11 +986,55 @@ mod tests {
     ],"stop_reason":"tool_use"}"#;
 
     #[tokio::test]
+    async fn sends_custom_headers_with_the_version_and_a_user_agent_in_place_of_scitls() {
+        let (base_url, handle) = spawn_server(vec![(200, THINKING_AND_TOOL_USE)]);
+        let credentials = Credentials::new(
+            SecretString::from("sk-test"),
+            vec![
+                ("X-Session".to_string(), SecretString::from("{session_id}")),
+                ("User-Agent".to_string(), SecretString::from("my-agent/1.0")),
+            ],
+        )
+        .unwrap();
+        let adapter = AnthropicAdapter::new(
+            base_url,
+            credentials,
+            "claude-test",
+            std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+        let session = SessionId::for_conversation("general").unwrap();
+        adapter
+            .send(
+                Some(&session),
+                &[user("hi")],
+                ToolOffer::NONE,
+                None,
+                &mut |_| {},
+            )
+            .await
+            .unwrap();
+        let received = handle.join().unwrap();
+
+        let headers = &received[0].headers;
+        assert!(headers.contains(&format!("x-session: {}\r\n", session.as_str())));
+        assert!(headers.contains("anthropic-version: "));
+        assert!(headers.contains("x-api-key: sk-test"));
+        // 登録したUser-Agentが、SCITLの既定の値と置き換わって1本だけ送られる。
+        assert_eq!(headers.matches("user-agent: ").count(), 1, "{headers}");
+        assert!(
+            headers.contains("user-agent: my-agent/1.0\r\n"),
+            "{headers}"
+        );
+    }
+
+    #[tokio::test]
     async fn sends_the_key_as_x_api_key_and_returns_the_thinking_to_replay() {
         let (base_url, handle) = spawn_server(vec![(200, THINKING_AND_TOOL_USE)]);
         let mut events = Vec::new();
         let replay = adapter(&base_url, "sk-test")
             .send(
+                None,
                 &[user("hi")],
                 ToolOffer::NONE,
                 Some(ReasoningEffort::High),
@@ -964,7 +1083,7 @@ mod tests {
         )]);
         let mut events = Vec::new();
         let replay = adapter(&base_url, "")
-            .send(&[user("hi")], ToolOffer::NONE, None, &mut |e| {
+            .send(None, &[user("hi")], ToolOffer::NONE, None, &mut |e| {
                 events.push(e)
             })
             .await
@@ -990,7 +1109,7 @@ mod tests {
             r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#,
         )]);
         let result = adapter(&base_url, "")
-            .send(&[user("hi")], ToolOffer::NONE, None, &mut |_| {})
+            .send(None, &[user("hi")], ToolOffer::NONE, None, &mut |_| {})
             .await;
         handle.join().unwrap();
         assert!(
@@ -1017,7 +1136,7 @@ mod tests {
         ] {
             let (base_url, handle) = spawn_server(vec![(200, body)]);
             let result = adapter(&base_url, "")
-                .send(&[user("hi")], ToolOffer::NONE, None, &mut |_| {})
+                .send(None, &[user("hi")], ToolOffer::NONE, None, &mut |_| {})
                 .await;
             handle.join().unwrap();
             match (expected, &result) {
@@ -1038,7 +1157,7 @@ mod tests {
         )]);
         let mut events = Vec::new();
         let result = adapter(&base_url, "")
-            .send(&[user("hi")], ToolOffer::NONE, None, &mut |e| {
+            .send(None, &[user("hi")], ToolOffer::NONE, None, &mut |e| {
                 events.push(e)
             })
             .await;
@@ -1066,6 +1185,7 @@ mod tests {
         let mut events = Vec::new();
         adapter(&base_url, "")
             .send(
+                None,
                 &[user("hi")],
                 ToolOffer::NONE,
                 Some(ReasoningEffort::Off),
@@ -1093,7 +1213,7 @@ mod tests {
             http_error(
                 StatusCode::BAD_REQUEST,
                 &error("prompt is too long: 250000 tokens > 200000 maximum"),
-                "",
+                &SentSecrets::default(),
                 adaptive
             ),
             LlmError::ContextExceeded(_)
@@ -1102,7 +1222,7 @@ mod tests {
             http_error(
                 StatusCode::BAD_REQUEST,
                 &error("adaptive thinking is not supported on this model"),
-                "",
+                &SentSecrets::default(),
                 adaptive
             ),
             LlmError::ReasoningEffortRejected(_)
@@ -1111,7 +1231,7 @@ mod tests {
             http_error(
                 StatusCode::BAD_REQUEST,
                 &error("adaptive thinking is not supported on this model"),
-                "",
+                &SentSecrets::default(),
                 Thinking::Unspecified
             ),
             LlmError::Http(_)
@@ -1120,7 +1240,7 @@ mod tests {
             http_error(
                 StatusCode::TOO_MANY_REQUESTS,
                 &error("rate limited"),
-                "",
+                &SentSecrets::default(),
                 adaptive
             ),
             LlmError::RateLimit(_)
@@ -1161,9 +1281,12 @@ mod tests {
                 r#"{"data":[{"id":"claude-a"}],"has_more":false,"last_id":"claude-a"}"#,
             ),
         ]);
-        let names = list_models(&base_url, &SecretString::from("sk-test".to_string()))
-            .await
-            .unwrap();
+        let names = list_models(
+            &base_url,
+            &Credentials::key_only(SecretString::from("sk-test".to_string())),
+        )
+        .await
+        .unwrap();
         let received = handle.join().unwrap();
 
         assert_eq!(names, ["claude-a", "claude-b"]);

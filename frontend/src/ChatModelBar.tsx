@@ -23,8 +23,8 @@ function choiceKey(choice: ModelChoice): string {
   return JSON.stringify([choice.provider_id, choice.model])
 }
 
-// チャット入力欄の下に置くモデル選択と思考の強さ選択。選べるものと選択中のものはRust側が
-// 組み立てて渡し、ここは描いて選ばせるだけ。
+// チャット入力欄の下の行(添付と送信の間)に置くモデル選択と思考の強さ選択。選べるものと選択中の
+// ものはRust側が組み立てて渡し、ここは描いて選ばせるだけ。
 export default function ChatModelBar({
   onError,
   onChanged,
@@ -67,36 +67,37 @@ export default function ChatModelBar({
   const choices = view?.choices ?? []
 
   return (
-    // 左右余白は外側(mainの直接の子)が持ち、一覧の位置と幅の基準は内側の行にする。
-    // 基準を外側に置くと、一覧の端がボタンではなく余白の外側に揃う。
+    // モデル選択は左端、思考の強さ選択は右端(送信ボタンの隣)に置く。一覧の位置と幅の基準
+    // (Dropdown.tsx)は、モデル選択では自分の入れ物全体、思考の強さ選択ではモデル選択の右の残り
+    // にする。モデル選択の一覧はボタンの左端から、思考の強さ選択の一覧はボタンの右端から開く。
     <div className="chat-model-bar">
-      <div className="chat-model-bar-row">
-        <Dropdown
-          toggleClassName="chat-model-toggle"
-          label={selected ? selected.label : t('select.model_unset')}
-          title={
-            selected
-              ? t('select.model_tooltip', {
-                  model: isolated(selected.label),
-                  provider: isolated(selected.provider_name),
-                })
-              : undefined
-          }
-          disabled={view === null}
-          options={choices.map((c) => ({
-            key: choiceKey(c),
-            label: c.label,
-            detail: c.provider_name,
-          }))}
-          selectedKey={selected && choiceKey(selected)}
-          onSelect={(key) => {
-            const choice = choices.find((c) => choiceKey(c) === key)
-            if (choice) void change(() => selectChatModel(choice.provider_id, choice.model))
-          }}
-          emptyText={t('select.models_empty')}
-          direction="up"
-          align="start"
-        />
+      <Dropdown
+        toggleClassName="chat-model-toggle"
+        label={selected ? selected.label : t('select.model_unset')}
+        title={
+          selected
+            ? t('select.model_tooltip', {
+                model: isolated(selected.label),
+                provider: isolated(selected.provider_name),
+              })
+            : undefined
+        }
+        disabled={view === null}
+        options={choices.map((c) => ({
+          key: choiceKey(c),
+          label: c.label,
+          detail: c.provider_name,
+        }))}
+        selectedKey={selected && choiceKey(selected)}
+        onSelect={(key) => {
+          const choice = choices.find((c) => choiceKey(c) === key)
+          if (choice) void change(() => selectChatModel(choice.provider_id, choice.model))
+        }}
+        emptyText={t('select.models_empty')}
+        direction="up"
+        align="start"
+      />
+      <div className="chat-model-effort">
         <Dropdown
           toggleClassName="chat-model-toggle"
           label={

@@ -1,9 +1,10 @@
 // 設定画面の「一般」タブ。
-import { useId, useState } from 'react'
-import { exportMarkdown, openExportFolder, updateGeneralSettings } from './api'
-import type { ExportSummary, Language, SettingsView } from './types'
+import { useEffect, useId, useState } from 'react'
+import { exportMarkdown, getExportTarget, openExportFolder, updateGeneralSettings } from './api'
+import type { ExportOutcome, ExportTarget, Language, SettingsView } from './types'
 import Dropdown from './Dropdown'
 import { currentLanguage, isolated, languageName, LANGUAGES, t } from './i18n'
+import { DisclosureMark } from './Icon'
 import { NumberField } from './settingsFields'
 import { useAsyncAction } from './useAsyncAction'
 
@@ -11,7 +12,8 @@ type GeneralUpdate = Parameters<typeof updateGeneralSettings>[0]
 
 interface GeneralTabProps {
   settings: SettingsView
-  onSave: (update: GeneralUpdate) => void
+  // 欄の誤りは理由の文言で返る(数値の欄が欄の下に出す)。
+  onSave: (update: GeneralUpdate) => Promise<string[]>
   onSaveLanguage: (language: Language) => void
 }
 
@@ -63,7 +65,8 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     systemPrompt: systemPrompt || null,
     taskChatSystemPrompt: taskChatSystemPrompt || null,
     taskOpeningMessage: taskOpeningMessage || null,
-    responseTimeoutSecs: general.response_timeout_secs,
+    // 数値の欄はその欄を書き換えたときだけ送る(プロンプトの保存で検証し直さない)。
+    responseTimeoutSecs: null,
   })
 
   return (
@@ -96,7 +99,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
         label={t('settings.general.system_prompt_label')}
         value={systemPrompt}
         onChange={setSystemPrompt}
-        onBlur={() => onSave(current())}
+        onBlur={() => void onSave(current())}
       />
 
       <NumberField
@@ -107,7 +110,10 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
       />
 
       <details className="settings-advanced">
-        <summary>{t('settings.general.advanced_settings')}</summary>
+        <summary>
+          <DisclosureMark />
+          {t('settings.general.advanced_settings')}
+        </summary>
         {/* <details>自体はflexにしないので(index.cssの.settings-advanced)、欄の間隔は
             中の入れ物のgapで持つ */}
         <div className="settings-section">
@@ -115,13 +121,13 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
             label={t('settings.general.task_chat_prompt_label')}
             value={taskChatSystemPrompt}
             onChange={setTaskChatSystemPrompt}
-            onBlur={() => onSave(current())}
+            onBlur={() => void onSave(current())}
           />
           <PromptField
             label={t('settings.general.task_opening_label')}
             value={taskOpeningMessage}
             onChange={setTaskOpeningMessage}
-            onBlur={() => onSave(current())}
+            onBlur={() => void onSave(current())}
           />
         </div>
       </details>
@@ -131,10 +137,12 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
   )
 }
 
-// 押すと確認なしで書き出し、成否はこの欄に出す。タブ全体のエラー欄を使わないのは、設定の
-// 保存とは別の操作の結果だから。
+// 押すと確認なしで書き出し(保存画面を出すOSでは、そこで場所を選ぶ)、成否はこの欄に出す。タブ全体の
+// エラー欄を使わないのは、設定の保存とは別の操作の結果だから。フォルダを開く操作は、書き出す先が
+// フォルダのOSでだけ出す(`ExportTarget`。Rust側が決める)。結果の文言は結果の種類で出し分ける。
 function ExportSection() {
-  const [summary, setSummary] = useState<ExportSummary | null>(null)
+  const [target, setTarget] = useState<ExportTarget | null>(null)
+  const [outcome, setOutcome] = useState<ExportOutcome | null>(null)
   const exporting = useAsyncAction((error) =>
     t('settings.general.export_failed', { error: isolated(error) }),
   )
@@ -142,17 +150,26 @@ function ExportSection() {
     t('settings.general.open_export_folder_failed', { error: isolated(error) }),
   )
 
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
+    // 取れなければフォルダを開く操作を出さないままにする。
+    void getExportTarget().then(setTarget, () => {})
+  }, [])
+
   // 結果の欄には最後に行った操作の成否だけを出す。
   const runExport = () => {
-    setSummary(null)
+    setOutcome(null)
     opening.clear()
-    void exporting.run(exportMarkdown, setSummary)
+    void exporting.run(exportMarkdown, setOutcome)
   }
   const openFolder = () => {
+    setOutcome(null)
     exporting.clear()
     void opening.run(openExportFolder)
   }
 
+  const summary =
+    outcome?.status === 'written' || outcome?.status === 'saved' ? outcome.summary : null
   return (
     <div className="settings-field settings-section-break">
       <span>{t('settings.general.export_label')}</span>
@@ -162,18 +179,26 @@ function ExportSection() {
             ? t('settings.general.exporting')
             : t('settings.general.export_button')}
         </button>
-        <button type="button" onClick={openFolder}>
-          {t('settings.general.open_export_folder')}
-        </button>
+        {target === 'folder' && (
+          <button type="button" onClick={openFolder}>
+            {t('settings.general.open_export_folder')}
+          </button>
+        )}
       </div>
-      {summary && !opening.error && (
-        <p>{t('settings.general.export_done', { folder: isolated(summary.folder) })}</p>
+      {outcome?.status === 'written' && (
+        <p>{t('settings.general.export_done', { folder: isolated(outcome.summary.folder) })}</p>
       )}
-      {summary && !opening.error && summary.missing_attachments > 0 && (
+      {outcome?.status === 'saved' && <p>{t('settings.general.export_saved')}</p>}
+      {summary && summary.missing_attachments > 0 && (
         <p className="error">
           {t('settings.general.export_missing_attachments', {
             count: summary.missing_attachments,
           })}
+        </p>
+      )}
+      {outcome?.status === 'left_incomplete' && (
+        <p className="error">
+          {t('settings.general.export_left_incomplete', { error: isolated(outcome.reason) })}
         </p>
       )}
       {exporting.error && <p className="error">{exporting.error}</p>}

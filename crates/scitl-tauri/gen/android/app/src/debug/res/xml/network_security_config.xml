@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- デバッグビルドだけ、rustls-platform-verifierの同じ名前の設定を置き換え、平文httpを許す。
+     `tauri android dev`で、画面がViteの開発サーバーを平文httpで読むため。
+     docs/spec/architecture/network-secrets.md「Androidでの平文http」 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

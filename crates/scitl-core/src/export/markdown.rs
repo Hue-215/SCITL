@@ -12,6 +12,7 @@ use std::fmt::Write;
 use percent_encoding::{utf8_percent_encode, AsciiSet};
 
 use crate::db::attachments::AttachmentKind;
+use crate::db::memories::Memory;
 use crate::db::messages::{Kind, Message, ResolvedPart, Role};
 use crate::db::task_steps::TaskStep;
 use crate::db::tasks::Task;
@@ -80,6 +81,22 @@ pub(super) fn render_task(task: &Task, steps: &[TaskStep], conversation: &[Entry
 pub(super) fn render_general_chat(conversation: &[Entry]) -> String {
     let mut out = String::from("# General chat\n\n");
     push_conversation(&mut out, conversation);
+    out
+}
+
+pub(super) fn render_memories(memories: &[Memory]) -> String {
+    let mut out = String::from("# Memories\n\n");
+    if memories.is_empty() {
+        out.push_str("None\n");
+    }
+    for memory in memories {
+        let _ = writeln!(
+            out,
+            "- {} (updated {})",
+            inline_text(&memory.content),
+            memory.updated_at
+        );
+    }
     out
 }
 

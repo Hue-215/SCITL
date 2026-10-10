@@ -1,0 +1,7 @@
+{
+  "identifier": "android-back-button",
+  "description": "Androidの「戻る」を画面で受けて、開いたダイアログ・左のカラム・設定画面を閉じる(docs/spec/architecture/webview-boundary.md「CSP / Tauri権限設定」)。受け手の登録と解除だけを与え、core:app:default等のまとめた権限は使わない。",
+  "windows": ["main"],
+  "platforms": ["android"],
+  "permissions": ["core:app:allow-register-listener", "core:app:allow-remove-listener"]
+}

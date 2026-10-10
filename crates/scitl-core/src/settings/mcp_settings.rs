@@ -1,17 +1,28 @@
 //! 外部ツールサーバー(MCP)の登録と、公開するツールの選択。
 
-use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use std::sync::Arc;
 
-use super::{delete_secret, input, invalid, Settings, SettingsView};
-use crate::config::{validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef};
+use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Serialize};
+
+use super::destination::NewDestination;
+use super::rejection::{refuse_if_any, rejected, InputRejection};
+use super::{input, invalid, DestinationDialog, HeaderInput, Settings, SettingsView};
+use crate::blocking;
+use crate::config::{
+    validate_mcp_server_name, Config, McpEndpoint, McpServerConfig, SecretRef,
+    MCP_SERVER_NAME_MAX_CHARS,
+};
 use crate::error::{CoreError, Result};
 use crate::mcp;
-use crate::secrets;
 use crate::tools::external;
 
+/// 秘密情報の`key_ref`の接頭辞と、削除に失敗したときの診断に出す名前。
+const SECRET_PREFIX: &str = "mcp";
+const SECRET_WHAT: &str = "MCP secret";
+
 /// サーバー追加フォームからの入力。`McpEndpoint`と同じく、接続方式ごとに必要な値だけを
-/// 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
+/// 受け取る。ヘッダーの値は秘密情報で、保存後は`key_ref`に置き換わる。値を含むため
 /// `Debug`は付けない(ログに出す経路を作らない)。
 #[derive(Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -19,37 +30,109 @@ use crate::tools::external;
 pub enum NewMcpEndpoint {
     StreamableHttp {
         url: String,
+        /// 画面からはヘッダーの欄の文字列で届く([`HeaderInput`])。
         #[serde(default)]
-        #[cfg_attr(test, ts(type = "Array<[string, string]>"))]
-        headers: Vec<(String, SecretString)>,
+        #[cfg_attr(test, ts(type = "string"))]
+        headers: HeaderInput,
     },
 }
 
+/// [`Settings::add_mcp_server`]の結果。`tools_error`は、登録のあとのツール一覧の取得に
+/// 失敗した理由(画面は追加したサーバーのカードに出す)。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct McpServerAdded {
+    pub settings: SettingsView,
+    pub server_id: String,
+    pub tools_error: Option<String>,
+}
+
 impl Settings {
+    /// サーバーを登録し([`Self::register_mcp_server`])、続けて1回ツール一覧を取得する
+    /// (公開するツールを選べるように)。取得に失敗しても登録は残し、理由を結果に添える。
+    /// 確かめ方(`confirm`)は[`Self::register_mcp_server`]。確かめる間は待つので、登録と同じく
+    /// `blocking::run`の中で呼ぶ。
+    pub async fn add_mcp_server(
+        self: &Arc<Self>,
+        name: String,
+        endpoint: NewMcpEndpoint,
+        confirm: impl FnOnce(&DestinationDialog) -> bool + Send + 'static,
+    ) -> Result<McpServerAdded> {
+        let settings = Arc::clone(self);
+        let (server_id, added) =
+            blocking::run(move || settings.register_mcp_server(&name, endpoint, confirm)).await?;
+        let (settings, tools_error) = match self.fetch_mcp_tools(&server_id).await {
+            Ok(fetched) => (fetched, None),
+            Err(e) => (added, Some(e.to_string())),
+        };
+        Ok(McpServerAdded {
+            settings,
+            server_id,
+            tools_error,
+        })
+    }
+
     /// 検証→重複確認→秘密情報の保存→登録の順。重複確認から登録までを書き込みロックの中で
     /// 行うので、同名の登録が割り込んで秘密情報が孤児になることはない。登録に失敗したら
-    /// 保存した秘密情報を消す。
-    pub fn add_mcp_server(&self, name: &str, endpoint: NewMcpEndpoint) -> Result<SettingsView> {
+    /// 保存した秘密情報を消す。登録したサーバーのIDと、登録後の設定を返す。
+    ///
+    /// 検証を通ったら、秘密情報を保存する前に`confirm`で利用者に通信先を確かめ、承認されなければ
+    /// 何も保存せずに[`CoreError::Cancelled`]を返す(`Settings::add_provider`と同じ)。確かめる
+    /// 間は書き込みロックを持たない。
+    pub(super) fn register_mcp_server(
+        &self,
+        name: &str,
+        endpoint: NewMcpEndpoint,
+        confirm: impl FnOnce(&DestinationDialog) -> bool,
+    ) -> Result<(String, SettingsView)> {
         let name = name.trim().to_string();
-        validate_mcp_server_name(&name)?;
-        let endpoint = validate_endpoint(endpoint)?;
+        let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+        let url = url.trim().to_string();
+        // 画面が欄の近くに出す誤りは、他の検証より先にまとめて見る。
+        let mut reasons = Vec::new();
+        if name.is_empty() {
+            reasons.push(InputRejection::McpServerNameRequired);
+        } else if validate_mcp_server_name(&name).is_err() {
+            reasons.push(InputRejection::McpServerNameInvalid {
+                max_chars: MCP_SERVER_NAME_MAX_CHARS,
+            });
+        } else if let Some(taken) = name_taken(&self.current().config, &name) {
+            reasons.push(taken);
+        }
+        if url.is_empty() {
+            reasons.push(InputRejection::UrlRequired);
+        }
+        let headers = headers.into_pairs().unwrap_or_else(|lines| {
+            reasons.extend(lines);
+            Vec::new()
+        });
+        refuse_if_any(reasons)?;
+        let endpoint = validate_endpoint(url, headers)?;
+        let destination = NewDestination::McpServer {
+            name: &name,
+            url: &endpoint.url,
+        };
+        if !confirm(&destination.dialog(self.display_language())) {
+            return Err(CoreError::Cancelled);
+        }
 
         let mut draft = self.edit();
-        if draft.config.mcp_servers.iter().any(|s| s.name == name) {
-            return Err(invalid(format!(
-                "MCP server name already registered: {name}"
-            )));
+        // 先の確かめから書き込みロックを取るまでに、同じ名前が登録されているかもしれない。
+        if let Some(taken) = name_taken(&draft.config, &name) {
+            return Err(rejected(vec![taken]));
         }
         let endpoint = store_endpoint_secrets(endpoint)?;
         let refs = endpoint_secret_refs(&endpoint).to_vec();
+        let id = ulid::Ulid::new().to_string();
         draft.config.mcp_servers.push(McpServerConfig {
-            id: ulid::Ulid::new().to_string(),
+            id: id.clone(),
             name,
             enabled: true,
             endpoint,
             enabled_tools: Default::default(),
         });
-        draft.commit().inspect_err(|_| delete_secret_refs(&refs))
+        let view = draft.commit().inspect_err(|_| delete_secret_refs(&refs))?;
+        Ok((id, view))
     }
 
     /// 保存済みの秘密情報も消す。`delete_provider`と同じく、設定の保存が済んでから消す。
@@ -149,47 +232,45 @@ impl Settings {
     }
 }
 
+/// 同じ識別子のサーバーが登録済みなら、その理由。
+fn name_taken(config: &Config, name: &str) -> Option<InputRejection> {
+    config
+        .mcp_servers
+        .iter()
+        .any(|s| s.name == name)
+        .then(|| InputRejection::McpServerNameTaken {
+            name: name.to_string(),
+        })
+}
+
 /// 秘密情報に触れる前に済ませられる検証をすべて行う。
-fn validate_endpoint(endpoint: NewMcpEndpoint) -> Result<NewMcpEndpoint> {
-    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
-    let url = url.trim().to_string();
+fn validate_endpoint(url: String, headers: Vec<(String, SecretString)>) -> Result<CheckedEndpoint> {
     mcp::validate_streamable_http_url(&url)?;
     for (name, value) in &headers {
         mcp::validate_header_name(name)?;
         mcp::validate_header_value(value.expose_secret())?;
     }
     input::unique_names(&headers, "header", str::to_ascii_lowercase)?;
-    Ok(NewMcpEndpoint::StreamableHttp { url, headers })
+    Ok(CheckedEndpoint { url, headers })
 }
 
-fn store_endpoint_secrets(endpoint: NewMcpEndpoint) -> Result<McpEndpoint> {
-    let NewMcpEndpoint::StreamableHttp { url, headers } = endpoint;
+/// 検証を済ませた接続先(streamable HTTP)。
+struct CheckedEndpoint {
+    url: String,
+    headers: Vec<(String, SecretString)>,
+}
+
+fn store_endpoint_secrets(endpoint: CheckedEndpoint) -> Result<McpEndpoint> {
+    let CheckedEndpoint { url, headers } = endpoint;
     Ok(McpEndpoint::StreamableHttp {
         url,
-        header_refs: store_secret_refs(headers)?,
+        header_refs: super::store_secret_refs(headers, SECRET_PREFIX, SECRET_WHAT)?,
     })
-}
-
-/// 秘密情報の値を保存し、`(name, key_ref)`の組に変換する。途中で失敗したら
-/// それまでに保存した分を削除してからエラーを返す(孤児を残さない)。
-fn store_secret_refs(pairs: Vec<(String, SecretString)>) -> Result<Vec<SecretRef>> {
-    let mut refs = Vec::with_capacity(pairs.len());
-    for (name, value) in pairs {
-        let key_ref = format!("mcp:{}", ulid::Ulid::new());
-        if let Err(e) = secrets::store(&key_ref, &value) {
-            delete_secret_refs(&refs);
-            return Err(e);
-        }
-        refs.push(SecretRef { name, key_ref });
-    }
-    Ok(refs)
 }
 
 /// 1件が失敗しても残りは試す。
 fn delete_secret_refs(refs: &[SecretRef]) {
-    for r in refs {
-        delete_secret(&r.key_ref, &format!("MCP secret '{}'", r.name));
-    }
+    super::delete_secret_refs(refs, SECRET_WHAT);
 }
 
 fn endpoint_secret_refs(endpoint: &McpEndpoint) -> &[SecretRef] {

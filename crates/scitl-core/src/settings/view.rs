@@ -32,11 +32,14 @@ pub struct ProviderView {
     pub models: Vec<ModelView>,
     pub active_model: Option<String>,
     pub has_api_key: bool,
+    /// 登録したカスタムヘッダーの名前。値は秘密情報なので渡さない。
+    pub header_names: Vec<String>,
     /// モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
     pub can_detect_capabilities: bool,
     /// このプロバイダーをアクティブにしているが、組み立てられない理由。
     pub error: Option<String>,
-    /// このプロバイダーをアクティブにしているが、鍵を資格情報ストアから読めない理由。
+    /// このプロバイダーをアクティブにしているが、鍵(またはカスタムヘッダーの値)を
+    /// 資格情報ストアから読めない理由。
     /// `error`と違い、プロバイダーの設定ではなく資格情報ストアの側の問題で、ストアの
     /// ロックを解除すれば次の送信で直ることがある。
     pub key_error: Option<String>,
@@ -55,6 +58,8 @@ pub struct ModelView {
     pub capabilities: ModelCapabilities,
     /// 手動設定が無いとき(自動検出 → 既定値)のコンテキスト長。入力欄のプレースホルダに出す。
     pub default_context_length: u32,
+    /// コンテキスト長の手動設定。入力欄に出す(無ければ空欄)。
+    pub context_length_override: Option<u32>,
     /// 能力に手動設定がある(「初期値に戻す」を出す)。
     pub overridden: bool,
     /// 自動検出でツール呼び出しに対応しないと分かった。警告を出すだけで、使うことは止めない
@@ -148,6 +153,16 @@ pub struct SettingsView {
     pub mcp_servers: Vec<McpServerView>,
     /// サーバー識別子の長さの上限。画面は入力欄の上限と案内文に使い、値を写さない。
     pub mcp_server_name_max_chars: usize,
+    /// プロバイダーの登録フォームで選べる方言と、選んだときに入れる既定のベースURL。
+    pub api_formats: Vec<ApiFormatChoice>,
+}
+
+/// 登録フォームの方言の選択肢1つ。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct ApiFormatChoice {
+    pub api_format: ApiFormat,
+    pub default_base_url: &'static str,
 }
 
 /// チャット入力欄の下のモデル選択・思考の強さ選択。設定画面の[`SettingsView`]とは別に持ち、
@@ -311,6 +326,7 @@ pub(super) fn build(
                     .collect(),
                 active_model: p.active_model.clone(),
                 has_api_key: p.key_ref.is_some(),
+                header_names: p.header_refs.iter().map(|r| r.name.clone()).collect(),
                 can_detect_capabilities: providers::can_detect_capabilities(p),
                 error: active_only(config, p, problems.active_provider_error),
                 key_error: active_only(config, p, problems.active_provider_key_error),
@@ -323,6 +339,13 @@ pub(super) fn build(
             .map(|s| mcp_server_view(s, catalog))
             .collect(),
         mcp_server_name_max_chars: MCP_SERVER_NAME_MAX_CHARS,
+        api_formats: ApiFormat::ALL
+            .into_iter()
+            .map(|api_format| ApiFormatChoice {
+                api_format,
+                default_base_url: providers::default_base_url(api_format),
+            })
+            .collect(),
     }
 }
 
@@ -356,6 +379,7 @@ fn model_view(m: &ModelConfig, detected: Option<&DetectedCapabilities>) -> Model
         visible: m.visible,
         capabilities: llm::resolve_capabilities(m, detected),
         default_context_length: llm::fallback_capabilities(detected).context_length,
+        context_length_override: m.overrides.context_length,
         overridden: !m.overrides.is_empty(),
         lacks_tools: detected.is_some_and(DetectedCapabilities::lacks_tools),
     }
@@ -476,6 +500,7 @@ mod tests {
             models: vec![model.clone()],
             active_model: None,
             key_ref: None,
+            header_refs: Vec::new(),
         };
         let choice = ModelChoice::of(&provider, &model);
         assert_eq!(

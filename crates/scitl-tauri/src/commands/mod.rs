@@ -3,6 +3,8 @@ pub mod chat;
 pub mod export;
 pub mod link;
 pub mod mcp;
+pub mod memories;
+pub mod requested_chat;
 pub mod settings;
 pub mod startup;
 pub mod tasks;

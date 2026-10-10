@@ -19,7 +19,7 @@ fn forward(channel: &Channel<TurnEvent>) -> impl Fn(TurnEvent) + Send + Sync + '
 }
 
 /// 発言を送り、応答を生成する([`run_turn`])。`chat`は表示中の会話で、ターンの途中経過は
-/// `on_event`へ送る。`attachments`は`stage_attachment`が返したトークン。
+/// `on_event`へ送る。`attachments`は`stage_received_file`が返したトークン。
 #[tauri::command]
 pub async fn send_chat_message(
     state: State<'_, AppState>,
@@ -33,26 +33,9 @@ pub async fn send_chat_message(
     let events = forward(&on_event);
     Ok(run_turn(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
         UserInput { text, attachments },
-    )
-    .await?)
-}
-
-/// 作ったばかりのタスクで、ユーザーの発言なしにモデルの返信から聞き取りを始める。
-#[tauri::command]
-pub async fn open_task_chat(
-    state: State<'_, AppState>,
-    task_id: i64,
-    on_event: Channel<TurnEvent>,
-) -> CommandResult<()> {
-    let snapshot = state.settings.snapshot_for_turn().await;
-    let events = forward(&on_event);
-    Ok(orchestration::open_task_chat(
-        state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
-        task_id,
     )
     .await?)
 }
@@ -70,7 +53,7 @@ pub async fn edit_chat_message(
     let events = forward(&on_event);
     Ok(edit_user_message(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
         message_id,
         text,
@@ -90,7 +73,7 @@ pub async fn retry_chat_message(
     let events = forward(&on_event);
     Ok(retry_reply(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
         message_id,
     )
@@ -108,7 +91,7 @@ pub async fn generate_chat_reply(
     let events = forward(&on_event);
     Ok(orchestration::generate_reply(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
     )
     .await?)

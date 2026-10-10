@@ -7,7 +7,7 @@
 | id | INTEGER | PRIMARY KEY |
 | task_id | INTEGER | NULL可。NULL=総合チャット |
 | role | TEXT | NOT NULL, `CHECK (role IN ('user','assistant','tool','error'))` |
-| content | TEXT | NOT NULL。ターンの返信の行(アシスタント発言)は空文字で、本文は`parts`に持つ |
+| content | TEXT | NOT NULL。ターンの返信の行(アシスタント発言)は空文字で、本文は`parts`に持つ。ユーザー発言は前後の空白を落として保存する(送信・編集のどの経路でも同じ。`orchestration::turn`) |
 | kind | TEXT | NOT NULL, `CHECK (kind IN ('normal','tool_execution'))` |
 | source | TEXT | 経路の印。応答生成以外の経路での操作の記録にだけ付ける(下記「ターン境界」)。それ以外はNULL |
 | error_kind | TEXT | NULL可。`role='error'`のときのみ非NULLで、安定した種別コードを持つ(例: `no_model`, `context_exceeded`) |
@@ -42,12 +42,12 @@ HTTPエラーなら状態コードとプロバイダーの応答本文、HTTP応
 秘密情報ではなく、証明書の名前は通信経路上の第三者も決められる文字列なので、下記の
 サニタイズと表示の扱い(プレーンテキストで描き、モデル入力とエクスポートに含めない)で受ける。
 
-- 載せてよいのは、アダプタがサニタイズした文字列(送信した鍵の伏せ字・制御文字と描かれない
+- 載せてよいのは、アダプタがサニタイズした文字列(送信した鍵とカスタムヘッダーの値の伏せ字・制御文字と描かれない
   文字の除去・長さの上限。`llm::ErrorDetail`)と、秘密情報を含まない識別子だけ。
   鍵ストア・設定ファイル・MCPサーバー由来の失敗は、鍵名・パス・URLを含みうるため詳細を
   持たない。どの種別が詳細を持つかは`orchestration::TurnFailure`のバリアントの形で決め、
   分類の1箇所に閉じる
-- **画面の「詳細を表示」専用**。外部から来た文字列なので、モデルへの入力(履歴・
+- **画面のエラー発言の「詳細」専用**。外部から来た文字列なので、モデルへの入力(履歴・
   システムプロンプト・ツール結果)とエクスポートには含めない。画面ではMarkdownとして
   解釈せず、プレーンテキストのまま描く
 - `error_detail IS NULL OR (role = 'error' AND error_detail <> '')` を
@@ -296,7 +296,7 @@ CHECK ((turn_id IS NULL) = (attempt_no IS NULL))
 | prefix_digest | TEXT | NOT NULL。入力より前(system・ツール定義・それまでの発言列)の指紋 |
 | history_start | INTEGER | NULL可。最初に並べたユーザー発言の`messages.id`(間引きの位置。その発言に置いた操作の記録も一緒に並ぶ)。NULL=会話の最初から |
 | input | TEXT | NOT NULL, `CHECK (json_valid(input))`。末尾に足した入力の発言と、含めた行(ユーザー発言・操作の記録)のidと、この行(`rounds`を含む)の形の版(`../architecture/transcript.md`「前が変わる場面の扱い」) |
-| rounds | TEXT | NOT NULL, `CHECK (json_valid(rounds))`。各ラウンドで足したassistant・tool結果と、最後の応答。`Replay`は受け取った生のJSONの文字列のまま持つ |
+| rounds | TEXT | NOT NULL, `CHECK (json_valid(rounds))`。各ラウンドで足したassistant・tool結果と、最後の応答。`Replay`は受け取った要素のJSONの文字列で持つ(ストリーミングでは差分から組み立て直したもの。`../architecture/transcript.md`「送った形のまま積む」) |
 | created_at | TEXT | ISO8601。NOT NULL |
 
 - 行は返信の行と同じトランザクションで書き(`transcript_blobs`の行も同じトランザクションで足す)、

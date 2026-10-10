@@ -2,7 +2,11 @@
 
 /**
  * サーバー追加フォームからの入力。`McpEndpoint`と同じく、接続方式ごとに必要な値だけを
- * 受け取る。組の2つ目は秘密情報の値で、保存後は`key_ref`に置き換わる。値を含むため
+ * 受け取る。ヘッダーの値は秘密情報で、保存後は`key_ref`に置き換わる。値を含むため
  * `Debug`は付けない(ログに出す経路を作らない)。
  */
-export type NewMcpEndpoint = { "transport": "streamable_http", url: string, headers: Array<[string, string]>, };
+export type NewMcpEndpoint = { "transport": "streamable_http", url: string, 
+/**
+ * 画面からはヘッダーの欄の文字列で届く([`HeaderInput`])。
+ */
+headers: string, };

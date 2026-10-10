@@ -1,17 +1,18 @@
-//! チャット本文中のリンクを開く前の判定と、OSへの委譲。確認ダイアログに出す内容(`inspect`)と、
-//! 実際に開く前の再検証(`open_confirmed`)が同じ判定を通るよう、判定はこのファイルに閉じる。
-//! WebView側の判定結果は信用しない。
+//! チャット本文中のリンクを開く前の判定と、OSへの委譲。確認のダイアログに出す内容(`inspect`・
+//! `dialog`)と、実際に開く前の再検証(`confirmed_target`)が同じ判定を通るよう、判定はこのファイルに
+//! 閉じる。確認はGUIのシェルがRust側からネイティブのダイアログで出し(画面は「開きたい」と伝える
+//! だけ)、WebView側の判定結果は受け取らない(`architecture/webview-boundary.md`の外部リンクの項)。
 
 use percent_encoding::{utf8_percent_encode, AsciiSet};
 use serde::Serialize;
 use url::Url;
 
 use crate::error::{CoreError, Result};
-use crate::text::encode_all_but;
+use crate::i18n::{self, Language};
+use crate::text::{self, encode_all_but};
 
 /// 開いてよいかどうかと、その理由。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinkVerdict {
     Web,
@@ -26,14 +27,12 @@ pub enum LinkVerdict {
     },
 }
 
-/// 確認ダイアログに出す内容。`url`は受け取った文字列をそのまま返す(表示用)。
+/// 確認のダイアログに出す内容。`url`は受け取った文字列をそのまま返す(表示用)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct LinkInspection {
     pub url: String,
     pub verdict: LinkVerdict,
-    /// `verdict`から決まる。「開く」を出すかどうかの判断を画面側に写さないため、
-    /// 判定結果として一緒に渡す。
+    /// `verdict`から決まる(「開く」を出すか)。
     pub can_open: bool,
     /// 書かれたホストと実際の移動先ホストが食い違う場合だけ、移動先のURL全体
     /// (ホストはpunycode)。見た目の似た文字によるなりすまし(ホモグラフ)や、
@@ -101,11 +100,92 @@ pub fn inspect(raw: &str) -> LinkInspection {
     LinkInspection::new(url, LinkVerdict::Web, real_url, userinfo_host)
 }
 
-/// 確認ダイアログで承認されたリンクを、判定し直してからOSの既定アプリで開く。
-/// 渡すのは解析・正規化後のURLで、判定した対象と開く対象を一致させる。
-/// 確認ダイアログを経たこと自体はここでは検証できない(WebView側の呼び出しを信用しない
-/// 前提のため、ここで保証するのは開く対象が許可された形であることまで)。
-pub fn open_confirmed(raw: &str) -> Result<()> {
+/// 確認のダイアログに出す見出しのURLの長さの上限(超えた分は「…」)。
+const MAX_SHOWN_URL_CHARS: usize = 300;
+
+/// リンクを開く前に出すネイティブのダイアログの文面(表示言語)。`open_label`が無ければ開けない
+/// リンクで、理由を知らせて閉じるだけにする。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkDialog {
+    pub title: String,
+    pub message: String,
+    /// 見た目の紛らわしいURL(ホモグラフ・ユーザー情報)への警告を含む。ダイアログの種類を変える。
+    pub warning: bool,
+    pub open_label: Option<String>,
+    pub close_label: String,
+}
+
+/// 判定の結果を、ネイティブのダイアログの文面にする。ダイアログは見た目を画面に揃えられないので、
+/// 警告は見出しの行と本文の行を空行で区切って並べる。URLは1行にし、見えない文字を`\uXXXX`の形にする
+/// (改行で文を差し込ませない。`architecture/sanitize.md`「ネイティブのダイアログ」)。
+pub fn dialog(lang: Language, inspection: &LinkInspection) -> LinkDialog {
+    let line = |s: &str| text::reveal_invisible_line(&text::ellipsize(s, MAX_SHOWN_URL_CHARS));
+    let t = |key| i18n::text(lang, key).to_string();
+    // 見出しのURLは、読めるものは開くときと同じ解釈で正規化した形にする(入力のままだと、空白の
+    // 並びで別の行の文に見せたり、長さの上限で切ってホストを隠したりできる)。開けるWebのリンクは、
+    // 移動先のホストを必ず別の行に出す。
+    let parsed = Url::parse(&inspection.url).ok();
+    let mut head = line(parsed.as_ref().map_or(&inspection.url, |url| url.as_str()));
+    if let (LinkVerdict::Web, Some(host)) = (
+        &inspection.verdict,
+        parsed.as_ref().and_then(|url| url.host_str()),
+    ) {
+        head.push('\n');
+        head.push_str(&i18n::format(
+            lang,
+            "link.host_label",
+            &[("host", &line(host))],
+        ));
+    }
+    let mut sections = vec![head];
+    if let Some(real_url) = &inspection.real_url {
+        sections.push(format!(
+            "{}\n{}\n{}",
+            t("link.special_char_title"),
+            t("link.special_char_body"),
+            i18n::format(lang, "link.real_url_label", &[("url", &line(real_url))]),
+        ));
+    }
+    if let Some(host) = &inspection.userinfo_host {
+        sections.push(format!(
+            "{}\n{}\n{}",
+            t("link.userinfo_title"),
+            t("link.userinfo_body"),
+            i18n::format(
+                lang,
+                "link.userinfo_domain_label",
+                &[("domain", &line(host))]
+            ),
+        ));
+    }
+    let warning = inspection.real_url.is_some() || inspection.userinfo_host.is_some();
+    match &inspection.verdict {
+        LinkVerdict::Unreadable => sections.push(t("link.unreadable")),
+        LinkVerdict::SchemeBlocked { scheme } => sections.push(i18n::format(
+            lang,
+            "link.scheme_blocked",
+            &[("scheme", &line(scheme))],
+        )),
+        LinkVerdict::Mail => sections.push(t("link.mailto_note")),
+        LinkVerdict::Web if !warning => sections.push(t("link.generic_warning")),
+        LinkVerdict::Web => {}
+    }
+    LinkDialog {
+        title: t("link.dialog_title"),
+        message: sections.join("\n\n"),
+        warning,
+        open_label: inspection.can_open.then(|| t("link.open")),
+        close_label: t(if inspection.can_open {
+            "common.cancel"
+        } else {
+            "common.close"
+        }),
+    }
+}
+
+/// 開くと承認されたリンクを判定し直し、OSへ渡す形(解析・正規化したURL)にする。判定した対象と
+/// 開く対象を一致させる。確認のダイアログはRust側が出すので、呼ぶのは承認されたあとだけ。
+pub fn confirmed_target(raw: &str) -> Result<String> {
     let inspection = inspect(raw);
     if !inspection.can_open {
         return Err(CoreError::Link(format!(
@@ -117,7 +197,13 @@ pub fn open_confirmed(raw: &str) -> Result<()> {
     if url.scheme() == "mailto" {
         keep_standard_mailto_fields(&mut url);
     }
-    open::that_detached(os_safe(&url)).map_err(|e| CoreError::Link(e.to_string()))
+    Ok(os_safe(&url))
+}
+
+/// 承認されたリンクをOSの既定アプリで開く(デスクトップ。Androidでは`open`クレートが動かないので、
+/// GUIのシェルが[`confirmed_target`]の結果を`tauri-plugin-opener`へ渡す)。
+pub fn open_confirmed(raw: &str) -> Result<()> {
+    open::that_detached(confirmed_target(raw)?).map_err(|e| CoreError::Link(e.to_string()))
 }
 
 /// RFC 3986でURLにそのまま書けない文字(`"`・空白・`<>^`|{}\`等)をパーセント表記にする。
@@ -169,6 +255,44 @@ fn written_host(url: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_dialog_offers_to_open_only_allowed_links_and_lists_the_warnings() {
+        let plain = dialog(Language::En, &inspect("https://example.com/a"));
+        assert!(plain.open_label.is_some());
+        assert!(!plain.warning);
+        assert!(plain.message.starts_with("https://example.com/a"));
+
+        let disguised = dialog(Language::Ja, &inspect("https://google.com@evil.com/"));
+        assert!(disguised.warning);
+        assert!(
+            disguised.message.contains("evil.com"),
+            "{}",
+            disguised.message
+        );
+
+        let blocked = dialog(Language::En, &inspect("file:///etc/passwd"));
+        assert!(blocked.open_label.is_none());
+        assert!(blocked.message.contains("file:"), "{}", blocked.message);
+
+        // URLの中の改行で、文を差し込ませない(URLは1行に収める)。
+        let injected = dialog(Language::En, &inspect("javascript:x\n\nThis link is safe."));
+        assert!(!injected.message.lines().any(|l| l == "This link is safe."));
+        // 空白の並びは正規化で`%20`になり、長い道筋でもホストは別の行に出る。
+        let spaced = dialog(
+            Language::En,
+            &inspect("https://evil.example/       Checked by SCITL."),
+        );
+        assert!(!spaced.message.contains("       "), "{}", spaced.message);
+        let slashes = format!("https:{}evil.example/", "/".repeat(300));
+        let hidden = dialog(Language::En, &inspect(&slashes));
+        assert!(
+            hidden.message.contains("evil.example"),
+            "{}",
+            hidden.message
+        );
+        assert!(!plain.message.contains('{') && !disguised.message.contains('{'));
+    }
 
     #[test]
     fn plain_https_has_no_warnings() {

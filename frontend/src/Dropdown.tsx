@@ -1,12 +1,6 @@
-import {
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from 'react'
+import { useId, useLayoutEffect, useRef, type ReactNode } from 'react'
+import Icon from './Icon'
+import { onPopupListKeyDown, usePopup } from './usePopup'
 
 export interface DropdownOption {
   key: string
@@ -44,8 +38,7 @@ interface DropdownProps {
 // この部品自身は基準にならない。ボタンの幅ではなく並んだ入れ物全体の幅まで広げられるように
 // するため。
 //
-// 開いている一覧は、外を押すか、フォーカスが外へ移ると閉じる。隣り合う一覧のうち1つだけが
-// 開いている状態はこれで保つ。
+// 開け閉めは`usePopup`(外を押す・フォーカスが外へ移る・「戻る」で閉じる)。
 export default function Dropdown({
   labelledBy,
   label,
@@ -56,38 +49,14 @@ export default function Dropdown({
   align,
   ...listProps
 }: DropdownProps) {
-  const [open, setOpen] = useState(false)
+  const { open, toggle, close, rootRef, toggleRef, onBlur } = usePopup()
   const valueId = useId()
-  const rootRef = useRef<HTMLDivElement>(null)
-  const toggleRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [open])
-
-  const close = () => {
-    setOpen(false)
-    toggleRef.current?.focus()
-  }
 
   // 矢印は一覧が開く向きを指し、開いている間は閉じる向きを指す。
-  const arrow = (direction === 'up') === open ? '▼' : '▲'
+  const arrow = (direction === 'up') === open ? 'keyboard_arrow_down' : 'keyboard_arrow_up'
 
   return (
-    <div
-      className="dropdown"
-      ref={rootRef}
-      onBlur={(e) => {
-        // 行き先の無いフォーカス喪失(一覧の余白を押した等)では閉じない。外を押した場合は
-        // pointerdownの側で閉じる。
-        if (e.relatedTarget && !rootRef.current?.contains(e.relatedTarget)) setOpen(false)
-      }}
-    >
+    <div className="dropdown" ref={rootRef} onBlur={onBlur}>
       <button
         type="button"
         ref={toggleRef}
@@ -97,14 +66,16 @@ export default function Dropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-labelledby={labelledBy && `${labelledBy} ${valueId}`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
       >
         <span id={valueId} className="dropdown-label">
           {label}
         </span>
-        <span aria-hidden="true">{arrow}</span>
+        <Icon name={arrow} />
       </button>
-      {open && <DropdownList {...listProps} direction={direction} align={align} onClose={close} />}
+      {open && (
+        <DropdownList {...listProps} direction={direction} align={align} onClose={close} />
+      )}
     </div>
   )
 }
@@ -144,25 +115,10 @@ function DropdownList({
     onSelect(key)
   }
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      onClose()
-      return
-    }
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
-    e.preventDefault()
-    const rows = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])
-    if (rows.length === 0) return
-    const at = rows.indexOf(document.activeElement as HTMLElement)
-    const next = e.key === 'ArrowDown' ? Math.min(at + 1, rows.length - 1) : Math.max(at - 1, 0)
-    rows[next].focus()
-  }
-
   return (
     <div
       className={`dropdown-popup dropdown-popup-${direction} dropdown-popup-${align}`}
-      onKeyDown={onKeyDown}
+      onKeyDown={(e) => onPopupListKeyDown(e, listRef.current, 'option', onClose)}
     >
       {options.length === 0 ? (
         emptyText && <p className="list-empty dropdown-empty">{emptyText}</p>

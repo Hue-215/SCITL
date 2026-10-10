@@ -2,16 +2,18 @@
 //! `scitl_core::settings`にあり、ここはそれを1つ呼ぶだけ。
 
 use secrecy::SecretString;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use scitl_core::config::{ApiFormat, Capability, ReasoningEffort};
 use scitl_core::i18n::Language;
+use scitl_core::llm::providers::{self, BaseUrlHint};
 use scitl_core::settings::{
-    AvailableModel, ChatModelsView, GeneralUpdate, NewProvider, SettingsView,
+    AvailableModel, ChatModelsView, FormOutcome, GeneralUpdate, HeaderInput, NewProvider,
+    SettingsView,
 };
 
 use super::{with_settings, CommandResult};
-use crate::AppState;
+use crate::{dialog, AppState};
 
 /// ロックを一瞬取るだけでI/Oを伴わないため、同期コマンドのままにする。
 #[tauri::command]
@@ -19,21 +21,26 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     state.settings.view()
 }
 
+/// 数値の欄は文字列のまま受け取る(解釈はcore。`None`は保存済みの値のまま)。欄の誤りは
+/// `FormOutcome::Rejected`で返す。
 #[tauri::command]
 pub async fn update_general_settings(
     state: State<'_, AppState>,
     system_prompt: Option<String>,
     task_chat_system_prompt: Option<String>,
     task_opening_message: Option<String>,
-    response_timeout_secs: Option<u64>,
-) -> CommandResult<SettingsView> {
+    response_timeout_secs: Option<String>,
+) -> CommandResult<FormOutcome<SettingsView>> {
     let update = GeneralUpdate {
         system_prompt,
         task_chat_system_prompt,
         task_opening_message,
         response_timeout_secs,
     };
-    with_settings(&state, move |s| s.update_general(update)).await
+    with_settings(&state, move |s| {
+        FormOutcome::from_result(s.update_general(update))
+    })
+    .await
 }
 
 /// 画面が起動時に1度だけ読む表示言語。`get_settings`と同じく、I/Oを伴わないので同期のまま。
@@ -50,33 +57,53 @@ pub async fn update_language(
     with_settings(&state, move |s| s.update_language(language)).await
 }
 
+/// 数値の欄は文字列のまま受け取る(`update_general_settings`と同じ)。
 #[tauri::command]
 pub async fn update_tool_settings(
     state: State<'_, AppState>,
-    max_rounds_per_turn: Option<u32>,
-    total_timeout_secs: Option<u64>,
-) -> CommandResult<SettingsView> {
+    max_rounds_per_turn: Option<String>,
+    total_timeout_secs: Option<String>,
+) -> CommandResult<FormOutcome<SettingsView>> {
     with_settings(&state, move |s| {
-        s.update_tools(max_rounds_per_turn, total_timeout_secs)
+        FormOutcome::from_result(s.update_tools(
+            max_rounds_per_turn.as_deref(),
+            total_timeout_secs.as_deref(),
+        ))
     })
     .await
 }
 
+/// ヘッダーの欄は文字列のまま、秘密情報として受け取る(分けるのはcore)。保存の前に、通信先を
+/// ネイティブのダイアログで利用者に確かめる(取りやめたら`FormOutcome::Cancelled`)。
 #[tauri::command]
 pub async fn add_provider(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     api_format: ApiFormat,
     base_url: String,
     api_key: Option<SecretString>,
-) -> CommandResult<SettingsView> {
+    headers: HeaderInput,
+) -> CommandResult<FormOutcome<SettingsView>> {
     let new = NewProvider {
         name,
         api_format,
         base_url,
         api_key,
+        headers,
     };
-    with_settings(&state, move |s| s.add_provider(new)).await
+    let confirm = dialog::confirm_destination(&app);
+    with_settings(&state, move |s| {
+        FormOutcome::from_result(s.add_provider(new, confirm))
+    })
+    .await
+}
+
+/// 登録フォームで入力中のベースURLへのヒント。判定はアダプタの知識なのでcoreが持つ
+/// (`llm::providers::base_url_hint`)。I/Oを伴わないので同期のまま。
+#[tauri::command]
+pub fn get_base_url_hint(api_format: ApiFormat, base_url: String) -> Option<BaseUrlHint> {
+    providers::base_url_hint(api_format, &base_url)
 }
 
 #[tauri::command]
@@ -87,13 +114,15 @@ pub async fn delete_provider(
     with_settings(&state, move |s| s.delete_provider(&provider_id)).await
 }
 
+/// 登録したら、検出できるプロバイダーなら続けて能力を検出する。推論サーバーへの問い合わせを
+/// 待つので`with_settings`を通さない(登録の保存は`Settings::add_models`の中で逃がす)。
 #[tauri::command]
 pub async fn add_models(
     state: State<'_, AppState>,
     provider_id: String,
     models: Vec<String>,
 ) -> CommandResult<SettingsView> {
-    with_settings(&state, move |s| s.add_models(&provider_id, &models)).await
+    Ok(state.settings.add_models(&provider_id, models).await?)
 }
 
 #[tauri::command]
@@ -137,10 +166,10 @@ pub async fn set_model_context_length(
     state: State<'_, AppState>,
     provider_id: String,
     model: String,
-    context_length: Option<u32>,
-) -> CommandResult<SettingsView> {
+    context_length: String,
+) -> CommandResult<FormOutcome<SettingsView>> {
     with_settings(&state, move |s| {
-        s.set_model_context_length(&provider_id, &model, context_length)
+        FormOutcome::from_result(s.set_model_context_length(&provider_id, &model, &context_length))
     })
     .await
 }

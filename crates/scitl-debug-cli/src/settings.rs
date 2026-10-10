@@ -13,7 +13,9 @@ use scitl_core::blocking;
 use scitl_core::config::ApiFormat;
 use scitl_core::error::Result as CoreResult;
 use scitl_core::i18n::Language;
-use scitl_core::settings::{GeneralUpdate, NewMcpEndpoint, NewProvider, Settings, SettingsView};
+use scitl_core::settings::{
+    GeneralUpdate, HeaderInput, NewMcpEndpoint, NewProvider, Settings, SettingsView,
+};
 
 use crate::{load_settings, DebugError};
 
@@ -31,14 +33,14 @@ pub enum SettingsCommand {
         #[arg(long, value_name = "TEXT")]
         task_opening_message: Option<String>,
         #[arg(long, value_name = "SECONDS")]
-        response_timeout_secs: Option<u64>,
+        response_timeout_secs: Option<String>,
     },
     /// Replace the limits on tool calls. Values left out go back to their defaults.
     Tools {
         #[arg(long, value_name = "COUNT")]
-        max_rounds_per_turn: Option<u32>,
+        max_rounds_per_turn: Option<String>,
         #[arg(long, value_name = "SECONDS")]
-        total_timeout_secs: Option<u64>,
+        total_timeout_secs: Option<String>,
     },
     /// Set the display language of the desktop app.
     Language {
@@ -63,8 +65,13 @@ pub enum ProviderCommand {
         /// OS credential store and is never printed.
         #[arg(long, value_name = "VAR")]
         api_key_env: Option<String>,
+        /// Request header NAME, taking its value from this process's variable VAR. The value
+        /// goes to the OS credential store. `{session_id}` in the value is replaced with an ID
+        /// of the conversation when a turn is sent. Can be repeated.
+        #[arg(long, value_name = "NAME=VAR")]
+        header: Vec<String>,
     },
-    /// Remove a provider and its stored API key.
+    /// Remove a provider and its stored API key and header values.
     Delete { provider_id: String },
     /// Ask the provider which models it offers. Nothing is saved.
     Models { provider_id: String },
@@ -178,7 +185,8 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
                 system_prompt,
                 task_chat_system_prompt,
                 task_opening_message,
-                response_timeout_secs,
+                // 省いた値は既定値に戻す(空欄と同じ)。
+                response_timeout_secs: Some(response_timeout_secs.unwrap_or_default()),
             };
             change(settings, move |s| s.update_general(update)).await
         }
@@ -187,7 +195,11 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
             total_timeout_secs,
         } => {
             change(settings, move |s| {
-                s.update_tools(max_rounds_per_turn, total_timeout_secs)
+                // 省いた値は既定値に戻す(空欄と同じ)。
+                s.update_tools(
+                    Some(max_rounds_per_turn.as_deref().unwrap_or_default()),
+                    Some(total_timeout_secs.as_deref().unwrap_or_default()),
+                )
             })
             .await
         }
@@ -205,6 +217,7 @@ pub async fn run_provider(session: &Session, command: ProviderCommand) -> Result
             api_format,
             base_url,
             api_key_env,
+            header,
         } => {
             let new = NewProvider {
                 name,
@@ -214,8 +227,10 @@ pub async fn run_provider(session: &Session, command: ProviderCommand) -> Result
                     .as_deref()
                     .map(|var| secret_from_env("--api-key-env", var))
                     .transpose()?,
+                headers: HeaderInput::Pairs(secrets_from_env("--header", header)?),
             };
-            change(settings, move |s| s.add_provider(new)).await
+            // 利用者自身が端末で打つので、通信先は確かめない(`cli.md`)。
+            change(settings, move |s| s.add_provider(new, |_| true)).await
         }
         ProviderCommand::Delete { provider_id } => {
             change(settings, move |s| s.delete_provider(&provider_id)).await
@@ -233,7 +248,10 @@ pub async fn run_model(session: &Session, command: ModelCommand) -> Result<(), D
         ModelCommand::Add {
             provider_id,
             models,
-        } => change(settings, move |s| s.add_models(&provider_id, &models)).await,
+        } => {
+            print_json(&settings.add_models(&provider_id, models).await?);
+            Ok(())
+        }
         ModelCommand::Remove { provider_id, model } => {
             change(settings, move |s| s.remove_model(&provider_id, &model)).await
         }
@@ -253,9 +271,11 @@ pub async fn run_mcp(session: &Session, command: McpCommand) -> Result<(), Debug
         McpCommand::AddHttp { header, name, url } => {
             let endpoint = NewMcpEndpoint::StreamableHttp {
                 url,
-                headers: secrets_from_env("--header", header)?,
+                headers: HeaderInput::Pairs(secrets_from_env("--header", header)?),
             };
-            change(settings, move |s| s.add_mcp_server(&name, endpoint)).await
+            // 利用者自身が端末で打つので、通信先は確かめない(`cli.md`)。
+            print_json(&settings.add_mcp_server(name, endpoint, |_| true).await?);
+            Ok(())
         }
         McpCommand::Delete { server_id } => {
             change(settings, move |s| s.delete_mcp_server(&server_id)).await

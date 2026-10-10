@@ -18,8 +18,9 @@
     応答の形で見分け、学習時の長さではなく実際に確保された長さだけをコンテキスト長として採る
   - Anthropic形式・Gemini形式: 公式のモデル情報(`GET …/models/{id}`)に問い合わせる。採る項目は
     下の「Anthropic形式」「Gemini形式」
-  - 問い合わせるのは、設定画面の操作のときと、起動後にモデルごとに最初の1回(チャット欄の
-    モデル選択を開いたときか、ターンを始めるとき)
+  - 問い合わせるのは、設定画面の操作のとき(モデルの追加では、追加の操作の中で続けて問い合わせる。
+    失敗しても追加は済ませる。`settings::Settings::add_models`)と、起動後にモデルごとに最初の1回
+    (チャット欄のモデル選択を開いたときか、ターンを始めるとき)
 - **既定値**(`llm::DEFAULT_CAPABILITIES`): モデル名によらず一律の値1つ(思考は
   あり、画像はなし、コンテキスト長は`FALLBACK_CONTEXT_LENGTH`)。モデル名から能力を引く表は
   持たない。出典を確かめられず、新しいモデルが出るたびに追従する手段も無いため。実物との
@@ -78,6 +79,9 @@ Anthropic形式は`GET /v1/models`、Gemini形式は`GET /v1beta/models`)で取�
 - 方言によらない失敗(reqwestが報告する通信の失敗と、状態コードだけで決まるもの)の変換は
   `llm::LlmError`に置き、全アダプタがそれを呼ぶ
 - 応答本文でしか分からない失敗(コンテキスト超過の書き方等)の判定は各`providers/*.rs`に置く
+- 応答の欄が`null`でも、欄が無いときと同じに読む(`providers::null_as_default`、Issue #458)。空の欄を
+  省かずに`null`で返す互換サーバーがあり、型の誤りとして失敗にすると会話が続かない。ツールの引数が
+  `null`なら、空のオブジェクトに置き換えずに`null`として上位へ渡す(引数検証がモデルへ失敗を返す)
 - 詳細は`llm::ErrorDetail`で運ぶ。サニタイズするコンストラクタでしか作れない
   (`../data-model/messages.md`「エラー発言の詳細」)
 
@@ -122,13 +126,45 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 入れるかは方言ごとに下に書く。ターンをまたいでは、送った形のまま保存したものを次のターンに並べて
 返す(`transcript.md`「送った形のまま積む」)。最後の応答(ツールを呼ばなかった応答)の`Replay`も保存する
 
+## OpenAI互換
+
+**OpenAI互換**(`llm::providers::openai_compat`): Chat Completions(`POST {base_url}/chat/completions`)を
+`stream: true`で呼び、SSEで届く断片を受け取った順にイベントとして渡す(Issue #204)。SSEの分割は方言によらない
+`llm/providers/sse.rs`が持ち、`data`の読み方はアダプタが持つ。
+
+- `stream`を無視して1つのJSONで返すサーバーもあるので、応答の`Content-Type`が`text/event-stream`で
+  なければ、ストリーミングしない応答として読む。`stream: true`そのものを拒むサーバー(ツールと同時の
+  ストリーミングに対応しない古い推論サーバー等)には対応しない
+- 応答タイムアウトは、データの届かない時間の上限として使う(`network-secrets.md`「外部通信の一元化とネットワーク設定」)
+- 本文(`delta.content`)と思考(`delta.reasoning_content`)は、届いたらすぐ渡す
+- ツール呼び出しは`index`ごとに断片を組み立て、終わってから最初の断片が届いた順に渡す。最初の断片が
+  `id`と名前を、続く断片が引数の続きを運ぶ。`index`を付けないサーバーでは、`id`か名前が付いた断片を
+  新しい呼び出し、付いていない断片と直前と同じ`id`の断片を直前の呼び出しの続きとする(空の`id`・名前は
+  付いていないものとする)。同じ`index`でも、すでに`id`を持つ呼び出しに別の`id`が届いたら新しい呼び出しと
+  する(並列の呼び出しをすべて同じ`index`で送るサーバー)。名前の無い呼び出しは応答の解釈の失敗にする
+- 1回の応答のツール呼び出しは`MAX_TOOL_CALLS`(128)件までで、超えたら応答の解釈の失敗にする(ストリーミング
+  しない応答も同じ)。上限が無いと、呼び出しを大量に並べて組み立てと実行に時間とメモリを使わせられる
+- 終了理由(空でないもの)か`[DONE]`が届いたら完了とし、残りは読まない(`[DONE]`を送らずに接続を開けたままにする
+  サーバーで、組み立て終えた応答をタイムアウトで捨てないため)。どちらも無いまま本文が終わったら、
+  途中で切れたとして通信の失敗にする。返信の候補が1つも無ければ空応答にする。空の`data`は読み飛ばす
+- 途中で`{"error": …}`が届いたら、エラー応答の本文と同じ見分け方(コンテキスト超過等)で失敗にする。
+  `error.code`に状態コードを入れるサーバーでは、その状態コードで分類する(回数制限・認証)
+- 1イベントの大きさ(`sse.rs`)と、1回の応答として読む量の合計(SSEでもJSONでも`MAX_RESPONSE_BYTES`)に
+  上限を置く。待つ時間の上限は無通信の間隔だけなので、送り続けるサーバーを量で止める
+- `finish_reason: "content_filter"`は`LlmError::Refused`にする(下の「Anthropic形式」の`refusal`と同じ)。
+  断られたと分かるのは最後なので、途中までの本文はもう画面に流れているが、返信としては保存しない
+- 思考を送り返さない方言なので、`Replay`は常に空
+
 ## Anthropic形式
 
 **Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
-ストリーミングせずに呼ぶ。出典は公式ドキュメント(errors・thinking・prompt caching・models)。
+`stream: true`で呼び、SSEで届くイベントを受け取った順に読む(Issue #204。`anthropic/stream.rs`)。出典は公式
+ドキュメント(errors・thinking・prompt caching・models・streaming)。
 
 - ベースURLは`/v1`を含まない(`https://api.anthropic.com`)。鍵は`x-api-key`、版は
-  `anthropic-version: 2023-06-01`で送る。設定画面は、`/v1`まで書いたURLにヒントを出す(登録は止めない)
+  `anthropic-version: 2023-06-01`で送る。設定画面は、`/v1`まで書いたURLにヒントを出す(登録は止めない。
+  判定はアダプタ側に置き(`providers::base_url_hint`)、画面は結果の種類から文言を引く。Gemini形式の
+  `/v1beta`も同じ)。登録フォームの既定のベースURLも方言ごとにアダプタが持ち、設定画面の状態で渡す
 - `max_tokens`は必須なので、アダプタが固定の値を送る。設定で変えられるようにするのはIssue #271
 - 思考の強さは`thinking: {type: "adaptive", display: "summarized"}`と`output_config.effort`で渡す。
   `display`を指定しないと思考の中身が空で返り、画面に出せない。「オフ」は`thinking: {type: "disabled"}`
@@ -144,21 +180,45 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 - プロンプトキャッシュは、システムプロンプトの末尾に目印を置き(ツールの定義とシステム
   プロンプトが常に読まれる)、リクエスト全体にも`cache_control`を付けて、伸びていく会話の末尾に
   目印を自動で置かせる
-- 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は、途中まで書いた本文を渡さずに
-  `LlmError::Refused`にし、断られたことが分かるエラー発言にする(OpenAI互換の
-  `finish_reason: "content_filter"`も同じ扱い)。`max_tokens`と
+- 終了理由の`refusal`(モデルや安全上の判定が応答を断った)は`LlmError::Refused`にし、断られたことが
+  分かるエラー発言にする(OpenAI互換の`finish_reason: "content_filter"`も同じ扱い)。途中まで書いた本文は
+  返信として保存しない。ストリーミングでは画面に流れたあとになり、ストリーミングしない応答では渡さない。`max_tokens`と
   `model_context_window_exceeded`は長さによる打ち切り(`FinishReason::Length`)にする
 - 能力の自動検出は`GET /v1/models/{id}`で行う。画像は`image_input`、コンテキスト長は
   `max_input_tokens`、思考はadaptiveに対応するかで決め、ツールは常にありとする
 
+ストリーミングの読み方:
+
+- `Content-Type`が`text/event-stream`でなければ、ストリーミングしない応答として読む(`stream`を無視する
+  中継があるため。OpenAI互換と同じ)。応答タイムアウトはデータの届かない時間の上限として使い、1イベントと
+  1回の応答の大きさに上限を置くのもOpenAI互換と同じ
+- ブロックは`content_block_start`で届いたブロックに、`index`の同じ差分を足して組み立てる。`text_delta`は
+  `text`に、`thinking_delta`は`thinking`に続け、`citations_delta`は`citations`に足す。`signature_delta`は
+  `signature`を置き換える(署名は断片ではなく1つの値で届く)。`input_json_delta`は連結しておき、読み終えてから
+  `input`に読む(断片が空なら空のオブジェクト。`input`の無い`tool_use`も空のオブジェクトにする)。読めなければ
+  応答の解釈の失敗にする(`input`をオブジェクトのまま送り返すので、壊れた引数を持つ形が無い)。長さの上限で
+  打ち切られた応答なら、打ち切りで呼び出しが切れたと分かる文言にする。知らない差分は読み飛ばす。始まって
+  いないブロックへの差分と、`MAX_STREAMED_ELEMENTS`(1024)を超えるブロックは応答の解釈の失敗にする
+- 本文と思考は届いたらすぐ渡し、ツール呼び出しは組み立て終えてから`Done`の前に渡す
+- 思考のブロックを含む応答は、組み立てたブロックを並びごと`Replay`に入れる(ストリーミングしないときと同じ。
+  文字列の形は`transcript.md`「送った形のまま積む」)
+- 終了理由(`message_delta`の`stop_reason`)か`message_stop`が届いたら完了とし、残りは読まない(`message_stop`を
+  送らずに接続を開けたままにする中継で、組み立て終えた応答をタイムアウトで捨てないため。OpenAI互換と同じ)。
+  どちらも無いまま本文が終わったら、途中で切れたとして通信の失敗にする。`message_start`・`ping`は読み飛ばす
+- 途中で届いた`error`は、`error.type`をエラー応答で返るときの状態コードに読み替えて分類する
+  (`rate_limit_error`は429、`overloaded_error`は529等)。種類(`type`)を付けずに`{"error": …}`だけを送る
+  中継のイベントも同じに扱う
+
 ## Gemini形式
 
 **Gemini形式**(`llm::providers::gemini`、Issue #81): Interactions API(`POST {base_url}/v1beta/interactions`)を
-ストリーミングせずに呼ぶ。旧来のAPIとされる`generateContent`ではなくこちらを使うのは、新しい機能が
-Interactions APIにだけ入るため。出典は公式ドキュメント(Interactions API reference・thinking・
-function calling・api-errors・models)。
+`stream: true`で呼び、SSEで届くイベントを受け取った順に読む(Issue #204。`gemini/stream.rs`)。旧来のAPIとされる
+`generateContent`ではなくこちらを使うのは、新しい機能がInteractions APIにだけ入るため。出典は公式ドキュメント
+(Interactions API reference・thinking・function calling・api-errors・models)。ストリーミングのイベントの形は、
+公式SDK(`@google/genai` 2.27.0)の型定義による。
 
-- ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る
+- ベースURLは`/v1beta`を含まない(`https://generativelanguage.googleapis.com`)。鍵は`x-goog-api-key`で送る。
+  `/v1beta`等の版まで書いたURLへのヒントはAnthropic形式と同じ
 - **`store: false`を常に送る**。既定ではやり取りがGoogle側に保存される(有料で55日、無料で1日)。
   会話はこのアプリが持ち、毎回すべてを入力のステップ(`user_input`・`model_output`・`function_call`・
   `function_result`)として送る(`previous_interaction_id`は使わない)
@@ -184,7 +244,8 @@ function calling・api-errors・models)。
 - 最後の呼び出し(ツールの上限)は、ツールの定義を残して`generation_config.tool_choice: "none"`で禁じる
 - 出力の上限(`max_output_tokens`)は送らず、モデルの既定に任せる(必須ではないため)
 - 状態(`status`)の`completed`は通常の終了、`requires_action`はツール呼び出し、`incomplete`は長さによる
-  打ち切りにする。`failed`は、途中まで書いた本文を渡さずにエラーにする
+  打ち切りにする。`failed`はエラーにする(ストリーミングでは途中までの本文は画面に流れたあとになるが、
+  返信としては保存しない)
 - 方針・安全上の判定で出力を止めたエラーコード(`safety`・`prohibited_content`等)は、`failed`の応答の中に
   あっても、HTTPのエラー応答にあっても`LlmError::Refused`にする。それ以外の`failed`はプロバイダーの
   エラー(`LlmError::Http`)にする
@@ -192,3 +253,25 @@ function calling・api-errors・models)。
   `LlmError::ContextExceeded`にする
 - 能力の自動検出は`GET /v1beta/models/{id}`で行う。コンテキスト長は`inputTokenLimit`、思考は`thinking`で
   決め、ツールは常にありとする。画像入力の可否は情報に無いので決めない
+
+ストリーミングの読み方:
+
+- `Accept: text/event-stream`を付けて頼む(公式SDKと同じ)。`Content-Type`が`text/event-stream`でなければ、
+  ストリーミングしない応答として読む。応答タイムアウトと大きさの上限はOpenAI互換と同じ
+- イベントは`data`のJSONの`event_type`で見分ける。出力のステップごとに`step.start`・`step.delta`・`step.stop`が
+  `index`付きで届き、`interaction.completed`の状態(`interaction.status`)が届いたら完了とする。状態の無いまま
+  本文が終わったら(`[DONE]`だけが届いた場合も)、途中で切れたとして通信の失敗にする。`interaction.created`・
+  `interaction.status_update`は読み飛ばす
+- ステップは`step.start`で届いたステップに、`index`の同じ差分を足して組み立てる。`text`は`content`に、
+  `thought_summary`は`summary`に足す(続く本文は1つの要素にまとめる。ストリーミングしないときは1つの要素で
+  返るため)。画像等の中身の差分は`content`に足す。`thought_signature`はそのステップの`signature`を置き換える
+  (`function_call`のステップの署名もこれで届くものとする)。`arguments_delta`は連結しておき、読み終えてから
+  `arguments`に読む(`arguments`の無い`function_call`は空のオブジェクトにする。読めないとき・打ち切りのときの
+  扱いとステップの数の上限はAnthropic形式と同じ)。根拠の注記等の知らない差分は読み飛ばす
+- 本文と思考の要約は届いたらすぐ渡し、ツール呼び出しは組み立て終えてから`Done`の前に渡す。`thought`を含む
+  応答は、組み立てた出力のステップを並びごと`Replay`に入れる(ストリーミングしないときと同じ)
+- 途中で届いた`error`は、`failed`の応答の`errors`と同じに分類する(方針・安全上の判定なら`LlmError::Refused`、
+  それ以外はプロバイダーのエラー)。`event_type`を付けずに`{"error": …}`だけを送る中継のイベントも同じ
+- 実際のAPIで動くことを確かめた(2026-10-08。確かめたモデル・思考の強さの組は記録していない)。差分から
+  組み立て直したステップ(キーの順・要約のまとめ方・`function_call`の署名の位置)が、確かめていない組でも
+  受け付けられるかは、上の確認(キーの順を逆にしても通った)からの推定

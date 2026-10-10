@@ -1,6 +1,6 @@
 //! 疑似API(LLM役が応答を書く。別リポジトリ Hue-215/Sham_llm)を相手に、本物のアダプタとターンの
 //! 処理を通して会話を進める試験用のドライバー。GUIの送信と同じ入口(`create_task`・
-//! `open_task_chat`・`run_turn`)を呼ぶ。使い方は`.claude/skills/llm-relay/SKILL.md`。
+//! `run_turn`)を呼ぶ。使い方は`.claude/skills/llm-relay/SKILL.md`。
 //!
 //! ```text
 //! cargo run -p scitl-core --example relay_session -- <DATA_DIR> <BASE_URL> <STEP>...
@@ -28,11 +28,12 @@ use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::providers::anthropic::AnthropicAdapter;
 use scitl_core::llm::providers::gemini::GeminiAdapter;
 use scitl_core::llm::providers::openai_compat::OpenAiCompatAdapter;
+use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{LlmAdapter, ResponseEvent, DEFAULT_CAPABILITIES};
 use scitl_core::mcp::{McpToolInfo, ToolCatalog};
 use scitl_core::orchestration::{
-    self, create_task, open_task_chat, run_turn, McpAccess, SystemPrompts, TaskCreation,
-    ToolLimits, TurnContext, TurnEvent,
+    self, create_task, run_turn, McpAccess, SystemPrompts, TaskCreation, ToolLimits, TurnContext,
+    TurnEvent,
 };
 use scitl_core::paths::DataLayout;
 use secrecy::SecretString;
@@ -46,7 +47,7 @@ async fn main() {
 
     std::fs::create_dir_all(data.root()).unwrap();
     let db: SharedConnection = Arc::new(Mutex::new(db::open(data.database()).unwrap()));
-    let key = SecretString::from("relay-dummy-key".to_string());
+    let key = Credentials::key_only(SecretString::from("relay-dummy-key".to_string()));
     // LLM役は人間並みに遅いので長めに待つ。
     let timeout = Duration::from_secs(900);
     let dialect = std::env::var("RELAY_DIALECT").unwrap_or_else(|_| "openai".to_string());
@@ -147,16 +148,23 @@ async fn main() {
             generating: &generating,
             attachments: &attachments,
             events: &events,
+            finished: &orchestration::discard_finished,
         };
         match step.as_str() {
             "@new" => {
-                let TaskCreation::Created { task } = create_task(db.clone(), &ctx).await.unwrap()
+                let creation = create_task(db.clone(), &ctx, |task| {
+                    println!("> @new (task {})", task.id);
+                })
+                .await
+                .unwrap();
+                let TaskCreation::Created {
+                    task,
+                    opening_error: None,
+                } = creation
                 else {
-                    panic!("the adapter is not ready");
+                    panic!("the task chat did not open: {creation:?}");
                 };
-                println!("> @new (task {})", task.id);
                 chat = Chat::Task(task.id);
-                open_task_chat(db.clone(), &ctx, task.id).await.unwrap();
             }
             "@general" => {
                 println!("> @general");

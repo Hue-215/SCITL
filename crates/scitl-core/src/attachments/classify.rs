@@ -1,8 +1,6 @@
 //! 添付の種別と形式の判定、受け付ける大きさの上限。拡張子や画面の申告は信用せず、
 //! 中身だけから決める(拡張子を偽ったファイルを画像としてモデルや画面に渡さないため)。
 
-use serde::Serialize;
-
 use crate::db::attachments::AttachmentKind;
 
 /// 受け付ける大きさの上限。
@@ -13,7 +11,6 @@ pub struct Limits {
     pub text_bytes: u64,
     /// OpenAI互換APIが1枚に受け付ける大きさに合わせる。
     pub image_bytes: u64,
-    pub other_bytes: u64,
     /// 1つの発言に付けられる数。
     pub per_message: usize,
 }
@@ -21,41 +18,25 @@ pub struct Limits {
 pub const LIMITS: Limits = Limits {
     text_bytes: 256 * 1024,
     image_bytes: 20 * 1024 * 1024,
-    other_bytes: 50 * 1024 * 1024,
     per_message: 10,
 };
 
 impl Limits {
-    pub fn bytes_for(&self, kind: AttachmentKind) -> u64 {
+    /// その種別の大きさの上限。その他は受け付けないので`None`(Issue #506。モデルが中身に
+    /// 何もできないのに、読んだかのように見えて紛らわしいため)。
+    pub fn bytes_for(&self, kind: AttachmentKind) -> Option<u64> {
         match kind {
-            AttachmentKind::Text => self.text_bytes,
-            AttachmentKind::Image => self.image_bytes,
-            AttachmentKind::Other => self.other_bytes,
+            AttachmentKind::Text => Some(self.text_bytes),
+            AttachmentKind::Image => Some(self.image_bytes),
+            AttachmentKind::Other => None,
         }
     }
 
     /// どの種別でも受け付けない大きさの下限。種別は中身を読むまで分からないので、読む前には
     /// これで見る。
     pub fn largest_bytes(&self) -> u64 {
-        self.text_bytes.max(self.image_bytes).max(self.other_bytes)
+        self.text_bytes.max(self.image_bytes)
     }
-
-    /// 画面がファイルの中身を読む前に確かめる上限。
-    pub fn for_picking(&self) -> PickingLimits {
-        PickingLimits {
-            largest_bytes: self.largest_bytes(),
-            per_message: self.per_message,
-        }
-    }
-}
-
-/// 画面へ渡す上限。種別は中身を読むまで分からないので、種別ごとの上限は渡さず
-/// (預けたときの判定の結果として返る)、どの種別でも受け付けない大きさだけを渡す。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
-pub struct PickingLimits {
-    pub largest_bytes: u64,
-    pub per_message: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +82,24 @@ pub fn classify(bytes: &[u8]) -> Classified {
     Classified {
         kind: AttachmentKind::Other,
         mime_type: "application/octet-stream",
+    }
+}
+
+/// 長いファイルの先頭だけから見た種別。先頭で切った位置がUTF-8の文字の途中でも、そこまでが
+/// テキストとして読めればテキストとする(上限を超えたテキストを、断る理由で「その他」と
+/// 取り違えないため)。
+pub fn classify_prefix(bytes: &[u8]) -> Classified {
+    let classified = classify(bytes);
+    if classified.kind != AttachmentKind::Other || bytes.contains(&0) {
+        return classified;
+    }
+    match std::str::from_utf8(bytes) {
+        // 末尾で文字が途切れただけ(不正なバイトではない)。
+        Err(e) if e.error_len().is_none() && !bytes.starts_with(PDF_SIGNATURE) => Classified {
+            kind: AttachmentKind::Text,
+            mime_type: "text/plain",
+        },
+        _ => classified,
     }
 }
 
@@ -163,5 +162,23 @@ mod tests {
         assert_eq!(pdf.mime_type, "application/pdf");
         assert_eq!(classify(b"%PDF-1.4\n1 0 obj").mime_type, "application/pdf");
         assert_eq!(classify(b"\x00\x01").mime_type, "application/octet-stream");
+    }
+
+    #[test]
+    fn a_prefix_cut_inside_a_character_is_still_text() {
+        let cut = &"締切".as_bytes()[..4];
+        assert_eq!(classify(cut).kind, AttachmentKind::Other);
+        assert_eq!(classify_prefix(cut).kind, AttachmentKind::Text);
+        // 不正なバイト・NUL・PDFは、先頭だけでもその他のまま。
+        assert_eq!(classify_prefix(b"a\xff").kind, AttachmentKind::Other);
+        assert_eq!(classify_prefix(b"a\0\xe7").kind, AttachmentKind::Other);
+        assert_eq!(
+            classify_prefix(b"%PDF-1.4\n\xe7").mime_type,
+            "application/pdf"
+        );
+        assert_eq!(
+            classify_prefix(b"\x89PNG\r\n\x1a\n").kind,
+            AttachmentKind::Image
+        );
     }
 }

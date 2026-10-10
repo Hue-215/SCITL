@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::attachments::{delivery_without_model, Delivery};
+use crate::attachments::{delivery_without_model, revealable, Delivery, CAN_REVEAL};
 use crate::db::attachments::{self, AttachmentKind};
 use crate::db::messages::{self, Chat, Kind, Message, ReplyRecords, ResolvedPart, Role};
 use crate::db::transcripts;
@@ -26,6 +26,9 @@ pub struct MessageView {
     pub parts: Vec<PartView>,
     /// 添付のうち、中身(テキストの本文・画像)をモデルへ渡していないもののid([`undelivered`])。
     pub undelivered_attachments: Vec<i64>,
+    /// 添付のうち、押して入っているフォルダを開けるもののid(`attachments::revealable`)。
+    /// 開けないOS(Android)では空。
+    pub revealable_attachments: Vec<i64>,
 }
 
 /// ターンの中身の1要素の表示。`round`は1始まりのラウンドの番号。
@@ -92,9 +95,19 @@ pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
                 .then(|| ToolExecutionView::of_content(&message.content)),
             parts,
             undelivered_attachments: undelivered.remove(&message.id).unwrap_or_default(),
+            revealable_attachments: revealable_ids(&message, CAN_REVEAL),
             message,
         })
         .collect())
+}
+
+fn revealable_ids(message: &Message, can_reveal: bool) -> Vec<i64> {
+    message
+        .attachments
+        .iter()
+        .filter(|a| revealable(a.kind, can_reveal))
+        .map(|a| a.id)
+        .collect()
 }
 
 /// ユーザー発言の添付のうち、中身をモデルへ渡していないもののidを、発言のidごとに返す
@@ -417,6 +430,24 @@ mod tests {
         let (u, ids) = f.user(&[(AttachmentKind::Text, ""), (AttachmentKind::Other, "z")]);
         f.reply("t1", 1);
         assert_eq!(f.undelivered(), HashMap::from([(u, vec![ids[1]])]));
+    }
+
+    /// 開けるのはその他の添付だけで、開けないOSでは何も開けない。
+    #[test]
+    fn only_other_files_are_revealable_and_none_where_folders_cannot_be_opened() {
+        let f = Fixture::new();
+        let (u, ids) = f.user(&[
+            (AttachmentKind::Text, ""),
+            (AttachmentKind::Image, "h1"),
+            (AttachmentKind::Other, "z"),
+        ]);
+        let message = messages::list_for_chat(&f.conn, Chat::General)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id == u)
+            .unwrap();
+        assert_eq!(revealable_ids(&message, true), [ids[2]]);
+        assert_eq!(revealable_ids(&message, false), Vec::<i64>::new());
     }
 
     #[test]

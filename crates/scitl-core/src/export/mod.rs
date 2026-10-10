@@ -3,8 +3,10 @@
 //! ターン(古い試行・破棄されたターン)は含めない。思考と`error_detail`も含めない。失敗した
 //! ターンで受け取り終えた中身(エラー発言の`parts`)は、画面と同じく含める。
 //!
-//! 書き出し先は呼び出し側が決める。画面からはパスを受け取らない。
+//! 書き出し先は呼び出し側が決める。画面からはパスを受け取らない。どこへ書くか(データディレクトリの
+//! フォルダか、利用者が選んだファイルか)は[`ExportTarget::CURRENT`]で決める。
 
+mod archive;
 mod markdown;
 
 use std::collections::HashMap;
@@ -18,6 +20,7 @@ use ulid::Ulid;
 use crate::attachments::{safe_file_name, AttachmentStore, Attachments};
 use crate::blocking;
 use crate::db::attachments::{self, Attachment, AttachmentContent};
+use crate::db::memories::{self, Memory};
 use crate::db::messages::{self, Chat, Message, ReplyRecords};
 use crate::db::task_steps::{self, TaskStep};
 use crate::db::tasks::{self, Task};
@@ -26,10 +29,52 @@ use crate::error::{CoreError, Result};
 use crate::text;
 use markdown::{AttachmentLink, Entry};
 
+pub use archive::{export_to_chosen_file, OpenChosen};
+
 const ATTACHMENTS_DIR: &str = "attachments";
 /// ファイル名に入れるタイトルの長さ。フォルダまでのパスと合わせて、Windowsのパスの長さの
 /// 上限に届かないよう短めにする(タイトルの全体はファイルの中にある)。
 const TITLE_CHARS_IN_FILE_NAME: usize = 40;
+
+/// 書き出す先。画面は受け取って、押せる操作と結果の文言を出し分ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum ExportTarget {
+    /// データディレクトリの`export/`に、日時の名前のフォルダを作る([`export_markdown`])。画面は
+    /// そのフォルダを開ける([`open_folder`])。
+    Folder,
+    /// 利用者が保存画面で選んだファイルへ、そのフォルダをzipにまとめて書く
+    /// ([`export_to_chosen_file`])。データディレクトリがほかのアプリから見えず、フォルダを開く
+    /// 手段も無いAndroidで使う。
+    ChosenFile,
+}
+
+impl ExportTarget {
+    /// このOSで書き出す先。
+    pub const CURRENT: Self = if cfg!(target_os = "android") {
+        Self::ChosenFile
+    } else {
+        Self::Folder
+    };
+}
+
+/// 書き出しの操作の結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ExportOutcome {
+    /// データディレクトリの`export/`のフォルダへ書いた([`ExportTarget::Folder`])。
+    Written { summary: ExportSummary },
+    /// 選んだファイルへzipで書いた([`ExportTarget::ChosenFile`])。`summary.folder`はzipの中の
+    /// フォルダの名前。
+    Saved { summary: ExportSummary },
+    /// 保存画面を閉じた。何も書いていない。
+    Cancelled,
+    /// 選んだファイルへ書き写せなかった。選んだファイルは保存画面が作るので、書きかけ(空を含む)が
+    /// 選んだ名前で残りうる。消す手段を持たないので、画面は利用者に消すよう伝える。
+    LeftIncomplete { reason: String },
+}
 
 /// 書き出しの結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -58,7 +103,13 @@ pub async fn export_markdown(
 }
 
 /// 書き出し先のフォルダをOSで開く。まだ一度も書き出していなければ空のフォルダを作って開く。
+/// フォルダへ書き出さないOS([`ExportTarget::CURRENT`])では、作る前に断る。
 pub fn open_folder(root: &Path) -> Result<()> {
+    if ExportTarget::CURRENT != ExportTarget::Folder {
+        return Err(CoreError::Export(
+            "exports are not written to a folder on this platform".to_string(),
+        ));
+    }
     fs::create_dir_all(root).map_err(io_error("create the export folder"))?;
     open::that_detached(root).map_err(io_error("open the export folder"))
 }
@@ -81,6 +132,7 @@ impl ChatRows {
 struct Snapshot {
     tasks: Vec<(Task, Vec<TaskStep>, ChatRows)>,
     general: ChatRows,
+    memories: Vec<Memory>,
 }
 
 impl Snapshot {
@@ -96,6 +148,7 @@ impl Snapshot {
         Ok(Self {
             tasks,
             general: ChatRows::read(conn, Chat::General)?,
+            memories: memories::list(conn)?,
         })
     }
 }
@@ -129,6 +182,10 @@ fn write_files(snapshot: &Snapshot, store: &AttachmentStore, dir: &Path) -> Resu
     write_file(
         &dir.join("general-chat.md"),
         &markdown::render_general_chat(&general),
+    )?;
+    write_file(
+        &dir.join("memories.md"),
+        &markdown::render_memories(&snapshot.memories),
     )?;
     for (task, steps, chat) in &snapshot.tasks {
         let conversation = entries(chat, store, dir, &mut counts);
@@ -439,6 +496,21 @@ mod tests {
             .contains("- Status: archived"));
         assert!(!folder.join(format!("task-{removed}-消した.md")).exists());
         assert!(read(folder.join("general-chat.md")).contains("general hello"));
+    }
+
+    /// メモリは削除したものを除いて書き出す。本文はMarkdownの構造として読まれない形にする。
+    #[test]
+    fn writes_memories_except_deleted_ones() {
+        let f = Fixture::new();
+        memories::add(&f.conn, &["朝型 *強調*".to_string(), "消した".to_string()]).unwrap();
+        let removed = memories::list(&f.conn).unwrap()[1].id;
+        memories::delete(&f.conn, removed).unwrap();
+
+        let (_, folder) = f.export();
+
+        let body = read(folder.join("memories.md"));
+        assert!(body.contains("朝型 \\*強調\\*"));
+        assert!(!body.contains("消した"));
     }
 
     #[test]

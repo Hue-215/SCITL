@@ -1,5 +1,6 @@
-import type { ReactNode, RefObject, UIEventHandler } from 'react'
+import type { ReactNode, RefObject, UIEventHandler, WheelEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
+import CodeBlock from './CodeBlock'
 import { ConfirmButton } from './Dialog'
 import { formatDateTime, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
@@ -15,17 +16,22 @@ import type { MessageView, PendingEntry } from './types'
 
 // Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
 // 表示はSCITL自身の文言(とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
-// エラー発言は、ターンの中でも外でもここで表示言語の文言に替える。
+// エラー発言は、ターンの中でも外でもここで表示言語の文言に替える。`streaming`は、書いている
+// 途中の本文か。
 function EntryBody({
   role,
   content,
   errorKind = null,
+  streaming = false,
 }: {
   role: string
   content: string
   errorKind?: string | null
+  streaming?: boolean
 }) {
-  if (role === 'user' || role === 'assistant') return <Markdown text={content} />
+  if (role === 'user' || role === 'assistant') {
+    return <Markdown text={content} streaming={streaming} />
+  }
   const text = role === 'error' ? turnErrorText(errorKind, content) : content
   return <span className="entry-content">{text}</span>
 }
@@ -61,29 +67,22 @@ function EntryActions({
 }
 
 // ターンの中身の1区切り。本文は返信と同じ吹き出しで出す。`footer`は吹き出しの末尾に足すもの
-// (日時と操作)。
+// (日時と操作)。`streaming`は、応答待ちの間の途中経過か。
 function TurnSegmentView({
   segment,
   footer = null,
+  streaming = false,
 }: {
   segment: TurnSegment
   footer?: ReactNode
+  streaming?: boolean
 }) {
   if (segment.kind === 'thoughts') return <ThinkingTools items={segment.items} />
   return (
     <div className="entry entry-assistant">
-      <EntryBody role="assistant" content={segment.text} />
+      <EntryBody role="assistant" content={segment.text} streaming={streaming} />
       {footer}
     </div>
-  )
-}
-
-// 返信の無い会話の末尾に出す、応答を生成する操作。止めたターンが会話の最後にあるときも同じ形で出す。
-function GenerateReplyButton({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
-  return (
-    <button type="button" disabled={disabled} onClick={onClick}>
-      {t('chat.generate_reply_button')}
-    </button>
   )
 }
 
@@ -100,6 +99,7 @@ export interface EntryEditing {
 interface ChatLogProps {
   logRef: RefObject<HTMLUListElement | null>
   onScroll: UIEventHandler<HTMLUListElement>
+  onWheel: WheelEventHandler<HTMLUListElement>
   messages: MessageView[]
   // 実行中のコマンドの楽観表示・途中経過・コマンド自体の失敗(`useChatRequests`)。
   pending: PendingEntry[]
@@ -111,14 +111,13 @@ interface ChatLogProps {
   editing: EntryEditing
   onRetry: (messageId: number) => void
   onRemove: (messageId: number) => void
-  // 会話が返信の無いまま終わっているときだけ渡す。会話の末尾に応答を生成する操作を出す。
-  onGenerateReply: (() => void) | null
 }
 
 // 会話欄。保存済みの発言・応答待ちの表示・コマンドの失敗を並べる。
 export default function ChatLog({
   logRef,
   onScroll,
+  onWheel,
   messages,
   pending,
   live,
@@ -127,15 +126,8 @@ export default function ChatLog({
   editing,
   onRetry,
   onRemove,
-  onGenerateReply,
 }: ChatLogProps) {
   const items = groupMessages(messages)
-  // 会話の最後のやり取り(ユーザー発言かターン)の位置。後ろに並ぶ操作の記録は数えない。送信中は
-  // 楽観表示のユーザー発言が後ろに来るので、保存済みの項目はどれも最後ではない。
-  const lastExchange =
-    pending.length > 0
-      ? items.length
-      : items.findLastIndex((i) => i.kind === 'turn' || i.message.role === 'user')
   // 応答を生成中に答えているユーザー発言(最後のユーザー発言)。画像を渡したかがまだ決まって
   // いないので、画像に渡していない印を出さない。送信中は答えている発言がまだ楽観表示にしか無い
   // (保存済みの最後のユーザー発言は、前の発言)。
@@ -151,8 +143,8 @@ export default function ChatLog({
         )
       : message.undelivered_attachments
   return (
-    <ul className="chat-log" ref={logRef} onScroll={onScroll}>
-      {items.map((item, index) => {
+    <ul className="chat-log" ref={logRef} onScroll={onScroll} onWheel={onWheel}>
+      {items.map((item) => {
         if (item.kind === 'plain') {
           const message = item.message
           // 応答生成以外の経路(画面・MCP等)での操作の記録はターンに含めず、経路のラベルを
@@ -189,6 +181,7 @@ export default function ChatLog({
                 <MessageAttachments
                   attachments={message.attachments}
                   undelivered={undeliveredOf(message)}
+                  revealable={message.revealable_attachments}
                 />
                 <div className="button-row entry-actions">
                   <button type="button" onClick={editing.cancel}>
@@ -215,6 +208,7 @@ export default function ChatLog({
               <MessageAttachments
                 attachments={message.attachments}
                 undelivered={undeliveredOf(message)}
+                revealable={message.revealable_attachments}
               />
               <time className="entry-time">{formatDateTime(message.created_at)}</time>
               {canEditOrDelete && (
@@ -250,24 +244,15 @@ export default function ChatLog({
             {actions}
           </>
         )
-        // ユーザーが止めたターンは失敗として見せない。会話の最後なら返信の無い会話と同じく
-        // 応答を生成する操作(中身は作り直し)を、続けて発言したあとなら止めたことだけを出す。
+        // ユーザーが止めたターンは失敗として見せず、止めたことだけを出す。会話の最後なら、入力欄の
+        // 「応答を生成」がこのターンを作り直す(`stoppedTurnAtEnd`)。
         if (finalMessage.role === 'error' && finalMessage.error_kind === 'stopped') {
           return (
             <li key={`turn-${item.turnId}`} className="turn-group">
               {segments.map((segment, i) => (
                 <TurnSegmentView key={i} segment={segment} />
               ))}
-              {index === lastExchange ? (
-                <div className="button-row">
-                  <GenerateReplyButton
-                    onClick={() => onRetry(finalMessage.id)}
-                    disabled={disableActions}
-                  />
-                </div>
-              ) : (
-                <p className="entry-stopped">{t('chat.stopped_note')}</p>
-              )}
+              <p className="entry-stopped">{t('chat.stopped_note')}</p>
             </li>
           )
         }
@@ -298,10 +283,9 @@ export default function ChatLog({
                 {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
                     プレーンテキストのまま出す */}
                 {finalMessage.error_detail && (
-                  <details className="entry-error-detail">
-                    <summary>{t('chat.error_detail_summary')}</summary>
-                    <pre>{finalMessage.error_detail}</pre>
-                  </details>
+                  <CodeBlock className="entry-error-detail" label={t('chat.error_detail_label')}>
+                    {finalMessage.error_detail}
+                  </CodeBlock>
                 )}
                 {footer}
               </div>
@@ -316,7 +300,7 @@ export default function ChatLog({
           // 終えてツールを実行している間は出す。止める指示を出したあとは、止めていることを出す)。
           <li key={`pending-${i}`} className="turn-group">
             {live.segments.map((segment, j) => (
-              <TurnSegmentView key={j} segment={segment} />
+              <TurnSegmentView key={j} segment={segment} streaming />
             ))}
             {(live.open !== 'text' || entry.stopping) && (
               <div className="entry entry-pending">
@@ -335,11 +319,6 @@ export default function ChatLog({
       {failure && (
         <li className="entry entry-error">
           <span className="entry-content">{failure}</span>
-        </li>
-      )}
-      {onGenerateReply && pending.length === 0 && (
-        <li className="button-row">
-          <GenerateReplyButton onClick={onGenerateReply} disabled={disableActions} />
         </li>
       )}
     </ul>

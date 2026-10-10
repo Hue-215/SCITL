@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { t } from './i18n'
+import { FOCUSABLE_SELECTOR } from './keyboard'
+import { useCloseOnBack } from './useCloseOnBack'
 
 interface DialogProps {
   title: string
@@ -11,14 +13,13 @@ interface DialogProps {
   width?: string
 }
 
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
 // ダイアログの共通枠。余白・角丸・ボタン配置を統一する。本文は children に委ね、枠自体は
 // 内容を知らない。
 export default function Dialog({ title, onClose, children, width }: DialogProps) {
   const boxRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<Element | null>(null)
+  // Androidの「戻る」はEscと同じく閉じる(確認のダイアログでは取り消しになる)。
+  useCloseOnBack(true, onClose)
 
   useEffect(() => {
     // 開いた時のフォーカス移動と、閉じた時に呼び出し元(削除ボタン等)へ戻す
@@ -55,7 +56,7 @@ export default function Dialog({ title, onClose, children, width }: DialogProps)
   }, [onClose])
 
   return createPortal(
-    <div className="dialog-overlay" onClick={onClose}>
+    <div className="dialog-overlay scrim" onClick={onClose}>
       <div
         ref={boxRef}
         className="dialog"

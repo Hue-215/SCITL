@@ -54,6 +54,26 @@ pub fn is_variation_selector(c: char) -> bool {
     )
 }
 
+/// 前の文字に付いた1個を残し、続けて重ねた異体字セレクタと先頭の異体字セレクタを除く。
+/// 異体字セレクタを並べると、任意のバイト列を1文字の後ろに見えない形で写せる(1個で
+/// 1バイト)。字形を選ぶ正規の使い方(絵文字のU+FE0F、漢字の異体字シーケンス)は1文字に1個で済む。
+pub fn drop_stacked_variation_selectors(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut after_base = false;
+    for c in s.chars() {
+        if is_variation_selector(c) {
+            if after_base {
+                out.push(c);
+            }
+            after_base = false;
+        } else {
+            out.push(c);
+            after_base = true;
+        }
+    }
+    out
+}
+
 /// 制御文字(改行を含む)を空白に畳み、連続空白を1つにまとめ、前後の空白を落とす。
 pub fn collapse_whitespace(s: &str) -> String {
     let replaced: String = s
@@ -112,6 +132,16 @@ pub fn display_block(s: &str, max: usize) -> String {
     ellipsize(&cleaned, max)
 }
 
+/// [`reveal_invisible`]を1行に収める版。改行と、行・段落の区切り(U+2028・U+2029。制御文字ではないが、
+/// GTK等は改行として描く)も`\uXXXX`の形にする(ネイティブのダイアログに差し込む値等、改行で文を
+/// 差し込ませたくない出力先)。
+pub fn reveal_invisible_line(s: &str) -> String {
+    reveal_invisible(s)
+        .replace('\n', "\\u000A")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
 /// 見えない文字(改行以外の制御文字と[`is_invisible_format`]の書式文字)を、JSONの
 /// エスケープの形(`\uXXXX`。基本多言語面の外はサロゲートの対)にして見えるようにする。
 /// 除かずに見せるのは、隠されていたこと自体を確かめられるようにするため。JSONのテキストに
@@ -147,6 +177,14 @@ pub(crate) const fn encode_all_but(kept: &[u8]) -> percent_encoding::AsciiSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_invisible_line_keeps_everything_on_one_line() {
+        assert_eq!(
+            reveal_invisible_line("a\nb\u{2028}c\u{2029}d\u{85}e"),
+            "a\\u000Ab\\u2028c\\u2029d\\u0085e"
+        );
+    }
 
     #[test]
     fn label_removes_bidi_and_zero_width_and_blanks_controls() {

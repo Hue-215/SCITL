@@ -13,20 +13,27 @@ import {
   updateLanguage,
   updateToolSettings,
 } from './api'
-import type { SettingsView } from './types'
+import { type AddResult, rejectionText } from './rejection'
+import type { FormOutcome, SettingsView } from './types'
+import { Drawer, DrawerToggle } from './Drawer'
 import { isolated, t } from './i18n'
+import Icon from './Icon'
 import { without } from './record'
 import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
+import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
+import { useDrawer } from './useDrawer'
+import { useSwipeToOpen } from './useDrawerSwipe'
 
 interface SettingsProps {
   onClose: () => void
 }
 
-// 左のレールに並べるタブ(並び順のまま)。
+// 左のカラムに並べるタブ(並び順のまま)。
 const TABS = [
   { id: 'general', label: 'settings.nav.general' },
+  { id: 'memory', label: 'settings.nav.memory' },
   { id: 'providers', label: 'settings.nav.provider' },
   { id: 'mcp', label: 'settings.nav.tools' },
 ] as const
@@ -38,6 +45,9 @@ export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 狭い窓で畳む左のメニュー。タブを選んだら閉じる。
+  const drawer = useDrawer()
+  const swipeToOpen = useSwipeToOpen(drawer)
 
   const reload = async () => {
     try {
@@ -56,6 +66,7 @@ export default function Settings({ onClose }: SettingsProps) {
   // タブを切り替えたら、前のタブの操作で出たエラーは伏せる(残っていると、
   // 今見ているタブの内容に対する指摘のように見えるため)。
   const selectTab = (next: TabId) => {
+    drawer.close()
     setTab(next)
     setError(null)
   }
@@ -69,12 +80,40 @@ export default function Settings({ onClose }: SettingsProps) {
     }
   }
 
-  // 追加の結果は、エラーをフォームの直下に出すため、ここでは握らず呼び出し元へ返す。
-  const applyAdded = async (action: () => Promise<SettingsView>) => {
-    const next = await action()
-    setSettings(next)
-    setError(null)
-    return next
+  // 欄の誤り(Rust側が断った理由)は文言にして呼び出し元へ返し、欄の近くに出させる。
+  // 受け付けたら空を返す。コマンド自体の失敗は上のエラー欄に出す。
+  const saveField = async (action: () => Promise<FormOutcome<SettingsView>>) => {
+    try {
+      const outcome = await action()
+      if (outcome.status === 'rejected') return outcome.reasons.map(rejectionText)
+      if (outcome.status === 'accepted') {
+        setSettings(outcome.value)
+        setError(null)
+      }
+    } catch (e) {
+      setError(failureText(e))
+    }
+    return []
+  }
+
+  // 追加のフォームは、欄の誤りもコマンド自体の失敗もフォームの直下に出すため、失敗は握らず
+  // 呼び出し元へ投げる。欄の誤りは文言にして返す。
+  const applyAdded = async <T,>(
+    action: () => Promise<FormOutcome<T>>,
+    accepted: (value: T) => SettingsView,
+  ): Promise<AddResult> => {
+    const outcome = await action()
+    switch (outcome.status) {
+      case 'rejected':
+        return { added: false, errors: outcome.reasons.map(rejectionText) }
+      // 確認のダイアログで取りやめた。入力を残し、何も出さない。
+      case 'cancelled':
+        return { added: false, errors: [] }
+      case 'accepted':
+        setSettings(accepted(outcome.value))
+        setError(null)
+        return { added: true, errors: [] }
+    }
   }
 
   // MCPサーバーのツール一覧を取得中のサーバーと、取得のエラー(サーバーごと、カード内に出す)。
@@ -97,34 +136,49 @@ export default function Settings({ onClose }: SettingsProps) {
     }
   }
 
-  return (
-    <div className="settings">
-      <header className="settings-header">
-        <button
-          type="button"
-          className="icon-button"
-          onClick={onClose}
-          aria-label={t('settings.back_tooltip')}
-          title={t('settings.back_tooltip')}
-        >
-          ←
-        </button>
-        <h1>{t('settings.heading')}</h1>
-      </header>
+  const tabLabel = TABS.find(({ id }) => id === tab)?.label ?? TABS[0].label
 
-      <div className="settings-body">
-        <nav className="settings-rail">
-          {TABS.map(({ id, label }) => (
+  return (
+    // 左のカラムはチャットのサイドバーと同じ形の入れ物で、設定を開いている間はサイドバーが設定の
+    // メニューに切り替わったように見せる(畳み方・引き出し方もサイドバーと同じ)。
+    <div className={drawer.narrow ? 'settings narrow' : 'settings'}>
+      <Drawer drawer={drawer}>
+        <nav className="sidebar">
+          <div className="sidebar-top-row">
             <button
-              key={id}
               type="button"
-              className={tab === id ? 'settings-tab selected' : 'settings-tab'}
-              onClick={() => selectTab(id)}
+              className="icon-button"
+              onClick={onClose}
+              aria-label={t('settings.back_tooltip')}
+              title={t('settings.back_tooltip')}
             >
-              {t(label)}
+              <Icon name="arrow_back" />
             </button>
-          ))}
+            <span className="settings-nav-heading">{t('settings.heading')}</span>
+          </div>
+          <div className="settings-tabs">
+            {TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                className={tab === id ? 'settings-tab selected' : 'settings-tab'}
+                aria-current={tab === id ? 'page' : undefined}
+                onClick={() => selectTab(id)}
+              >
+                {t(label)}
+              </button>
+            ))}
+          </div>
         </nav>
+      </Drawer>
+
+      <div className="settings-main" inert={drawer.shown} {...swipeToOpen}>
+        <header className="pane-top">
+          <div className="settings-header">
+            <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
+            <h1>{t(tabLabel)}</h1>
+          </div>
+        </header>
 
         <div className="settings-content">
           <div className="settings-column">
@@ -140,35 +194,45 @@ export default function Settings({ onClose }: SettingsProps) {
             ) : tab === 'general' ? (
               <GeneralTab
                 settings={settings}
-                onSave={(update) => runOrReportError(() => updateGeneralSettings(update))}
+                onSave={(update) => saveField(() => updateGeneralSettings(update))}
                 onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
               />
+            ) : tab === 'memory' ? (
+              <MemoryTab />
             ) : tab === 'providers' ? (
               <ProvidersTab
                 settings={settings}
-                onAddProvider={async (name, format, baseUrl, apiKey) => {
-                  await applyAdded(() => addProvider(name, format, baseUrl, apiKey))
-                }}
+                onAddProvider={(name, format, baseUrl, apiKey, headers) =>
+                  applyAdded(
+                    () => addProvider(name, format, baseUrl, apiKey, headers),
+                    (next) => next,
+                  )
+                }
                 onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
                 onUpdateModels={runOrReportError}
+                onSaveModelField={saveField}
               />
             ) : (
               <McpTab
                 settings={settings}
                 onSaveLimits={(maxRoundsPerTurn, totalTimeoutSecs) =>
-                  runOrReportError(() =>
-                    updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }),
+                  saveField(() => updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }))
+                }
+                onAddServer={(name, endpoint) =>
+                  // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
+                  applyAdded(
+                    () => addMcpServer(name, endpoint),
+                    ({ settings: next, server_id, tools_error }) => {
+                      if (tools_error !== null) {
+                        setToolFetchErrors((prev) => ({
+                          ...prev,
+                          [server_id]: t('common.fetch_failed', { error: isolated(tools_error) }),
+                        }))
+                      }
+                      return next
+                    },
                   )
                 }
-                onAddServer={async (name, endpoint) => {
-                  // 追加したら続けて1回ツール一覧を取得する。失敗しても登録は残し、
-                  // エラーはそのカードに出す。追加したサーバーは、追加前に無かったidで
-                  // 見分ける。
-                  const before = new Set(settings.mcp_servers.map((s) => s.id))
-                  const next = await applyAdded(() => addMcpServer(name, endpoint))
-                  const added = next.mcp_servers.find((s) => !before.has(s.id))
-                  if (added) void fetchTools(added.id)
-                }}
                 onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
                 onSetServerEnabled={(id, enabled) =>
                   runOrReportError(() => setMcpServerEnabled(id, enabled))

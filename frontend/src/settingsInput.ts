@@ -2,46 +2,41 @@
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
 
-// フォーカスを外すと自動保存する数値入力。入力中は自身のstateだけを更新し、blur時にのみ親へ
-// 確定した値を渡す。入力チェック(空欄は未設定、それ以外は1以上の整数)をこの1箇所に閉じ、
-// 設定欄(NumberField)とモデル表のコンテキスト長の両方がこれを使う。
-export function usePositiveIntegerInput(
-  value: number | null,
-  onSave: (value: number | null) => void,
-) {
-  const [text, setText] = useState(value?.toString() ?? '')
-  const [invalid, setInvalid] = useState(false)
+// フォーカスを外すと自動保存する数値の欄。入力中は自身のstateだけを更新し、blur時にのみ欄の
+// 文字列をそのまま親へ渡す。解釈(全角の数字・空欄は未設定・1以上の整数か)と検証はRust側が
+// 行い、断られたら理由の文言(`onSave`が返す)を欄の下に出す。設定欄(NumberField)とモデル表の
+// コンテキスト長の両方がこれを使う。
+export function useNumberInput(value: number | null, onSave: (text: string) => Promise<string[]>) {
+  const saved = value?.toString() ?? ''
+  const [text, setText] = useState(saved)
+  const [errors, setErrors] = useState<string[]>([])
 
   // 保存された値が変わったら、入力欄をそれに戻す。描画の中で前回の値と比べて揃える。
   const [shown, setShown] = useState(value)
   if (shown !== value) {
     setShown(value)
-    setText(value?.toString() ?? '')
-    setInvalid(false)
+    setText(saved)
+    setErrors([])
   }
 
-  const save = () => {
-    // IMEを切り忘れて打った全角の数字も受け付ける。
-    const trimmed = text.normalize('NFKC').trim()
-    const parsed = trimmed === '' ? null : Number(trimmed)
-    if (parsed !== null && (!Number.isInteger(parsed) || parsed <= 0)) {
-      setInvalid(true)
+  const save = async () => {
+    // フォーカスが通り過ぎただけで保存しない(モデル表では行ごとに欄がある)。
+    if (text === saved) {
+      setErrors([])
       return
     }
-    setInvalid(false)
-    // フォーカスが通り過ぎただけで保存しない(モデル表では行ごとに欄がある)。
-    if (parsed !== value) onSave(parsed)
+    setErrors(await onSave(text))
   }
 
   return {
-    invalid,
+    errors,
     inputProps: {
       type: 'text',
       inputMode: 'numeric' as const,
       value: text,
       onChange: (e: ChangeEvent<HTMLInputElement>) => setText(e.target.value),
-      onBlur: save,
-      'aria-invalid': invalid,
+      onBlur: () => void save(),
+      'aria-invalid': errors.length > 0,
     },
   }
 }

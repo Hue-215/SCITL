@@ -2,18 +2,16 @@
 //! 読み出しをここに閉じる。行の読み書きは`db::attachments`。
 
 mod classify;
-mod dropped;
 mod normalize;
+mod received;
 mod staging;
 mod store;
-
-use std::path::PathBuf;
 
 use rusqlite::Connection;
 use serde::Serialize;
 
-pub use classify::{classify, image_mime_type, Classified, Limits, PickingLimits, LIMITS};
-pub use dropped::DropNotice;
+pub use classify::{classify, image_mime_type, Classified, Limits, LIMITS};
+pub use received::{name_from_uri, ReceivedFile, ReceivedFiles};
 pub(crate) use staging::Taken;
 pub use staging::{Rejection, StageOutcome};
 pub(crate) use store::safe_file_name;
@@ -58,11 +56,55 @@ pub fn delivery_without_model(kind: AttachmentKind) -> Option<Delivery> {
     (without == delivery(kind, true, true)).then_some(without)
 }
 
+/// 添付の入ったフォルダを開けるか([`Attachments::reveal`])。Androidでは`open`クレートが
+/// 失敗を返し、開く手段が無い(取り出すときは、エクスポートのzipに同梱されたものを使う)。
+pub const CAN_REVEAL: bool = cfg!(not(target_os = "android"));
+
+/// 画面で押して入っているフォルダを開ける添付か。その他は今は受け付けないが、受け付けていた
+/// 頃に付けたものは、利用者が取り出せるよう開けるままにする(Issue #506)。
+pub fn revealable(kind: AttachmentKind, can_reveal: bool) -> bool {
+    can_reveal && kind == AttachmentKind::Other
+}
+
+/// クリップボードの画像(RGBAの画素の並び)を、受け取ったファイル(PNG)にする。名前は、画像を
+/// 貼り付けたときにブラウザが付けるものに揃える。預けるときの正規化と同じ長辺まで先に縮めてから
+/// 符号化する(写真を等倍のPNGにすると、画像の大きさの上限に当たりやすいため)。画素の数が正規化で
+/// 扱える上限を超えるものは、写しを作る前に断る。
+pub fn clipboard_image(width: u32, height: u32, rgba: &[u8]) -> Result<ReceivedFile> {
+    if u64::from(width) * u64::from(height) > normalize::MAX_PIXELS {
+        return Err(CoreError::Attachment(
+            "the image on the clipboard is too large".to_string(),
+        ));
+    }
+    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
+        CoreError::Attachment("the image on the clipboard is malformed".to_string())
+    })?;
+    let mut image = image::DynamicImage::ImageRgba8(image);
+    if width.max(height) > normalize::MAX_LONG_EDGE {
+        image = image.resize(
+            normalize::MAX_LONG_EDGE,
+            normalize::MAX_LONG_EDGE,
+            image::imageops::FilterType::Triangle,
+        );
+    }
+    let mut bytes = Vec::new();
+    image
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .map_err(|e| CoreError::Attachment(format!("could not encode the pasted image: {e}")))?;
+    Ok(ReceivedFile::Bytes {
+        name: "image.png".to_string(),
+        bytes,
+    })
+}
+
 /// アプリの起動中ずっと1つを使う。
 pub struct Attachments {
     store: AttachmentStore,
     staged: staging::Staged,
-    dropped: dropped::Dropped,
+    received: received::Received,
 }
 
 impl Attachments {
@@ -70,7 +112,7 @@ impl Attachments {
         Self {
             store,
             staged: staging::Staged::default(),
-            dropped: dropped::Dropped::default(),
+            received: received::Received::default(),
         }
     }
 
@@ -80,24 +122,34 @@ impl Attachments {
         self.staged.stage(name, bytes)
     }
 
-    /// 窓に落とされたファイルを受け取り、画面へ知らせる形にする。パスはOSのドロップからGUIの
-    /// シェルへ届いたもので、WebViewからは受け取らない(`docs/spec/architecture/attachments.md`
-    /// 「受け取り方」)。ここでは読まない。
-    pub fn receive_drop(&self, paths: Vec<PathBuf>) -> Option<DropNotice> {
-        self.dropped.receive(paths)
+    /// 画面の外から届いたファイル(窓に落とした・選択画面で選んだ・クリップボードの画像)を受け取り、
+    /// 画面へ知らせる形にする。パスや開き方はGUIのシェルがOSから受け取ったもので、WebViewからは
+    /// 受け取らない(`docs/spec/architecture/attachments.md`「受け取り方」)。ここでは読まない。
+    pub fn receive(&self, files: Vec<ReceivedFile>) -> Option<ReceivedFiles> {
+        self.received.receive(files)
     }
 
-    /// 落としたファイルのうち、画面が受け付けたものを読み、[`Self::stage`]と同じく判定して
-    /// 預ける。ファイルを読むのでブロッキング処理として呼ぶ。
-    pub fn stage_dropped(&self, drop_id: u64, index: usize) -> Result<StageOutcome> {
-        let path = self
-            .dropped
-            .take(drop_id, index)
-            .ok_or_else(|| CoreError::Attachment("dropped file not found".to_string()))?;
-        match dropped::read(&path)? {
-            Ok(bytes) => self.stage(dropped::name_of(&path), bytes),
+    /// 受け取ったファイルのうち、画面が受け付けたものを読み、[`Self::stage`]と同じく判定して
+    /// 預ける。1つの発言に付けられる数に達していたら読まずに断る。ファイルを読むのでブロッキング
+    /// 処理として呼ぶ。
+    pub fn stage_received(&self, batch_id: u64, index: usize) -> Result<StageOutcome> {
+        let file = self
+            .received
+            .take(batch_id, index)
+            .ok_or_else(|| CoreError::Attachment("received file not found".to_string()))?;
+        // 読む前に席を取る。並べて受け取っても、上限を超える分は読まない。
+        let Some(seat) = self.staged.reserve() else {
+            return Ok(staging::too_many());
+        };
+        match received::read(file)? {
+            Ok((name, bytes)) => self.staged.stage_seated(name, bytes, seat),
             Err(reason) => Ok(StageOutcome::Rejected { reason }),
         }
+    }
+
+    /// 送っていない添付をすべて捨てる(`staging::Staged::clear`)。
+    pub fn discard_all(&self) {
+        self.staged.clear();
     }
 
     pub fn discard(&self, token: &str) {
@@ -140,9 +192,15 @@ impl Attachments {
         blocking::run(move || Ok(store.read_image(&hash)?.data_url().to_string())).await
     }
 
-    /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。
+    /// 添付の入ったフォルダを開く([`AttachmentStore::reveal`])。画面が開ける添付([`revealable`])
+    /// だけを開き、それ以外(開けないOS・その他でない添付)は書き出す前に断る。
     pub async fn reveal(&self, db: SharedConnection, id: i64) -> Result<()> {
         let attachment = with_conn(db, move |conn| attachments::get(conn, id)).await?;
+        if !revealable(attachment.view.kind, CAN_REVEAL) {
+            return Err(CoreError::Attachment(format!(
+                "attachment {id} cannot be shown in a folder"
+            )));
+        }
         let hash = file_hash(attachment.content, id, AttachmentKind::Other)?;
         let store = self.store.clone();
         blocking::run(move || store.reveal(&attachment.view.original_name, &hash)).await
@@ -263,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn stages_a_dropped_file_under_its_own_name_and_refuses_folders() {
+    fn stages_a_received_file_under_its_own_name_and_refuses_folders() {
         let t = TempStore::new();
         let attachments = Attachments::new(t.store.clone());
         let dir = tempfile::tempdir().unwrap();
@@ -271,22 +329,81 @@ mod tests {
         std::fs::write(&path, "hello").unwrap();
 
         let notice = attachments
-            .receive_drop(vec![path, dir.path().to_path_buf()])
+            .receive(vec![
+                ReceivedFile::Path(path),
+                ReceivedFile::Path(dir.path().to_path_buf()),
+            ])
             .unwrap();
         assert_eq!(notice.names[0], "memo.txt");
         let StageOutcome::Staged { token, kind, .. } =
-            attachments.stage_dropped(notice.drop_id, 0).unwrap()
+            attachments.stage_received(notice.batch_id, 0).unwrap()
         else {
             panic!("expected staged");
         };
         assert_eq!(kind, AttachmentKind::Text);
         assert_eq!(attachments.take_staged(&[token]).unwrap().len(), 1);
         assert_eq!(
-            attachments.stage_dropped(notice.drop_id, 1).unwrap(),
+            attachments.stage_received(notice.batch_id, 1).unwrap(),
             StageOutcome::Rejected {
                 reason: Rejection::NotAFile
             }
         );
-        assert!(attachments.stage_dropped(notice.drop_id, 0).is_err());
+        assert!(attachments.stage_received(notice.batch_id, 0).is_err());
+    }
+
+    #[test]
+    fn a_clipboard_image_is_staged_as_a_png_image() {
+        let t = TempStore::new();
+        let attachments = Attachments::new(t.store.clone());
+        let file = clipboard_image(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        let notice = attachments.receive(vec![file]).unwrap();
+        assert_eq!(notice.names, ["image.png"]);
+        let StageOutcome::Staged { kind, .. } =
+            attachments.stage_received(notice.batch_id, 0).unwrap()
+        else {
+            panic!("expected staged");
+        };
+        assert_eq!(kind, AttachmentKind::Image);
+        assert!(clipboard_image(2, 2, &[0; 3]).is_err());
+        // 長辺は正規化と同じ長さまで先に縮める。
+        let edge = normalize::MAX_LONG_EDGE;
+        let ReceivedFile::Bytes { bytes, .. } =
+            clipboard_image(edge * 2, 10, &vec![0; (edge * 2 * 10 * 4) as usize]).unwrap()
+        else {
+            panic!("expected bytes");
+        };
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(decoded.width(), edge);
+    }
+
+    /// 1つの発言に付けられる数に達していたら、受け取ったファイルを読まずに断る。
+    #[test]
+    fn refuses_received_files_without_reading_them_once_full() {
+        let t = TempStore::new();
+        let attachments = Attachments::new(t.store.clone());
+        for i in 0..LIMITS.per_message {
+            attachments
+                .stage(format!("{i}.txt"), b"a".to_vec())
+                .unwrap();
+        }
+        let notice = attachments
+            .receive(vec![ReceivedFile::Opened {
+                name: "x.txt".to_string(),
+                open: Box::new(|| panic!("must not be opened")),
+            }])
+            .unwrap();
+        assert_eq!(
+            attachments.stage_received(notice.batch_id, 0).unwrap(),
+            StageOutcome::Rejected {
+                reason: Rejection::TooMany {
+                    limit: LIMITS.per_message
+                }
+            }
+        );
+        attachments.discard_all();
+        assert!(matches!(
+            attachments.stage("a.txt".into(), b"a".to_vec()).unwrap(),
+            StageOutcome::Staged { .. }
+        ));
     }
 }

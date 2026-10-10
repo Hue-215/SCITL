@@ -6,7 +6,9 @@ use crate::config::ReasoningEffort;
 use crate::db::messages::Chat;
 use crate::in_flight::InFlightSet;
 use crate::llm::{LlmAdapter, ModelCapabilities};
-use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnEvents, TurnFailure};
+use crate::orchestration::{
+    McpAccess, SystemPrompts, ToolLimits, TurnEvents, TurnFailure, TurnFinished,
+};
 
 /// 組み立ては[`crate::settings::Snapshot::turn_context`]が行う。
 #[derive(Clone)]
@@ -15,7 +17,7 @@ pub struct TurnContext<'a> {
     /// 読めない)。使えなければ、ターンはその理由のエラー発言で終わる。
     pub adapter: Result<&'a dyn LlmAdapter, TurnFailure>,
     pub prompts: SystemPrompts<'a>,
-    /// 聞き取りから始まった会話で、最初の返信が答えた発言([`crate::orchestration::open_task_chat`])。
+    /// 聞き取りから始まった会話で、最初の返信が答えた発言([`crate::orchestration::create_task`])。
     pub opening_message: &'a str,
     /// 使うモデルの能力(`llm::resolve_capabilities`で解決済み)。
     pub capabilities: ModelCapabilities,
@@ -31,4 +33,6 @@ pub struct TurnContext<'a> {
     pub attachments: &'a Attachments,
     /// ターンの途中経過の受け口([`crate::orchestration::TurnEvent`])。
     pub events: TurnEvents<'a>,
+    /// 応答生成が終わったことの受け口([`crate::orchestration::FinishedTurn`])。
+    pub finished: TurnFinished<'a>,
 }

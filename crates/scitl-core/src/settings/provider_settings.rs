@@ -2,18 +2,27 @@
 
 use secrecy::{ExposeSecret, SecretString};
 
-use super::{delete_secret, input, invalid, Settings, SettingsView};
+use super::destination::NewDestination;
+use super::rejection::rejected;
+use super::{delete_secret, delete_secret_refs, input, invalid, store_secret_refs, HeaderInput};
+use super::{DestinationDialog, Settings, SettingsView};
 use crate::config::{ApiFormat, Config, ProviderConfig};
 use crate::error::{CoreError, Result};
 use crate::llm::providers;
 use crate::secrets;
 
-/// プロバイダー追加フォームからの入力。
+/// カスタムヘッダーの値の`key_ref`の接頭辞と、削除に失敗したときの診断に出す名前。
+const HEADER_SECRET_PREFIX: &str = "provider-header";
+const HEADER_SECRET_WHAT: &str = "provider header";
+
+/// プロバイダー追加フォームからの入力。値を含むため`Debug`は付けない。
 pub struct NewProvider {
     pub name: String,
     pub api_format: ApiFormat,
     pub base_url: String,
     pub api_key: Option<SecretString>,
+    /// カスタムHTTPヘッダー。値は保存後は`key_ref`に置き換わる。
+    pub headers: HeaderInput,
 }
 
 impl Settings {
@@ -31,26 +40,55 @@ impl Settings {
 
     /// 最初に登録したプロバイダーをアクティブにする
     /// ([`Config::reselect_active_provider`])。同じ名前のプロバイダーは登録できない
-    /// (チャットのモデル選択で見分けられなくなる)。鍵の保存に失敗したらプロバイダー自体の
-    /// 登録も中断し、登録に失敗したら保存した鍵を消す。どちらでも`key_ref`と鍵の片方だけが
-    /// 残る状態を作らない。
-    pub fn add_provider(&self, new: NewProvider) -> Result<SettingsView> {
+    /// (チャットのモデル選択で見分けられなくなる)。鍵・ヘッダーの値の保存に失敗したら
+    /// プロバイダー自体の登録も中断し、登録に失敗したら保存した値を消す。どちらでも参照と
+    /// 値の片方だけが残る状態を作らない。
+    ///
+    /// 検証を通ったら、秘密情報を保存する前に`confirm`で利用者に通信先を確かめ、承認されなければ
+    /// 何も保存せずに[`CoreError::Cancelled`]を返す(画面からの登録はネイティブのダイアログ。
+    /// 端末で利用者自身が打つCLIは確かめない)。確かめる間は書き込みロックを持たない。
+    pub fn add_provider(
+        &self,
+        new: NewProvider,
+        confirm: impl FnOnce(&DestinationDialog) -> bool,
+    ) -> Result<SettingsView> {
+        // 欄の誤りは画面が欄の近くに出すので、他の検証より先に見る。
+        let headers = new.headers.into_pairs().map_err(rejected)?;
         let name = input::name(&new.name, "provider name", input::PROVIDER_NAME_MAX_CHARS)?;
         let base_url = new.base_url.trim().to_string();
         providers::validate_base_url(&base_url)?;
         // 鍵を保存する前にも確かめ、登録できないと分かっている名前のために資格情報ストアへ
         // 書かない。
         refuse_registered_provider_name(&self.current().config, &name)?;
+        let api_key = new.api_key.filter(|key| !key.expose_secret().is_empty());
+        if let Some(key) = &api_key {
+            providers::validate_api_key(key)?;
+        }
+        validate_headers(new.api_format, &headers)?;
+        let destination = NewDestination::Provider {
+            name: &name,
+            api_format: new.api_format,
+            base_url: &base_url,
+        };
+        if !confirm(&destination.dialog(self.display_language())) {
+            return Err(CoreError::Cancelled);
+        }
 
-        let key_ref = match new.api_key {
-            Some(key) if !key.expose_secret().is_empty() => {
-                providers::validate_api_key(&key)?;
+        let key_ref = match api_key {
+            Some(key) => {
                 let key_ref = format!("provider:{}", ulid::Ulid::new());
                 secrets::store(&key_ref, &key)?;
                 Some(key_ref)
             }
-            _ => None,
+            None => None,
         };
+        let delete_key = || {
+            if let Some(key_ref) = &key_ref {
+                delete_secret(key_ref, "provider API key");
+            }
+        };
+        let header_refs = store_secret_refs(headers, HEADER_SECRET_PREFIX, HEADER_SECRET_WHAT)
+            .inspect_err(|_| delete_key())?;
 
         self.register_provider(ProviderConfig {
             id: ulid::Ulid::new().to_string(),
@@ -60,11 +98,11 @@ impl Settings {
             models: Vec::new(),
             active_model: None,
             key_ref: key_ref.clone(),
+            header_refs: header_refs.clone(),
         })
         .inspect_err(|_| {
-            if let Some(key_ref) = &key_ref {
-                delete_secret(key_ref, "provider API key");
-            }
+            delete_key();
+            delete_secret_refs(&header_refs, HEADER_SECRET_WHAT);
         })
     }
 
@@ -96,8 +134,24 @@ impl Settings {
         if let Some(key_ref) = &removed.key_ref {
             delete_secret(key_ref, "provider API key");
         }
+        delete_secret_refs(&removed.header_refs, HEADER_SECRET_WHAT);
         Ok(view)
     }
+}
+
+/// 秘密情報に触れる前に済ませられるヘッダーの検証。名前の規則は方言ごとに
+/// [`providers::validate_header_name`]が、値の規則は[`crate::net::secret_header_value`]が決める。
+fn validate_headers(api_format: ApiFormat, headers: &[(String, SecretString)]) -> Result<()> {
+    for (name, value) in headers {
+        providers::validate_header_name(api_format, name)?;
+        if crate::net::secret_header_value(value.expose_secret()).is_none() {
+            // 値は秘密情報なので、エラー文に含めない。
+            return Err(invalid(format!(
+                "the value of header '{name}' must contain only ASCII characters without line breaks"
+            )));
+        }
+    }
+    input::unique_names(headers, "header", str::to_ascii_lowercase)
 }
 
 fn refuse_registered_provider_name(config: &Config, name: &str) -> Result<()> {

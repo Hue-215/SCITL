@@ -4,4 +4,4 @@ import type { Task } from "./Task";
 /**
  * [`create_task`]の結果。
  */
-export type TaskCreation = { "status": "created", task: Task, } | { "status": "unavailable", error_kind: string, };
+export type TaskCreation = { "status": "created", task: Task, opening_error: string | null, } | { "status": "unavailable", error_kind: string, };

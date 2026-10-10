@@ -1,6 +1,8 @@
-// 標準エラーへは`diagnostics`からだけ書く。
+// 標準エラー(Androidではlogcat)へは`diagnostics`からだけ書く。
 #![deny(clippy::print_stderr)]
 
+#[cfg(target_os = "android")]
+mod android;
 pub mod attachments;
 pub mod blocking;
 pub mod config;
@@ -9,6 +11,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod export;
 mod files;
+pub mod foreground_service;
 pub mod i18n;
 pub mod in_flight;
 pub mod link;
@@ -17,6 +20,7 @@ pub mod mcp;
 pub mod net;
 pub mod orchestration;
 pub mod paths;
+pub mod reply_notification;
 pub mod secrets;
 pub mod settings;
 pub mod text;

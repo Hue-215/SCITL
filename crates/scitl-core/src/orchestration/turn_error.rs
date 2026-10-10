@@ -95,7 +95,7 @@ impl TurnFailure {
             TurnFailure::ThinkingEffortUnsupported { .. } => "thinking_effort_unsupported",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
             TurnFailure::ToolTimeout => "tool_timeout",
-            TurnFailure::Stopped => "stopped",
+            TurnFailure::Stopped => STOPPED_KIND,
             TurnFailure::Auth { .. } => "auth",
             TurnFailure::RateLimit { .. } => "rate_limit",
             TurnFailure::Refused { .. } => "refused",
@@ -112,7 +112,7 @@ impl TurnFailure {
         i18n::text(Language::En, &message_key(self.kind())).to_string()
     }
 
-    /// 画面の「詳細を表示」専用。`content`(定型文言)には混ぜない。
+    /// 画面のエラー発言の「詳細」専用。`content`(定型文言)には混ぜない。
     pub fn detail(&self) -> Option<&str> {
         match self {
             TurnFailure::ResponseTimeout { detail }
@@ -142,6 +142,14 @@ impl TurnFailure {
 /// エラー発言の文言のキーの前置き(後ろに種別コードを付ける)。画面も同じ前置きで引き直すので、
 /// 画面へ値を書き出す(`i18n`のテストが`frontend/src/bindings/SharedConstants.ts`に書く)。
 pub const MESSAGE_KEY_PREFIX: &str = "turn_error.";
+
+/// 利用者が止めたターンの種別コード。
+pub(crate) const STOPPED_KIND: &str = "stopped";
+
+/// エラー発言の種別コードに対応する、表示言語の文言(画面がエラー発言の行に出すものと同じ)。
+pub fn localized_message(lang: crate::i18n::Language, kind: &str) -> String {
+    crate::i18n::text(lang, &message_key(kind)).to_string()
+}
 
 /// 種別コードに対応する言語ファイルのキー。
 fn message_key(kind: &str) -> String {
@@ -173,6 +181,7 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Migration(_) => unexpected("migration"),
         CoreError::TaskNotFound(_) => unexpected("task_not_found"),
         CoreError::TaskStepNotFound(_) => unexpected("task_step_not_found"),
+        CoreError::MemoryNotFound(_) => unexpected("memory_not_found"),
         CoreError::MessageNotFound(_) => unexpected("message_not_found"),
         CoreError::AttachmentNotFound(_) => unexpected("attachment_not_found"),
         // 実体の置き場所のパスを含みうるので、文言は載せない。
@@ -185,6 +194,10 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Internal(_) => unexpected("internal"),
         // 設定操作でだけ起きる。ターンの経路には来ない。
         CoreError::InvalidSettings(_) => unexpected("invalid_settings"),
+        // 画面の入力を受け取る設定操作でだけ起きる。ターンの経路には来ない。
+        CoreError::Rejected(_) => unexpected("rejected"),
+        // 通信先の登録でだけ起きる。ターンの経路には来ない。
+        CoreError::Cancelled => unexpected("cancelled"),
         // リンクを開く操作でだけ起きる。ターンの経路には来ない。
         CoreError::Link(_) => unexpected("link"),
         // エクスポートでだけ起きる。ターンの経路には来ない。
@@ -243,9 +256,14 @@ mod tests {
     use reqwest::StatusCode;
 
     use super::*;
+    use crate::llm::SentSecrets;
 
     fn detail(text: &str) -> ErrorDetail {
-        ErrorDetail::http(StatusCode::INTERNAL_SERVER_ERROR, text, "")
+        ErrorDetail::http(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            text,
+            &SentSecrets::default(),
+        )
     }
 
     fn llm(e: LlmError) -> TurnFailure {
@@ -496,7 +514,7 @@ mod tests {
         let failure = llm(LlmError::from_status(
             StatusCode::UNAUTHORIZED,
             "missing bearer token",
-            "",
+            &SentSecrets::default(),
         ));
         assert_eq!(failure.kind(), "auth");
         assert!(failure.user_message().contains("missing"));

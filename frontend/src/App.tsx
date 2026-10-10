@@ -10,22 +10,27 @@ import {
   getTaskDetail,
   listChatMessages,
   listTasks,
-  openTaskChat,
   renameTask,
   retryChatMessage,
   sendChatMessage,
   setTaskArchived,
   stopChatResponse,
+  watchRequestedChats,
 } from './api'
 import ChatCompose, { type ComposedMessage } from './ChatCompose'
 import ChatLog from './ChatLog'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
+import { Drawer, DrawerToggle } from './Drawer'
 import { t, turnErrorText } from './i18n'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
-import type { Chat, MessageView, TaskDetailView, TaskListItem } from './types'
+import { stoppedTurnAtEnd } from './thinking'
+import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent } from './types'
 import { useChatRequests } from './useChatRequests'
+import { useCloseOnBack } from './useCloseOnBack'
+import { useDrawer } from './useDrawer'
+import { useSwipeToOpen } from './useDrawerSwipe'
 import { useStickToBottom } from './useStickToBottom'
 
 export default function App() {
@@ -54,6 +59,7 @@ export default function App() {
   const {
     ref: logRef,
     onScroll: onLogScroll,
+    onWheel: onLogWheel,
     stick,
     follow,
   } = useStickToBottom<HTMLUListElement>()
@@ -93,6 +99,9 @@ export default function App() {
 
   const requests = useChatRequests()
   const { reloaded } = requests
+  // 狭い窓で畳むサイドバー。サイドバーで会話・タスクの追加・設定を選んだら閉じる。
+  const drawer = useDrawer()
+  const swipeToOpen = useSwipeToOpen(drawer)
 
   const loadChat = useCallback(
     async (target: Chat) => {
@@ -129,34 +138,56 @@ export default function App() {
     void loadChat(chat)
   }, [chat, loadChat])
 
-  // 作ったらユーザーの発言を待たずに聞き取りを始める。
+  // 作ったらユーザーの発言を待たずに聞き取りを始める(Rust側の1つの操作)。作ったタスクの
+  // 会話を開き、聞き取りの応答待ちを会話ごとの表示に載せる。
   const addTask = async () => {
     if (adding) return
     setAdding(true)
     setAddBlocked(null)
-    let id: number
+    // 聞き取りの途中経過の行き先。会話を開くまでは無い。
+    let forward: ((event: TurnEvent) => void) | null = null
+    let opened = false
+    // 作った知らせはコマンドの完了より遅れて届くことがあるので、知らせと完了の早いほうで
+    // 1回だけ開く。
+    const open = (task: Task) => {
+      if (opened) return
+      opened = true
+      setAdding(false)
+      void loadTasks()
+      selectChat(taskChat(task.id))
+      void requests.run(
+        taskChat(task.id),
+        [{ role: 'pending', content: t('chat.pending_reply') }],
+        (onEvent) => {
+          forward = onEvent
+          // 聞き取りを始められなかった理由は、その会話の失敗として出す。
+          return creation.then((result) => {
+            if (result.status === 'created' && result.opening_error !== null) {
+              throw result.opening_error
+            }
+          })
+        },
+        settle,
+      )
+    }
+    const creation = createTask((event) => {
+      if (event.type === 'created') open(event.task)
+      else forward?.(event.event)
+    })
     try {
-      const result = await createTask()
-      if (result.status === 'unavailable') {
+      const result = await creation
+      if (result.status === 'created') {
+        open(result.task)
+      } else {
         // モデル未選択等でチャットを使えない間は作らない。理由はエラー発言と同じ文言で出す。
         setAddBlocked(turnErrorText(result.error_kind, result.error_kind))
-        return
       }
-      id = result.task.id
-      await loadTasks()
-      selectChat(taskChat(id))
     } catch (e) {
+      // 作る前の失敗だけが届く(作ったあとの失敗は結果に添えられる)。
       setError(failureText(e))
-      return
     } finally {
       setAdding(false)
     }
-    await requests.run(
-      taskChat(id),
-      [{ role: 'pending', content: t('chat.pending_reply') }],
-      (onEvent) => openTaskChat(id, onEvent),
-      settle,
-    )
   }
 
   // 応答待ちの会話では、送信・編集・再試行・削除のすべてを不可にする。他の会話は応答待ちの
@@ -196,11 +227,12 @@ export default function App() {
     )
   }
 
-  // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。
+  // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。空白だけで
+  // 確定させないのは入力の補助で、受け付けるかと前後の空白を削るかはRust側が決める。
   const submitEdit = async (message: MessageView) => {
     const messageId = message.id
-    const text = editDraft.trim()
-    if ((!text && message.attachments.length === 0) || disableActions) return
+    const text = editDraft
+    if ((text.trim() === '' && message.attachments.length === 0) || disableActions) return
     const target = chat
     setEditingId(null)
     stick()
@@ -272,6 +304,15 @@ export default function App() {
     if (selectedRef.current === chatKey(taskChat(taskId))) selectChat(GENERAL_CHAT)
   }
 
+  // 入力欄の「応答を生成」。返信の無いまま終わった会話には新しく生成し、最後のターンをユーザーが
+  // 止めていたら、そのターンを作り直す。
+  const stoppedId = stoppedTurnAtEnd(messages)
+  const generateAction = lacksReply
+    ? () => void generateReply()
+    : stoppedId !== null
+      ? () => void retry(stoppedId)
+      : null
+
   const pending = requests.pendingOf(chat)
   const live = requests.liveOf(chat)
   const failure = requests.failureOf(chat)
@@ -280,61 +321,97 @@ export default function App() {
   // 表示のとき。設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
   useLayoutEffect(follow, [follow, messages, pending.length, live, failure, settingsOpen])
 
+  const closeSettings = () => {
+    stick()
+    setAddBlocked(null)
+    setSettingsOpen(false)
+  }
+  // Androidの「戻る」で、設定画面からチャットへ戻る。設定画面の中で開いたものが先に閉じる。
+  useCloseOnBack(settingsOpen, closeSettings)
+
+  // 通知を押して届いた会話を開く(Android)。どの会話を開くかはRust側が決めて知らせてくる。
+  // 設定画面とサイドバーは、開いていれば閉じる。通知が出るのは裏にいた間なので、一覧も引き直す。
+  const openRequestedChat = useRef<(next: Chat) => void>(() => undefined)
+  useEffect(() => {
+    openRequestedChat.current = (next) => {
+      if (settingsOpen) closeSettings()
+      drawer.close()
+      selectChat(next)
+      void loadTasks()
+    }
+  })
+  useEffect(() => {
+    // 知らせ先は1つで、渡し直すと置き換わる(StrictModeで2回渡しても、後のものだけが残る)。
+    watchRequestedChats((next) => openRequestedChat.current(next)).catch(() => undefined)
+  }, [])
+
   if (settingsOpen) {
-    return (
-      <Settings
-        onClose={() => {
-          stick()
-          setAddBlocked(null)
-          setSettingsOpen(false)
-        }}
-      />
-    )
+    return <Settings onClose={closeSettings} />
   }
 
+  const drawerToggle = <DrawerToggle drawer={drawer} label={t('sidebar.open_tooltip')} />
+
   return (
-    <div className="layout">
-      <Sidebar
-        tasks={tasks}
-        selected={chat}
-        onSelect={selectChat}
-        onAddTask={() => void addTask()}
-        adding={adding}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
+    <div className={drawer.narrow ? 'layout narrow' : 'layout'}>
+      <Drawer drawer={drawer}>
+        <Sidebar
+          tasks={tasks}
+          selected={chat}
+          onSelect={(next) => {
+            drawer.close()
+            selectChat(next)
+          }}
+          onAddTask={() => {
+            drawer.close()
+            void addTask()
+          }}
+          adding={adding}
+          onOpenSettings={() => {
+            drawer.close()
+            setSettingsOpen(true)
+          }}
+        />
+      </Drawer>
 
-      <main>
-        {task ? (
-          <TaskHeader
-            key={task.id}
-            task={task}
-            disabled={disableActions}
-            onRename={(title) => runTaskOperation(task.id, () => renameTask(task.id, title))}
-            onSetArchived={(archived) =>
-              runTaskOperation(task.id, async () => {
-                await setTaskArchived(task.id, archived)
-                if (archived) leaveIfShown(task.id)
-              })
-            }
-            onDelete={() =>
-              runTaskOperation(task.id, async () => {
-                await deleteTask(task.id)
-                leaveIfShown(task.id)
-              })
-            }
-          />
-        ) : (
-          <header className="chat-header">
-            <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
-          </header>
-        )}
+      <main inert={drawer.shown} {...swipeToOpen}>
+        <div className="pane-top">
+          {task ? (
+            <TaskHeader
+              key={task.id}
+              task={task}
+              drawerToggle={drawerToggle}
+              disabled={disableActions}
+              onRename={(title) => runTaskOperation(task.id, () => renameTask(task.id, title))}
+              onSetArchived={(archived) =>
+                runTaskOperation(task.id, async () => {
+                  await setTaskArchived(task.id, archived)
+                  if (archived) leaveIfShown(task.id)
+                })
+              }
+              onDelete={() =>
+                runTaskOperation(task.id, async () => {
+                  await deleteTask(task.id)
+                  leaveIfShown(task.id)
+                })
+              }
+            />
+          ) : (
+            <header className="chat-header">
+              <div className="chat-header-row">
+                {drawerToggle}
+                <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
+              </div>
+            </header>
+          )}
 
-        {error && <p className="error">{error}</p>}
-        {addBlocked && <p className="error">{addBlocked}</p>}
+          {error && <p className="error">{error}</p>}
+          {addBlocked && <p className="error">{addBlocked}</p>}
+        </div>
 
         <ChatLog
           logRef={logRef}
           onScroll={onLogScroll}
+          onWheel={onLogWheel}
           messages={messages}
           pending={pending}
           live={live}
@@ -353,7 +430,6 @@ export default function App() {
           }}
           onRetry={(messageId) => void retry(messageId)}
           onRemove={(messageId) => void remove(messageId)}
-          onGenerateReply={lacksReply ? () => void generateReply() : null}
         />
 
         <ChatCompose
@@ -361,6 +437,7 @@ export default function App() {
           generating={requests.isGenerating(chat)}
           stopping={requests.isStopping(chat)}
           onSend={(message) => void send(message)}
+          onGenerateReply={generateAction}
           onStop={stop}
           onError={setError}
           onModelChanged={() => setAddBlocked(null)}

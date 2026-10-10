@@ -393,6 +393,7 @@ mod tests {
 
         async fn send(
             &self,
+            _session: Option<&crate::llm::SessionId>,
             _messages: &[ChatMessage],
             _tools: ToolOffer<'_>,
             _reasoning_effort: Option<ReasoningEffort>,

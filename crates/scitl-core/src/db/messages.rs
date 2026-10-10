@@ -104,7 +104,7 @@ pub struct NewMessage<'a> {
     pub origin: Origin<'a>,
     /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
     pub error_kind: Option<&'a str>,
-    /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
+    /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面のエラー発言の「詳細」専用で、
     /// モデル入力・エクスポートには使わない。
     pub error_detail: Option<&'a str>,
     /// ターンの返信の行(`Origin::Turn`の通常発言)だけが持ち、それには必ず持つ
@@ -352,6 +352,26 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
             Ok(m)
         })
         .transpose()
+}
+
+/// 試行`(turn_id, attempt_no)`の返信の行(アシスタント発言かエラー発言)。まだ書いていなければ
+/// `None`。添付は埋めない(返信は添付を持たない)。
+pub(crate) fn reply_of_attempt(
+    conn: &Connection,
+    turn_id: &str,
+    attempt_no: i64,
+) -> Result<Option<Message>> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {MESSAGE_COLUMNS} FROM messages
+                 WHERE turn_id = ?1 AND attempt_no = ?2 AND kind = 'normal'
+                   AND role IN ('assistant', 'error') AND deleted_at IS NULL"
+            ),
+            rusqlite::params![turn_id, attempt_no],
+            message_from_row,
+        )
+        .optional()?)
 }
 
 /// [`message_from_row`]が読む列の並び。

@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod gemini;
 mod local_server;
 pub mod openai_compat;
+mod sse;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,9 +13,9 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
-use crate::config::{ApiFormat, Config, ProviderConfig};
+use crate::config::{ApiFormat, Config, ProviderConfig, SecretRef};
 use crate::error::CoreError;
-use crate::llm::{DetectedCapabilities, ErrorDetail, LlmAdapter, LlmError};
+use crate::llm::{DetectedCapabilities, ErrorDetail, LlmAdapter, LlmError, SentSecrets, SessionId};
 use crate::net::ExternalUrl;
 use crate::secrets;
 
@@ -36,6 +37,36 @@ pub enum ActiveAdapter {
     /// 出してよい文)を持つ。資格情報ストアのロック解除後などに読み直せるよう、呼び出し元は
     /// 次の機会に組み立て直す。
     KeyUnavailable(String),
+}
+
+/// 方言ごとの公式のベースURL(登録フォームの初期値)。
+pub fn default_base_url(api_format: ApiFormat) -> &'static str {
+    match api_format {
+        ApiFormat::OpenAiCompat => openai_compat::DEFAULT_BASE_URL,
+        ApiFormat::Anthropic => anthropic::DEFAULT_BASE_URL,
+        ApiFormat::Gemini => gemini::DEFAULT_BASE_URL,
+    }
+}
+
+/// 登録フォームで、ベースURLの欄の下に出すヒント。登録は止めない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum BaseUrlHint {
+    /// アダプタが足すAPIの版のパスまで書いている。
+    VersionPathIncluded,
+}
+
+/// 入力中のベースURLへのヒント。URLとして読めなければ何も出さない(読めないことは登録の
+/// ときに断る)。
+pub fn base_url_hint(api_format: ApiFormat, base_url: &str) -> Option<BaseUrlHint> {
+    let url = reqwest::Url::parse(base_url.trim()).ok()?;
+    let included = match api_format {
+        ApiFormat::OpenAiCompat => false,
+        ApiFormat::Anthropic => anthropic::includes_version_path(url.path()),
+        ApiFormat::Gemini => gemini::includes_version_path(url.path()),
+    };
+    included.then_some(BaseUrlHint::VersionPathIncluded)
 }
 
 /// 登録前のAPIキーの検証。ASCIIの可視文字だけを受け付ける。空白・改行・全角文字の混入は、
@@ -83,20 +114,33 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
 /// 一覧・能力の問い合わせの応答を読む。失敗は状態コードだけで分類する。
 async fn read_success_json<T: DeserializeOwned>(
     response: reqwest::Response,
-    api_key: &SecretString,
+    secrets: &SentSecrets,
 ) -> Result<T, CoreError> {
-    read_success_json_with(response, api_key, LlmError::from_status).await
+    read_success_json_with(response, secrets, LlmError::from_status).await
 }
 
-/// [`read_success_json`]の、失敗を`classify`(状態コード・本文・伏せる鍵から分類する)で分類する形。
+/// [`read_success_json`]の、失敗を`classify`(状態コード・本文・伏せる値から分類する)で分類する形。
 async fn read_success_json_with<T: DeserializeOwned>(
     response: reqwest::Response,
-    api_key: &SecretString,
-    classify: fn(StatusCode, &str, &str) -> LlmError,
+    secrets: &SentSecrets,
+    classify: fn(StatusCode, &str, &SentSecrets) -> LlmError,
 ) -> Result<T, CoreError> {
-    let key = api_key.expose_secret();
-    let response = reject_failure(response, |status, body| classify(status, body, key)).await?;
-    Ok(read_json(response, api_key).await?)
+    let response = reject_failure(response, secrets, |status, body| {
+        classify(status, body, secrets)
+    })
+    .await?;
+    Ok(read_json(response, secrets).await?)
+}
+
+/// 応答の欄が`null`でも、欄が無いときと同じ既定値にする(`#[serde(default, deserialize_with =
+/// "super::null_as_default")]`)。`#[serde(default)]`だけでは、無い欄は受けても`null`は型の誤りに
+/// なる。空の欄を省かずに`null`で返す互換サーバーがある(Issue #458)。
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    Ok(<Option<T> as serde::Deserialize>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// リクエストに並べる要素(Anthropic形式のブロック・Gemini形式のステップ)。組み立てたものか、
@@ -151,7 +195,7 @@ fn abbreviate(blocks: &mut serde_json::Value, nested: &[&str], targets: &[(&str,
 /// 数値等)があれば、応答の解釈の失敗にする。
 fn read_elements(
     elements: &[Box<RawValue>],
-    api_key: &SecretString,
+    secrets: &SentSecrets,
 ) -> Result<Vec<serde_json::Value>, LlmError> {
     elements
         .iter()
@@ -160,11 +204,72 @@ fn read_elements(
                 LlmError::InvalidResponse(ErrorDetail::http(
                     StatusCode::OK,
                     &e.to_string(),
-                    api_key.expose_secret(),
+                    secrets,
                 ))
             })
         })
         .collect()
+}
+
+/// ストリーミングで差分から組み立て直した要素を、送り返す要素([`crate::llm::Replay`])にする。
+/// `Value`から書き出すので、キーの順は受け取った順ではなく名前順になる(方言ごとに、キーの順を
+/// 見ないことを確かめてある。`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
+fn assembled_element(value: &serde_json::Value) -> Box<RawValue> {
+    serde_json::value::to_raw_value(value).expect("a JSON value serializes")
+}
+
+/// 組み立て中の要素(オブジェクト)の`key`の文字列の後ろに`text`を足す。文字列でなければ置き換える。
+fn append_text(element: &mut serde_json::Value, key: &str, text: &str) {
+    match element.get_mut(key) {
+        Some(serde_json::Value::String(existing)) => existing.push_str(text),
+        _ => element[key] = serde_json::Value::String(text.to_string()),
+    }
+}
+
+/// ストリーミングで断片を連結したツール呼び出しの引数を読む。断片が無い(空の)引数は空の
+/// オブジェクトとする。引数をオブジェクトのまま送り返す方言なので、読めなければ応答の解釈の
+/// 失敗にする(壊れた引数を送り返す形が無い)。
+fn streamed_arguments(text: &str, secrets: &SentSecrets) -> Result<serde_json::Value, LlmError> {
+    if text.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(text).map_err(|e| {
+        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
+    })
+}
+
+/// ストリーミングで組み立てる要素(ブロック・ステップ)の数の上限。実際の応答の要素はこれより
+/// ずっと少ない。上限が無いと、壊れた・悪意のあるサーバーが要素を大量に並べて、差分を当てる
+/// 先を探す時間とメモリを使わせられる(1回の応答の量の上限の範囲でも数十万個になる)。
+const MAX_STREAMED_ELEMENTS: usize = 1024;
+
+/// 組み立てる要素が多すぎる([`MAX_STREAMED_ELEMENTS`])。
+fn too_many_elements() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the response contains too many content elements",
+    ))
+}
+
+/// 長さの上限で打ち切られた応答の、途中で切れたツール呼び出しの引数を読めなかった。切れた引数の
+/// 呼び出しは実行できないので、応答の解釈の失敗にするが、打ち切りが原因だと分かるようにする。
+fn tool_call_cut_off() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal(
+        "the output limit cut off a tool call before its arguments were complete",
+    ))
+}
+
+/// ストリーミングの`data`をJSONとして読む。
+fn parse_event(data: &str, secrets: &SentSecrets) -> Result<serde_json::Value, LlmError> {
+    serde_json::from_str(data).map_err(|e| {
+        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
+    })
+}
+
+/// 終わりの合図の無いまま、ストリーミングの応答の本文が終わった(上流が落ちて途中で切れた)。
+fn stream_cut_off() -> LlmError {
+    LlmError::Connection(ErrorDetail::internal(
+        "the event stream ended before the response was complete",
+    ))
 }
 
 /// ツール呼び出しの引数を、オブジェクトしか受け付けない方言に渡す形にする。その方言の応答から
@@ -191,6 +296,7 @@ struct ProviderInputs<'a> {
     api_format: ApiFormat,
     base_url: &'a str,
     key_ref: Option<&'a str>,
+    header_refs: &'a [SecretRef],
     model: &'a str,
 }
 
@@ -201,6 +307,7 @@ impl<'a> AdapterInputs<'a> {
                 api_format: p.api_format,
                 base_url: &p.base_url,
                 key_ref: p.key_ref.as_deref(),
+                header_refs: &p.header_refs,
                 model: p.resolved_model().unwrap_or_default(),
             }),
             timeout: config.general.response_timeout(),
@@ -211,19 +318,19 @@ impl<'a> AdapterInputs<'a> {
 /// 現在の`active_provider_id`からアダプタを組み立てる。アクティブなプロバイダーが無ければ
 /// [`ActiveAdapter::NoProvider`](チャット送信時にエラー発言になる)。
 ///
-/// 資格情報ストアから鍵を読めなくても失敗にはせず、[`ActiveAdapter::KeyUnavailable`]を返す
-/// (起動や、鍵と無関係な設定の変更を止めないため)。読めなかった鍵の代わりに鍵無しで
-/// 送ることはしない。
+/// 資格情報ストアから鍵(またはカスタムヘッダーの値)を読めなくても失敗にはせず、
+/// [`ActiveAdapter::KeyUnavailable`]を返す(起動や、鍵と無関係な設定の変更を止めないため)。
+/// 読めなかった値の代わりに、その値を抜いて送ることはしない。
 pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError> {
     let AdapterInputs { provider, timeout } = AdapterInputs::of(config);
     let Some(provider) = provider else {
         return Ok(ActiveAdapter::NoProvider);
     };
-    let api_key = match load_api_key(provider.key_ref) {
-        Ok(api_key) => api_key,
+    let credentials = match load_credentials(provider.key_ref, provider.header_refs) {
+        Ok(credentials) => credentials,
         Err(e) => {
             crate::diagnostics::report(format_args!(
-                "failed to read the API key from the secret store: {e}"
+                "failed to read the provider's secrets from the secret store: {e}"
             ));
             return Ok(ActiveAdapter::KeyUnavailable(e.to_string()));
         }
@@ -233,19 +340,19 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
     let adapter: SharedAdapter = match provider.api_format {
         ApiFormat::OpenAiCompat => Arc::new(OpenAiCompatAdapter::new(
             provider.base_url.to_string(),
-            api_key,
+            credentials,
             provider.model,
             timeout,
         )?),
         ApiFormat::Anthropic => Arc::new(AnthropicAdapter::new(
             provider.base_url.to_string(),
-            api_key,
+            credentials,
             provider.model,
             timeout,
         )?),
         ApiFormat::Gemini => Arc::new(GeminiAdapter::new(
             provider.base_url.to_string(),
-            api_key,
+            credentials,
             provider.model,
             timeout,
         )?),
@@ -271,13 +378,15 @@ pub async fn detect_capabilities(
     if !can_detect_capabilities(provider) {
         return Ok(None);
     }
-    let api_key = load_api_key_off_thread(provider).await?;
+    let credentials = load_credentials_off_thread(provider).await?;
     match provider.api_format {
-        ApiFormat::OpenAiCompat => local_server::detect(&provider.base_url, &api_key, models).await,
-        ApiFormat::Anthropic => anthropic::detect(&provider.base_url, &api_key, models)
+        ApiFormat::OpenAiCompat => {
+            local_server::detect(&provider.base_url, &credentials, models).await
+        }
+        ApiFormat::Anthropic => anthropic::detect(&provider.base_url, &credentials, models)
             .await
             .map(Some),
-        ApiFormat::Gemini => gemini::detect(&provider.base_url, &api_key, models)
+        ApiFormat::Gemini => gemini::detect(&provider.base_url, &credentials, models)
             .await
             .map(Some),
     }
@@ -285,19 +394,22 @@ pub async fn detect_capabilities(
 
 /// プロバイダーが提供するモデル名の一覧。名前順で、登録済みのものも含む。
 pub async fn list_models(provider: &ProviderConfig) -> Result<Vec<String>, CoreError> {
-    let api_key = load_api_key_off_thread(provider).await?;
+    let credentials = load_credentials_off_thread(provider).await?;
     match provider.api_format {
-        ApiFormat::OpenAiCompat => openai_compat::list_models(&provider.base_url, &api_key).await,
-        ApiFormat::Anthropic => anthropic::list_models(&provider.base_url, &api_key).await,
-        ApiFormat::Gemini => gemini::list_models(&provider.base_url, &api_key).await,
+        ApiFormat::OpenAiCompat => {
+            openai_compat::list_models(&provider.base_url, &credentials).await
+        }
+        ApiFormat::Anthropic => anthropic::list_models(&provider.base_url, &credentials).await,
+        ApiFormat::Gemini => gemini::list_models(&provider.base_url, &credentials).await,
     }
 }
 
-/// 非同期の問い合わせの前に鍵を読む。資格情報ストアの呼び出しはブロックするため
-/// 別スレッドで行う。読めなければ問い合わせずにエラーにする。
-async fn load_api_key_off_thread(provider: &ProviderConfig) -> Result<SecretString, CoreError> {
+/// 非同期の問い合わせの前に鍵とカスタムヘッダーの値を読む。資格情報ストアの呼び出しは
+/// ブロックするため別スレッドで行う。読めなければ問い合わせずにエラーにする。
+async fn load_credentials_off_thread(provider: &ProviderConfig) -> Result<Credentials, CoreError> {
     let key_ref = provider.key_ref.clone();
-    crate::blocking::run(move || load_api_key(key_ref.as_deref())).await
+    let header_refs = provider.header_refs.clone();
+    crate::blocking::run(move || load_credentials(key_ref.as_deref(), &header_refs)).await
 }
 
 /// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
@@ -312,21 +424,27 @@ enum KeyHeader {
     Named(&'static str),
 }
 
-/// 鍵を添えて送る。届かなかったとき(接続・タイムアウト等)は、鍵を伏せた[`LlmError`]にする。
-/// 応答の状態コードは見ない([`reject_failure`])。
+/// 鍵とカスタムヘッダーを添えて送る。届かなかったとき(接続・タイムアウト等)は、送った
+/// 秘密情報を伏せた[`LlmError`]にする。応答の状態コードは見ない([`reject_failure`])。
+///
+/// `session`は会話ごとのID。会話の無いリクエスト(モデル一覧・能力の検出)は`None`を渡し、
+/// `{session_id}`を含むヘッダーは付けない([`Credentials`])。
 async fn send_with_key(
     request: reqwest::RequestBuilder,
-    api_key: &SecretString,
+    credentials: &Credentials,
     header: KeyHeader,
+    session: Option<&SessionId>,
 ) -> Result<reqwest::Response, LlmError> {
-    let key = api_key.expose_secret();
+    let secrets = &credentials.sent;
+    let request = credentials.apply_headers(request, session)?;
+    let key = credentials.api_key.expose_secret();
     // 認証不要のローカル推論サーバー向けに、鍵が空なら鍵のヘッダーごと付けない
     // (`Bearer `だけを送ると、空の鍵を不正な鍵として弾くサーバーがある)。
     if key.is_empty() {
         return request
             .send()
             .await
-            .map_err(|e| LlmError::from_transport(e, key));
+            .map_err(|e| LlmError::from_transport(e, secrets));
     }
     // ヘッダーに載せられない鍵は、方言によらず送る前に同じ文言で断る(reqwestに任せると、
     // 組み立ての失敗として内部の文言のまま出る)。登録時の検証([`validate_api_key`])より前に
@@ -353,13 +471,14 @@ async fn send_with_key(
         .header(name, value)
         .send()
         .await
-        .map_err(|e| LlmError::from_transport(e, key))
+        .map_err(|e| LlmError::from_transport(e, secrets))
 }
 
 /// 非成功の状態コードの応答を、本文とともに`classify`で分類したエラーにする。本文でしか
 /// 分からない種類を見ないなら、`classify`は[`LlmError::from_status`]でよい。
 async fn reject_failure(
     response: reqwest::Response,
+    secrets: &SentSecrets,
     classify: impl FnOnce(StatusCode, &str) -> LlmError,
 ) -> Result<reqwest::Response, LlmError> {
     let status = response.status();
@@ -367,13 +486,36 @@ async fn reject_failure(
         return Ok(response);
     }
     let retry_after = retry_after_secs(&response);
-    let body = response.text().await.unwrap_or_default();
+    let body = read_error_body(response, secrets).await;
     Err(match (classify(status, &body), retry_after) {
         (LlmError::RateLimit(detail), Some(secs)) => {
             LlmError::RateLimit(detail.with_retry_after(secs))
         }
         (error, _) => error,
     })
+}
+
+/// エラー応答の本文として読む量の上限。分類と詳細(`ErrorDetail`は512文字まで)には先頭だけで
+/// 足りる。ストリーミングで読む方言では待つ時間の上限が無通信の間隔だけなので、流し続ける
+/// 本文を読み切ろうとしない。
+const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// エラー応答の本文の先頭([`MAX_ERROR_BODY_BYTES`]まで)。読めなかった分は捨てる。
+///
+/// 上限で切ったときは、末尾から送った秘密情報の最も長い値の長さ分を捨てる。境界をまたいだ値は
+/// 一部だけが残り、伏せ字(値全体との照合)に掛からないため。
+async fn read_error_body(mut response: reqwest::Response, secrets: &SentSecrets) -> String {
+    let mut body = Vec::new();
+    while body.len() < MAX_ERROR_BODY_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    if body.len() >= MAX_ERROR_BODY_BYTES {
+        body.truncate(MAX_ERROR_BODY_BYTES.saturating_sub(secrets.max_len()));
+    }
+    String::from_utf8_lossy(&body).into_owned()
 }
 
 /// レート制限の応答が示す、送り直してよくなるまでの秒数(`Retry-After`)。日時の形は扱わない
@@ -392,30 +534,268 @@ fn retry_after_secs(response: &reqwest::Response) -> Option<u64> {
         .ok()
 }
 
-/// 成功の応答の本文をJSONとして読む。読めなければ鍵を伏せた[`LlmError`]にする。
+/// 1回の応答として読む量の上限。1回のモデル呼び出し・問い合わせの応答はこれよりずっと小さい。
+/// ストリーミングで読む方言では待つ時間の上限が無通信の間隔だけなので
+/// (`net::RequestTimeout::BetweenReads`)、送り続けるサーバーを時間では止められず、量で止める。
+/// ストリーミングを頼んでも1つのJSONで返すサーバーがあるので、JSONで読む経路にも掛ける。
+const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+/// 応答が大きすぎる([`MAX_RESPONSE_BYTES`])。
+fn response_too_large() -> LlmError {
+    LlmError::InvalidResponse(ErrorDetail::internal("the response is too large"))
+}
+
+/// 成功の応答の本文をJSONとして読む。読めなければ送った秘密情報を伏せた[`LlmError`]にする。
 async fn read_json<T: DeserializeOwned>(
     response: reqwest::Response,
-    api_key: &SecretString,
+    secrets: &SentSecrets,
 ) -> Result<T, LlmError> {
-    response
-        .json()
+    let body = read_body(response, MAX_RESPONSE_BYTES, secrets).await?;
+    serde_json::from_slice(&body).map_err(|e| {
+        LlmError::InvalidResponse(ErrorDetail::http(StatusCode::OK, &e.to_string(), secrets))
+    })
+}
+
+/// 応答の本文を、`limit`バイトを超えたら打ち切って読む(超えたら[`response_too_large`])。
+/// JSONで読む成功の応答の本文はこれで読む(上限は[`MAX_RESPONSE_BYTES`]。SSEは`sse.rs`が同じ上限を数える)。
+async fn read_body(
+    mut response: reqwest::Response,
+    limit: usize,
+    secrets: &SentSecrets,
+) -> Result<Vec<u8>, LlmError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| LlmError::from_transport(e, api_key.expose_secret()))
+        .map_err(|e| LlmError::from_body_read(e, secrets))?
+    {
+        if body.len() + chunk.len() > limit {
+            return Err(response_too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// 鍵を登録していないプロバイダー(`key_ref`が無い)は空の鍵で、鍵のヘッダーを付けずに送る
 /// (認証不要のローカル推論サーバー向け)。鍵を登録したのに読めなければエラーにする。
-/// 鍵無しで送るのは前者だけで、その分岐はここに閉じる。
-fn load_api_key(key_ref: Option<&str>) -> Result<SecretString, CoreError> {
-    match key_ref {
-        Some(key_ref) => secrets::load(key_ref),
-        None => Ok(SecretString::from(String::new())),
+/// 鍵無しで送るのは前者だけで、その分岐はここに閉じる。カスタムヘッダーの値も、1つでも
+/// 読めなければエラーにする(その値を抜いて送らない)。
+fn load_credentials(
+    key_ref: Option<&str>,
+    header_refs: &[SecretRef],
+) -> Result<Credentials, CoreError> {
+    let api_key = match key_ref {
+        Some(key_ref) => secrets::load(key_ref)?,
+        None => SecretString::from(String::new()),
+    };
+    let headers = header_refs
+        .iter()
+        .map(|r| Ok((r.name.clone(), secrets::load(&r.key_ref)?)))
+        .collect::<Result<Vec<_>, CoreError>>()?;
+    Credentials::new(api_key, headers)
+}
+
+/// カスタムヘッダーの値のうち、送るときに会話ごとのID([`SessionId`])へ置き換える部分。
+/// 置き換えるのはこの1種類だけで、ほかの`{...}`は書かれたまま送る。
+pub const SESSION_ID_PLACEHOLDER: &str = "{session_id}";
+
+/// 送り先へ渡す秘密情報(APIキーとカスタムヘッダー)と、エラー文で伏せる値。
+pub struct Credentials {
+    api_key: SecretString,
+    headers: Vec<(reqwest::header::HeaderName, SecretString)>,
+    sent: SentSecrets,
+}
+
+impl Credentials {
+    /// `headers`の名前と値は登録の時点で検証済み([`validate_header_name`]・
+    /// [`crate::net::secret_header_value`])。ここで読み直すのは名前の形だけで、予約名かどうかは
+    /// 見直さない(設定ファイルを手で書き換えた場合は、書いたとおりに送る。MCPと同じ)。
+    pub fn new(
+        api_key: SecretString,
+        headers: Vec<(String, SecretString)>,
+    ) -> Result<Self, CoreError> {
+        let headers = headers
+            .into_iter()
+            .map(|(name, value)| {
+                let name =
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
+                        CoreError::ProviderConfig(format!("invalid header name '{name}': {e}"))
+                    })?;
+                Ok((name, value))
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?;
+        // `{session_id}`を挟む値は、置き換えた後の値を前もって知れないので、挟まれた部分ごとに
+        // 伏せる(IDそのものは秘密ではない)。
+        let sent = SentSecrets::new(
+            std::iter::once(api_key.expose_secret()).chain(
+                headers
+                    .iter()
+                    .flat_map(|(_, value)| value.expose_secret().split(SESSION_ID_PLACEHOLDER)),
+            ),
+        );
+        Ok(Self {
+            api_key,
+            headers,
+            sent,
+        })
     }
+
+    /// カスタムヘッダーの無い鍵だけの組。
+    pub fn key_only(api_key: SecretString) -> Self {
+        Self::new(api_key, Vec::new()).expect("no header names to parse")
+    }
+
+    /// エラー文から伏せる値。
+    fn secrets(&self) -> &SentSecrets {
+        &self.sent
+    }
+
+    /// カスタムヘッダーを付ける。`{session_id}`を含むヘッダーは、`session`が無ければ付けない
+    /// (空の値に置き換えて送ると、空のIDとして断る送り先がある)。
+    fn apply_headers(
+        &self,
+        mut request: reqwest::RequestBuilder,
+        session: Option<&SessionId>,
+    ) -> Result<reqwest::RequestBuilder, LlmError> {
+        for (name, template) in &self.headers {
+            let template = template.expose_secret();
+            let value = if template.contains(SESSION_ID_PLACEHOLDER) {
+                let Some(session) = session else {
+                    continue;
+                };
+                SecretString::from(template.replace(SESSION_ID_PLACEHOLDER, session.as_str()))
+            } else {
+                SecretString::from(template)
+            };
+            let value =
+                crate::net::secret_header_value(value.expose_secret()).ok_or_else(|| {
+                    LlmError::InvalidRequest(ErrorDetail::internal(
+                        "a custom header value contains characters that cannot be sent in a header",
+                    ))
+                })?;
+            request = request.header(name.clone(), value);
+        }
+        Ok(request)
+    }
+}
+
+/// 登録前のカスタムヘッダーの名前の検証。リクエストの構造を決める名前
+/// ([`crate::net::validate_custom_header_name`])に加え、その方言でSCITL自身が付ける
+/// ヘッダー(鍵・版)の名前を断る。鍵は`key_ref`で扱っており、二重に指定させない。
+/// `User-Agent`は断らない(上書きすると、登録した値が送られる)。
+pub fn validate_header_name(api_format: ApiFormat, name: &str) -> Result<(), CoreError> {
+    let own: &[&str] = match api_format {
+        ApiFormat::OpenAiCompat => openai_compat::OWN_HEADERS,
+        ApiFormat::Anthropic => anthropic::OWN_HEADERS,
+        ApiFormat::Gemini => gemini::OWN_HEADERS,
+    };
+    crate::net::validate_custom_header_name(name, own).map_err(CoreError::ProviderConfig)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_urls_that_include_the_version_path_get_a_hint() {
+        let hint = Some(BaseUrlHint::VersionPathIncluded);
+        for (format, url) in [
+            (ApiFormat::Anthropic, "https://api.anthropic.com/v1"),
+            (
+                ApiFormat::Anthropic,
+                " https://proxy.example/anthropic/v1/messages/ ",
+            ),
+            (
+                ApiFormat::Gemini,
+                "https://generativelanguage.googleapis.com/v1beta",
+            ),
+            (
+                ApiFormat::Gemini,
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+            ),
+            (
+                ApiFormat::Gemini,
+                "https://generativelanguage.googleapis.com/v1/interactions",
+            ),
+        ] {
+            assert_eq!(base_url_hint(format, url), hint, "{url}");
+        }
+        for (format, url) in [
+            (ApiFormat::Anthropic, "https://api.anthropic.com"),
+            (ApiFormat::Anthropic, "https://example.com/v10"),
+            (ApiFormat::Gemini, default_base_url(ApiFormat::Gemini)),
+            (
+                ApiFormat::OpenAiCompat,
+                default_base_url(ApiFormat::OpenAiCompat),
+            ),
+            (ApiFormat::Anthropic, "not a url /v1"),
+        ] {
+            assert_eq!(base_url_hint(format, url), None, "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn read_body_stops_at_the_limit() {
+        let (url, server) =
+            test_server::spawn_server(vec![(200, "0123456789"), (200, "0123456789")]);
+        let client = reqwest::Client::new();
+        let secrets = SentSecrets::default();
+
+        let response = client.get(&url).send().await.unwrap();
+        let body = read_body(response, 10, &secrets).await.unwrap();
+        assert_eq!(body, b"0123456789");
+
+        let response = client.get(&url).send().await.unwrap();
+        let err = read_body(response, 9, &secrets).await.unwrap_err();
+        assert!(matches!(err, LlmError::InvalidResponse(_)), "{err:?}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn header_names_the_dialect_sets_itself_are_reserved() {
+        for (format, own) in [
+            (ApiFormat::OpenAiCompat, "Authorization"),
+            (ApiFormat::Anthropic, "X-Api-Key"),
+            (ApiFormat::Anthropic, "anthropic-version"),
+            (ApiFormat::Gemini, "x-goog-api-key"),
+        ] {
+            assert!(validate_header_name(format, own).is_err(), "{own}");
+            // 構造を決める名前は方言によらず断る。
+            assert!(validate_header_name(format, "Content-Type").is_err());
+            for allowed in ["x-opencode-session", "User-Agent", "X-Title"] {
+                assert!(validate_header_name(format, allowed).is_ok(), "{allowed}");
+            }
+        }
+        // 別の方言の鍵のヘッダーは、その方言では自分で付けないので使える。
+        assert!(validate_header_name(ApiFormat::Gemini, "authorization").is_ok());
+        assert!(validate_header_name(ApiFormat::OpenAiCompat, "bad name").is_err());
+    }
+
+    #[test]
+    fn secrets_to_redact_are_the_parts_around_the_placeholder() {
+        let credentials = Credentials::new(
+            SecretString::from("sk-key"),
+            vec![
+                ("X-Session".to_string(), SecretString::from("{session_id}")),
+                (
+                    "X-Token".to_string(),
+                    SecretString::from("tok-{session_id}-tail"),
+                ),
+            ],
+        )
+        .unwrap();
+        let detail = ErrorDetail::http(
+            StatusCode::BAD_REQUEST,
+            "sk-key tok-0123-tail {session_id}",
+            credentials.secrets(),
+        );
+        // IDそのものは秘密ではないので伏せず、挟んだ部分だけを伏せる。
+        assert_eq!(
+            detail.as_str(),
+            "HTTP 400: [redacted] [redacted]0123[redacted] {session_id}"
+        );
+    }
 
     #[test]
     fn api_key_must_be_visible_ascii() {

@@ -4,6 +4,10 @@ import type { ModelView } from "./ModelView";
 
 export type ProviderView = { id: string, name: string, api_format: ApiFormat, base_url: string, models: Array<ModelView>, active_model: string | null, has_api_key: boolean, 
 /**
+ * 登録したカスタムヘッダーの名前。値は秘密情報なので渡さない。
+ */
+header_names: Array<string>, 
+/**
  * モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
  */
 can_detect_capabilities: boolean, 
@@ -12,7 +16,8 @@ can_detect_capabilities: boolean,
  */
 error: string | null, 
 /**
- * このプロバイダーをアクティブにしているが、鍵を資格情報ストアから読めない理由。
+ * このプロバイダーをアクティブにしているが、鍵(またはカスタムヘッダーの値)を
+ * 資格情報ストアから読めない理由。
  * `error`と違い、プロバイダーの設定ではなく資格情報ストアの側の問題で、ストアの
  * ロックを解除すれば次の送信で直ることがある。
  */

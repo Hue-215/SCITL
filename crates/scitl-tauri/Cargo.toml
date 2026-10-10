@@ -4,6 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# 本体はライブラリに置き、デスクトップの実行ファイル(`main.rs`)とAndroidのActivityの両方から
+# 呼ぶ(`lib.rs`の`run`)。Androidは`cdylib`(共有ライブラリ)を読み込む。名前を実行ファイルと
+# 変えるのは、Windowsで両者のデバッグ情報(.pdb)の名前がぶつかるため
+# (https://github.com/rust-lang/cargo/issues/8519)。iOSは対象にしないので`staticlib`は足さない
+[lib]
+name = "scitl_tauri_lib"
+crate-type = ["cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -11,8 +19,20 @@ tauri-build = { version = "2", features = [] }
 scitl-core = { path = "../scitl-core" }
 tauri = { version = "2", features = [] }
 secrecy = { workspace = true }
-percent-encoding = { workspace = true }
+tauri-plugin-dialog = "2"
+
+# 多重起動の防止とクリップボードの画像の読み出しはデスクトップだけ(`lib.rs`の`run`。
+# clipboard-managerのAndroid側は文字しか読めない)
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2.4"
+tauri-plugin-clipboard-manager = "~2.3"
+
+# 選択画面で選んだ`content://`のURIを開く・本文中のリンクをOSへ渡す(Androidだけ。デスクトップは
+# パスで届き、リンクは`scitl-core`が`open`クレートで開く。`open`はAndroidで動かない)
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-fs = "2"
+# 2.6からTauri 2.12を要求するので2.5に留める
+tauri-plugin-opener = "~2.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5.9"

@@ -4,43 +4,21 @@ import type { FormEvent } from 'react'
 import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
 import { isolated, t } from './i18n'
+import type { AddResult } from './rejection'
 import { CollapseToggle, NumberField, ServerNotice } from './settingsFields'
 import { useAsyncAction } from './useAsyncAction'
 import { useCollapse } from './useCollapse'
 
-// 「1行1件、KEY=VALUE」形式のテキストをパースする。エラーは行ごとに個別指摘する。行は前後の
-// 空白を除いてから見るので、`=`が先頭でなければキーは空にならない。
-function parseKeyValueLines(text: string): { pairs: [string, string][]; errors: string[] } {
-  const pairs: [string, string][] = []
-  const errors: string[] = []
-  text.split('\n').forEach((line, i) => {
-    const trimmed = line.trim()
-    if (trimmed === '') return
-    const eq = trimmed.indexOf('=')
-    if (eq <= 0) {
-      errors.push(
-        t('settings.tools.kv_line_invalid', {
-          line_no: i + 1,
-          line: isolated(trimmed),
-          sample: t('settings.tools.kv_sample'),
-        }),
-      )
-      return
-    }
-    pairs.push([trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1).trim()])
-  })
-  return { pairs, errors }
-}
-
-// 使える文字と並びだけを見る(長さの上限はRust側から受け取る)。アンダーバーは英数字の間に
-// 1つずつだけ置ける。登録の可否はRust側(`config::validate_mcp_server_name`)が決め直す。
-// ここで見るのは、表示言語の文言で理由を出すため。
-const MCP_NAME_CHARS = /^[A-Za-z0-9]+(_[A-Za-z0-9]+)*$/
-
 interface McpTabProps {
   settings: SettingsView
-  onSaveLimits: (maxRoundsPerTurn: number | null, totalTimeoutSecs: number | null) => void
-  onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<void>
+  // 数値の欄の文字列のまま保存する。書き換えた欄だけを送り、もう一方はnull(保存済みのまま)。
+  // 欄の誤りは理由の文言で返る。
+  onSaveLimits: (
+    maxRoundsPerTurn: string | null,
+    totalTimeoutSecs: string | null,
+  ) => Promise<string[]>
+  // 欄の誤りは理由の文言で返る(フォームの下に出す)。
+  onAddServer: (name: string, endpoint: NewMcpEndpoint) => Promise<AddResult>
   onDeleteServer: (serverId: string) => void
   onSetServerEnabled: (serverId: string, enabled: boolean) => void
   onSetToolEnabled: (serverId: string, toolName: string, enabled: boolean) => void
@@ -82,7 +60,6 @@ export function McpTab({
       </ul>
 
       <AddMcpServerForm
-        existingNames={settings.mcp_servers.map((s) => s.name)}
         nameMaxChars={settings.mcp_server_name_max_chars}
         onAdd={onAddServer}
       />
@@ -95,14 +72,14 @@ export function McpTab({
           label={t('settings.tools.max_rounds_label')}
           value={settings.tools.max_rounds_per_turn}
           defaultValue={settings.tools.default_max_rounds_per_turn}
-          onSave={(rounds) => onSaveLimits(rounds, settings.tools.total_timeout_secs)}
+          onSave={(rounds) => onSaveLimits(rounds, null)}
         />
 
         <NumberField
           label={t('settings.tools.timeout_label')}
           value={settings.tools.total_timeout_secs}
           defaultValue={settings.tools.default_total_timeout_secs}
-          onSave={(secs) => onSaveLimits(settings.tools.max_rounds_per_turn, secs)}
+          onSave={(secs) => onSaveLimits(null, secs)}
         />
       </section>
     </div>
@@ -221,12 +198,12 @@ function McpServerCard({
 }
 
 interface AddMcpServerFormProps {
-  existingNames: string[]
   nameMaxChars: number
-  onAdd: (name: string, endpoint: NewMcpEndpoint) => Promise<void>
+  onAdd: (name: string, endpoint: NewMcpEndpoint) => Promise<AddResult>
 }
 
-function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFormProps) {
+// 欄の解釈と検証(識別子の規則・重複、URL・ヘッダーの欄)はRust側が行い、断った理由を返す。
+function AddMcpServerForm({ nameMaxChars, onAdd }: AddMcpServerFormProps) {
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [headersText, setHeadersText] = useState('')
@@ -235,39 +212,22 @@ function AddMcpServerForm({ existingNames, nameMaxChars, onAdd }: AddMcpServerFo
   // 入力を空にするのは成功したときだけ。
   const submission = useAsyncAction()
 
-  const reset = () => {
-    setName('')
-    setUrl('')
-    setHeadersText('')
-  }
-
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (submission.running) return
-    const trimmedName = name.trim()
-    const validationErrors: string[] = []
-    if (trimmedName === '') {
-      validationErrors.push(t('settings.tools.id_required'))
-    } else if (trimmedName.length > nameMaxChars || !MCP_NAME_CHARS.test(trimmedName)) {
-      validationErrors.push(t('settings.tools.id_invalid', { max: nameMaxChars }))
-    } else if (existingNames.includes(trimmedName)) {
-      validationErrors.push(t('settings.tools.id_duplicate', { id: isolated(trimmedName) }))
-    }
-
-    if (!url.trim()) validationErrors.push(t('settings.tools.url_required'))
-    const { pairs, errors: headerErrors } = parseKeyValueLines(headersText)
-    validationErrors.push(...headerErrors)
-    if (validationErrors.length > 0) {
-      setErrors(validationErrors)
-      return
-    }
+    const endpoint: NewMcpEndpoint = { transport: 'streamable_http', url, headers: headersText }
+    // 前の送信の欄の誤りは、この送信がコマンドごと失敗しても残さない。
     setErrors([])
-    const endpoint: NewMcpEndpoint = {
-      transport: 'streamable_http',
-      url: url.trim(),
-      headers: pairs,
-    }
-    void submission.run(() => onAdd(trimmedName, endpoint), reset)
+    void submission.run(
+      () => onAdd(name, endpoint),
+      ({ added, errors: rejected }) => {
+        setErrors(rejected)
+        if (!added) return
+        setName('')
+        setUrl('')
+        setHeadersText('')
+      },
+    )
   }
 
   return (

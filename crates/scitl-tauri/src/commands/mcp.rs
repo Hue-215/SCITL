@@ -2,20 +2,30 @@
 //! `scitl_core::settings`にあり、ここはそれを1つ呼ぶだけ。ターン中のツール呼び出しは
 //! `orchestration::turn`側にあり、ここで取得した一覧のキャッシュを共有する。
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
-use scitl_core::settings::{NewMcpEndpoint, SettingsView};
+use scitl_core::settings::{FormOutcome, McpServerAdded, NewMcpEndpoint, SettingsView};
 
 use super::{with_settings, CommandResult};
-use crate::AppState;
+use crate::{dialog, AppState};
 
+/// 登録したら続けてツール一覧を取得する。接続を待つので`with_settings`を通さない
+/// (登録の保存は`Settings::add_mcp_server`の中で`blocking::run`に逃がす)。識別子・URL・
+/// ヘッダーの欄の誤りは`FormOutcome::Rejected`で返す。保存の前に、通信先をネイティブの
+/// ダイアログで利用者に確かめる(取りやめたら`FormOutcome::Cancelled`)。
 #[tauri::command]
 pub async fn add_mcp_server(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     endpoint: NewMcpEndpoint,
-) -> CommandResult<SettingsView> {
-    with_settings(&state, move |s| s.add_mcp_server(&name, endpoint)).await
+) -> CommandResult<FormOutcome<McpServerAdded>> {
+    Ok(FormOutcome::from_result(
+        state
+            .settings
+            .add_mcp_server(name, endpoint, dialog::confirm_destination(&app))
+            .await,
+    )?)
 }
 
 #[tauri::command]

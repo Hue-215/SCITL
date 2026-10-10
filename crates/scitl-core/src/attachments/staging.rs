@@ -9,7 +9,7 @@
 //! 大きさ・MIME・内容のハッシュも正規化した後のもの。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
@@ -47,14 +47,20 @@ pub enum Rejection {
         kind: AttachmentKind,
         limit_bytes: u64,
     },
-    /// 窓に落としたものがファイルでない(フォルダ等)。
+    /// 窓に落としたもの・選んだものがファイルでない(フォルダ等)。
     NotAFile,
+    /// 送っていない添付が、1つの発言に付けられる数に達している。
+    TooMany { limit: usize },
+    /// 中身が「その他」(画像として扱う形式でもUTF-8のテキストでもない)。モデルが中身に何も
+    /// できないので受け付けない(Issue #506)。
+    Unsupported,
+    /// 画像として扱う形式だが、デコードできない(壊れている・画素数が上限を超える)。形式を
+    /// 変えるよう促す[`Self::Unsupported`]の文言では、利用者が何を直せばよいか分からないので分ける。
+    ImageUnreadable,
 }
 
 #[derive(Debug, Clone)]
 struct Entry {
-    /// 預けた順の通し番号。上限を超えたときに古いものから捨てるために使う。
-    seq: u64,
     name: String,
     classified: Classified,
     bytes: Arc<[u8]>,
@@ -95,14 +101,63 @@ impl Taken {
 }
 
 /// 送信前の添付の集合。アプリの起動中だけメモリに持つ。
+///
+/// 預かる数は、1つの発言に付けられる数([`LIMITS`]の`per_message`)までにし、達したら新しく
+/// 預けようとしたものを断る(古いものを黙って捨てない)。入力欄は1つなので、預かりの数は入力欄に
+/// 並ぶ添付の数と一致する(取り消し・送信に失敗して戻した添付も、預かりの出し入れで合う)。
+/// 送信までメモリに持つので、乗っ取られた画面から際限なく預けさせない(合計量も、この数と
+/// 種別ごとの上限の積で抑えられる)。受け取ったファイルは、読む前に席を取る([`Self::reserve`])。
+/// 読んでいる途中のものも数に入れ、並べて受け取っても上限を超える分は読まない。
+///
+/// 例外は送信に失敗して戻した添付([`Self::restore`])で、その間に足した添付と合わせて上限を超え
+/// うる(戻す分を捨てると利用者の添付を失うので、超えたまま戻す。送るときに断られ、利用者が減らす)。
 #[derive(Default)]
 pub(super) struct Staged {
     entries: Mutex<HashMap<String, Entry>>,
-    next_seq: AtomicU64,
+    /// 席を取って読んでいる途中の数。増やすのは`entries`のロックの中だけ。
+    reserved: AtomicUsize,
+}
+
+/// 受け取ったファイルを読む間の席([`Staged::reserve`])。預けるか、落とせば返る。
+pub(super) struct Seat<'a>(&'a Staged);
+
+impl Drop for Seat<'_> {
+    fn drop(&mut self) {
+        self.0.reserved.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl Staged {
+    /// 席を取る。預かりと読んでいる途中の数が上限に達していれば`None`で、そのファイルは読まない。
+    pub(super) fn reserve(&self) -> Option<Seat<'_>> {
+        let entries = self.lock();
+        if entries.len() + self.reserved.load(Ordering::Acquire) >= LIMITS.per_message {
+            return None;
+        }
+        self.reserved.fetch_add(1, Ordering::AcqRel);
+        Some(Seat(self))
+    }
+
     pub(super) fn stage(&self, name: String, bytes: Vec<u8>) -> Result<StageOutcome> {
+        self.stage_into(name, bytes, None)
+    }
+
+    /// 席を取って読んだものを預ける。
+    pub(super) fn stage_seated(
+        &self,
+        name: String,
+        bytes: Vec<u8>,
+        seat: Seat<'_>,
+    ) -> Result<StageOutcome> {
+        self.stage_into(name, bytes, Some(seat))
+    }
+
+    fn stage_into(
+        &self,
+        name: String,
+        bytes: Vec<u8>,
+        seat: Option<Seat<'_>>,
+    ) -> Result<StageOutcome> {
         if name.trim().is_empty() {
             return Err(CoreError::InvalidArgument {
                 name: "name".to_string(),
@@ -110,7 +165,9 @@ impl Staged {
             });
         }
         let classified = classify(&bytes);
-        let limit_bytes = LIMITS.bytes_for(classified.kind);
+        let Some(limit_bytes) = LIMITS.bytes_for(classified.kind) else {
+            return Ok(unsupported());
+        };
         if bytes.len() as u64 > limit_bytes {
             return Ok(StageOutcome::Rejected {
                 reason: Rejection::TooLarge {
@@ -119,26 +176,42 @@ impl Staged {
                 },
             });
         }
-        let (classified, bytes) = normalized(classified, bytes);
+        let Some((classified, bytes)) = normalized(classified, bytes) else {
+            return Ok(StageOutcome::Rejected {
+                reason: Rejection::ImageUnreadable,
+            });
+        };
         let size_bytes = size_of(&bytes);
         let token = Ulid::new().to_string();
         let mut entries = self.lock();
-        make_room(&mut entries);
+        // 席を持っていれば、その席の分は数に入っているので除いて数える。
+        let others = self.reserved.load(Ordering::Acquire) - usize::from(seat.is_some());
+        if entries.len() + others >= LIMITS.per_message {
+            return Ok(too_many());
+        }
         entries.insert(
             token.clone(),
             Entry {
-                seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
                 name,
                 classified,
                 bytes: bytes.into(),
             },
         );
+        // 預かりに入れたので、席は返す(ロックの中で返し、数が一時的にも二重にならないように)。
+        drop(seat);
+        drop(entries);
         Ok(StageOutcome::Staged {
             token,
             kind: classified.kind,
             mime_type: classified.mime_type.to_string(),
             size_bytes,
         })
+    }
+
+    /// 預かりを空にする。画面が読み込み直されると、入力欄の添付は消えるのに預かりは残り、
+    /// 数の上限に達したまま添付できなくなるので、画面は起動のたびに呼ぶ。
+    pub(super) fn clear(&self) {
+        self.lock().clear();
     }
 
     /// 知らないトークンは何もしない(破棄と送信が行き違っても困らないように)。
@@ -187,44 +260,33 @@ impl Staged {
     }
 }
 
-/// 預かる数を、1つの発言に付けられる数までに抑える。送信までメモリに持つので、乗っ取られた
-/// 画面から際限なく預けさせない(合計量も、この数と種別ごとの上限の積で抑えられる)。
-///
-/// 超える分は断らずに一番古いものを捨てる。画面の再読み込み等で取り残された預かりが溜まっても、
-/// 再起動まで添付できなくなることがないように。画面も同じ`per_message`で入力欄の添付を
-/// 頭打ちにしているので、捨てられるのは取り残された預かりだけになる。
-fn make_room(entries: &mut HashMap<String, Entry>) {
-    while entries.len() >= LIMITS.per_message {
-        let oldest = entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.seq)
-            .map(|(token, _)| token.clone())
-            .expect("not empty");
-        entries.remove(&oldest);
+/// 画像なら正規化したものに置き換える。デコードできない画像(壊れている・画素数が上限を
+/// 超える)は`None`で、受け付けない。
+fn normalized(classified: Classified, bytes: Vec<u8>) -> Option<(Classified, Vec<u8>)> {
+    if classified.kind != AttachmentKind::Image {
+        return Some((classified, bytes));
+    }
+    let image = normalize_image(&bytes)?;
+    Some((
+        Classified {
+            kind: AttachmentKind::Image,
+            mime_type: image.mime_type,
+        },
+        image.bytes,
+    ))
+}
+
+fn unsupported() -> StageOutcome {
+    StageOutcome::Rejected {
+        reason: Rejection::Unsupported,
     }
 }
 
-/// 画像なら正規化したものに置き換える。デコードできない画像は拒まず「その他」として預かる
-/// (その他は中身をデコードしないので、壊れた画像を置いておいても害が無い)。
-fn normalized(classified: Classified, bytes: Vec<u8>) -> (Classified, Vec<u8>) {
-    if classified.kind != AttachmentKind::Image {
-        return (classified, bytes);
-    }
-    match normalize_image(&bytes) {
-        Some(image) => (
-            Classified {
-                kind: AttachmentKind::Image,
-                mime_type: image.mime_type,
-            },
-            image.bytes,
-        ),
-        None => (
-            Classified {
-                kind: AttachmentKind::Other,
-                mime_type: classified.mime_type,
-            },
-            bytes,
-        ),
+pub(super) fn too_many() -> StageOutcome {
+    StageOutcome::Rejected {
+        reason: Rejection::TooMany {
+            limit: LIMITS.per_message,
+        },
     }
 }
 
@@ -262,16 +324,51 @@ mod tests {
     }
 
     #[test]
-    fn stages_at_most_as_many_as_a_message_can_carry_dropping_the_oldest() {
+    fn refuses_new_attachments_once_a_message_is_full_and_keeps_the_staged_ones() {
         let staged = Staged::default();
         let tokens: Vec<String> = (0..LIMITS.per_message)
             .map(|i| token_of(staged.stage(format!("{i}.txt"), b"a".to_vec()).unwrap()))
             .collect();
-        let newest = token_of(staged.stage("over.txt".into(), b"a".to_vec()).unwrap());
+        assert!(staged.reserve().is_none());
+        assert_eq!(
+            staged.stage("over.txt".into(), b"a".to_vec()).unwrap(),
+            too_many()
+        );
+        assert!(staged.take(&tokens).is_ok());
 
-        assert_eq!(staged.lock().len(), LIMITS.per_message);
-        assert!(staged.take(std::slice::from_ref(&tokens[0])).is_err());
-        assert!(staged.take(&[tokens[1].clone(), newest]).is_ok());
+        // 取り消した分だけ、また預けられる。
+        let a = token_of(staged.stage("a.txt".into(), b"a".to_vec()).unwrap());
+        staged.discard(&a);
+        assert!(staged.reserve().is_some());
+        staged.stage("b.txt".into(), b"a".to_vec()).unwrap();
+        staged.clear();
+        assert_eq!(staged.lock().len(), 0);
+    }
+
+    /// 読んでいる途中の席も数に入れ、席を持って預けるときは自分の席を除いて数える。
+    #[test]
+    fn seats_count_toward_the_limit_until_they_are_used_or_dropped() {
+        let staged = Staged::default();
+        let seats: Vec<Seat<'_>> = (0..LIMITS.per_message)
+            .map(|_| staged.reserve().unwrap())
+            .collect();
+        assert!(staged.reserve().is_none());
+        assert_eq!(
+            staged.stage("x.txt".into(), b"a".to_vec()).unwrap(),
+            too_many()
+        );
+        let mut seats = seats.into_iter();
+        let first = seats.next().unwrap();
+        assert!(matches!(
+            staged
+                .stage_seated("a.txt".into(), b"a".to_vec(), first)
+                .unwrap(),
+            StageOutcome::Staged { .. }
+        ));
+        assert!(staged.reserve().is_none());
+        drop(seats);
+        assert_eq!(staged.reserved.load(Ordering::Acquire), 0);
+        assert!(staged.reserve().is_some());
     }
 
     #[test]
@@ -336,26 +433,33 @@ mod tests {
         assert_eq!(image::load_from_memory(bytes).unwrap().width(), 1568);
     }
 
+    /// その他(画像として扱わない形式・UTF-8でないテキスト・PDF)とデコードできない画像は
+    /// 預からない。
     #[test]
-    fn stages_undecodable_images_as_other() {
+    fn refuses_other_kinds_and_undecodable_images_without_staging() {
         let staged = Staged::default();
-        let broken = b"\x89PNG\r\n\x1a\nbody".to_vec();
-        let outcome = staged.stage("broken.png".into(), broken.clone()).unwrap();
-        let StageOutcome::Staged {
-            token,
-            kind,
-            mime_type,
-            ..
-        } = outcome
-        else {
-            panic!("expected staged, got {outcome:?}");
-        };
         assert_eq!(
-            (kind, mime_type.as_str()),
-            (AttachmentKind::Other, "image/png")
+            staged
+                .stage("broken.png".into(), b"\x89PNG\r\n\x1a\nbody".to_vec())
+                .unwrap(),
+            StageOutcome::Rejected {
+                reason: Rejection::ImageUnreadable
+            }
         );
-        let taken = staged.take(&[token]).unwrap();
-        assert_eq!(&*taken.0[0].1.bytes, broken.as_slice());
+        for (name, bytes) in [
+            ("a.zip", b"PK\x03\x04\x14\0\0\0".to_vec()),
+            ("photo.heic", b"\0\0\0\x18ftypheic".to_vec()),
+            ("sjis.txt", b"\x92\xf7\x90\xd8".to_vec()),
+            ("a.pdf", b"%PDF-1.7\n".to_vec()),
+        ] {
+            assert_eq!(
+                staged.stage(name.into(), bytes).unwrap(),
+                unsupported(),
+                "{name}"
+            );
+        }
+        assert!(staged.lock().is_empty());
+        assert_eq!(staged.reserved.load(Ordering::Acquire), 0);
     }
 
     #[test]

@@ -20,6 +20,11 @@ pub enum ApiFormat {
     Gemini,
 }
 
+impl ApiFormat {
+    /// 登録フォームで選べる順。
+    pub const ALL: [Self; 3] = [Self::OpenAiCompat, Self::Anthropic, Self::Gemini];
+}
+
 /// 1つのLLMプロバイダー設定。秘密情報を含まないため、そのままログに出しても
 /// TOMLファイルとして保存してもよい。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +42,11 @@ pub struct ProviderConfig {
     /// [`crate::secrets`]に保存した秘密情報を指す不透明な参照。未設定(鍵が要らない
     /// ローカル推論サーバー等)の場合は`None`。
     pub key_ref: Option<String>,
+    /// リクエストに添えるカスタムHTTPヘッダー。値は[`crate::secrets`]に置く(MCPサーバーの
+    /// ヘッダーと同じ扱い)。値の中の`{session_id}`は送るときに置き換わる
+    /// (`llm::providers::SESSION_ID_PLACEHOLDER`)。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_refs: Vec<SecretRef>,
 }
 
 impl ProviderConfig {
@@ -114,7 +124,8 @@ pub enum ReasoningEffort {
 pub type ModelOverrides = crate::llm::CapabilityLayer;
 
 /// 応答タイムアウトの既定値(秒)。未設定のときに使う値はここにだけ置く。生成の
-/// 長い非ストリーミング応答も待てるよう、余裕を持たせる。タイムアウト自体は常に掛ける
+/// 長い非ストリーミング応答も待てるよう、余裕を持たせる。ストリーミングで読む方言では、
+/// 全体ではなくデータの届かない時間の上限になる(`net::RequestTimeout`)。タイムアウト自体は常に掛ける
 /// (応答しないエンドポイント1つでターンが固まらないように)。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 
@@ -177,7 +188,7 @@ pub struct ToolConfig {
 /// [`crate::secrets`]に保存した1つの値(HTTPヘッダーの値)を指す参照。
 /// `key_ref`はULIDで払い出し、`name`からは組み立てない(`name`はユーザー入力で、`:`等を
 /// 含んで衝突しうるため)。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretRef {
     pub name: String,
     pub key_ref: String,
@@ -328,6 +339,7 @@ mod tests {
                 models: vec![ModelConfig::new("gpt-4o-mini".to_string())],
                 active_model: Some("gpt-4o-mini".to_string()),
                 key_ref: Some("provider:default".to_string()),
+                header_refs: Vec::new(),
             }],
             active_provider_id: Some("default".to_string()),
             general: GeneralConfig::default(),
@@ -464,6 +476,7 @@ command = "npx"
             ],
             active_model: Some("not-in-list".to_string()),
             key_ref: None,
+            header_refs: Vec::new(),
         };
         assert_eq!(provider.resolved_model(), Some("a"));
     }

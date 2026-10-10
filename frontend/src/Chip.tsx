@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import Icon from './Icon'
 
 interface ChipProps {
   // 利用者が付けた名前(ファイル名等)でありうるので、要素の境界で閉じ込める。
@@ -7,7 +8,10 @@ interface ChipProps {
   detail?: string
   // 名前の前に置くもの(サムネイル・警告の印等)。
   leading?: ReactNode
-  // 説明のツールチップ。
+  // 名前の下に出す説明(警告・失敗の理由)。指で操作する端末ではツールチップが出ないので、
+  // 知らないと困ることはここに書く。
+  note?: string
+  // 補助の説明のツールチップ(押したときに何が起きるか等)。
   title?: string
   tone?: 'normal' | 'warning' | 'error'
   // 押したときの操作。無ければ押せない。
@@ -23,6 +27,7 @@ export default function Chip({
   label,
   detail,
   leading,
+  note,
   title,
   tone = 'normal',
   onOpen,
@@ -32,9 +37,12 @@ export default function Chip({
 }: ChipProps) {
   const content = (
     <>
-      {leading}
-      <bdi className="chip-label">{label}</bdi>
-      {detail && <span className="chip-detail">{detail}</span>}
+      <span className="chip-line">
+        {leading}
+        <bdi className="chip-label">{label}</bdi>
+        {detail && <span className="chip-detail">{detail}</span>}
+      </span>
+      {note && <span className="chip-note">{note}</span>}
     </>
   )
   return (
@@ -54,7 +62,7 @@ export default function Chip({
           aria-label={removeLabel}
           disabled={disabled}
         >
-          {/* グリフをアイコン代わりに使う(tokens.cssの--icon-size-*の注記) */}×
+          <Icon name="close" />
         </button>
       )}
     </span>

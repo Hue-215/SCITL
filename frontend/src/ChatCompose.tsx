@@ -8,13 +8,19 @@ import {
   useRef,
   useState,
 } from 'react'
-import { watchDroppedFiles } from './api'
+import {
+  discardAllStagedAttachments,
+  failureText,
+  pasteClipboardImage,
+  pickAttachments,
+  watchDroppedFiles,
+} from './api'
 import { StagedAttachmentChips } from './Attachments'
-import { PASTED_IMAGES_NEED_READING, readClipboardImages } from './clipboard'
 import ChatModelBar from './ChatModelBar'
 import { t } from './i18n'
-import { isCommitEnter } from './keyboard'
-import type { AttachmentDeliveries, DropNotice } from './types'
+import Icon from './Icon'
+import { isSendEnter } from './keyboard'
+import type { AttachmentDeliveries, ReceivedFiles } from './types'
 import {
   type StagedAttachments,
   type TakenAttachments,
@@ -28,8 +34,11 @@ interface ComposeState {
   draft: string
   setDraft: (draft: string) => void
   staged: StagedAttachments
-  // 窓に落としたファイルの受け取り先を差し替える。入力欄が出ていて、添付を足せるときだけ置く。
-  setDropTarget: (target: ((notice: DropNotice) => void) | null) => void
+  // Rust側が受け取ったファイル(落とした・選んだ・貼り付けた)の受け取り先を差し替える。入力欄が
+  // 出ていて、添付を足せるときだけ置く。
+  setReceiveTarget: (target: ((files: ReceivedFiles) => void) | null) => void
+  // 受け取ったファイルを、そのときの受け取り先へ渡す(置かれていなければ受け付けない)。
+  receive: (files: ReceivedFiles) => void
 }
 
 const ComposeContext = createContext<ComposeState | null>(null)
@@ -40,25 +49,30 @@ const ComposeContext = createContext<ComposeState | null>(null)
  * 状態が変わっても描き直されるのは入力欄だけになる(`children`は外から渡された同じ要素の
  * まま)。
  *
- * 窓に落としたファイルもここで受ける。パスはOSからRust側へ直接届き、画面には名前だけが知らされる
- * (`watchDroppedFiles`)。窓のどこに落としても入力欄の添付に加え、入力欄が出ていない・添付を
- * 足せないときは受け付けない(読ませないまま、次のドロップで捨てられる)。
+ * 添付になるファイルは、画面を通らずにRust側がOSから受け取り、画面には名前だけが知らされる
+ * (窓に落とした・選択画面で選んだ・クリップボードの画像)。受け取った時点で入力欄が出ていない・
+ * 添付を足せないときは受け付けない(読ませないまま、次に受け取ったときに捨てられる)。
  */
 export function ComposeProvider({ children }: { children: ReactNode }) {
   const [draft, setDraft] = useState('')
   const staged = useStagedAttachments()
-  const dropTarget = useRef<((notice: DropNotice) => void) | null>(null)
-  const setDropTarget = useCallback((target: ((notice: DropNotice) => void) | null) => {
-    dropTarget.current = target
+  const receiveTarget = useRef<((files: ReceivedFiles) => void) | null>(null)
+  const setReceiveTarget = useCallback((target: ((files: ReceivedFiles) => void) | null) => {
+    receiveTarget.current = target
   }, [])
+  const receive = useCallback((files: ReceivedFiles) => receiveTarget.current?.(files), [])
 
   useEffect(() => {
+    // 読み込み直した画面は入力欄の添付を持たないので、Rust側に残った預かりを捨てる。
+    discardAllStagedAttachments().catch(() => undefined)
     // 送り先は1つで、渡し直すと置き換わる(StrictModeで2回渡しても、後のものだけが残る)。
-    watchDroppedFiles((notice) => dropTarget.current?.(notice)).catch(() => undefined)
-  }, [])
+    watchDroppedFiles(receive).catch(() => undefined)
+  }, [receive])
 
   return (
-    <ComposeContext value={{ draft, setDraft, staged, setDropTarget }}>{children}</ComposeContext>
+    <ComposeContext value={{ draft, setDraft, staged, setReceiveTarget, receive }}>
+      {children}
+    </ComposeContext>
   )
 }
 
@@ -74,6 +88,7 @@ export default function ChatCompose({
   generating,
   stopping,
   onSend,
+  onGenerateReply,
   onStop,
   onError,
   onModelChanged,
@@ -85,6 +100,9 @@ export default function ChatCompose({
   // 止める指示を出したあと。停止ボタンを押せなくする。
   stopping: boolean
   onSend: (message: ComposedMessage) => void
+  // 会話が返信の無いまま終わっている(最後のターンを止めた場合を含む)ときだけ渡す。入力欄が空の
+  // 間、送信ボタンの位置に応答を生成するボタンを出す。
+  onGenerateReply: (() => void) | null
   onStop: () => void
   onError: (message: string) => void
   // モデルの選択を変えられたとき。
@@ -92,122 +110,151 @@ export default function ChatCompose({
 }) {
   const compose = useContext(ComposeContext)
   if (!compose) throw new Error('ChatCompose needs ComposeProvider')
-  const { draft, setDraft, staged, setDropTarget } = compose
+  const { draft, setDraft, staged, setReceiveTarget, receive } = compose
   // 添付を足せるか。選ぶ・落とす・貼り付けるのどれにも同じ条件を使う。
-  const canAdd = !disabled && staged.canAdd
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const canAdd = !disabled
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
   const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)
+  // OSの選択画面を開いている間。
+  const [picking, setPicking] = useState(false)
 
-  // 落としたファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addDropped`は描くたびに
-  // 変わる)。応答待ちになった描画のすぐ後から受け付けないよう、画面に出す前に差し替える。
-  // 貼り付けの画像を読み直したあとの受け取り先。読み終えたときの入力欄の状態で受ける。
-  const pasteTarget = useRef<((files: File[]) => void) | null>(null)
+  // 受け取ったファイルの受け取り先を、描くたびに今の`staged`へ向け直す(`addReceived`は描くたびに
+  // 変わる)。応答待ちになった描画のすぐ後から受け付けないよう、画面に出す前に差し替える。選択画面・
+  // 貼り付けの結果も、届いたときの入力欄の状態で受ける。
   useLayoutEffect(() => {
-    pasteTarget.current = canAdd ? staged.add : null
-    setDropTarget(canAdd ? staged.addDropped : null)
-    return () => {
-      pasteTarget.current = null
-      setDropTarget(null)
-    }
+    setReceiveTarget(canAdd ? staged.addReceived : null)
+    return () => setReceiveTarget(null)
   })
 
-  // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。
+  // 本文が空でも、添付があれば送れる。判定を待っている添付があるうちは送らない。空白だけの
+  // 本文で送信を押せなくするのは入力の補助で、受け付けるかはRust側が決める。
   const canSend = !disabled && !staged.busy && (draft.trim() !== '' || staged.ready)
+  // 何も書いていない(添付も無い)ときだけ、送信の代わりに応答を生成する操作を出す。
+  const offerGenerate =
+    onGenerateReply !== null && draft.trim() === '' && !staged.ready && !staged.busy
 
+  // 本文は打ったまま送る(前後の空白を削るかはRust側が決める)。
   const send = () => {
     if (!canSend) return
     const attachments = staged.take()
     setDraft('')
-    onSend({ text: draft.trim(), attachments, restore: () => staged.restore(attachments) })
+    onSend({ text: draft, attachments, restore: () => staged.restore(attachments) })
+  }
+
+  // 右端のボタンは、生成中は停止、書いていなければ応答を生成、それ以外は送信。それぞれ別の要素に
+  // する(同じ要素だと、送信を押したフォーカスが残り、応答待ちの間のEnterで止めてしまう)。
+  let action: ReactNode
+  if (generating) {
+    action = (
+      <button
+        key="stop"
+        type="button"
+        className="icon-button primary"
+        disabled={stopping}
+        aria-label={t('chat.stop_button')}
+        title={t('chat.stop_button')}
+        onClick={(e) => {
+          // 送信をダブルクリックした2回目が、入れ替わった停止ボタンに当たっても止めない。
+          if (e.detail > 1) return
+          onStop()
+        }}
+      >
+        <Icon name="stop" />
+      </button>
+    )
+  } else if (offerGenerate) {
+    action = (
+      <button
+        key="generate"
+        type="button"
+        className="icon-button primary"
+        disabled={disabled}
+        aria-label={t('chat.generate_reply_button')}
+        title={t('chat.generate_reply_button')}
+        onClick={onGenerateReply}
+      >
+        <Icon name="arrow_forward" />
+      </button>
+    )
+  } else {
+    action = (
+      <button
+        key="send"
+        type="submit"
+        className="icon-button primary"
+        disabled={!canSend}
+        aria-label={t('chat.send_button')}
+        title={t('chat.send_button')}
+      >
+        <Icon name="arrow_upward" />
+      </button>
+    )
   }
 
   return (
     <>
       <StagedAttachmentChips staged={staged} deliveries={deliveries} disabled={disabled} />
 
-      <div className="chat-compose-area">
-        <form
-          className="chat-compose"
-          onSubmit={(e) => {
-            e.preventDefault()
-            send()
+      <form
+        className="chat-compose"
+        onSubmit={(e) => {
+          e.preventDefault()
+          send()
+        }}
+      >
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
+            // 一緒に、その見た目の画像も載せるため。文字(空白だけを除く)が無ければ、
+            // クリップボードの画像をRust側に読ませる(画面は`clipboardData`のファイルを読まない)。
+            if (e.clipboardData.getData('text/plain').trim() !== '' || !canAdd) return
+            void pasteClipboardImage().then(
+              (files) => {
+                if (files) receive(files)
+              },
+              (err: unknown) => onError(failureText(err)),
+            )
           }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              staged.add(Array.from(e.target.files ?? []))
-              // 同じファイルをもう一度選んでも変更として届くように空へ戻す。
-              e.target.value = ''
-            }}
-          />
+          onKeyDown={(e) => {
+            if (isSendEnter(e)) {
+              e.preventDefault()
+              send()
+            }
+          }}
+          disabled={disabled}
+          placeholder={t('chat.input_hint')}
+          aria-label={t('chat.input_hint')}
+        />
+
+        <div className="chat-compose-bar">
           <button
             type="button"
-            disabled={!canAdd}
+            className="icon-button raised"
+            disabled={!canAdd || picking}
+            aria-label={t('attachment.add_tooltip')}
             title={t('attachment.add_tooltip')}
-            onClick={() => fileInputRef.current?.click()}
+            // 選ぶのも読むのもRust側(OSの選択画面)。画面はファイルに触れない。開いている間は
+            // 押せなくする(2つ開くと、後に閉じた方の受け取りが先の分を置き換える)。
+            onClick={() => {
+              setPicking(true)
+              void pickAttachments()
+                .then(
+                  (files) => {
+                    if (files) receive(files)
+                  },
+                  (e: unknown) => onError(failureText(e)),
+                )
+                .finally(() => setPicking(false))
+            }}
           >
-            {t('attachment.add_button')}
+            <Icon name="attach_file" />
           </button>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onPaste={(e) => {
-              // 文字も載っていれば文字として貼る。表計算ソフト等は、コピーしたセルの文字と
-              // 一緒に、その見た目の画像も載せるため。
-              const text = e.clipboardData.getData('text/plain')
-              if (text.trim() !== '') return
-              const files = Array.from(e.clipboardData.files)
-              if (files.length > 0) {
-                e.preventDefault()
-                if (canAdd) staged.add(files)
-                return
-              }
-              // 文字(空白だけを除く)もファイルも無い。WebKitGTKは画像を`clipboardData`に
-              // 入れないので読み直す。空白だけの文字は、画像があるか分からないので既定どおり貼る。
-              if (!PASTED_IMAGES_NEED_READING || !canAdd) return
-              void readClipboardImages().then((images) => {
-                if (images.length > 0) pasteTarget.current?.(images)
-              })
-            }}
-            onKeyDown={(e) => {
-              if (isCommitEnter(e) && !e.shiftKey) {
-                e.preventDefault()
-                send()
-              }
-            }}
-            disabled={disabled}
-            placeholder={t('chat.input_hint')}
-          />
-          {generating ? (
-            // 送信ボタンとは別の要素にする(同じ要素だと、送信を押したフォーカスが残り、
-            // 応答待ちの間のEnterで止めてしまう)。
-            <button
-              key="stop"
-              type="button"
-              className="primary"
-              disabled={stopping}
-              onClick={(e) => {
-                // 送信をダブルクリックした2回目が、入れ替わった停止ボタンに当たっても止めない。
-                if (e.detail > 1) return
-                onStop()
-              }}
-            >
-              {t('chat.stop_button')}
-            </button>
-          ) : (
-            <button key="send" type="submit" className="primary" disabled={!canSend}>
-              {t('chat.send_button')}
-            </button>
-          )}
-        </form>
-
-        <ChatModelBar onError={onError} onChanged={onModelChanged} onDeliveries={setDeliveries} />
-      </div>
+          <ChatModelBar onError={onError} onChanged={onModelChanged} onDeliveries={setDeliveries} />
+          {action}
+        </div>
+      </form>
     </>
   )
 }
