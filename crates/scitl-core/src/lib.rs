@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod net;
 pub mod orchestration;
 pub mod paths;
+pub mod reply_notification;
 pub mod secrets;
 pub mod settings;
 pub mod text;

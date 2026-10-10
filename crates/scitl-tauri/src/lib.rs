@@ -9,9 +9,11 @@ use scitl_core::attachments::{AttachmentStore, Attachments, ReceivedFiles};
 use scitl_core::db::messages::Chat;
 use scitl_core::db::SharedConnection;
 use scitl_core::in_flight::InFlightSet;
+use scitl_core::orchestration::{FinishedTurn, TurnContext, TurnEvents};
 use scitl_core::paths::{self, DataDirError, DataLayout};
-use scitl_core::settings::Settings;
+use scitl_core::settings::{Settings, Snapshot};
 use tauri::ipc::Channel;
+use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
@@ -29,6 +31,27 @@ pub struct AppState {
     pub export_staging: PathBuf,
     /// 窓にファイルが落とされたことの知らせ先(`commands::attachments::watch_dropped_files`)。
     pub dropped: Mutex<Option<Channel<ReceivedFiles>>>,
+    /// 応答生成が終わったことの受け口(`orchestration::TurnContext::finished`)。
+    pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
+    /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
+    pub requested_chat: Mutex<Option<Channel<Chat>>>,
+}
+
+impl AppState {
+    /// ターンに渡す文脈(`settings::Snapshot::turn_context`)。アプリの起動中ずっと同じものを渡す分を
+    /// ここで足す。
+    pub fn turn_context<'a>(
+        &'a self,
+        snapshot: &'a Snapshot,
+        events: TurnEvents<'a>,
+    ) -> TurnContext<'a> {
+        snapshot.turn_context(
+            &self.generating,
+            &self.attachments,
+            events,
+            self.finished.as_ref(),
+        )
+    }
 }
 
 /// データディレクトリを開けなかった理由。このときは`AppState`を置かず、画面はこれだけを表示する
@@ -92,12 +115,23 @@ pub fn run() {
         .on_page_load(|_webview, _payload| {
             #[cfg(target_os = "android")]
             init_jni_users(_webview);
+            // 読み込み直した画面は知らせ先を渡し直す。それまでに届いた頼みを、前の画面の知らせ先へ
+            // 送って失わないようにする(渡し直されるまで引き取らない)。
+            if _payload.event() == PageLoadEvent::Started {
+                commands::requested_chat::forget_watcher(_webview.app_handle());
+            }
         })
         // 窓に落としたファイルのパスは、OSのドロップからここへ直接届く(WebViewを通らない)。
-        .on_window_event(|window, event| {
-            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
                 commands::attachments::receive_drop(window.app_handle(), paths.clone());
             }
+            // 通知を押してアプリが前に出たら、開く会話の頼みを画面へ届ける。
+            #[cfg(mobile)]
+            WindowEvent::Resumed | WindowEvent::Focused(true) => {
+                commands::requested_chat::deliver(window.app_handle());
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::startup::get_startup_failure,
@@ -156,6 +190,7 @@ pub fn run() {
             commands::memories::update_memory,
             commands::memories::delete_memory,
             commands::link::open_link,
+            commands::requested_chat::watch_requested_chats,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -233,11 +268,13 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     Ok(AppState {
         db,
         generating: generating_set(&settings),
+        finished: finished_sink(&settings),
         settings,
         attachments,
         export_dir: data.export(),
         export_staging: paths::export_staging(cache),
         dropped: Mutex::new(None),
+        requested_chat: Mutex::new(None),
     })
 }
 
@@ -254,6 +291,21 @@ fn generating_set(settings: &Arc<Settings>) -> InFlightSet<Chat> {
 #[cfg(not(target_os = "android"))]
 fn generating_set(_settings: &Arc<Settings>) -> InFlightSet<Chat> {
     InFlightSet::new()
+}
+
+/// 応答生成が終わったことの受け口。Androidでは、利用者がアプリを見ていなければ通知で知らせる
+/// (`architecture/concurrency.md`「Androidで裏へ回ったとき」)。通知の文面は表示言語で出す。
+#[cfg(target_os = "android")]
+fn finished_sink(settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+    let settings = Arc::clone(settings);
+    Box::new(move |finished| {
+        scitl_core::reply_notification::post(settings.display_language(), &finished)
+    })
+}
+
+#[cfg(not(target_os = "android"))]
+fn finished_sink(_settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+    Box::new(scitl_core::orchestration::discard_finished)
 }
 
 /// `tauri.conf.json`で作るウィンドウのラベル。
@@ -410,6 +462,32 @@ mod tests {
             ),
         ] {
             assert!(kotlin.contains(&format!("const val {name} = \"{value}\"")));
+        }
+    }
+
+    /// 応答が終わったことの通知と、通知を押して開く会話の引き取りを、coreが名前と値で指せること
+    /// (`scitl_core::reply_notification`)。
+    #[test]
+    fn core_reply_notification_names_match_kotlin() {
+        use scitl_core::reply_notification::{
+            ACTIVITY_CLASS, CHAT_GENERAL, CHAT_NONE, NOTIFIER_CLASS,
+        };
+        let notifier =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/ReplyNotifier.kt");
+        assert!(notifier.contains(&format!("object {NOTIFIER_CLASS} {{")));
+        assert!(notifier.contains(
+            "fun post(context: Context, chat: Long, title: String, body: String, channelName: String)"
+        ));
+        let activity =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
+        assert!(activity.contains(&format!("class {ACTIVITY_CLASS} :")));
+        assert!(activity.contains("fun takeRequestedChat(): Long"));
+        assert!(activity.contains(&format!("const val CHAT_GENERAL = {CHAT_GENERAL}L")));
+        assert!(activity.contains(&format!("const val CHAT_NONE = {CHAT_NONE}L")));
+        // 名前で引くクラスとメソッドを、配布用のビルドの難読化から外してあること。
+        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
+        for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
+            assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
         }
     }
 

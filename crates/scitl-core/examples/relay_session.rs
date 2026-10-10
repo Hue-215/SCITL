@@ -148,6 +148,7 @@ async fn main() {
             generating: &generating,
             attachments: &attachments,
             events: &events,
+            finished: &orchestration::discard_finished,
         };
         match step.as_str() {
             "@new" => {

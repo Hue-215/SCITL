@@ -354,6 +354,26 @@ pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
         .transpose()
 }
 
+/// 試行`(turn_id, attempt_no)`の返信の行(アシスタント発言かエラー発言)。まだ書いていなければ
+/// `None`。添付は埋めない(返信は添付を持たない)。
+pub(crate) fn reply_of_attempt(
+    conn: &Connection,
+    turn_id: &str,
+    attempt_no: i64,
+) -> Result<Option<Message>> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {MESSAGE_COLUMNS} FROM messages
+                 WHERE turn_id = ?1 AND attempt_no = ?2 AND kind = 'normal'
+                   AND role IN ('assistant', 'error') AND deleted_at IS NULL"
+            ),
+            rusqlite::params![turn_id, attempt_no],
+            message_from_row,
+        )
+        .optional()?)
+}
+
 /// [`message_from_row`]が読む列の並び。
 const MESSAGE_COLUMNS: &str = "id, task_id, role, content, kind, source, error_kind, error_detail, parts, turn_id, attempt_no, created_at";
 

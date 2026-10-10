@@ -17,9 +17,10 @@ use scitl_core::llm::{
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
-    create_task, delete_message, discard_events, edit_user_message, generate_reply, lacks_reply,
-    preview_request, retry_reply, run_turn, stop_response, McpAccess, PartView, PreviewOptions,
-    SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvent, TurnFailure, UserInput,
+    create_task, delete_message, discard_events, discard_finished, edit_user_message,
+    generate_reply, lacks_reply, preview_request, retry_reply, run_turn, stop_response,
+    FinishedTurn, McpAccess, PartView, PreviewOptions, SystemPrompts, TaskCreation, ToolLimits,
+    TurnContext, TurnEvent, TurnFailure, TurnOutcome, UserInput,
 };
 use serde_json::json;
 
@@ -480,6 +481,7 @@ fn context_without_provider() -> TurnContext<'static> {
         generating: Box::leak(Box::new(InFlightSet::new())),
         attachments: Box::leak(Box::new(unwritable_attachments())),
         events: &discard_events,
+        finished: &discard_finished,
     }
 }
 
@@ -3888,6 +3890,141 @@ async fn only_generating_a_response_counts_as_long_running() {
         .await
         .unwrap();
     assert_eq!(*reported.lock().unwrap(), [true, false]);
+}
+
+/// 終わった応答生成を受け口へ知らせる。返信なら最後のラウンドの本文を、失敗なら種別を載せる。
+/// 利用者が止めたターンは知らせない。
+#[tokio::test]
+async fn a_finished_turn_is_reported_with_its_reply_or_failure() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    conn.execute(
+        "UPDATE tasks SET title = '旅行の計画' WHERE id = ?1",
+        [task_id],
+    )
+    .unwrap();
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Mutex::new(Vec::new());
+    let record = |finished: FinishedTurn| reported.lock().unwrap().push(finished);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["応答"]))
+        },
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context_without_provider()
+        },
+        Chat::General,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let generating = InFlightSet::new();
+    let stopping = StoppingAdapter::new(
+        ScriptedAdapter::new(Vec::new()),
+        &generating,
+        Chat::General,
+        0,
+        true,
+    );
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            finished: &record,
+            ..context(&stopping)
+        },
+        Chat::General,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [
+            FinishedTurn {
+                chat,
+                task_name: Some("旅行の計画".to_string()),
+                outcome: TurnOutcome::Replied {
+                    text: "応答".to_string()
+                },
+            },
+            FinishedTurn {
+                chat: Chat::General,
+                task_name: None,
+                outcome: TurnOutcome::Failed {
+                    kind: "no_provider".to_string()
+                },
+            },
+        ]
+    );
+}
+
+/// 再試行は、作り直した試行の返信を1回だけ知らせる。名前の無いタスクは、最初の発言から作った
+/// 呼び名で知らせる。
+#[tokio::test]
+async fn a_retry_is_reported_once_with_the_reply_of_the_new_attempt() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Mutex::new(Vec::new());
+    let record = |finished: FinishedTurn| reported.lock().unwrap().push(finished);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["最初の応答"]))
+        },
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let first_reply = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
+    };
+    retry_reply(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["作り直した応答"]))
+        },
+        chat,
+        first_reply,
+    )
+    .await
+    .unwrap();
+
+    let replied = |text: &str| FinishedTurn {
+        chat,
+        task_name: Some("質問".to_string()),
+        outcome: TurnOutcome::Replied {
+            text: text.to_string(),
+        },
+    };
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [replied("最初の応答"), replied("作り直した応答")]
+    );
 }
 
 /// 止めたターンも、長く掛かる処理から抜ける(サービスを残さない)。

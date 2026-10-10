@@ -33,7 +33,7 @@ pub async fn send_chat_message(
     let events = forward(&on_event);
     Ok(run_turn(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
         UserInput { text, attachments },
     )
@@ -53,7 +53,7 @@ pub async fn edit_chat_message(
     let events = forward(&on_event);
     Ok(edit_user_message(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
         message_id,
         text,
@@ -73,7 +73,7 @@ pub async fn retry_chat_message(
     let events = forward(&on_event);
     Ok(retry_reply(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
         message_id,
     )
@@ -91,7 +91,7 @@ pub async fn generate_chat_reply(
     let events = forward(&on_event);
     Ok(orchestration::generate_reply(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         chat,
     )
     .await?)

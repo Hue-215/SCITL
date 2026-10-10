@@ -11,6 +11,7 @@ mod tool_record;
 mod transcript;
 pub mod turn;
 mod turn_context;
+mod turn_end;
 pub mod turn_error;
 mod turn_event;
 mod turn_request;
@@ -28,5 +29,6 @@ pub use turn::{
     run_turn, stop_response, TaskCreation, TaskOpeningEvent, UserInput,
 };
 pub use turn_context::TurnContext;
+pub use turn_end::{discard_finished, FinishedTurn, TurnFinished, TurnOutcome};
 pub use turn_error::TurnFailure;
 pub use turn_event::{discard_events, TurnEvent, TurnEvents};

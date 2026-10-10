@@ -36,7 +36,7 @@ use crate::llm::{DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{
     self, default_opening_message, default_task_chat_prompt, stored_prompt, McpAccess,
-    SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure,
+    SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure, TurnFinished,
 };
 use crate::secrets;
 
@@ -123,6 +123,7 @@ impl Snapshot {
         generating: &'a InFlightSet<Chat>,
         attachments: &'a Attachments,
         events: TurnEvents<'a>,
+        finished: TurnFinished<'a>,
     ) -> TurnContext<'a> {
         TurnContext {
             adapter: match &self.adapter {
@@ -142,6 +143,7 @@ impl Snapshot {
             generating,
             attachments,
             events,
+            finished,
         }
     }
 }

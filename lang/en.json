@@ -74,6 +74,8 @@
   "link.userinfo_title": "Warning: URL contains @",
   "markdown.image_fallback": "image",
   "meta.name": "English",
+  "reply_notice.channel": "Finished responses",
+  "reply_notice.no_text": "The response is ready",
   "select.effort.high": "High",
   "select.effort.low": "Low",
   "select.effort.medium": "Medium",

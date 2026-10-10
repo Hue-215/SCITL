@@ -101,6 +101,12 @@ export function watchDroppedFiles(onDrop: (files: ReceivedFiles) => void): Promi
   return invoke('watch_dropped_files', { onDrop: new Channel(onDrop) })
 }
 
+// 通知を押して開くことになった会話の知らせ先(Android)。1つで、渡し直すと置き換わる。どの会話を
+// 開くかはRust側が確かめて決め、画面はそれを表示するだけ。
+export function watchRequestedChats(onRequest: (chat: Chat) => void): Promise<void> {
+  return invoke('watch_requested_chats', { onRequest: new Channel(onRequest) })
+}
+
 // OSの選択画面で選ばせる。取りやめたらnull。
 export function pickAttachments(): Promise<ReceivedFiles | null> {
   return invoke('pick_attachments')

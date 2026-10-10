@@ -18,7 +18,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 | `architecture/llm-adapter.md` | プロバイダーのアダプタ、モデルの能力、イベント列、失敗の種類 | 通信先・通信方式を変えるなら当たる |
 | `architecture/prompt-shape.md` | システムプロンプト、ユーザー発言の囲み、日時・状態の伝え方、操作の記録、固定文言 | 囲み・予約タグの形を変えるなら当たる |
 | `architecture/transcript.md` | 履歴の組み立て、送った形の保存、思考の送り返し、間引き | 保存の形を変えるなら当たる |
-| `architecture/concurrency.md` | 多重起動の防止、同期と非同期の境界、応答生成の停止、Androidで裏へ回ったとき(フォアグラウンドサービス)、途中経過の通知 | 2つ目の起動から届く引数を使うなら当たる。Androidのマニフェストの権限を変えるなら当たる |
+| `architecture/concurrency.md` | 多重起動の防止、同期と非同期の境界、応答生成の停止、Androidで裏へ回ったとき(フォアグラウンドサービス、応答が終わったことの通知、通知から会話を開く)、途中経過の通知 | 2つ目の起動から届く引数を使うなら当たる。Androidのマニフェストの権限を変えるなら当たる。通知に載せるもの・通知から届く値の扱いを変えるなら当たる |
 | `architecture/network-secrets.md` | HTTPクライアント、平文http、秘密情報、資格情報ストア | 当たる |
 | `architecture/webview-boundary.md` | 画面が持つもの・持たないもの、IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる。IPCコマンドの引数でパス・URL等を受け取るものを足す・広げるなら当たる。「画面が持つもの・持たないもの」の持たないものを緩めるなら当たる |
 | `architecture/sanitize.md` | 外部から来た文字列・自由入力を、モデル・画面・端末・ファイルへ出す | 当たる |
@@ -93,6 +93,7 @@ SCITL/
 │   │       ├── blocking.rs         # 非同期層からブロッキング処理を呼ぶ入口(architecture/concurrency.md)
 │   │       ├── in_flight.rs        # 同じ対象への処理を同時に1本に絞る(タスクごとの応答生成)
 │   │       ├── foreground_service.rs # Androidで、応答の生成中だけフォアグラウンドサービスにする(architecture/concurrency.md)
+│   │       ├── reply_notification.rs # Androidで、応答が終わったことの通知と、通知を押して開く会話(architecture/concurrency.md)
 │   │       ├── link.rs             # 本文中のリンクを開く前の判定とOSへの委譲(architecture/webview-boundary.md)
 │   │       ├── text.rs             # 出力先を知らない文字単位の部品(architecture/sanitize.md)
 │   │       └── i18n.rs             # 言語ファイルを引く入口と表示言語の一覧(architecture/i18n.md)

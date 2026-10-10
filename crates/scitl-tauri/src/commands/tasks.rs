@@ -43,7 +43,7 @@ pub async fn create_task(
     };
     Ok(orchestration::create_task(
         state.db.clone(),
-        &snapshot.turn_context(&state.generating, &state.attachments, &events),
+        &state.turn_context(&snapshot, &events),
         |task| {
             let _ = on_event.send(TaskOpeningEvent::Created { task: task.clone() });
         },
