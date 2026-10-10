@@ -24,7 +24,7 @@
 | `jni-sys` | jni-sys-macros(Androidのみ) | https://github.com/jni-rs/jni-sys のタグ`v0.4.1-macros` |
 | `ndk` | ndk・ndk-sys(Androidのみ) | https://github.com/rust-mobile/ndk のタグ`ndk-0.9.0`(`ndk-sys-0.6.0`も同じコミット) |
 | `ndk-context` | ndk-context(Androidのみ) | https://github.com/rust-mobile/ndk のタグ`ndk-context-0.1.1` |
-| `rustls-platform-verifier` | rustls-platform-verifier-android(Androidのみ。APKに入るKotlinの部品を含む) | https://github.com/rustls/rustls-platform-verifier のタグ`v/0.7.0` |
+| `rustls-platform-verifier` | rustls-platform-verifier-android(Androidのみ。APKに入るKotlinの部品を含む) | https://github.com/rustls/rustls-platform-verifier のタグ`v/0.7.1` |
 | `apache-2.0` | Apache-2.0の標準の文面(POM_LICENSE_TEXT) | https://www.apache.org/licenses/LICENSE-2.0.txt |
 | `webview2-sdk` | webview2-com-sysが静的にリンクするWebView2のローダー(BUNDLED) | NuGetの`Microsoft.Web.WebView2` 1.0.3800.47の`LICENSE.txt`・`NOTICE.txt` |
 | `rust` | Rustの標準ライブラリ(STD) | https://github.com/rust-lang/rust のタグ`1.93.1`の`COPYRIGHT`・`LICENSE-MIT`・`LICENSE-APACHE` |

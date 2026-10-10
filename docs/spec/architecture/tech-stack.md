@@ -162,8 +162,9 @@ targetSdkを37以上へ上げるときに見直すこと:
   一覧に現れないので、Gradleに書き出させて別の一覧(`android.txt`)にし、同じ`about.toml`の`accepted`で
   確かめる。POMの書くライセンスはすべてApache-2.0(2026-10)。Jacksonは、取り込んだ別の部品
   (FastDoubleParser: MIT、bigint: BSD-2-Clause)の文面をjarの中に持つ。POMに現れないので機械では
-  照らせず、一覧には載る。Kotlinの部品はクレート
-  `rustls-platform-verifier-android`(MIT OR Apache-2.0)の中身なので、そのクレートの項で足りる。
+  照らせず、一覧には載る。Kotlinの部品は、クレート
+  `rustls-platform-verifier-android`(MIT OR Apache-2.0)と同じリポジトリから出ていてライセンスも同じ
+  なので、そのクレートの項で足りる(POMはライセンスを書いていない)。
   Rustのクレートの一覧は、Android向けを`about.toml`の`targets`とは別に洗い出す(デスクトップの
   配布物にAndroidだけのクレートを載せないため)。一覧はAPKの中に入れる
   (`.claude/skills/release-build` 7節)

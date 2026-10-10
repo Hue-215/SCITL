@@ -237,9 +237,13 @@ keytool -list -v -keystore <置き場所>/scitl-release.p12 -alias scitl | grep 
 ```sh
 export SCITL_ANDROID_KEYSTORE=<キーストアのファイルの絶対パス>
 export SCITL_ANDROID_KEY_ALIAS=scitl
-read -rs SCITL_ANDROID_KEYSTORE_PASSWORD && export SCITL_ANDROID_KEYSTORE_PASSWORD   # 履歴に残さない
+read -rsp 'キーストアのパスワード: ' SCITL_ANDROID_KEYSTORE_PASSWORD; echo   # 履歴に残さない
+export SCITL_ANDROID_KEYSTORE_PASSWORD
 scripts/release-build-android.sh
 ```
+
+bashで実行する(zshの`read -p`は別の意味になる)。`read`は1行ずつ打つ(貼り付ける)。まとめて貼ると、パスワードを待っている間に次の行が入力として
+読まれ、空のまま(または次の行をパスワードとして)進む。
 
 - 前提: 1節のものに加えて、`docs/spec/architecture/tech-stack.md`「Androidのビルド」の道具
   (SDK・NDK・JDK・Rustのターゲット`aarch64-linux-android`)と環境変数。APKはビルドする側のOSに
@@ -279,7 +283,9 @@ scripts/release-build-android.sh
     持たないので、標準の文面を載せる(`licenses/apache-2.0`)。jarの中に表示のファイル(`META-INF`の
     NOTICE・LICENSE)を持つもの(Jackson等)は、それも載せる。AndroidのビルドはこれらをAPKから
     除くことがある(`META-INF/NOTICE`・`META-INF/LICENSE`は既定で除かれる)。Tauri本体とプラグインの
-    Kotlin側、`rustls-platform-verifier`のKotlinの部品は、Rustのクレートの中身なので`rust.txt`の側で足りる
+    Kotlin側は、Rustのクレートの中身なので`rust.txt`の側で足りる。`rustls-platform-verifier`のKotlinの
+    部品(`org.rustls:rustls-platform-verifier`)はMavenの依存として`android.txt`に出るが、POMがライセンスを
+    書いていないので、同じリポジトリのクレート`rustls-platform-verifier-android`の項(`rust.txt`)を指す
   - `assemble-dist.mjs --check-licenses`(CIと、ビルドの前)は、Android向けのクレートの一覧も確かめる。
     Mavenの依存はGradleを動かさないと分からないので、APKを作るときにだけ確かめる
 - **縮小(R8)**: リリースビルドはR8が使われていないクラスを消し、名前を変える。RustからJNIで呼ぶ
@@ -306,6 +312,6 @@ adb logcat -s SCITL RustStdoutStderr AndroidRuntime
 ```
 
 R8で消えると困るもの(JNIで呼ぶもの)を通る操作を、リリースのAPKで一通り行う: HTTPSのプロバイダーへの
-接続(証明書の検証)、鍵付きのプロバイダーの登録(秘密情報の保存先)、応答の生成を裏へ回して通知を
+接続(証明書の検証。OCSPの宛先を持たない証明書の通信先で、CRLの取得を通す。Issue #535)、鍵付きのプロバイダーの登録(秘密情報の保存先)、応答の生成を裏へ回して通知を
 受け取り、通知から会話を開く、エクスポート、添付の選択。最後に実機へ入れて起動する。
 

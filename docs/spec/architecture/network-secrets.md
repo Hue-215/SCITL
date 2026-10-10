@@ -44,17 +44,25 @@ User-Agentを求める通信先がある(OpenCode Go等)。送るのは名前と
 Androidでも信頼ルートはOSの証明書ストアで、検証はAndroidの証明書の検証(`TrustManager`)が行う。
 `rustls-platform-verifier`は検証のたびにJNIでKotlinの部品を呼ぶので、次の2つが要る。
 
-- **Kotlinの部品の同梱**: 部品はクレート`rustls-platform-verifier-android`がMavenの形で持っている。
-  `gen/android/app/build.gradle.kts`が`cargo metadata`からその場所を引き、参照先に足す。グループ
-  `rustls`はこの参照先からだけ取り(`exclusiveContent`)、GoogleやMaven Centralに同じ名前のものが
-  出ても使わない。リリースビルドで縮めるときに消されないよう、`proguard-rules.pro`で残す
+- **Kotlinの部品の同梱**: 部品は、上流がGitHubのブランチ`maven-archive`に置くMavenのリポジトリから
+  Gradleが取る(クレート`rustls-platform-verifier-android`は、0.2.0から部品を同梱しなくなった)。版は
+  `gen/android/app/build.gradle.kts`が`cargo metadata`から引くそのクレートの版に合わせる。グループ
+  `org.rustls`はこの参照先からだけ取り(`exclusiveContent`)、GoogleやMaven Centralに同じ名前のものが
+  出ても使わない。ブランチは書き換えられうるので、取った中身(AARとPOM)は
+  `gen/android/gradle/verification-metadata.xml`のSHA-256と照らし、合わなければビルドを止める。版を
+  上げたら、`maven-archive`のその版を足したコミットが上流のリリースの手順で作られたものかを見てから、
+  新しい版のSHA-256に置き換え、`origin`にそのコミットを書く(並べて置かれた`.sha1`は同じブランチに
+  あるので、転送で壊れていないことしか確かめられない)。同じ版でSHA-256が合わなくなったときは、
+  値を書き換えずに上流を調べる。
+  部品はNetwork Security Configも持つ(「Androidでの平文http」)。リリースビルドで縮めるときに
+  消されないよう、`proguard-rules.pro`で残す
 - **JNIの参照の受け渡し**: JVMとApplicationのContextを`net::android::init`で渡す。JavaVMとActivityは
   wryがWebViewのスレッドで呼ぶコールバックからしか得られない(Tauri 2.11が使うtao 0.35は
   `ndk-context`を初期化しない)ので、GUIの`setup`がメインの窓のWebViewに頼み、渡すのは
   WebViewを作った後になる。渡せなかったときは、ページを読み込むたびに頼み直す
 
 渡す前にHTTPSで接続すると、クライアントの組み立ては通り、証明書の検証の時点でpanicする
-(`rustls-platform-verifier` 0.7.0)。HTTPSを使う経路はどれも画面からのIPCで始まり、起動時に裏で
+(`rustls-platform-verifier` 0.7)。HTTPSを使う経路はどれも画面からのIPCで始まり、起動時に裏で
 通信しないので、画面が読み込まれるまでに渡し終わる。それでも間に合わなかったときや渡せなかったときに
 panicさせないよう、渡すまでは`hardened_client`がHTTPSの通信先を断る(平文httpは断らない)。
 
@@ -65,6 +73,55 @@ panicさせないよう、渡すまでは`hardened_client`がHTTPSの通信先�
 taoが`ndk-context`を初期化する版(0.37以上)になれば、`setup`の中でその場で渡せるようになり、
 順序の議論と頼み直しが要らなくなる。そのときは秘密情報の保存先のための初期化(「Androidの保存先」)を
 外す(二重に初期化するとpanicする)。
+
+### 証明書の失効の確認
+
+証明書の検証はOSが行う(上の「TLSバックエンド」)ので、失効を確かめるかと、そのための通信も
+OSの検証に従う。`rustls-platform-verifier`はどのOSでも葉の証明書だけを確かめる。
+
+| OS | 失効の確認 | 通信 |
+|---|---|---|
+| Windows | 確かめる(`CERT_CHAIN_REVOCATION_CHECK_END_CERT`) | 証明書が指すCRL・OCSPの配布元へ取りに行く(上限10秒)。取れなければ通す |
+| Android | 確かめる(`PKIXRevocationChecker`、`SOFT_FAIL`) | 証明書が指すCRLの配布元へ取りに行く。OCSPの応答元へは届かない(下記) |
+| Linux | 確かめない(webpkiにCRLを渡していない) | しない |
+
+この通信の宛先(CA)は利用者が登録したものではないが、`../principles.md` 1節の例外として認める。
+宛先は登録した通信先の証明書が決め、アプリが選んで増やすものではない。止めると、失効した証明書を
+見分けられなくなる。Windowsの検証は、失効の確認のほかに、足りない中間証明書の取得(証明書が指す
+AIA)やルート証明書の更新でも外へ通信しうる(`rustls-platform-verifier`は止めていない)。
+
+- **`hardened_client`を通らない**: これらの通信はOS(Windows)やJava(Android)が行うので、
+  プロキシの設定・リダイレクトの扱い・将来のオフラインスイッチ(Issue #3)の遮断点の外にある。
+  オフラインスイッチを作るときは、公的CAの証明書を持つLANのHTTPSサーバーにつなぐと、外へ
+  失効を確かめに行くことを考える
+- **伝わるもの**: CAには、利用者のIPアドレスと取ったもの、JavaやOSのHTTPが付ける名前(Androidは
+  `User-Agent: Dalvik/…`に機種名とOSの版を載せる)が伝わる。平文なので、経路上からも取ったURLが
+  見える。CRLは発行元ごと(またはそれを分けた一部)なので、どの通信先につないだかまでは絞りにくい
+  (OCSPは葉の証明書を名指しする)
+
+Androidでは次のとおり(`rustls-platform-verifier-android` 0.2.0。Issue #535)。
+
+- 失効を確かめるのは、連鎖のルートがシステムの信頼ルートのときだけ。利用者が端末に足したCAの
+  連鎖では確かめない
+- 葉の証明書にOCSPの宛先があればOCSPを、無ければCRLを取りに行く。ただし平文を許すのはCRLの
+  配布元だけ(「Androidでの平文http」)なので、リリースビルドではOCSPの応答元に届かない。その失敗は
+  `SOFT_FAIL`で許されてCRLへ回り、CRLも取れなければ、失効を確かめないまま通る(github.com等、
+  OCSPの宛先だけを持つ証明書がこうなる。2026-10に試験のプログラムで確かめた)。デバッグビルドは
+  平文をすべて許すので、OCSPも届き、振る舞いがリリースと分かれる
+- OCSPの宛先が無いと、CRLが取れて失効していないときだけ通る(`SOFT_FAIL`は、OCSPの宛先が無い
+  ことまでは許さない)。Google Trust Services・Let's Encrypt等はOCSPをやめてCRLだけを配っている
+  (2026-10)ので、多くの通信先がCRLの取得に頼る
+- 次のときは、失効していなくてもつながらない
+  - CRLの配布元に届かないとき。インターネットに出られない環境で、公的CAの証明書(CRLだけ)を
+    持つLANのHTTPSサーバーにつなぐ場合を含む(平文httpのLANのサーバーには当たらない)
+  - CRLの配布元が、平文を許す一覧に無いとき。一覧は中間CAごとのホスト名(`r10.c.lencr.org`等)で、
+    CAが新しい中間CAを使い始めると、部品の版を上げてAPKを配り直すまでつながらない
+  - OCSPの宛先もCRLの配布元も持たない証明書
+- 検証の部品は、確かめられなかった理由をすべて`Revoked`として返す。失効していない証明書でも
+  `invalid peer certificate: Revoked`と出る
+- CRLは平文httpで配られ、取得はJavaのHTTPで行うので、Network Security Configの平文の可否に従う
+  (「Androidでの平文http」)。CRLの配布元への平文を止めると、OCSPの宛先を持たない証明書の
+  通信先にはすべてつながらない
 
 ### 平文httpの許容範囲
 
@@ -104,13 +161,22 @@ Androidでも、平文httpを許すかは`classify_host`だけが決める。
   - LAN上の別マシンのMCPサーバー(`http://192.168.x.x`)からのツールの一覧の取得
 
   エミュレーターの通信はホストを経由するので、実機のWi-FiからLANへ届くかは確かめていない
-- **`usesCleartextTraffic`の値**: `gen/android/app/build.gradle.kts`がビルドの種類ごとに決める。
-  リリースビルドの`false`は、画面(WebView)とJava側の平文httpを止める守りとして残す(CSPと二重)。
-  LANへの平文httpのために`true`にしない(Rust側の通信には効かず、守りだけが外れる)。デバッグビルドの
-  `true`は、`tauri android dev`で画面がViteの開発サーバーを平文httpで読むため
-- **Network Security Configの証明書の設定は別**: trust-anchors・debug-overridesなどの証明書の検証の
-  設定は、Androidの証明書の検証(`TrustManager`)を通してRust側のHTTPSにも効きうる(「Androidの信頼ルート」)。
-  今は置いていない
+- **平文の可否はNetwork Security Configで決める**: マニフェストの`networkSecurityConfig`が指す設定は、
+  `rustls-platform-verifier`のKotlinの部品が持つもの(`res/xml/network_security_config.xml`)をそのまま
+  使う。平文httpを止め(`base-config`)、CAがCRLを配るホストにだけ許す(上流がCCADBから作る一覧で、
+  0.2.0では376件。「証明書の失効の確認」)。画面(WebView)とJava側の平文httpを止める守り(CSPと二重)は
+  残り、空くのは一覧のホストへの平文だけになる(画面からはCSPと遷移の制限で止まる)。一覧は
+  サブドメインを含み、一般のサイトを兼ねるホスト(`www.microsoft.com`等)もある。一覧は、部品の版を上げるときに
+  上流に任せて更新する。LANへの平文httpのために平文を許さない(Rust側の通信には効かず、守りだけが外れる)
+- **デバッグビルドはすべての平文を許す**: `gen/android/app/src/debug/res/xml/network_security_config.xml`が
+  部品の設定を同じ名前で置き換える。`tauri android dev`で、画面のHMRがViteの開発サーバーへ平文で
+  つなぐため
+- **`usesCleartextTraffic`は置かない**: Network Security Configがあると無視される(Android 7以上)ので、
+  置くと効かない値が残る
+- **証明書の設定は置かない**: Network Security Configのtrust-anchors・debug-overridesなどの証明書の
+  検証の設定は、Androidの証明書の検証(`TrustManager`)を通してRust側のHTTPSにも効きうる
+  (「Androidの信頼ルート」)。部品の設定もデバッグの置き換えも、平文の可否だけを持つ。部品の版を
+  上げたら、証明書の設定が入っていないことを確かめる
 - **ローカルネットワークの権限**: targetSdk 36では、LANへの通信は`INTERNET`だけで許される(一時的な
   措置とされている)。Android 17のエミュレーターでも、上の確認のとき権限無しで通った。37以上へ
   上げるときの見直しは`tech-stack.md`「AndroidのSDKの版」
