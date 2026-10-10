@@ -5,8 +5,8 @@
          docs/spec/architecture/concurrency.md「Androidで裏へ回ったとき」 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- 宣言だけして、実行時には求めない。利用者がOSの設定で許可すれば、生成中の通知が
-         通知ドロワーにも出る(許可が無くてもサービスは動く)。 -->
+    <!-- 応答が終わったことの通知(ReplyNotifier)に要る。初めて応答を生成するときに1回だけ求める。
+         許可が無くてもサービスは動き、通知が出ないだけになる。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application

@@ -95,7 +95,7 @@ impl TurnFailure {
             TurnFailure::ThinkingEffortUnsupported { .. } => "thinking_effort_unsupported",
             TurnFailure::ToolRoundLimit => "tool_round_limit",
             TurnFailure::ToolTimeout => "tool_timeout",
-            TurnFailure::Stopped => "stopped",
+            TurnFailure::Stopped => STOPPED_KIND,
             TurnFailure::Auth { .. } => "auth",
             TurnFailure::RateLimit { .. } => "rate_limit",
             TurnFailure::Refused { .. } => "refused",
@@ -142,6 +142,14 @@ impl TurnFailure {
 /// エラー発言の文言のキーの前置き(後ろに種別コードを付ける)。画面も同じ前置きで引き直すので、
 /// 画面へ値を書き出す(`i18n`のテストが`frontend/src/bindings/SharedConstants.ts`に書く)。
 pub const MESSAGE_KEY_PREFIX: &str = "turn_error.";
+
+/// 利用者が止めたターンの種別コード。
+pub(crate) const STOPPED_KIND: &str = "stopped";
+
+/// エラー発言の種別コードに対応する、表示言語の文言(画面がエラー発言の行に出すものと同じ)。
+pub fn localized_message(lang: crate::i18n::Language, kind: &str) -> String {
+    crate::i18n::text(lang, &message_key(kind)).to_string()
+}
 
 /// 種別コードに対応する言語ファイルのキー。
 fn message_key(kind: &str) -> String {

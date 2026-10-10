@@ -97,8 +97,12 @@ impl Turns {
     }
 
     fn context<'a>(&'a self, session: &'a Session, events: TurnEvents<'a>) -> TurnContext<'a> {
-        self.snapshot
-            .turn_context(&session.generating, &self.attachments, events)
+        self.snapshot.turn_context(
+            &session.generating,
+            &self.attachments,
+            events,
+            &orchestration::discard_finished,
+        )
     }
 }
 

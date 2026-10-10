@@ -3,7 +3,7 @@
 //!
 //! サービスの本体は`gen/android`のKotlin(`GeneratingService`)にあり、ここからはIntentで始める・
 //! 止めるだけを頼む。裏でActivityが無くなっていても止められるよう、WebViewを通さず、
-//! [`crate::secrets::android`]が`ndk-context`へ渡したApplicationのContextから頼む。
+//! ApplicationのContextから頼む(`crate::android::with_application`)。
 
 /// サービスのクラスの名前(パッケージは[`crate::APP_IDENTIFIER`])。マニフェストの宣言と揃える。
 /// マニフェストはRustの定数を参照できないので、scitl-tauriのテストが照合する。
@@ -35,7 +35,7 @@ pub use android::set_running;
 #[cfg(target_os = "android")]
 mod android {
     use jni::objects::{JObject, JValue};
-    use jni::{jni_sig, jni_str, Env, JavaVM};
+    use jni::{jni_sig, jni_str, Env};
 
     use super::{notice, EXTRA_CHANNEL, EXTRA_TITLE, SERVICE_CLASS};
     use crate::i18n::Language;
@@ -55,19 +55,8 @@ mod android {
     }
 
     fn request(running: bool, lang: Language) -> Result<(), String> {
-        // 渡す前に`ndk_context::android_context`を呼ぶとpanicする。済んだ印は秘密情報の保存先が
-        // 持っている(`network-secrets.md`「Androidの保存先」)。
-        if !crate::secrets::android::initialized() {
-            return Err("no application context yet".to_string());
-        }
-        let android = ndk_context::android_context();
-        // SAFETY: `secrets::android::init`が渡した、このプロセスのJavaVM。
-        let vm = unsafe { JavaVM::from_raw(android.vm().cast()) };
-        vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-            // SAFETY: `secrets::android::init`が渡した、消さないグローバル参照。`JObject`はDropで
-            // 参照を消さない。
-            let context = unsafe { JObject::from_raw(env, android.context().cast()) };
-            let intent = service_intent(env, &context)?;
+        crate::android::with_application(|env, context| {
+            let intent = service_intent(env, context)?;
             if running {
                 let notice = notice(lang);
                 put_extra(env, &intent, EXTRA_TITLE, notice.title)?;
@@ -75,14 +64,14 @@ mod android {
                 // 前に出ている間に始めるので`startForegroundService`は使わない。あちらは、サービスが
                 // 通知を出す前に止めるとアプリごと落とされる。
                 env.call_method(
-                    &context,
+                    context,
                     jni_str!("startService"),
                     jni_sig!("(Landroid/content/Intent;)Landroid/content/ComponentName;"),
                     &[JValue::from(&intent)],
                 )?;
             } else {
                 env.call_method(
-                    &context,
+                    context,
                     jni_str!("stopService"),
                     jni_sig!("(Landroid/content/Intent;)Z"),
                     &[JValue::from(&intent)],
@@ -90,7 +79,6 @@ mod android {
             }
             Ok(())
         })
-        .map_err(|e| e.to_string())
     }
 
     /// サービスを名前で指すIntent。

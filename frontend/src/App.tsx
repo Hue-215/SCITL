@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 import {
   chatLacksReply,
   createTask,
@@ -15,6 +15,7 @@ import {
   sendChatMessage,
   setTaskArchived,
   stopChatResponse,
+  watchRequestedChats,
 } from './api'
 import ChatCompose, { type ComposedMessage } from './ChatCompose'
 import ChatLog from './ChatLog'
@@ -327,6 +328,19 @@ export default function App() {
   }
   // Androidの「戻る」で、設定画面からチャットへ戻る。設定画面の中で開いたものが先に閉じる。
   useCloseOnBack(settingsOpen, closeSettings)
+
+  // 通知を押して届いた会話を開く(Android)。どの会話を開くかはRust側が決めて知らせてくる。
+  // 設定画面とサイドバーは、開いていれば閉じる。通知が出るのは裏にいた間なので、一覧も引き直す。
+  const openRequestedChat = useEffectEvent((next: Chat) => {
+    if (settingsOpen) closeSettings()
+    drawer.close()
+    selectChat(next)
+    void loadTasks()
+  })
+  useEffect(() => {
+    // 知らせ先は1つで、渡し直すと置き換わる(StrictModeで2回渡しても、後のものだけが残る)。
+    watchRequestedChats(openRequestedChat).catch(() => undefined)
+  }, [])
 
   if (settingsOpen) {
     return <Settings onClose={closeSettings} />

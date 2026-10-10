@@ -23,3 +23,12 @@
 # HTTPSの証明書の検証でRustからJNIで呼ぶ(`rustls-platform-verifier`)。JNIからの呼び出しは
 # 見えないので、使われていないとみなして消されないようにする。
 -keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
+
+# 応答が終わったことの通知と、通知を押して開く会話の引き取りで、RustからJNIで呼ぶ
+# (`scitl_core::reply_notification`)。クラスも名前で引くので、名前を変えさせない。
+-keep class net.niigo.scitl.ReplyNotifier {
+    public static void post(android.content.Context, long, java.lang.String, java.lang.String, java.lang.String);
+}
+-keep class net.niigo.scitl.MainActivity {
+    public static long takeRequestedChat();
+}

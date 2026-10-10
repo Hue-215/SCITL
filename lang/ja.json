@@ -74,6 +74,8 @@
   "link.userinfo_title": "警告: @を含むURL",
   "markdown.image_fallback": "画像",
   "meta.name": "日本語",
+  "reply_notice.channel": "応答の完了",
+  "reply_notice.no_text": "応答が届きました",
   "select.effort.high": "高",
   "select.effort.low": "低",
   "select.effort.medium": "中",

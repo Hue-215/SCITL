@@ -33,6 +33,8 @@ class GeneratingService : Service() {
       Log.w(TAG, "could not enter the foreground", e)
       stopSelf()
     }
+    // 初めて応答を生成するときに、応答が終わったことの通知(ReplyNotifier)のための許可を求める。
+    MainActivity.requestNotificationPermissionOnce()
     // プロセスごと終わらされたら、生成も終わっている。サービスだけを作り直させない。
     return START_NOT_STICKY
   }

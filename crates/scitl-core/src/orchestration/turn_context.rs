@@ -6,7 +6,9 @@ use crate::config::ReasoningEffort;
 use crate::db::messages::Chat;
 use crate::in_flight::InFlightSet;
 use crate::llm::{LlmAdapter, ModelCapabilities};
-use crate::orchestration::{McpAccess, SystemPrompts, ToolLimits, TurnEvents, TurnFailure};
+use crate::orchestration::{
+    McpAccess, SystemPrompts, ToolLimits, TurnEvents, TurnFailure, TurnFinished,
+};
 
 /// 組み立ては[`crate::settings::Snapshot::turn_context`]が行う。
 #[derive(Clone)]
@@ -31,4 +33,6 @@ pub struct TurnContext<'a> {
     pub attachments: &'a Attachments,
     /// ターンの途中経過の受け口([`crate::orchestration::TurnEvent`])。
     pub events: TurnEvents<'a>,
+    /// 応答生成が終わったことの受け口([`crate::orchestration::FinishedTurn`])。
+    pub finished: TurnFinished<'a>,
 }

@@ -23,6 +23,7 @@ use crate::orchestration::history;
 use crate::orchestration::mcp_access::McpAccess;
 use crate::orchestration::tool_record::{ToolExecutionRecord, ToolExecutionView};
 use crate::orchestration::transcript::SavedTurn;
+use crate::orchestration::turn_end;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::turn_request::TurnRequest;
 use crate::orchestration::{TurnContext, TurnEvent, TurnEvents};
@@ -414,6 +415,7 @@ fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
 ///
 /// 走っている間、`generating`の長く掛かる部分に入っていることにする
 /// ([`InFlight::long_running`]。`architecture/concurrency.md`「Androidで裏へ回ったとき」)。
+/// 返信かエラー発言を書き終えたら、終わったことを知らせる([`TurnContext::finished`])。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
@@ -423,9 +425,23 @@ async fn generate_turn_response(
     // 応答を待つのはここから先だけ。発言の削除・タスクの操作も同じ集合で処理中になるが、すぐに済む。
     let _long_running = generating.long_running();
     let stop = generating.stop_signal();
+    let result = respond(db.clone(), ctx, &attempt, stop).await;
+    if result.is_ok() {
+        report_finished(db, ctx, &attempt).await;
+    }
+    result
+}
+
+/// [`generate_turn_response`]の中身。返信かエラー発言を書いて返る。
+async fn respond(
+    db: SharedConnection,
+    ctx: &TurnContext<'_>,
+    attempt: &Attempt,
+    stop: &StopSignal,
+) -> Result<()> {
     let adapter = match ready_adapter(ctx) {
         Ok(adapter) => adapter,
-        Err(failure) => return fail_turn(db, &attempt, failure, &ReplyParts::default()).await,
+        Err(failure) => return fail_turn(db, attempt, failure, &ReplyParts::default()).await,
     };
 
     let mut sessions = McpSessions::new();
@@ -436,17 +452,34 @@ async fn generate_turn_response(
                     db.clone(),
                     adapter,
                     ctx,
-                    &attempt,
+                    attempt,
                     &external,
                     &mut sessions,
                     stop,
                 )
                 .await
             }
-            None => fail_turn(db, &attempt, TurnFailure::Stopped, &ReplyParts::default()).await,
+            None => fail_turn(db, attempt, TurnFailure::Stopped, &ReplyParts::default()).await,
         };
     sessions.close().await;
     result
+}
+
+/// 終わったことを受け口へ知らせる([`TurnContext::finished`])。返信の行は書き終えているので、
+/// 知らせる中身を作れなくてもターンは失敗にしない。
+async fn report_finished(db: SharedConnection, ctx: &TurnContext<'_>, attempt: &Attempt) {
+    let attempt = attempt.clone();
+    let finished = with_conn(db, move |conn| {
+        turn_end::finished_turn(conn, attempt.chat, &attempt.turn_id, attempt.attempt_no)
+    })
+    .await;
+    match finished {
+        Ok(Some(finished)) => (ctx.finished)(finished),
+        Ok(None) => {}
+        Err(e) => {
+            crate::diagnostics::report(format_args!("could not report that the turn finished: {e}"))
+        }
+    }
 }
 
 /// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
