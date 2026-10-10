@@ -9,6 +9,26 @@
 /// マニフェストはRustの定数を参照できないので、scitl-tauriのテストが照合する。
 pub const SERVICE_CLASS: &str = "GeneratingService";
 
+/// 通知の文面をサービスへ渡すIntentのextraの名前。Kotlin側の定数と揃える(照合は[`SERVICE_CLASS`]と同じ)。
+pub const EXTRA_TITLE: &str = "title";
+pub const EXTRA_CHANNEL: &str = "channel";
+
+/// 通知の文面。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+struct Notice {
+    title: &'static str,
+    /// OSの設定に出る、通知のチャンネルの名前。
+    channel: &'static str,
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn notice(lang: crate::i18n::Language) -> Notice {
+    Notice {
+        title: crate::i18n::text(lang, "generating_notice.title"),
+        channel: crate::i18n::text(lang, "generating_notice.channel"),
+    }
+}
+
 #[cfg(target_os = "android")]
 pub use android::set_running;
 
@@ -17,8 +37,8 @@ mod android {
     use jni::objects::{JObject, JValue};
     use jni::{jni_sig, jni_str, Env, JavaVM};
 
-    use super::SERVICE_CLASS;
-    use crate::i18n::{self, Language};
+    use super::{notice, EXTRA_CHANNEL, EXTRA_TITLE, SERVICE_CLASS};
+    use crate::i18n::Language;
 
     /// サービスを始める(`running`が`true`)・止める。通知の文面は`lang`で引いて渡す。
     ///
@@ -35,7 +55,8 @@ mod android {
     }
 
     fn request(running: bool, lang: Language) -> Result<(), String> {
-        // 渡す前に`ndk_context::android_context`を呼ぶとpanicする。
+        // 渡す前に`ndk_context::android_context`を呼ぶとpanicする。済んだ印は秘密情報の保存先が
+        // 持っている(`network-secrets.md`「Androidの保存先」)。
         if !crate::secrets::android::initialized() {
             return Err("no application context yet".to_string());
         }
@@ -48,18 +69,9 @@ mod android {
             let context = unsafe { JObject::from_raw(env, android.context().cast()) };
             let intent = service_intent(env, &context)?;
             if running {
-                put_extra(
-                    env,
-                    &intent,
-                    "title",
-                    i18n::text(lang, "generating_notice.title"),
-                )?;
-                put_extra(
-                    env,
-                    &intent,
-                    "channel",
-                    i18n::text(lang, "generating_notice.channel"),
-                )?;
+                let notice = notice(lang);
+                put_extra(env, &intent, EXTRA_TITLE, notice.title)?;
+                put_extra(env, &intent, EXTRA_CHANNEL, notice.channel)?;
                 // 前に出ている間に始めるので`startForegroundService`は使わない。あちらは、サービスが
                 // 通知を出す前に止めるとアプリごと落とされる。
                 env.call_method(
@@ -112,5 +124,25 @@ mod android {
             &[JValue::from(&name), JValue::from(&value)],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::Language;
+
+    /// 文面を引くキーはAndroidでしか使わないので、どの言語でも引けることをここで確かめる
+    /// (引けないとキーそのものが通知に出る)。
+    #[test]
+    fn the_notice_has_text_in_every_language() {
+        for lang in Language::ALL {
+            let notice = notice(lang);
+            assert!(!notice.title.starts_with("generating_notice."), "{lang:?}");
+            assert!(
+                !notice.channel.starts_with("generating_notice."),
+                "{lang:?}"
+            );
+        }
     }
 }

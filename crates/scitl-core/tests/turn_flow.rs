@@ -3890,6 +3890,37 @@ async fn only_generating_a_response_counts_as_long_running() {
     assert_eq!(*reported.lock().unwrap(), [true, false]);
 }
 
+/// 止めたターンも、長く掛かる処理から抜ける(サービスを残さない)。
+#[tokio::test]
+async fn a_stopped_turn_is_no_longer_long_running() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let generating = InFlightSet::watching_long_running({
+        let reported = reported.clone();
+        move |any| reported.lock().unwrap().push(any)
+    });
+    let adapter =
+        StoppingAdapter::new(ScriptedAdapter::new(Vec::new()), &generating, chat, 0, true);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&adapter)
+        },
+        chat,
+        "こんにちは".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock().unwrap();
+    stopped_reply(&db::messages::list_for_chat(&conn, chat).unwrap());
+    assert_eq!(*reported.lock().unwrap(), [true, false]);
+}
+
 /// 生成中のタスクでは発言を削除できない。生成中のターンが読んだ履歴とDBの発言が食い違うため。
 #[tokio::test]
 async fn a_message_cannot_be_deleted_while_its_task_is_generating() {

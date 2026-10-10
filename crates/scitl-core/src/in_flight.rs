@@ -31,6 +31,7 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
     /// 長く掛かる部分([`InFlight::long_running`])に入っている処理が、無い状態から在る状態に
     /// なったら`on_change(true)`を、在る状態から無い状態になったら`on_change(false)`を呼ぶ集合。
     /// 呼び出しは起きた順に1つずつ行う。次の出入りを待たせるので、`on_change`に待つ処理を置かない。
+    /// `on_change`がpanicしても数は狂わないが、知らせた状態と食い違ったままになる。
     pub fn watching_long_running(on_change: impl Fn(bool) + Send + Sync + 'static) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
@@ -133,9 +134,10 @@ impl LongRunningCount {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, usize> {
+        // 数は整数1つなので、`on_change`のpanicで毒されても壊れていない。以後の処理を止めない。
         self.count
             .lock()
-            .expect("long-running count mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

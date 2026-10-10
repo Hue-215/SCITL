@@ -250,7 +250,10 @@ D-Busの呼び出しの上限(約25秒)を2回待つことになる。
   読み出しも`expect`でpanicさせる(済んだかを問い合わせる手段は無い)。`secrets.rs`が済んだ印を持ち、
   済むまでは保存先を組み立てずに`NoStorageAccess`を返す(「鍵を読めなかったとき」の扱いに乗り、
   やり直さない)。taoが`ndk-context`を初期化する版(0.37以上)へ上げるときは、二重の初期化になるので
-  `secrets::android::init`を呼ぶのをやめる。`ndk-context`の版が分かれる(初期化が保存先に届かない)か、
+  `secrets::android::init`を呼ぶのをやめる。そのとき、済んだ印を見ている側(保存先の組み立てと、
+  同じContextでフォアグラウンドサービスを始める`foreground_service`。`concurrency.md`「Androidで裏へ
+  回ったとき」)が、taoの初期化を済んだものとして扱えるようにする(印が立たないままだと、保存先は
+  使えず、サービスは黙って始まらなくなる)。`ndk-context`の版が分かれる(初期化が保存先に届かない)か、
   ほかのクレートが使い始める(二重の初期化になりうる)と、動かすまで気付けないので、
   `gen/android/app/build.gradle.kts`が`cargo metadata`の結果を見てAndroidのビルドを止める。
   クレートは同じ初期化をKotlinから呼ぶ入口(`io.crates.keyring.Keyring`の`initializeNdkContext`)も

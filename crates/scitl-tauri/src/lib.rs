@@ -387,7 +387,8 @@ mod tests {
         assert_eq!(conf["productName"], scitl_core::PRODUCT_NAME);
     }
 
-    /// 応答の生成中のサービスを、coreが名前で指せること(`scitl_core::foreground_service`)。
+    /// 応答の生成中のサービスを、coreが名前で指せ、通知の文面を渡せること
+    /// (`scitl_core::foreground_service`)。
     #[test]
     fn core_service_class_matches_android_manifest() {
         let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
@@ -401,6 +402,28 @@ mod tests {
             "class {} :",
             scitl_core::foreground_service::SERVICE_CLASS
         )));
+        for (name, value) in [
+            ("EXTRA_TITLE", scitl_core::foreground_service::EXTRA_TITLE),
+            (
+                "EXTRA_CHANNEL",
+                scitl_core::foreground_service::EXTRA_CHANNEL,
+            ),
+        ] {
+            assert!(kotlin.contains(&format!("const val {name} = \"{value}\"")));
+        }
+    }
+
+    /// 応答の生成中のサービスを、ほかのアプリから始められないこと。
+    #[test]
+    fn the_generating_service_is_not_exported() {
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        let (_, after) = manifest
+            .split_once("<service")
+            .expect("the manifest declares a service");
+        let service = after.split("/>").next().unwrap();
+        assert!(service.contains("android:exported=\"false\""));
+        assert!(service.contains("android:foregroundServiceType=\"dataSync\""));
+        assert!(!after.contains("<intent-filter"));
     }
 
     #[test]
