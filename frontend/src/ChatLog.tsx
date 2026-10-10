@@ -1,8 +1,8 @@
 import type { ReactNode, RefObject, UIEventHandler, WheelEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
+import CodeBlock from './CodeBlock'
 import { ConfirmButton } from './Dialog'
 import { formatDateTime, t, turnErrorText } from './i18n'
-import { DisclosureMark } from './Icon'
 import Markdown from './Markdown'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
 import {
@@ -16,17 +16,22 @@ import type { MessageView, PendingEntry } from './types'
 
 // Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
 // 表示はSCITL自身の文言(とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
-// エラー発言は、ターンの中でも外でもここで表示言語の文言に替える。
+// エラー発言は、ターンの中でも外でもここで表示言語の文言に替える。`streaming`は、書いている
+// 途中の本文か。
 function EntryBody({
   role,
   content,
   errorKind = null,
+  streaming = false,
 }: {
   role: string
   content: string
   errorKind?: string | null
+  streaming?: boolean
 }) {
-  if (role === 'user' || role === 'assistant') return <Markdown text={content} />
+  if (role === 'user' || role === 'assistant') {
+    return <Markdown text={content} streaming={streaming} />
+  }
   const text = role === 'error' ? turnErrorText(errorKind, content) : content
   return <span className="entry-content">{text}</span>
 }
@@ -62,18 +67,20 @@ function EntryActions({
 }
 
 // ターンの中身の1区切り。本文は返信と同じ吹き出しで出す。`footer`は吹き出しの末尾に足すもの
-// (日時と操作)。
+// (日時と操作)。`streaming`は、応答待ちの間の途中経過か。
 function TurnSegmentView({
   segment,
   footer = null,
+  streaming = false,
 }: {
   segment: TurnSegment
   footer?: ReactNode
+  streaming?: boolean
 }) {
   if (segment.kind === 'thoughts') return <ThinkingTools items={segment.items} />
   return (
     <div className="entry entry-assistant">
-      <EntryBody role="assistant" content={segment.text} />
+      <EntryBody role="assistant" content={segment.text} streaming={streaming} />
       {footer}
     </div>
   )
@@ -276,13 +283,9 @@ export default function ChatLog({
                 {/* プロバイダーが書いた文字列のため、Markdown描画の対象にせず
                     プレーンテキストのまま出す */}
                 {finalMessage.error_detail && (
-                  <details className="entry-error-detail">
-                    <summary>
-                      <DisclosureMark />
-                      {t('chat.error_detail_summary')}
-                    </summary>
-                    <pre className="detail-box">{finalMessage.error_detail}</pre>
-                  </details>
+                  <CodeBlock className="entry-error-detail" label={t('chat.error_detail_label')}>
+                    {finalMessage.error_detail}
+                  </CodeBlock>
                 )}
                 {footer}
               </div>
@@ -297,7 +300,7 @@ export default function ChatLog({
           // 終えてツールを実行している間は出す。止める指示を出したあとは、止めていることを出す)。
           <li key={`pending-${i}`} className="turn-group">
             {live.segments.map((segment, j) => (
-              <TurnSegmentView key={j} segment={segment} />
+              <TurnSegmentView key={j} segment={segment} streaming />
             ))}
             {(live.open !== 'text' || entry.stopping) && (
               <div className="entry entry-pending">

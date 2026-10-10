@@ -29,13 +29,13 @@ export function NumberField({ label, value, defaultValue, onSave }: NumberFieldP
 }
 
 interface CollapseToggleProps {
-  // 畳んでいるときの文言(何を何件表示するか)。
+  // 畳んでいるときの文言(何を何件表示するか、または「すべて表示」)。
   showLabel: string
   expanded: boolean
   onToggle: () => void
 }
 
-// 件数の多い一覧(モデル表・MCPのツール一覧)を既定で畳むための開閉ボタン。
+// 件数の多い一覧(モデル表・MCPのツール一覧)と長いコードの塊を既定で畳むための開閉ボタン。
 export function CollapseToggle({ showLabel, expanded, onToggle }: CollapseToggleProps) {
   return (
     <button type="button" onClick={onToggle} aria-expanded={expanded}>
