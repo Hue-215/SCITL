@@ -1,11 +1,11 @@
 ---
 name: release-build
-description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→配布物を作って起動を確かめる→mainへ取り込む→タグ→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1の使い方、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
+description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→配布物を作って起動を確かめる→mainへ取り込む→タグ→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1・release-build-android.shの使い方、Androidの署名の鍵の扱い、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz・APK)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
 ---
 
 # 配布用のビルド
 
-リリース全体の流れは6節。配布物は`scripts/`のスクリプトで作る。`cargo build --release`や`npx tauri build`を直接叩くと、
+リリース全体の流れは6節、Androidの配布物(署名したAPK)は7節。配布物は`scripts/`のスクリプトで作る。`cargo build --release`や`npx tauri build`を直接叩くと、
 ビルドした人の絶対パスがバイナリに残る(下の「何をしているか」)。`release/*`への移行と
 配布はメンテナが行う(CLAUDE.md「進行中の作業」)。
 
@@ -173,19 +173,24 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
    扱いは`docs/spec/architecture/tech-stack.md`「依存の脆弱性」)。直すものがあれば`release/*`の上で直す
 4. **配布物を作る**: `release/<版>`の先頭で、LinuxとWindowsのそれぞれで1節のスクリプトを走らせる。
    出来るのは`target/dist/scitl-<版>-linux-x64.tar.gz`と`target/dist/scitl-<版>-windows-x64.zip`。
-   版はCargo.tomlから取り、コミットの情報は焼き込まないので、`main`へ取り込んだ後のものと中身は同じ
+   版はCargo.tomlから取り、コミットの情報は焼き込まないので、`main`へ取り込んだ後のものと中身は同じ。
+   AndroidのAPKは、Linuxで`release-build.sh`の**後に**7節のスクリプトを走らせて作る(`release-build.sh`は
+   `target/dist`を空にしてから始める)。出来るのは`target/dist/scitl-<版>-android-arm64.apk`
 5. **起動を確かめる**: 一時ディレクトリの外(`target/`の下など)に展開して起動し、画面が出ることと、
-   展開したフォルダに`data`ができることを見る。直すものがあれば`release/*`の上で直し、手順4から
-   やり直す(タグを打つ前に済ませ、打ち直しを避ける)
+   展開したフォルダに`data`ができることを見る。APKは7節の「確かめる」のとおりに実機へ入れて見る。
+   直すものがあれば`release/*`の上で直し、手順4からやり直す(タグを打つ前に済ませ、打ち直しを避ける)
 6. **`main`へ取り込む**: `release/<版>` → `main`のPRを作り、メンテナがマージする
 7. **タグを打つ**: `main`のマージコミットに注釈付きタグ`v<版>`を打ってpushする
    (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
-8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> --title "SCITL <版>" --notes-file <ノート>`。
+8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> <apk> --title "SCITL <版>" --notes-file <ノート>`。
    リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
    次も書く(`README.md`は内容を意図して少なくしてあり、配布物に入るのもそれなので、利用者が
    これらを読めるのはノートだけになる。ビルドする環境を変えたら、求めるglibcの版を直す)
    - Windowsの実行ファイルにコード署名が無く、初回の起動でSmartScreenの警告が出ること
    - Linuxは`libwebkit2gtk-4.1-0`(Fedoraは`webkit2gtk4.1`)が要ること、求めるglibcの版(4節)
+   - AndroidはAndroid 10以上・arm64の端末向けであること。入れるときに、ダウンロードに使ったアプリ
+     (ブラウザ等)へ「提供元不明のアプリ」の許可が要ること。データはアプリの中に置かれ、
+     アンインストールすると消えること
    - データは展開したフォルダの`data`に置かれること。版を上げるときは、古いフォルダの`data`を
      新しいフォルダへ移すこと
    - ユーザーのフォルダの下に置くこと。同時に開かないこと。同期するフォルダ・ネットワークドライブに
@@ -195,3 +200,112 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
      必須にして、その値をヘッダーとして登録すること(`docs/spec/tools.md` 4.5節)
 9. **`develop`へ戻す**: `release/*`の上で版を上げた・直したものがあれば、`release/<版>` → `develop`の
    PRを作り、メンテナがマージする。何も無ければ省く
+
+## 7. Androidの配布物
+
+署名したAPKを1つ作る。置き場所はデスクトップの配布物と同じGitHub Releases。Google Playには出さない。
+
+### 署名の鍵
+
+Androidは、同じ鍵で署名されたAPKだけを、入っているアプリへの上書きとして受け付ける。**鍵を失うか
+変えると、同じアプリとして更新できなくなる**(上書きのインストールを断られ、利用者はアンインストール
+してから入れ直すことになり、アプリの中のデータが消える)。鍵が漏れると、SCITLを名乗る更新を
+他人が作れる。
+
+- 鍵(キーストアのファイル)とパスワードはメンテナが持つ。**リポジトリにも、Claudeのセッションにも
+  置かない**。Claudeは本番の鍵を作らず、パスワードを受け取らない。スクリプトを本番の鍵で走らせるのは
+  メンテナ
+- 控えは、キーストアのファイルとパスワードを、ビルドする機械とは別の場所に置く(置き場所はメンテナが
+  決める)
+- 本番の鍵の証明書の指紋(SHA-256)は、`release-build-android.sh`の`release_certificate`に書いてある
+  (指紋は、配ったAPKから誰でも読める公開の情報)。スクリプトは、配布するAPK(arm64)がこの鍵で
+  署名されていなければ失敗にする。控えから戻したキーストアが正しいかも、この指紋で確かめる
+- 鍵はPKCS12のキーストアに1つ作る。有効期間は、切れると更新を出せなくなるので長くする
+
+```sh
+keytool -genkeypair -keystore <置き場所>/scitl-release.p12 -storetype PKCS12 \
+  -alias scitl -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=SCITL Task Companion"
+keytool -list -v -keystore <置き場所>/scitl-release.p12 -alias scitl | grep SHA256   # 指紋
+```
+
+デバッグビルド(`tauri android build --debug`)は、機械ごとに作られるデバッグ用の鍵で署名される。
+本番の鍵とは別なので、デバッグビルドを入れてある端末にリリースのAPKは上書きできない(逆も同じ。
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`)。先に`adb uninstall net.niigo.scitl`する(データは消える)。
+
+### 実行する
+
+```sh
+export SCITL_ANDROID_KEYSTORE=<キーストアのファイルの絶対パス>
+export SCITL_ANDROID_KEY_ALIAS=scitl
+read -rs SCITL_ANDROID_KEYSTORE_PASSWORD && export SCITL_ANDROID_KEYSTORE_PASSWORD   # 履歴に残さない
+scripts/release-build-android.sh
+```
+
+- 前提: 1節のものに加えて、`docs/spec/architecture/tech-stack.md`「Androidのビルド」の道具
+  (SDK・NDK・JDK・Rustのターゲット`aarch64-linux-android`)と環境変数。APKはビルドする側のOSに
+  よらないので、スクリプトはLinux用だけを置く(Windowsでは作らない)
+- 配布するのは実機向けの`arm64-v8a`だけ(4つのABIをまとめると、APKが数倍の大きさになる)。
+  エミュレーターでリリースのAPKを確かめるときは`--target x86_64`を付ける
+  (`scitl-<版>-android-x86_64.apk`が出来る。配布しない。本番の鍵でなくても通るので、Claudeが
+  確かめるときは、その場で作った使い捨ての鍵を使う)
+- 署名はスクリプトが`apksigner`で行う。Gradleには署名の設定を置いていないので、
+  `npx tauri android build`を直接叩くと、署名の無い(端末に入れられない)APKが出来る
+- パスワードは`apksigner`にだけ渡す(スクリプトが最初に環境変数から外す)。Gradleに渡すと、ビルドの
+  後も数時間残るGradle・Kotlinのデーモンの環境変数に載り、同じ機械のほかのプロセスから読める。
+  npmの依存のスクリプトや、依存クレートの`build.rs`にも届く
+- `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`の扱いは1節と同じ。フラグが開発時と違うので、
+  `target/<ターゲット>/release`は全部作り直しになる
+
+### 何をしているか
+
+- **版**: `versionName`は`Cargo.toml`の`[workspace.package]`の版、`versionCode`は
+  `major×1000000 + minor×1000 + patch`(0.2.0なら2000)。Gradleがcargoの解決結果から引くので、
+  6節の手順2で版を上げれば両方上がる。`versionCode`が入っているものより小さいAPKは、上書きの
+  インストールを断られる。`tauri.conf.json`に`version`を置かないのは6節のとおりで、tauri-cliは
+  その場合`tauri.properties`を書かないので、これには頼らない
+- **絶対パス**: 2節と同じ置き換えを、ネイティブのライブラリ(`lib/arm64-v8a/libscitl_tauri_lib.so`)に
+  掛ける。環境変数は、tauri-cli → Gradle → tauri-cli → cargoの経路をそのまま届く(置き換えを
+  付けないと、`.so`に依存クレートの場所が残る)。NDKのclangでビルドされるCのソース
+  (`aws-lc-sys`・SQLite)の場所は、`.so`に入っていない(NDK 30.0で確認、2026-10。入れば検査が失敗する)
+- **第三者ライセンスの一覧**: APKの中の`assets/licenses/`に、`LICENSE`と`THIRD-PARTY-LICENSES/`を入れる
+  (APKは1つのファイルで渡るので、隣に置いても一緒に届かない)。Gradleのタスク`scitlLicenses`が、
+  リリースのAPKを作るたびに`assemble-dist.mjs --android-licenses`を呼んで組み立てる
+  - `rust.txt`は、cargo-aboutにAndroid向け(`aarch64-linux-android`)で洗い出させる。Androidにしか
+    入らないクレートの写しは`SUPPLIED_ANDROID`に置く
+  - `android.txt`は、Gradleが解決したMavenの依存(androidx・Material・Kotlinの標準ライブラリ等)。
+    Gradleのタスク`scitlReleaseDependencies`が、リリースのAPKに入るものと各POMの書くライセンスを
+    書き出し、`assemble-dist.mjs`がライセンスを見分けて`about.toml`の`accepted`と照らす。
+    見分けられないもの・許容外のものがあれば失敗する。Mavenのパッケージの多くはライセンス文を
+    持たないので、標準の文面を載せる(`licenses/apache-2.0`)。jarの中に表示のファイル(`META-INF`の
+    NOTICE・LICENSE)を持つもの(Jackson等)は、それも載せる。AndroidのビルドはこれらをAPKから
+    除くことがある(`META-INF/NOTICE`・`META-INF/LICENSE`は既定で除かれる)。Tauri本体とプラグインの
+    Kotlin側、`rustls-platform-verifier`のKotlinの部品は、Rustのクレートの中身なので`rust.txt`の側で足りる
+  - `assemble-dist.mjs --check-licenses`(CIと、ビルドの前)は、Android向けのクレートの一覧も確かめる。
+    Mavenの依存はGradleを動かさないと分からないので、APKを作るときにだけ確かめる
+- **縮小(R8)**: リリースビルドはR8が使われていないクラスを消し、名前を変える。RustからJNIで呼ぶ
+  クラスは見えないので、`gen/android/app/proguard-rules.pro`に残す指定を書く。JNIで呼ぶものを足したら、
+  ここにも足し、リリースのAPKで動かして確かめる(デバッグビルドは縮小しないので、気付けない)
+
+### 確かめる
+
+スクリプトは、出来たAPKについて次を確かめ、通れば署名して`target/dist`へ置く。
+
+- 入っているネイティブのライブラリが、頼んだABIのものだけであること
+- `assets/licenses/`に一覧が入っていること
+- APKを展開したすべてのファイルに、3節の3つのパスが残っていないこと
+- 署名したあと、署名が検証できることと、署名した鍵が本番のものであること(`apksigner verify`が出す
+  証明書の指紋を`release_certificate`と比べる。x86_64は、違っていても知らせるだけ)
+
+リリースのAPKはWebViewのデバッグ(`android-check`スキル4節の実寸の測定)が使えない。撮る・触るは使える。
+手で確かめるのは次のとおり。
+
+```sh
+aapt2 dump badging <apk> | head -3        # versionCode・versionName・minSdk・targetSdk
+adb install <apk>                         # 上書きなら -r。デバッグビルドが入っていれば先にアンインストールする
+adb logcat -s SCITL RustStdoutStderr AndroidRuntime
+```
+
+R8で消えると困るもの(JNIで呼ぶもの)を通る操作を、リリースのAPKで一通り行う: HTTPSのプロバイダーへの
+接続(証明書の検証)、鍵付きのプロバイダーの登録(秘密情報の保存先)、応答の生成を裏へ回して通知を
+受け取り、通知から会話を開く、エクスポート、添付の選択。最後に実機へ入れて起動する。
+

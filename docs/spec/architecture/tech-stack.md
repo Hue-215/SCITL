@@ -82,6 +82,10 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
   タグ`RustStdoutStderr`でlogcatに出るので、`adb logcat -s SCITL RustStdoutStderr`で両方を読む
   (`sanitize.md`「無害化」の表の下)
 
+配布するAPK(署名したリリースビルド)の作り方、署名の鍵の扱い、版(`versionCode`)の決まり方は
+`.claude/skills/release-build` 7節。リリースビルドはR8が使われていないクラスを消すので、RustからJNIで
+呼ぶクラスを足したら`gen/android/app/proguard-rules.pro`に残す指定を書く(デバッグビルドでは気付けない)。
+
 ## AndroidのSDKの版
 
 | 値 | 版 | 書く場所 |
@@ -153,12 +157,16 @@ targetSdkを37以上へ上げるときに見直すこと:
 - **BSL-1.0(Boost Software License)は許容する**(MITと同じ許容型で、コピーレフトではない。バイナリでの
   配布には表示も求めない)。入るのはWindowsのクリップボードを読む`clipboard-win`と、その依存の`error-code`
   (`tauri-plugin-clipboard-manager`経由。Issue #476)
-- **AndroidのAPKには、Gradleで解決する依存も入る**(androidx・Material・Kotlinの標準ライブラリ等と、
-  `rustls-platform-verifier`のKotlinの部品)。cargo-aboutの一覧(`about.toml`の`targets`)はAndroidを
-  対象にしておらず、Gradleの依存はそもそも一覧に現れない。Androidを配布するときに、Gradleの依存の
-  一覧を別に組み立てる。Kotlinの部品はクレート`rustls-platform-verifier-android`(MIT OR Apache-2.0)の
-  中身なので、そのクレートの項で足りる。ただしパッケージにライセンスファイルが無い(0.1.1)ので、
-  Androidを対象に足すときに`licenses/`のSUPPLIEDに入れる
+- **AndroidのAPKには、Gradleで解決する依存も入る**(androidx・Material・Kotlinの標準ライブラリ・
+  Tauri本体が使うJackson等と、`rustls-platform-verifier`のKotlinの部品)。Gradleの依存はcargo-aboutの
+  一覧に現れないので、Gradleに書き出させて別の一覧(`android.txt`)にし、同じ`about.toml`の`accepted`で
+  確かめる。POMの書くライセンスはすべてApache-2.0(2026-10)。Jacksonは、取り込んだ別の部品
+  (FastDoubleParser: MIT、bigint: BSD-2-Clause)の文面をjarの中に持つ。POMに現れないので機械では
+  照らせず、一覧には載る。Kotlinの部品はクレート
+  `rustls-platform-verifier-android`(MIT OR Apache-2.0)の中身なので、そのクレートの項で足りる。
+  Rustのクレートの一覧は、Android向けを`about.toml`の`targets`とは別に洗い出す(デスクトップの
+  配布物にAndroidだけのクレートを載せないため)。一覧はAPKの中に入れる
+  (`.claude/skills/release-build` 7節)
 - **Windowsの実行ファイルには、MicrosoftのWebView2 SDKのローダーが入る**(`webview2-com-sys`が
   `WebView2LoaderStatic.lib`を静的にリンクする)。SDKのライセンスはBSD-3-Clauseと同じ形の条項で、
   バイナリでの配布にも著作権表示とライセンス文の同梱を求める。クレートのライセンス(MIT)とは別に、
