@@ -3853,6 +3853,43 @@ fn stopping_a_chat_that_is_not_generating_does_nothing() {
     assert!(!stop_response(&generating, Chat::General));
 }
 
+/// 応答を生成している間だけ、長く掛かる処理として知らせる(Androidではこの間だけフォアグラウンド
+/// サービスにする)。同じ集合で処理中になる発言の削除は、すぐに済むので知らせない。
+#[tokio::test]
+async fn only_generating_a_response_counts_as_long_running() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let generating = InFlightSet::watching_long_running({
+        let reported = reported.clone();
+        move |any| reported.lock().unwrap().push(any)
+    });
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            generating: &generating,
+            ..context(&ScriptedAdapter::texts(&["応答"]))
+        },
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*reported.lock().unwrap(), [true, false]);
+
+    let user_message_id = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
+    };
+    delete_message(db.clone(), &generating, chat, user_message_id)
+        .await
+        .unwrap();
+    assert_eq!(*reported.lock().unwrap(), [true, false]);
+}
+
 /// 生成中のタスクでは発言を削除できない。生成中のターンが読んだ履歴とDBの発言が食い違うため。
 #[tokio::test]
 async fn a_message_cannot_be_deleted_while_its_task_is_generating() {
