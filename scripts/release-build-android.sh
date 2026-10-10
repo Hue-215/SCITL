@@ -19,7 +19,7 @@ set -euo pipefail
 # 本番の署名の鍵の証明書の指紋(SHA-256)。Androidは、同じ鍵で署名したAPKだけを上書きとして
 # 受け付けるので、配布するAPKがこの鍵で署名されていなければ失敗にする。指紋は公開してよい情報
 # (配ったAPKから誰でも読める)。鍵そのものはリポジトリに置かない。
-release_certificate=88f470c4a4f70d038c0112677a68d0ffc41f64be6ff5b1919b12e3192989b130
+release_certificate=6bf1aa206590dcb460051800a80e4eca614666022038587aae3a37de26cf0c96
 
 target=aarch64
 case "$#:${1:-}:${2:-}" in
