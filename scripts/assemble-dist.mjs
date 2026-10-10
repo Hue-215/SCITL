@@ -170,7 +170,8 @@ const SUPPLIED_ANDROID = {
   ndk: 'ndk',
   'ndk-context': 'ndk-context',
   'ndk-sys': 'ndk',
-  // APKに入るKotlinの部品(Mavenの`rustls:rustls-platform-verifier`)は、このクレートの中身。
+  // APKに入るKotlinの部品(Mavenの`org.rustls:rustls-platform-verifier`)は、このクレートと同じ
+  // リポジトリから出ていて、ライセンスも同じ。
   'rustls-platform-verifier-android': 'rustls-platform-verifier',
 }
 
@@ -380,8 +381,8 @@ const POM_LICENSES = [[/^https?:\/\/www\.apache\.org\/licenses\/LICENSE-2\.0(\.t
 const POM_WITHOUT_LICENSE = {
   // GuavaからListenableFutureだけを切り出したパッケージ。ライセンスは親のPOM(guava-parent)にある。
   'com.google.guava:listenablefuture': { license: 'Apache-2.0' },
-  // クレート`rustls-platform-verifier-android`が同梱するKotlinの部品。
-  'rustls:rustls-platform-verifier': { crate: 'rustls-platform-verifier-android' },
+  // クレート`rustls-platform-verifier-android`と同じリポジトリから出る、Kotlinの部品。
+  'org.rustls:rustls-platform-verifier': { crate: 'rustls-platform-verifier-android' },
 }
 
 // ライセンスの標準の文面(licenses/の下のフォルダ)。Mavenのパッケージはライセンス文を持たず、POMが
@@ -412,7 +413,7 @@ function gradleLicenses(file) {
     const known = dep.licenses.length === 0 ? POM_WITHOUT_LICENSE[id] : undefined
     if (known) stale.delete(id)
     if (known?.crate) {
-      index.push(`${id} ${dep.version}  (part of the Rust crate ${known.crate}; see rust.txt)`)
+      index.push(`${id} ${dep.version}  (same repository and license as the Rust crate ${known.crate}; see rust.txt)`)
       continue
     }
     const licenses = known

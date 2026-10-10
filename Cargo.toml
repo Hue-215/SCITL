@@ -26,8 +26,9 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # (`scitl-core/src/net/android.rs`)。reqwestが引き込むものと同じ版でなければ、渡した先と検証する側が
 # 別のクレートになり、渡したことにならない。上流の版が上がったら合わせて上げる
 # (`cargo tree -i rustls-platform-verifier --target aarch64-linux-android`で確認)。`jni`は
-# `rustls-platform-verifier`の要求する版で、Tauri(tao・wry)の使う0.21と同居する
-rustls-platform-verifier = "0.7"
+# `rustls-platform-verifier`の要求する版で、Tauri(tao・wry)の使う0.21と同居する。0.7.1以上が要る
+# (AndroidでCRLの配布元への平文を許す設定を、Kotlinの部品が持つ。Issue #535)
+rustls-platform-verifier = "0.7.1"
 jni = "0.22"
 thiserror = "2"
 secrecy = { version = "0.10", features = ["serde"] }
