@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
+import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,23 +79,23 @@ class MainActivity : TauriActivity() {
 
     private var current: MainActivity? = null
 
-    @Volatile
-    private var requestedChat = CHAT_NONE
+    // 書くのはメインスレッド、引き取るのはRust側のスレッド。
+    private val requestedChat = AtomicLong(CHAT_NONE)
 
     private fun keepRequestedChat(intent: Intent?) {
-      if (intent?.hasExtra(EXTRA_CHAT) == true) {
-        requestedChat = intent.getLongExtra(EXTRA_CHAT, CHAT_NONE)
+      try {
+        if (intent?.hasExtra(EXTRA_CHAT) == true) {
+          requestedChat.set(intent.getLongExtra(EXTRA_CHAT, CHAT_NONE))
+        }
+      } catch (e: RuntimeException) {
+        // ほかのアプリが、読めないextraを付けて起動した(Android 12以下は、extraを1つ読むだけで
+        // 全部を展開する)。頼みは無かったことにする。
       }
     }
 
     /** 通知を押して届いた、開く会話の頼みを引き取る(Rust側からJNIで呼ぶ)。無ければCHAT_NONE。 */
     @JvmStatic
-    @Synchronized
-    fun takeRequestedChat(): Long {
-      val chat = requestedChat
-      requestedChat = CHAT_NONE
-      return chat
-    }
+    fun takeRequestedChat(): Long = requestedChat.getAndSet(CHAT_NONE)
 
     /**
      * 応答の生成を始めたときに、通知の許可をまだ求めていなければ求める(GeneratingServiceが呼ぶ)。

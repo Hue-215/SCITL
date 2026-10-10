@@ -28,7 +28,7 @@ pub enum TurnOutcome {
 }
 
 /// 終わった応答生成の受け口([`crate::orchestration::TurnContext::finished`])。
-/// ターンの処理を止めないよう、受け口の側で待たない。
+/// ターンの後始末(生成中の印を外す等)を遅らせるので、長く待つ処理を置かない。
 pub type TurnFinished<'a> = &'a (dyn Fn(FinishedTurn) + Send + Sync);
 
 /// 終わったことを知らせない呼び出し元(CLI・テスト等)が渡す受け口。
@@ -79,4 +79,48 @@ fn last_text(parts: &[ReplyPart]) -> String {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(round: u32, text: &str) -> ReplyPart {
+        ReplyPart::Text {
+            round,
+            text: text.to_string(),
+        }
+    }
+
+    /// ツールを呼ぶ前の前置きではなく、最後に書いた本文を取る。思考とツールの呼び出しは取らない。
+    #[test]
+    fn the_last_text_is_the_one_written_after_the_tools() {
+        let parts = [
+            text(1, "調べます"),
+            ReplyPart::Tool {
+                round: 1,
+                record: 7,
+            },
+            ReplyPart::Reasoning {
+                round: 2,
+                text: "考え".to_string(),
+            },
+            text(2, "答えです"),
+            ReplyPart::Reasoning {
+                round: 2,
+                text: "後の考え".to_string(),
+            },
+        ];
+        assert_eq!(last_text(&parts), "答えです");
+    }
+
+    #[test]
+    fn a_reply_without_text_has_no_last_text() {
+        let parts = [ReplyPart::Tool {
+            round: 1,
+            record: 7,
+        }];
+        assert_eq!(last_text(&parts), "");
+        assert_eq!(last_text(&[]), "");
+    }
 }

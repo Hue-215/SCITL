@@ -3972,6 +3972,61 @@ async fn a_finished_turn_is_reported_with_its_reply_or_failure() {
     );
 }
 
+/// 再試行は、作り直した試行の返信を1回だけ知らせる。名前の無いタスクは、最初の発言から作った
+/// 呼び名で知らせる。
+#[tokio::test]
+async fn a_retry_is_reported_once_with_the_reply_of_the_new_attempt() {
+    let conn = db::open_in_memory().unwrap();
+    let chat = Chat::Task(seed_task(&conn));
+    let db = Arc::new(Mutex::new(conn));
+    let reported = Mutex::new(Vec::new());
+    let record = |finished: FinishedTurn| reported.lock().unwrap().push(finished);
+
+    run_turn(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["最初の応答"]))
+        },
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let first_reply = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        messages
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap()
+            .id
+    };
+    retry_reply(
+        db.clone(),
+        &TurnContext {
+            finished: &record,
+            ..context(&ScriptedAdapter::texts(&["作り直した応答"]))
+        },
+        chat,
+        first_reply,
+    )
+    .await
+    .unwrap();
+
+    let replied = |text: &str| FinishedTurn {
+        chat,
+        task_name: Some("質問".to_string()),
+        outcome: TurnOutcome::Replied {
+            text: text.to_string(),
+        },
+    };
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [replied("最初の応答"), replied("作り直した応答")]
+    );
+}
+
 /// 止めたターンも、長く掛かる処理から抜ける(サービスを残さない)。
 #[tokio::test]
 async fn a_stopped_turn_is_no_longer_long_running() {

@@ -15,7 +15,8 @@ import android.os.Build
  * (docs/spec/architecture/concurrency.md「Androidで裏へ回ったとき」)。
  *
  * いつ終わったか・何を載せるかはRust側が決め(scitl_core::reply_notification)、文面は通知へ出す形に
- * 整えてから渡してくる。ここで決めるのは、アプリが前に出ているか(出ていれば出さない)だけ。
+ * 整えてから渡してくる。ここにあるのは、アプリが画面に出ているか(出ていれば出さない)の判定と、
+ * 通知の出し方(チャンネル、同じ会話の通知の置き換え、押したときに開くもの)。
  */
 object ReplyNotifier {
   /**
@@ -56,6 +57,9 @@ object ReplyNotifier {
         )
       )
       .setAutoCancel(true)
+      // 本文はモデルの出力。OSが文面から操作(リンクを開く等)を作って通知に足すと、アプリの
+      // 「開く前の確認」を通らずに開けてしまう。
+      .setAllowSystemGeneratedContextualActions(false)
       .build()
     manager.notify(chat.toString(), NOTIFICATION_ID, notification)
   }

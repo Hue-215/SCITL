@@ -13,6 +13,7 @@ use scitl_core::orchestration::{FinishedTurn, TurnContext, TurnEvents};
 use scitl_core::paths::{self, DataDirError, DataLayout};
 use scitl_core::settings::{Settings, Snapshot};
 use tauri::ipc::Channel;
+use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
@@ -114,6 +115,11 @@ pub fn run() {
         .on_page_load(|_webview, _payload| {
             #[cfg(target_os = "android")]
             init_jni_users(_webview);
+            // 読み込み直した画面は知らせ先を渡し直す。それまでに届いた頼みを、前の画面の知らせ先へ
+            // 送って失わないようにする(渡し直されるまで引き取らない)。
+            if _payload.event() == PageLoadEvent::Started {
+                commands::requested_chat::forget_watcher(_webview.app_handle());
+            }
         })
         // 窓に落としたファイルのパスは、OSのドロップからここへ直接届く(WebViewを通らない)。
         .on_window_event(|window, event| match event {

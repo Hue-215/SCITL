@@ -1,5 +1,5 @@
 use tauri::ipc::Channel;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use scitl_core::db::messages::Chat;
 
@@ -21,13 +21,21 @@ pub fn watch_requested_chats(
     deliver(&app);
 }
 
+/// 画面が読み込み直されるときに、前の画面の知らせ先を捨てる。
+pub fn forget_watcher(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        *state
+            .requested_chat
+            .lock()
+            .expect("requested chat mutex poisoned") = None;
+    }
+}
+
 /// 通知を押して届いた、開く会話の頼みがあれば、確かめてから画面へ知らせる
 /// (`scitl_core::reply_notification`)。頼みはActivityが持っていて、アプリが前に出たときと、画面が
 /// 知らせ先を渡したときに引き取る。画面が知らせ先を渡す前なら、引き取らずに残す。
 #[cfg(target_os = "android")]
 pub fn deliver(app: &AppHandle) {
-    use tauri::Manager;
-
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let Some(state) = app.try_state::<AppState>() else {
