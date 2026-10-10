@@ -65,7 +65,7 @@ pub async fn run_turn(
         return Err(e);
     }
 
-    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
 }
 
 /// ユーザー発言と添付を1つのトランザクションで書く。実体は行より先に置き場所へ書く
@@ -224,7 +224,7 @@ async fn generate_new_turn(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
 }
 
 /// ユーザー発言の編集。対象の発言以降(自身を含む)の通常発言をすべて論理削除し、編集後の
@@ -257,7 +257,7 @@ pub async fn edit_user_message(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat), generating.stop_signal()).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
 }
 
 /// ターンの返信(アシスタント発言またはエラー発言)の再試行。対象の発言以降(自身を含む)の
@@ -305,7 +305,7 @@ pub async fn retry_reply(
     })
     .await?;
 
-    generate_turn_response(db, ctx, attempt, generating.stop_signal()).await
+    generate_turn_response(db, ctx, attempt, &generating).await
 }
 
 /// 発言と、それより後ろの通常発言をまとめて論理削除する(編集・再試行と同じく、その地点から
@@ -411,12 +411,18 @@ fn expect_normal(target: &Message, expected_roles: &[Role]) -> Result<()> {
 /// `stop`で止めた場合も同じく、止めたことを表すエラー発言を書いて`Ok`で返す([`stop_response`])。
 /// 失敗までに受け取り終えたラウンドの中身と実行したツールは、エラー発言に添えて残す
 /// ([`ReplyParts`])。
+///
+/// 走っている間、`generating`の長く掛かる部分に入っていることにする
+/// ([`InFlight::long_running`]。`architecture/concurrency.md`「Androidで裏へ回ったとき」)。
 async fn generate_turn_response(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     attempt: Attempt,
-    stop: &StopSignal,
+    generating: &InFlight<'_, Chat>,
 ) -> Result<()> {
+    // 応答を待つのはここから先だけ。発言の削除・タスクの操作も同じ集合で処理中になるが、すぐに済む。
+    let _long_running = generating.long_running();
+    let stop = generating.stop_signal();
     let adapter = match ready_adapter(ctx) {
         Ok(adapter) => adapter,
         Err(failure) => return fail_turn(db, &attempt, failure, &ReplyParts::default()).await,

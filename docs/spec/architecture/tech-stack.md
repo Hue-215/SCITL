@@ -38,6 +38,8 @@
   `tauri-plugin-opener`で開く(Issue #492)。iOSは対象にしない
   - エクスポートは、Androidではフォルダを開く操作を出さず、保存画面で選んだ場所へzipで書く
     (`export.md`「Androidでの書き出し先」)
+  - 応答を生成している間だけフォアグラウンドサービスにする。公式のプラグインが無いので、
+    サービスは`gen/android`にKotlinで書いてある(`concurrency.md`「Androidで裏へ回ったとき」)
 
 ## Androidのビルド
 

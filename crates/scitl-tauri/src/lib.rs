@@ -229,15 +229,31 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
         paths::revealed_attachments(cache),
     )));
 
+    let settings = Arc::new(settings);
     Ok(AppState {
         db,
-        settings: Arc::new(settings),
-        generating: InFlightSet::new(),
+        generating: generating_set(&settings),
+        settings,
         attachments,
         export_dir: data.export(),
         export_staging: paths::export_staging(cache),
         dropped: Mutex::new(None),
     })
+}
+
+/// 応答を生成中の会話の集合。Androidでは、応答を生成している間だけフォアグラウンドサービスにする
+/// (`architecture/concurrency.md`「Androidで裏へ回ったとき」)。通知の文面は表示言語で出す。
+#[cfg(target_os = "android")]
+fn generating_set(settings: &Arc<Settings>) -> InFlightSet<Chat> {
+    let settings = Arc::clone(settings);
+    InFlightSet::watching_long_running(move |generating| {
+        scitl_core::foreground_service::set_running(generating, settings.display_language())
+    })
+}
+
+#[cfg(not(target_os = "android"))]
+fn generating_set(_settings: &Arc<Settings>) -> InFlightSet<Chat> {
+    InFlightSet::new()
 }
 
 /// `tauri.conf.json`で作るウィンドウのラベル。
@@ -369,6 +385,45 @@ mod tests {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(conf["productName"], scitl_core::PRODUCT_NAME);
+    }
+
+    /// 応答の生成中のサービスを、coreが名前で指せ、通知の文面を渡せること
+    /// (`scitl_core::foreground_service`)。
+    #[test]
+    fn core_service_class_matches_android_manifest() {
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        assert!(manifest.contains(&format!(
+            "android:name=\".{}\"",
+            scitl_core::foreground_service::SERVICE_CLASS
+        )));
+        let kotlin =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/GeneratingService.kt");
+        assert!(kotlin.contains(&format!(
+            "class {} :",
+            scitl_core::foreground_service::SERVICE_CLASS
+        )));
+        for (name, value) in [
+            ("EXTRA_TITLE", scitl_core::foreground_service::EXTRA_TITLE),
+            (
+                "EXTRA_CHANNEL",
+                scitl_core::foreground_service::EXTRA_CHANNEL,
+            ),
+        ] {
+            assert!(kotlin.contains(&format!("const val {name} = \"{value}\"")));
+        }
+    }
+
+    /// 応答の生成中のサービスを、ほかのアプリから始められないこと。
+    #[test]
+    fn the_generating_service_is_not_exported() {
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        let (_, after) = manifest
+            .split_once("<service")
+            .expect("the manifest declares a service");
+        let service = after.split("/>").next().unwrap();
+        assert!(service.contains("android:exported=\"false\""));
+        assert!(service.contains("android:foregroundServiceType=\"dataSync\""));
+        assert!(!after.contains("<intent-filter"));
     }
 
     #[test]

@@ -3,6 +3,9 @@
 //!
 //! 処理中の対象ごとに、止める指示の印も持つ。印を見て止まるかどうか、どこで止まるかは
 //! 処理の側が決める。
+//!
+//! 処理のうち長く掛かる部分に入っているものがあるかも数え、有無が変わったら知らせる
+//! ([`InFlightSet::watching_long_running`])。どこが長く掛かる部分かは処理の側が決める。
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -14,12 +17,25 @@ use tokio::sync::watch;
 /// 処理中の対象と、それぞれへの止める指示。
 pub struct InFlightSet<K> {
     entries: Mutex<HashMap<K, watch::Sender<bool>>>,
+    long_running: LongRunningCount,
 }
 
 impl<K: Eq + Hash + Clone> InFlightSet<K> {
     pub fn new() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
+            long_running: LongRunningCount::new(None),
+        }
+    }
+
+    /// 長く掛かる部分([`InFlight::long_running`])に入っている処理が、無い状態から在る状態に
+    /// なったら`on_change(true)`を、在る状態から無い状態になったら`on_change(false)`を呼ぶ集合。
+    /// 呼び出しは起きた順に1つずつ行う。次の出入りを待たせるので、`on_change`に待つ処理を置かない。
+    /// `on_change`がpanicしても数は狂わないが、知らせた状態と食い違ったままになる。
+    pub fn watching_long_running(on_change: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            long_running: LongRunningCount::new(Some(Box::new(on_change))),
         }
     }
 
@@ -74,11 +90,69 @@ impl<K: Eq + Hash + Clone> InFlight<'_, K> {
     pub fn stop_signal(&self) -> &StopSignal {
         &self.stop
     }
+
+    /// この処理が長く掛かる部分に入ったことにする。返ったガードを落とすと出たことになる。
+    pub fn long_running(&self) -> LongRunning<'_> {
+        self.set.long_running.enter()
+    }
 }
 
 impl<K: Eq + Hash + Clone> Drop for InFlight<'_, K> {
     fn drop(&mut self) {
         self.set.lock().remove(&self.key);
+    }
+}
+
+/// 長く掛かる部分に入っている処理の数と、その有無が変わったことの知らせ先。
+struct LongRunningCount {
+    count: Mutex<usize>,
+    on_change: Option<Box<dyn Fn(bool) + Send + Sync>>,
+}
+
+impl LongRunningCount {
+    fn new(on_change: Option<Box<dyn Fn(bool) + Send + Sync>>) -> Self {
+        Self {
+            count: Mutex::new(0),
+            on_change,
+        }
+    }
+
+    fn enter(&self) -> LongRunning<'_> {
+        let mut count = self.lock();
+        *count += 1;
+        if *count == 1 {
+            self.notify(true);
+        }
+        LongRunning { count: self }
+    }
+
+    /// 知らせる順が出入りの順と入れ替わらないよう、数のロックを持ったまま呼ぶ。
+    fn notify(&self, any: bool) {
+        if let Some(on_change) = &self.on_change {
+            on_change(any);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, usize> {
+        // 数は整数1つなので、`on_change`のpanicで毒されても壊れていない。以後の処理を止めない。
+        self.count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// 長く掛かる部分に入っている間だけ持つガード([`InFlight::long_running`])。
+pub struct LongRunning<'a> {
+    count: &'a LongRunningCount,
+}
+
+impl Drop for LongRunning<'_> {
+    fn drop(&mut self) {
+        let mut count = self.count.lock();
+        *count -= 1;
+        if *count == 0 {
+            self.count.notify(false);
+        }
     }
 }
 
@@ -131,6 +205,32 @@ mod tests {
         assert!(!set.request_stop(&1), "処理中でなければ何もしない");
         let next = set.try_begin(1).unwrap();
         assert!(!next.stop_signal().is_requested(), "次の処理に持ち越さない");
+    }
+
+    #[test]
+    fn long_running_work_is_reported_when_the_first_enters_and_the_last_leaves() {
+        let reported = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let set = InFlightSet::watching_long_running({
+            let reported = reported.clone();
+            move |any| reported.lock().unwrap().push(any)
+        });
+        let first = set.try_begin(1).unwrap();
+        let second = set.try_begin(2).unwrap();
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "処理中になっただけでは知らせない"
+        );
+
+        let first_long = first.long_running();
+        let second_long = second.long_running();
+        assert_eq!(*reported.lock().unwrap(), [true]);
+        drop(first_long);
+        assert_eq!(*reported.lock().unwrap(), [true], "まだ1つ残っている");
+        drop(second_long);
+        assert_eq!(*reported.lock().unwrap(), [true, false]);
+
+        let _again = first.long_running();
+        assert_eq!(*reported.lock().unwrap(), [true, false, true]);
     }
 
     #[tokio::test]

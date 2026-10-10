@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod export;
 mod files;
+pub mod foreground_service;
 pub mod i18n;
 pub mod in_flight;
 pub mod link;

@@ -156,6 +156,8 @@ pub mod android {
     ///
     /// taoが`ndk-context`を初期化する版(0.37以上)になったら、これを呼ばない(二重の初期化で
     /// panicする)。
+    /// そのときは[`initialized`]を見ている側([`crate::foreground_service`]も含む)が、taoの初期化を
+    /// 済んだものとして扱えるようにする。
     ///
     /// # Safety
     ///
