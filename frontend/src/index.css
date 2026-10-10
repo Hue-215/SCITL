@@ -1049,6 +1049,13 @@ details[open] > summary > .disclosure-mark,
 
 .code-block pre.code-block-overflowing {
   max-height: calc(var(--code-collapsed-max-height) - var(--code-toggle-height) - var(--space-1));
+  /* 畳んだ下端は行の途中で切れる。そこへ横のスクロールバーが重なると切れた行と開閉のボタンの間が
+     散らかるので、畳んでいる間はバーを描かない(横へは動かせる。開けばバーが出る)。 */
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* コピーと開閉のボタン。文字の端を中身の端に揃える(ボタンの左右の余白の分だけ、見出しの行の右と
