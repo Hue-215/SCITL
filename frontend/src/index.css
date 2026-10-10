@@ -405,17 +405,38 @@ option {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  /* 入力欄の上が広いとログの見える範囲がその分狭くなるので詰める。gapは子の間すべてに
-     一律で効くため、ここを0にすると見出しやエラー行もログに接する(.errorもmainの
-     直接の子)。入力欄の上だけを0にはできないので、全体を1段落とす。 */
-  gap: var(--space-2);
-  /* 左右は空けない。ログの左右余白は吹き出し自身が持つ(.chat-log > *)ので、ここで
-     足すと窓端から見た近い側・遠い側が2倍の関係にならず、スクロールバーも窓の端から
-     内側へ浮く。 */
+  /* 上は見出しの帯(.pane-top)が窓の上端から持ち、帯はログに接する(帯とログの間を空けないので、
+     子の間はgapではなく、ログより下の子のmarginで空ける)。左右は空けない。ログの左右余白は
+     吹き出し自身が持つ(.chat-log > *)ので、ここで足すと窓端から見た近い側・遠い側が2倍の関係に
+     ならず、スクロールバーも窓の端から内側へ浮く。 */
   /* 下は入力欄の下の行(添付・モデル選択・送信)と窓の下端の間。入力欄との間と揃える(tokens.css)。 */
-  padding: var(--pane-padding) 0 var(--compose-bottom-gap);
+  padding-bottom: var(--compose-bottom-gap);
   /* スクロールするのはログだけ。見出しと入力欄は常に同じ位置に留める。 */
   overflow: hidden;
+}
+
+/* ログより下の子(添付のチップ・入力欄)の間。入力欄の上が広いとログの見える範囲がその分狭くなるので
+   詰める。添付のチップは入力欄(ChatCompose.tsx)と並ぶmainの直接の子なので、入力欄だけには付けない。 */
+.layout main > .chat-log ~ * {
+  margin-top: var(--space-2);
+}
+
+/* スクロールする領域(会話欄・設定の本文)の上に留める帯。見出しと、見出しの下に出す行を入れる。
+   背景で塗って影を落とし、スクロールした中身が帯の下へ潜って見えるようにする(ui.md「塗りと
+   奥行き」)。影が中身の切れる所に落ちるよう、帯は窓の上端からスクロールする領域の上端までを
+   隙間なく占め、見出しとの間は帯の下の余白で空ける。上と左右の影は、外側の入れ物の
+   overflow: hiddenで切る。 */
+.pane-top {
+  /* 後から描かれるスクロール領域の中身(位置決めした部品を含む)より手前に出す。 */
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-block: var(--pane-padding) var(--space-2);
+  background: var(--color-bg);
+  box-shadow: var(--shadow-pinned);
 }
 
 /* ログだけが窓端まで届く(スクロールバーを窓の端に出し、吹き出しのマージンを
@@ -573,7 +594,8 @@ option {
    しない(Dropdown.tsx)。 */
 .dropdown-popup {
   position: absolute;
-  /* 後から描かれる会話欄より手前に出す。重なる相手はこの1つだけなので1で足りる。 */
+  /* 後から描かれる会話欄より手前に出す。入力欄の下から上へ開く一覧は見出しの帯(.pane-top)にも
+     届きうるが、同じ順位で後に描かれるので手前になる。 */
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -622,10 +644,12 @@ option {
 }
 
 /* 狭い窓で畳む左のカラム(サイドバー・設定のメニュー)の入れ物(Drawer.tsx)。広い窓では
-   カラムを並びの中にそのまま出す。 */
+   カラムを並びの中にそのまま出す。窓を広げたときは、畳んだ位置(.narrow .drawer)から滑って戻し、
+   狭めて畳むとき(左の外へ滑る)と出入りの動きを揃える。起動時は前の位置が無いので動かない。 */
 .drawer {
   display: flex;
   flex-shrink: 0;
+  transition: transform var(--motion-duration) ease-out;
 }
 
 /* 狭い窓では内容の上に重ね、左の外から滑らせて出し入れする。閉じたら、滑り終えてから
@@ -685,6 +709,7 @@ option {
 
 /* 動きを減らす設定では、滑らせずに切り替える。 */
 @media (prefers-reduced-motion: reduce) {
+  .drawer,
   .narrow .drawer,
   .narrow .drawer.open,
   .drawer-backdrop,
@@ -1224,17 +1249,21 @@ details[open] > summary > .disclosure-mark,
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* スクロールするのは本文だけ。見出しの帯の影も、上と左右はここで切る。 */
+  overflow: hidden;
 }
 
-/* 見出しは本文(.settings-content > *)と同じ幅の列に置き、左端を揃える。 */
+/* 見出しは、窓の幅いっぱいの帯(.pane-top)の中で本文(.settings-content > *)と同じ幅の列に置き、
+   左端を揃える。高さは会話欄の見出しの行と揃え、左のカラムの先頭の行と見出しの文字の高さを合わせる。 */
 .settings-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
   max-width: var(--content-max-width);
+  min-height: var(--control-size-md);
   margin-inline: auto;
-  padding: var(--pane-padding) var(--space-4) 0;
+  padding-inline: var(--space-4);
 }
 
 /* 左のカラムの先頭で、戻るボタンと並べる見出し。 */
@@ -1262,8 +1291,10 @@ details[open] > summary > .disclosure-mark,
 .settings-content {
   flex: 1;
   min-height: 0;
-  /* 左右は空けない。ログ・サイドバーと同じ理由で、スクロールバーを窓の端に出す。 */
-  padding: var(--pane-padding) 0;
+  /* 左右は空けない。ログ・サイドバーと同じ理由で、スクロールバーを窓の端に出す。
+     上は会話欄(.chat-log)と同じく、見出しの帯の下の余白と合わせて見出しと本文の間を作る。
+     端の部品のフォーカスの光を切らさない幅(--focus-glow-spread)も兼ねる。 */
+  padding: var(--space-2) 0 var(--pane-padding);
   overflow-y: auto;
 }
 
@@ -1768,6 +1799,9 @@ button.danger {
    都合、内容領域の幅基準ではなくoverlay自身の幅(100%)を基準にする。 */
 .dialog-overlay {
   position: fixed;
+  /* 見出しの帯(.pane-top)と同じ順位にしておき、bodyの末尾に置く(Dialog.tsx)ダイアログを
+     帯より手前に出す。 */
+  z-index: 1;
   inset: 0 0 auto;
   /* 暗幕は見えている範囲を、システムバーの帯の下まで覆う。ダイアログは安全領域の内側に置く。 */
   height: var(--viewport-height);
