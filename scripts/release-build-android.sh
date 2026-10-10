@@ -2,13 +2,14 @@
 # Androidの配布用のビルド(署名したAPK)。手順と確かめ方は.claude/skills/release-build/SKILL.md 7節。
 #
 # デスクトップ向け(release-build.sh)と同じく、ビルドした人の絶対パスをネイティブのライブラリ(.so)から
-# 外してビルドし、出来たAPKの中身(署名・入っているABI・第三者ライセンスの一覧・残ったパス)を
-# 確かめて、`target/dist`に置く。APKはビルドする側のOSによらないので、Linuxでだけ作る。
+# 外してビルドし、出来たAPKの中身(入っているABI・第三者ライセンスの一覧・残ったパス)を確かめてから、
+# 署名して`target/dist`に置く。APKはビルドする側のOSによらないので、Linuxでだけ作る。
 #
 #   scripts/release-build-android.sh [--target aarch64|x86_64]
 #
 # 配布するのは実機向けの`aarch64`(既定)だけ。`x86_64`は、エミュレーターでリリースのAPKを確かめるためのもの。
-# 署名の鍵は環境変数で渡す(`gen/android/app/build.gradle.kts`が読む)。
+# 署名の鍵は環境変数で渡す。パスワードは、署名する`apksigner`にだけ渡す(npm・cargo・Gradleと、
+# ビルドの後も残るGradleのデーモンには渡さない)。
 #
 #   SCITL_ANDROID_KEYSTORE           キーストア(PKCS12)のファイルの絶対パス
 #   SCITL_ANDROID_KEYSTORE_PASSWORD  キーストアのパスワード
@@ -36,14 +37,19 @@ for name in SCITL_ANDROID_KEYSTORE SCITL_ANDROID_KEYSTORE_PASSWORD SCITL_ANDROID
     exit 1
   fi
 done
-# Gradleは相対パスを`gen/android/app`から辿るので、取り違えないよう絶対パスだけを受け付ける。
+# 途中で作業ディレクトリを移るので、取り違えないよう絶対パスだけを受け付ける。
 if [[ "$SCITL_ANDROID_KEYSTORE" != /* || ! -f "$SCITL_ANDROID_KEYSTORE" ]]; then
   echo "SCITL_ANDROID_KEYSTORE は、キーストアのファイルの絶対パスにしてください: $SCITL_ANDROID_KEYSTORE" >&2
   exit 1
 fi
-apksigner="$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -1)"
-if [[ -z "$apksigner" ]]; then
-  echo "apksigner がありません(SDK Managerで「Android SDK Build-Tools」を入れてください)" >&2
+# パスワードは、ここから先で起動するプロセスの環境変数に載せない。
+keystore_password="$SCITL_ANDROID_KEYSTORE_PASSWORD"
+unset SCITL_ANDROID_KEYSTORE_PASSWORD
+build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1 || true)"
+apksigner="$build_tools/apksigner"
+zipalign="$build_tools/zipalign"
+if [[ -z "$build_tools" || ! -x "$apksigner" || ! -x "$zipalign" ]]; then
+  echo "apksigner・zipalign がありません(SDK Managerで「Android SDK Build-Tools」を入れてください)" >&2
   exit 1
 fi
 
@@ -63,7 +69,7 @@ fi
 # 前の配布物と前のビルドのAPKを、今回のものと取り違えないよう先に消す。`target/dist`のほかの
 # 配布物(デスクトップ向け)には触らない。
 dist="$root/target/dist/$name.apk"
-built="$root/crates/scitl-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk"
+built="$root/crates/scitl-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk"
 rm -f "$dist" "$built"
 
 export_remap_flags
@@ -75,16 +81,15 @@ npx tauri android build --apk --target "$target"
 unset CARGO_ENCODED_RUSTFLAGS
 
 if [[ ! -f "$built" ]]; then
-  echo "署名したAPKがありません: $built" >&2
+  echo "ビルドしたAPKがありません: $built" >&2
   exit 1
 fi
 
-# 署名を確かめ、署名した鍵の証明書を表示する(控えてある指紋と見比べる)。
-"$apksigner" verify --print-certs "$built"
-
 # APKはzipで、中のファイルは圧縮されているので、展開してから中身を確かめる。
+# 署名まで終えずに抜けたら、検査していない・署名の無いものが配布物の置き場所に残らないようにする。
 unpacked="$(mktemp -d)"
-trap 'rm -rf "$unpacked"' EXIT
+completed=""
+trap 'rm -rf "$unpacked"; [[ -n "$completed" ]] || rm -f "$dist"' EXIT
 unzip -q "$built" -d "$unpacked"
 
 # 入っているネイティブのライブラリが、頼んだABIのものだけか。
@@ -102,6 +107,16 @@ done
 check_no_absolute_paths "$unpacked"
 echo "絶対パスは残っていません"
 
+# 署名する。署名はAPKの中のファイルを変えないので、上の検査は署名したものにも当てはまる。
+# 署名の前に、中のファイルの位置が揃っていること(署名の後には直せない)を確かめる。
+"$zipalign" -c 4 "$built"
 mkdir -p "$root/target/dist"
-cp "$built" "$dist"
+SCITL_ANDROID_KEYSTORE_PASSWORD="$keystore_password" "$apksigner" sign \
+  --ks "$SCITL_ANDROID_KEYSTORE" --ks-type PKCS12 --ks-key-alias "$SCITL_ANDROID_KEY_ALIAS" \
+  --ks-pass env:SCITL_ANDROID_KEYSTORE_PASSWORD --key-pass env:SCITL_ANDROID_KEYSTORE_PASSWORD \
+  --out "$dist" "$built"
+rm -f "$dist.idsig"
+# 署名を確かめ、署名した鍵の証明書を表示する(控えてある指紋と見比べる)。
+"$apksigner" verify --print-certs "$dist"
+completed=1
 echo "配布物: $dist"

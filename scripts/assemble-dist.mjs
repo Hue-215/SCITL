@@ -378,7 +378,7 @@ const POM_LICENSES = [[/^https?:\/\/www\.apache\.org\/licenses\/LICENSE-2\.0(\.t
 
 // POMにライセンスを書いていない依存の扱い。
 const POM_WITHOUT_LICENSE = {
-  // 中身の無いパッケージ(Guavaとの衝突を避けるためのもの)。ライセンスは親のPOM(guava-parent)にある。
+  // GuavaからListenableFutureだけを切り出したパッケージ。ライセンスは親のPOM(guava-parent)にある。
   'com.google.guava:listenablefuture': { license: 'Apache-2.0' },
   // クレート`rustls-platform-verifier-android`が同梱するKotlinの部品。
   'rustls:rustls-platform-verifier': { crate: 'rustls-platform-verifier-android' },
@@ -389,7 +389,9 @@ const POM_WITHOUT_LICENSE = {
 const POM_LICENSE_TEXT = { 'Apache-2.0': 'apache-2.0' }
 
 // Gradleのタスク`scitlReleaseDependencies`が書き出した一覧から、本文を作る。見分けられないライセンス・
-// 許容していないライセンスの依存があれば失敗する。
+// 許容していないライセンスの依存があれば失敗する。jarの中の表示のファイル(META-INFのNOTICE・LICENSE)は、
+// Androidのビルドが既定でAPKから除くものがあるので、ここに載せる(取り込んだ別の部品のライセンスも
+// ここに入る。POMには現れないので、`accepted`とは照らせない)。
 function gradleLicenses(file) {
   if (!existsSync(file)) fail(`missing: ${file}`)
   const accepted = acceptedLicenses()
@@ -397,8 +399,15 @@ function gradleLicenses(file) {
   const index = []
   const used = new Set()
   const rejected = []
+  const notices = new Map()
   for (const dep of JSON.parse(readFileSync(file, 'utf8'))) {
     const id = `${dep.group}:${dep.name}`
+    for (const { file: name, text } of dep.notices) {
+      const normalized = text.replace(/\r\n/g, '\n').trim()
+      const key = createHash('sha256').update(normalized).digest('hex')
+      if (!notices.has(key)) notices.set(key, { text: normalized, labels: [] })
+      notices.get(key).labels.push(`${id} ${dep.version}: ${name}`)
+    }
     const where = dep.url ?? `https://mvnrepository.com/artifact/${dep.group}/${dep.name}`
     const known = dep.licenses.length === 0 ? POM_WITHOUT_LICENSE[id] : undefined
     if (known) stale.delete(id)
@@ -430,9 +439,10 @@ function gradleLicenses(file) {
     'Third-party licenses (Android libraries)',
     '',
     'The Android package of SCITL Task Companion includes the libraries listed below,',
-    'resolved from Maven repositories. Their packages point to the license by address and',
-    'carry no license file, so the standard text of each license follows the list. Notice',
-    'files shipped inside a library are kept in META-INF of the package.',
+    'resolved from Maven repositories. Most of their packages point to the license by',
+    'address and carry no license file, so the standard text of each license follows the',
+    'list. The notice and license files that some libraries do carry come after it, each',
+    'headed by the libraries it comes from.',
     '',
     ...index,
     '',
@@ -444,6 +454,7 @@ function gradleLicenses(file) {
       ...suppliedFiles(POM_LICENSE_TEXT[license]).map(([, text]) => text.trim()),
       '',
     ]),
+    ...[...notices.values()].flatMap(({ text, labels }) => [rule, ...labels, rule, '', text, '']),
   ].join('\n')
 }
 

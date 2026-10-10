@@ -244,8 +244,11 @@ scripts/release-build-android.sh
 - 配布するのは実機向けの`arm64-v8a`だけ(4つのABIをまとめると、APKが数倍の大きさになる)。
   エミュレーターでリリースのAPKを確かめるときは`--target x86_64`を付ける
   (`scitl-<版>-android-x86_64.apk`が出来る。配布しない)
-- 署名の設定は`gen/android/app/build.gradle.kts`が環境変数から読む。環境変数が無いまま
-  `npx tauri android build`を叩くと、署名の無い(端末に入れられない)APKが出来る
+- 署名はスクリプトが`apksigner`で行う。Gradleには署名の設定を置いていないので、
+  `npx tauri android build`を直接叩くと、署名の無い(端末に入れられない)APKが出来る
+- パスワードは`apksigner`にだけ渡す(スクリプトが最初に環境変数から外す)。Gradleに渡すと、ビルドの
+  後も数時間残るGradle・Kotlinのデーモンの環境変数に載り、同じ機械のほかのプロセスから読める。
+  npmの依存のスクリプトや、依存クレートの`build.rs`にも届く
 - `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`の扱いは1節と同じ。フラグが開発時と違うので、
   `target/<ターゲット>/release`は全部作り直しになる
 
@@ -268,9 +271,11 @@ scripts/release-build-android.sh
   - `android.txt`は、Gradleが解決したMavenの依存(androidx・Material・Kotlinの標準ライブラリ等)。
     Gradleのタスク`scitlReleaseDependencies`が、リリースのAPKに入るものと各POMの書くライセンスを
     書き出し、`assemble-dist.mjs`がライセンスを見分けて`about.toml`の`accepted`と照らす。
-    見分けられないもの・許容外のものがあれば失敗する。Mavenのパッケージはライセンス文を持たないので、
-    標準の文面を載せる(`licenses/apache-2.0`)。Tauri本体とプラグインのKotlin側、
-    `rustls-platform-verifier`のKotlinの部品は、Rustのクレートの中身なので`rust.txt`の側で足りる
+    見分けられないもの・許容外のものがあれば失敗する。Mavenのパッケージの多くはライセンス文を
+    持たないので、標準の文面を載せる(`licenses/apache-2.0`)。jarの中に表示のファイル(`META-INF`の
+    NOTICE・LICENSE)を持つもの(Jackson等)は、それも載せる。AndroidのビルドはこれらをAPKから
+    除くことがある(`META-INF/NOTICE`・`META-INF/LICENSE`は既定で除かれる)。Tauri本体とプラグインの
+    Kotlin側、`rustls-platform-verifier`のKotlinの部品は、Rustのクレートの中身なので`rust.txt`の側で足りる
   - `assemble-dist.mjs --check-licenses`(CIと、ビルドの前)は、Android向けのクレートの一覧も確かめる。
     Mavenの依存はGradleを動かさないと分からないので、APKを作るときにだけ確かめる
 - **縮小(R8)**: リリースビルドはR8が使われていないクラスを消し、名前を変える。RustからJNIで呼ぶ
@@ -279,12 +284,13 @@ scripts/release-build-android.sh
 
 ### 確かめる
 
-スクリプトは、出来たAPKについて次を確かめ、通れば`target/dist`へ置く。
+スクリプトは、出来たAPKについて次を確かめ、通れば署名して`target/dist`へ置く。
 
-- 署名が検証できること(`apksigner verify`)。署名した鍵の証明書の指紋を表示するので、控えと見比べる
 - 入っているネイティブのライブラリが、頼んだABIのものだけであること
 - `assets/licenses/`に一覧が入っていること
 - APKを展開したすべてのファイルに、3節の3つのパスが残っていないこと
+- 署名したあと、署名が検証できること(`apksigner verify`)。署名した鍵の証明書の指紋を表示するので、
+  控えと見比べる
 
 リリースのAPKはWebViewのデバッグ(`android-check`スキル4節の実寸の測定)が使えない。撮る・触るは使える。
 手で確かめるのは次のとおり。

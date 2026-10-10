@@ -1,9 +1,11 @@
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
+import java.util.zip.ZipFile
 import javax.inject.Inject
 import javax.xml.parsers.DocumentBuilderFactory
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.result.ResolvedArtifactResult
+import org.gradle.api.attributes.Attribute
 import org.gradle.maven.MavenModule
 import org.gradle.maven.MavenPomArtifact
 import org.gradle.process.ExecOperations
@@ -112,21 +114,6 @@ android {
         versionCode = scitlVersionCode
         versionName = scitlVersionName
     }
-    // リリースの署名の鍵はリポジトリに置かず、場所とパスワードを環境変数から読む。無ければ、
-    // 署名の無い(端末に入れられない)APKが出来る。配布物は`scripts/release-build-android.sh`で作る
-    // (.claude/skills/release-build「Androidの配布物」)。
-    val releaseKeystore = System.getenv("SCITL_ANDROID_KEYSTORE")
-    signingConfigs {
-        if (releaseKeystore != null) {
-            create("release") {
-                storeFile = file(releaseKeystore)
-                storePassword = System.getenv("SCITL_ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("SCITL_ANDROID_KEY_ALIAS")
-                // PKCS12のキーストアは、鍵のパスワードがキーストアのものと同じ。
-                keyPassword = System.getenv("SCITL_ANDROID_KEYSTORE_PASSWORD")
-            }
-        }
-    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -140,7 +127,9 @@ android {
             }
         }
         getByName("release") {
-            signingConfig = signingConfigs.findByName("release")
+            // ここでは署名しない(署名の無いAPKは端末に入れられない)。配布物は
+            // `scripts/release-build-android.sh`が署名する。鍵のパスワードをGradleに渡すと、ビルドの
+            // 後も残るデーモンの環境変数に載るため(.claude/skills/release-build「Androidの配布物」)。
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
@@ -174,8 +163,9 @@ dependencies {
 }
 
 // 第三者ライセンスの一覧のために、リリースのAPKに入るMavenの依存と、それぞれのPOMが書いている
-// ライセンスを書き出す。プロジェクトとして入るTauri本体とプラグインのKotlin側は、Rustのクレートの
-// 中身なので、クレートの一覧で足りる。
+// ライセンス、jarの中に持っている表示のファイル(META-INFのNOTICE・LICENSE)を書き出す。表示の
+// ファイルは、Androidのビルドが既定でAPKから除くものがあるので、一覧の側に載せる。プロジェクトとして
+// 入るTauri本体とプラグインのKotlin側は、Rustのクレートの中身なので、クレートの一覧で足りる。
 val scitlReleaseDependencies = tasks.register("scitlReleaseDependencies") {
     val output = layout.buildDirectory.file("scitl/release-dependencies.json")
     outputs.file(output)
@@ -191,9 +181,24 @@ val scitlReleaseDependencies = tasks.register("scitlReleaseDependencies") {
                 component.id to component.getArtifacts(MavenPomArtifact::class.java)
                     .filterIsInstance<ResolvedArtifactResult>().single().file
             }
+        // aarは、中のclasses.jarを取り出した形で受け取る(クラスパスに載るものと同じ)。
+        val notices = configurations["universalReleaseRuntimeClasspath"].incoming.artifactView {
+            attributes { attribute(Attribute.of("artifactType", String::class.java), "android-classes-jar") }
+        }.artifacts.groupBy({ it.id.componentIdentifier }) { artifact ->
+            ZipFile(artifact.file).use { jar ->
+                jar.entries().asSequence()
+                    .filter { Regex("""META-INF/[^/]*(NOTICE|LICEN[SC]E)[^/]*""", RegexOption.IGNORE_CASE).matches(it.name) }
+                    .map { mapOf("file" to it.name, "text" to jar.getInputStream(it).readBytes().toString(Charsets.UTF_8)) }
+                    .toList()
+            }
+        }.mapValues { it.value.flatten() }
+        // POMは外から取ってきたファイルなので、外部の実体を読ませない。
+        val pomParser = DocumentBuilderFactory.newInstance().apply {
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        }
         val list = ids.map { id ->
             val pom = poms[id] ?: error("POMを引けない: $id")
-            val project = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pom).documentElement
+            val project = pomParser.newDocumentBuilder().parse(pom).documentElement
             fun Element.children(name: String) = (0 until childNodes.length)
                 .map { childNodes.item(it) }.filterIsInstance<Element>().filter { it.tagName == name }
             fun Element.text(name: String) = children(name).firstOrNull()?.textContent?.trim()
@@ -204,6 +209,7 @@ val scitlReleaseDependencies = tasks.register("scitlReleaseDependencies") {
                 "url" to project.text("url"),
                 "licenses" to project.children("licenses").flatMap { it.children("license") }
                     .map { mapOf("name" to it.text("name"), "url" to it.text("url")) },
+                "notices" to notices[id].orEmpty(),
             )
         }.sortedBy { "${it["group"]}:${it["name"]}" }
         output.get().asFile.writeText(JsonOutput.prettyPrint(JsonOutput.toJson(list)))
