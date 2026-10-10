@@ -16,6 +16,11 @@
 #   SCITL_ANDROID_KEY_ALIAS          鍵の別名
 set -euo pipefail
 
+# 本番の署名の鍵の証明書の指紋(SHA-256)。Androidは、同じ鍵で署名したAPKだけを上書きとして
+# 受け付けるので、配布するAPKがこの鍵で署名されていなければ失敗にする。指紋は公開してよい情報
+# (配ったAPKから誰でも読める)。鍵そのものはリポジトリに置かない。
+release_certificate=88f470c4a4f70d038c0112677a68d0ffc41f64be6ff5b1919b12e3192989b130
+
 target=aarch64
 case "$#:${1:-}:${2:-}" in
   0::) ;;
@@ -116,7 +121,16 @@ SCITL_ANDROID_KEYSTORE_PASSWORD="$keystore_password" "$apksigner" sign \
   --ks-pass env:SCITL_ANDROID_KEYSTORE_PASSWORD --key-pass env:SCITL_ANDROID_KEYSTORE_PASSWORD \
   --out "$dist" "$built"
 rm -f "$dist.idsig"
-# 署名を確かめ、署名した鍵の証明書を表示する(控えてある指紋と見比べる)。
-"$apksigner" verify --print-certs "$dist"
+# 署名を確かめ、署名した鍵が本番のものかを見る。エミュレーターで確かめるためのAPK(x86_64)は
+# 配布しないので、別の鍵でも通す。
+certificates="$("$apksigner" verify --print-certs "$dist" | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p')"
+if [[ "$certificates" == "$release_certificate" ]]; then
+  echo "本番の鍵で署名されています"
+elif [[ "$target" == aarch64 ]]; then
+  echo "本番の鍵で署名されていません(署名した鍵の証明書のSHA-256: ${certificates:-読み取れない})" >&2
+  exit 1
+else
+  echo "本番の鍵ではない鍵で署名されています。このAPKは配布しないでください: $certificates"
+fi
 completed=1
 echo "配布物: $dist"

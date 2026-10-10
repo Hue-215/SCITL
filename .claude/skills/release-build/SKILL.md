@@ -216,13 +216,16 @@ Androidは、同じ鍵で署名されたAPKだけを、入っているアプリ�
   置かない**。Claudeは本番の鍵を作らず、パスワードを受け取らない。スクリプトを本番の鍵で走らせるのは
   メンテナ
 - 控えは、キーストアのファイルとパスワードを、ビルドする機械とは別の場所に置く(置き場所はメンテナが
-  決める)。鍵の証明書の指紋(SHA-256)も控えておき、スクリプトが表示するものと見比べる
+  決める)
+- 本番の鍵の証明書の指紋(SHA-256)は、`release-build-android.sh`の`release_certificate`に書いてある
+  (指紋は、配ったAPKから誰でも読める公開の情報)。スクリプトは、配布するAPK(arm64)がこの鍵で
+  署名されていなければ失敗にする。控えから戻したキーストアが正しいかも、この指紋で確かめる
 - 鍵はPKCS12のキーストアに1つ作る。有効期間は、切れると更新を出せなくなるので長くする
 
 ```sh
 keytool -genkeypair -keystore <置き場所>/scitl-release.p12 -storetype PKCS12 \
   -alias scitl -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=SCITL Task Companion"
-keytool -list -v -keystore <置き場所>/scitl-release.p12 -alias scitl | grep SHA256   # 指紋を控える
+keytool -list -v -keystore <置き場所>/scitl-release.p12 -alias scitl | grep SHA256   # 指紋
 ```
 
 デバッグビルド(`tauri android build --debug`)は、機械ごとに作られるデバッグ用の鍵で署名される。
@@ -243,7 +246,8 @@ scripts/release-build-android.sh
   よらないので、スクリプトはLinux用だけを置く(Windowsでは作らない)
 - 配布するのは実機向けの`arm64-v8a`だけ(4つのABIをまとめると、APKが数倍の大きさになる)。
   エミュレーターでリリースのAPKを確かめるときは`--target x86_64`を付ける
-  (`scitl-<版>-android-x86_64.apk`が出来る。配布しない)
+  (`scitl-<版>-android-x86_64.apk`が出来る。配布しない。本番の鍵でなくても通るので、Claudeが
+  確かめるときは、その場で作った使い捨ての鍵を使う)
 - 署名はスクリプトが`apksigner`で行う。Gradleには署名の設定を置いていないので、
   `npx tauri android build`を直接叩くと、署名の無い(端末に入れられない)APKが出来る
 - パスワードは`apksigner`にだけ渡す(スクリプトが最初に環境変数から外す)。Gradleに渡すと、ビルドの
@@ -289,8 +293,8 @@ scripts/release-build-android.sh
 - 入っているネイティブのライブラリが、頼んだABIのものだけであること
 - `assets/licenses/`に一覧が入っていること
 - APKを展開したすべてのファイルに、3節の3つのパスが残っていないこと
-- 署名したあと、署名が検証できること(`apksigner verify`)。署名した鍵の証明書の指紋を表示するので、
-  控えと見比べる
+- 署名したあと、署名が検証できることと、署名した鍵が本番のものであること(`apksigner verify`が出す
+  証明書の指紋を`release_certificate`と比べる。x86_64は、違っていても知らせるだけ)
 
 リリースのAPKはWebViewのデバッグ(`android-check`スキル4節の実寸の測定)が使えない。撮る・触るは使える。
 手で確かめるのは次のとおり。
