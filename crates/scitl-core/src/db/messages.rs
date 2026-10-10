@@ -104,7 +104,7 @@ pub struct NewMessage<'a> {
     pub origin: Origin<'a>,
     /// `role`が`Error`のときのみ`Some`(`CHECK ((role = 'error') = (error_kind IS NOT NULL))`)。
     pub error_kind: Option<&'a str>,
-    /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面の「詳細を表示」専用で、
+    /// エラー発言の詳細(`orchestration::TurnFailure::detail`)。画面のエラー発言の「詳細」専用で、
     /// モデル入力・エクスポートには使わない。
     pub error_detail: Option<&'a str>,
     /// ターンの返信の行(`Origin::Turn`の通常発言)だけが持ち、それには必ず持つ

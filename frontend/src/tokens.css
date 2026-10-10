@@ -146,6 +146,10 @@
      検索欄と7行ほどが収まる。 */
   --option-list-max-height: 20rem;
 
+  /* 長いコードの塊を畳んだときに見せる高さ。補助文の大きさ(--font-size-sm)でおよそ12行。
+     途中の行で切れてよい(続きがあることが分かる)ので、行数からは決めていない。 */
+  --code-collapsed-max-height: 15rem;
+
   /* 画面の入れ物(#root)の高さ。窓の高さを既定にし、viewport.tsが見えている範囲(Androidでは
      ソフトキーボードを除いた範囲)の高さで上書きし続ける。 */
   --viewport-height: 100dvh;

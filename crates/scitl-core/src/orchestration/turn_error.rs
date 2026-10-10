@@ -112,7 +112,7 @@ impl TurnFailure {
         i18n::text(Language::En, &message_key(self.kind())).to_string()
     }
 
-    /// 画面の「詳細を表示」専用。`content`(定型文言)には混ぜない。
+    /// 画面のエラー発言の「詳細」専用。`content`(定型文言)には混ぜない。
     pub fn detail(&self) -> Option<&str> {
         match self {
             TurnFailure::ResponseTimeout { detail }

@@ -334,6 +334,7 @@ option {
   .list-row,
   .settings-tab,
   .entry-actions button,
+  .code-block button,
   .chat-model-toggle,
   .chat-header-description-toggle
 ) {
@@ -359,6 +360,7 @@ option {
    (--control-size-md)まで広げる。見た目の文字の大きさは変えない。 */
 @media (pointer: coarse) {
   .entry-actions button,
+  .code-block button,
   .chat-model-toggle,
   .chat-header-description-toggle,
   .chip,
@@ -367,6 +369,7 @@ option {
   }
 
   .entry-actions button,
+  .code-block button,
   .chip-remove {
     min-width: var(--control-size-md);
   }
@@ -943,10 +946,6 @@ details[open] > summary > .disclosure-mark,
   color: var(--color-text-secondary);
 }
 
-.entry-error-detail {
-  font-size: var(--font-size-sm);
-}
-
 /* Markdownとして描画しない本文(エラー発言・応答待ち)。改行入りの文言を空白に潰さない。 */
 .entry-content {
   white-space: pre-wrap;
@@ -990,12 +989,84 @@ details[open] > summary > .disclosure-mark,
   list-style: decimal;
 }
 
-.markdown pre {
-  padding: var(--space-2);
+/* コードの塊(CodeBlock.tsx)。見出しの行(名前とコピー)・中身・長いときの開閉を1つの箱に入れる。
+   見出しの行とボタンは画面の文字なので、本文の中でもSansにする。 */
+.code-block {
+  min-width: 0;
+  max-width: 100%;
   background: var(--color-bg);
   color: var(--color-text);
-  overflow-x: auto;
   border-radius: var(--radius);
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  /* 開閉のボタンの高さ(1行分。指で操作する端末では当たり判定の大きさ)。畳んだ中身の高さから引く。 */
+  --code-toggle-height: calc(var(--font-size-sm) * var(--line-height-normal));
+
+  @media (pointer: coarse) {
+    --code-toggle-height: var(--control-size-md);
+  }
+}
+
+/* 名前が無いときもコピーは右端に置く。名前は幅に収まらない分を省略する。
+   コピーのボタンは、ホバーで塗られる箱が塊の縁に当たらないよう、上と右を同じだけ離す。 */
+.code-block-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) 0 var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.code-block-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 本文のコードブロックの名前(言語名)はモデルが書くので、中身と同じ等幅で出す。 */
+.markdown .code-block-label {
+  font-family: var(--font-family-mono);
+}
+
+.code-block-copy {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+}
+
+.code-block pre {
+  padding: 0 var(--space-2) var(--space-2);
+  overflow-x: auto;
+}
+
+/* 畳んでいる間は先頭だけを見せる。収まっているかはCodeBlock.tsxがこの箱で測る。
+   収まらず開閉のボタンを出すときは、ボタンとその下の余白の分だけ低くして、塊の高さを測る前と
+   同じに保つ(測ったあとに高さが変わると、下端に合わせた会話欄がずれる)。 */
+.code-block pre.code-block-clipped {
+  max-height: var(--code-collapsed-max-height);
+  overflow-y: hidden;
+}
+
+.code-block pre.code-block-overflowing {
+  max-height: calc(var(--code-collapsed-max-height) - var(--code-toggle-height) - var(--space-1));
+  /* 畳んだ下端は行の途中で切れる。そこへ横のスクロールバーが重なると切れた行と開閉のボタンの間が
+     散らかるので、畳んでいる間はバーを描かない(横へは動かせる。開けばバーが出る)。 */
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* コピーと開閉のボタン。文字の端を中身の端に揃える(ボタンの左右の余白の分だけ、見出しの行の右と
+   開閉のボタンの左右を詰める)。 */
+.code-block button {
+  padding: 0 var(--space-1);
+}
+
+.code-block > button {
+  height: var(--code-toggle-height);
+  margin: 0 var(--space-1) var(--space-1);
 }
 
 /* 列の多い表は吹き出しを押し広げず、表の中だけで横にスクロールさせる。 */
@@ -1019,9 +1090,14 @@ details[open] > summary > .disclosure-mark,
   gap: calc(var(--space-2) - 2 * var(--entry-action-padding-inline));
 }
 
-.entry-actions button {
+/* コードの塊のボタン(コピー・開閉)も同じ文字にする。 */
+.entry-actions button,
+.code-block button {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+}
+
+.entry-actions button {
   padding: 0 var(--entry-action-padding-inline);
 }
 
@@ -1043,8 +1119,8 @@ details[open] > summary > .disclosure-mark,
 /* <details>はflexコンテナにしない(summaryの開閉描画がエンジンごとに崩れるため)。
    そのため中身の間隔だけは入れ物のgapではなくmarginで持つ。 */
 
-/* 開閉する行(思考・ツール呼び出し・エラーの詳細)を開いた中身の箱。本文の吹き出しと見分けが
-   付くよう、塗らずに輪郭線だけを持つ。 */
+/* 開閉する行(思考・ツール呼び出し)を開いた中身の箱。本文の吹き出しと見分けが付くよう、塗らずに
+   輪郭線だけを持つ。 */
 .detail-box {
   margin-top: var(--space-1);
   padding: var(--space-2);
@@ -1127,11 +1203,6 @@ details[open] > summary > .disclosure-mark,
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-/* エラーの吹き出しの中では、灰色の線は塗りから浮くので警告の色で引く。 */
-.entry-error .detail-box {
-  border-color: var(--color-danger);
 }
 
 .operation-label {

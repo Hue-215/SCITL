@@ -1,12 +1,36 @@
-import { memo, useRef } from 'react'
+import { isValidElement, memo, useRef, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { openLink } from './api'
+import CodeBlock from './CodeBlock'
 import remarkInertHtml from './remarkInertHtml'
 import remarkSoftBreaks from './remarkSoftBreaks'
 
 // remarkSoftBreaksは、remarkInertHtmlが`<br>`から作った改行を見て二重の改行を避けるため後に置く
 const REMARK_PLUGINS = [remarkGfm, remarkInertHtml, remarkSoftBreaks]
+
+// コードブロックの言語名(```の後ろに書かれた最初の語)。<pre>の中の<code>に`language-…`の
+// クラスとして載ってくる。モデルが書くものなので、言語名らしい短い英数字のときだけ出す
+// (見出しの行に文を書いて、SCITL自身の表示を装えないように)。
+const LANGUAGE_CLASS = /(?:^|\s)language-([A-Za-z0-9+#._-]{1,32})(?:\s|$)/
+
+function languageOf(children: ReactNode): string | null {
+  if (!isValidElement<{ className?: string }>(children)) return null
+  return LANGUAGE_CLASS.exec(children.props.className ?? '')?.[1] ?? null
+}
+
+// コードブロックの描き方。描くたびに作り直すと開閉の状態が消えるので、モジュールに1つずつ置く。
+function Pre({ children }: { children?: ReactNode }) {
+  return <CodeBlock label={languageOf(children)}>{children}</CodeBlock>
+}
+
+function StreamingPre({ children }: { children?: ReactNode }) {
+  return (
+    <CodeBlock label={languageOf(children)} collapse={false}>
+      {children}
+    </CodeBlock>
+  )
+}
 
 // 発言本文のMarkdown描画。react-markdownはHTML文字列を経由せずReactの要素を直接組み
 // 立てるため、innerHTMLへの注入経路を持たない。生のHTML・画像はremarkInertHtmlが構文木の
@@ -14,10 +38,19 @@ const REMARK_PLUGINS = [remarkGfm, remarkInertHtml, remarkSoftBreaks]
 //
 // 本文が変わらない限り描き直さない(`memo`)。会話欄は入力欄と同じ親の下にあり、1文字打つ
 // たびに全発言を解析し直すと、会話が長いほど入力が重くなるため。
-export default memo(function Markdown({ text }: { text: string }) {
+//
+// `streaming`は、書いている途中の本文か。途中の間は長いコードブロックを畳まない。
+export default memo(function Markdown({
+  text,
+  streaming = false,
+}: {
+  text: string
+  streaming?: boolean
+}) {
   const rootRef = useRef<HTMLDivElement>(null)
 
   const components: Components = {
+    pre: streaming ? StreamingPre : Pre,
     // リンクはWebView内で遷移させず、Rust側が出す確認のダイアログを経てOSのブラウザで開く。<a>に
     // hrefを持たせないことで、クリック処理以外の経路(中クリック・ドラッグ・右
     // クリックメニュー・エンジンによるDNS先読み)をまとめて無くす。書かれたURLをそのまま
