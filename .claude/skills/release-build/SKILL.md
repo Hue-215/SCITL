@@ -237,9 +237,13 @@ keytool -list -v -keystore <置き場所>/scitl-release.p12 -alias scitl | grep 
 ```sh
 export SCITL_ANDROID_KEYSTORE=<キーストアのファイルの絶対パス>
 export SCITL_ANDROID_KEY_ALIAS=scitl
-read -rs SCITL_ANDROID_KEYSTORE_PASSWORD && export SCITL_ANDROID_KEYSTORE_PASSWORD   # 履歴に残さない
+read -rsp 'キーストアのパスワード: ' SCITL_ANDROID_KEYSTORE_PASSWORD; echo   # 履歴に残さない
+export SCITL_ANDROID_KEYSTORE_PASSWORD
 scripts/release-build-android.sh
 ```
+
+`read`は1行ずつ打つ(貼り付ける)。まとめて貼ると、パスワードを待っている間に次の行が入力として
+読まれ、空のまま(または次の行をパスワードとして)進む。
 
 - 前提: 1節のものに加えて、`docs/spec/architecture/tech-stack.md`「Androidのビルド」の道具
   (SDK・NDK・JDK・Rustのターゲット`aarch64-linux-android`)と環境変数。APKはビルドする側のOSに
