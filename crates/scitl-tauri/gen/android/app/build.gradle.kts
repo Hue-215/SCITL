@@ -84,6 +84,20 @@ val rustlsPlatformVerifierVersion = cargoPackages.let { packages ->
     packages.single { it["name"] == "rustls-platform-verifier-android" }["version"] as String
 }
 
+val rustlsPlatformVerifierGroup = "org.rustls"
+
+// 取った部品を照らすSHA-256の項が、使う座標(グループ・名前・版)にあることを確かめる。
+// `verification-metadata.xml`はほかのグループを照らさないので、グループの名前が変わったまま
+// 項を直し忘れると、照らさずに通ってしまう。版だけが変わったときはGradleが止めるが、
+// 理由が分かるようここでも止める。
+file("../gradle/verification-metadata.xml").readText().let { metadata ->
+    val component = """<component group="$rustlsPlatformVerifierGroup" name="rustls-platform-verifier" version="$rustlsPlatformVerifierVersion">"""
+    check(metadata.contains(component)) {
+        "gradle/verification-metadata.xmlに、Kotlinの部品の$rustlsPlatformVerifierVersion のSHA-256が無い" +
+            "(docs/spec/architecture/network-secrets.md「Androidの信頼ルート」の手順で足す)"
+    }
+}
+
 repositories {
     // このグループは上流のリポジトリからだけ取る。GoogleやMaven Centralに同じ名前のものが出ても使わない。
     // リポジトリはブランチ`maven-archive`で、書き換えられうるので、取った中身は
@@ -92,7 +106,7 @@ repositories {
         forRepository {
             maven { url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/") }
         }
-        filter { includeGroup("org.rustls") }
+        filter { includeGroup(rustlsPlatformVerifierGroup) }
     }
 }
 
@@ -147,7 +161,7 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
-    implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
+    implementation("$rustlsPlatformVerifierGroup:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

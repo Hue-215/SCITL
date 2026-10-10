@@ -413,7 +413,7 @@ function gradleLicenses(file) {
     const known = dep.licenses.length === 0 ? POM_WITHOUT_LICENSE[id] : undefined
     if (known) stale.delete(id)
     if (known?.crate) {
-      index.push(`${id} ${dep.version}  (part of the Rust crate ${known.crate}; see rust.txt)`)
+      index.push(`${id} ${dep.version}  (same repository and license as the Rust crate ${known.crate}; see rust.txt)`)
       continue
     }
     const licenses = known

@@ -242,7 +242,7 @@ export SCITL_ANDROID_KEYSTORE_PASSWORD
 scripts/release-build-android.sh
 ```
 
-`read`は1行ずつ打つ(貼り付ける)。まとめて貼ると、パスワードを待っている間に次の行が入力として
+bashで実行する(zshの`read -p`は別の意味になる)。`read`は1行ずつ打つ(貼り付ける)。まとめて貼ると、パスワードを待っている間に次の行が入力として
 読まれ、空のまま(または次の行をパスワードとして)進む。
 
 - 前提: 1節のものに加えて、`docs/spec/architecture/tech-stack.md`「Androidのビルド」の道具
