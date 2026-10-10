@@ -9,7 +9,7 @@
  *   --color-primary, --color-primary-container, --color-on-primary-container, --color-primary-button,
  *   --color-danger, --color-danger-container, --color-on-danger-container
  * 同じく theme.ts が発行する奥行きのトークン(buildElevationと対応):
- *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-focus
+ *   --shadow-raise, --shadow-sink, --shadow-lift, --shadow-pinned, --shadow-focus
  */
 
 /* ウェイトを足し引きしたら、下の--font-weight-*とui.md「書体とウェイト」の表も直す。 */

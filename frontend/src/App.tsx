@@ -374,37 +374,39 @@ export default function App() {
       </Drawer>
 
       <main inert={drawer.shown} {...swipeToOpen}>
-        {task ? (
-          <TaskHeader
-            key={task.id}
-            task={task}
-            drawerToggle={drawerToggle}
-            disabled={disableActions}
-            onRename={(title) => runTaskOperation(task.id, () => renameTask(task.id, title))}
-            onSetArchived={(archived) =>
-              runTaskOperation(task.id, async () => {
-                await setTaskArchived(task.id, archived)
-                if (archived) leaveIfShown(task.id)
-              })
-            }
-            onDelete={() =>
-              runTaskOperation(task.id, async () => {
-                await deleteTask(task.id)
-                leaveIfShown(task.id)
-              })
-            }
-          />
-        ) : (
-          <header className="chat-header">
-            <div className="chat-header-row">
-              {drawerToggle}
-              <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
-            </div>
-          </header>
-        )}
+        <div className="pane-top">
+          {task ? (
+            <TaskHeader
+              key={task.id}
+              task={task}
+              drawerToggle={drawerToggle}
+              disabled={disableActions}
+              onRename={(title) => runTaskOperation(task.id, () => renameTask(task.id, title))}
+              onSetArchived={(archived) =>
+                runTaskOperation(task.id, async () => {
+                  await setTaskArchived(task.id, archived)
+                  if (archived) leaveIfShown(task.id)
+                })
+              }
+              onDelete={() =>
+                runTaskOperation(task.id, async () => {
+                  await deleteTask(task.id)
+                  leaveIfShown(task.id)
+                })
+              }
+            />
+          ) : (
+            <header className="chat-header">
+              <div className="chat-header-row">
+                {drawerToggle}
+                <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
+              </div>
+            </header>
+          )}
 
-        {error && <p className="error">{error}</p>}
-        {addBlocked && <p className="error">{addBlocked}</p>}
+          {error && <p className="error">{error}</p>}
+          {addBlocked && <p className="error">{addBlocked}</p>}
+        </div>
 
         <ChatLog
           logRef={logRef}

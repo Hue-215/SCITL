@@ -173,9 +173,11 @@ export default function Settings({ onClose }: SettingsProps) {
       </Drawer>
 
       <div className="settings-main" inert={drawer.shown} {...swipeToOpen}>
-        <header className="settings-header">
-          <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
-          <h1>{t(tabLabel)}</h1>
+        <header className="pane-top">
+          <div className="settings-header">
+            <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
+            <h1>{t(tabLabel)}</h1>
+          </div>
         </header>
 
         <div className="settings-content">
