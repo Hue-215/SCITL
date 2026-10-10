@@ -622,10 +622,12 @@ option {
 }
 
 /* 狭い窓で畳む左のカラム(サイドバー・設定のメニュー)の入れ物(Drawer.tsx)。広い窓では
-   カラムを並びの中にそのまま出す。 */
+   カラムを並びの中にそのまま出す。窓を広げたときは、畳んだ位置(.narrow .drawer)から滑って戻し、
+   狭めて畳むとき(左の外へ滑る)と出入りの動きを揃える。起動時は前の位置が無いので動かない。 */
 .drawer {
   display: flex;
   flex-shrink: 0;
+  transition: transform var(--motion-duration) ease-out;
 }
 
 /* 狭い窓では内容の上に重ね、左の外から滑らせて出し入れする。閉じたら、滑り終えてから
@@ -685,6 +687,7 @@ option {
 
 /* 動きを減らす設定では、滑らせずに切り替える。 */
 @media (prefers-reduced-motion: reduce) {
+  .drawer,
   .narrow .drawer,
   .narrow .drawer.open,
   .drawer-backdrop,
