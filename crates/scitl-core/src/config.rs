@@ -174,7 +174,7 @@ impl GeneralConfig {
     }
 }
 
-/// ツール呼び出しの上限(設定画面「ツール/MCP」タブ)。`None`は未設定で、既定値は
+/// ツール呼び出しの上限(設定画面「MCPサーバー」タブ)。`None`は未設定で、既定値は
 /// [`crate::orchestration::ToolLimits`]が持つ。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
