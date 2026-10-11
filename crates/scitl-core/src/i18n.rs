@@ -292,6 +292,9 @@ mod tests {
              /** エラー発言の文言のキーの前置き(`orchestration::turn_error::MESSAGE_KEY_PREFIX`)。 */\n\
              export const TURN_ERROR_KEY_PREFIX = {};\n\
              \n\
+             /** コマンドの失敗の文言のキーの前置き(`error::MESSAGE_KEY_PREFIX`)。 */\n\
+             export const COMMAND_ERROR_KEY_PREFIX = {};\n\
+             \n\
              /** メモリ1件の本文の上限文字数(`db::memories::MAX_MEMORY_CHARS`)。 */\n\
              export const MAX_MEMORY_CHARS = {};\n\
              \n\
@@ -302,6 +305,7 @@ mod tests {
              export const MAX_TITLE_CHARS = {};\n",
             quoted(Language::DEFAULT.code()),
             quoted(crate::orchestration::turn_error::MESSAGE_KEY_PREFIX),
+            quoted(crate::error::MESSAGE_KEY_PREFIX),
             crate::db::memories::MAX_MEMORY_CHARS,
             crate::db::memories::MAX_MEMORIES,
             crate::db::tasks::MAX_TITLE_CHARS,

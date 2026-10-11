@@ -73,8 +73,9 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 `ts-rs`で生成する。手で写すと、Rust側の変更に追従し損ねても型検査が通ってしまうため。
 生成は`cargo test`が行い、CIは生成し直した結果とコミット済みの生成物が一致することを確かめる。
 
-コマンドの失敗は`commands::CommandError`の1つの型で返し、画面へ渡す形(`CoreError`の表示文の
-文字列)をそこだけで決める。各コマンドは`?`で返すだけにする。画面の入力を受け取るコマンドで、
+コマンドの失敗は`commands::CommandError`の1つの型で返し、画面へ渡す形(失敗の種類と`CoreError`の
+表示文の組。`error::CommandFailure`)をそこだけで決める。画面は種類から表示言語の文言を引く
+(`i18n.md`「coreの文言とエラー発言」)。各コマンドは`?`で返すだけにする。画面の入力を受け取るコマンドで、
 画面が欄の近くに表示言語で出す誤り(`CoreError::Rejected`)は、失敗にせず`settings::FormOutcome`の
 `rejected`で種類のまま返す(`i18n.md`)。
 
