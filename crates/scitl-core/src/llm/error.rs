@@ -29,8 +29,8 @@ pub enum LlmError {
     /// 読み切れなかった(ストリーミングで読む方言では、データの届かない時間が上限を超えた)。
     #[error("timed out waiting for the response: {0}")]
     Timeout(ErrorDetail),
-    /// 接続先に届かなかった(接続の拒否・名前解決・TLS・接続確立の上限)か、応答の途中で
-    /// 接続が切れた。
+    /// 接続先に届かなかった(接続の拒否・名前解決・証明書の検証を除くTLS・接続確立の上限)か、
+    /// 応答の途中で接続が切れた。
     #[error("failed to communicate with the provider: {0}")]
     Connection(ErrorDetail),
     /// 接続先の証明書を検証できず、接続を断った(期限切れ・発行元が不明・失効等)。Androidの検証の
@@ -316,6 +316,55 @@ mod tests {
         assert!(!rejected_certificate(&rustls::Error::HandshakeNotComplete));
         let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
         assert!(!rejected_certificate(&Wrapped(Box::new(refused))));
+    }
+
+    /// 実際の接続で、証明書の検証で断られた失敗を通信の失敗と見分ける。信頼されていない
+    /// 証明書を出すTLSのサーバーへ、アプリのHTTPクライアントでつなぐ。
+    ///
+    /// 見分けは、reqwestが返す失敗の原因の連鎖の形と、そこに現れるrustlsの型に頼っている。
+    /// 依存を上げて、連鎖の包み方が変わったとき・rustlsが2つの版に分かれたとき(型が別になる)・
+    /// 判定の順が崩れたときは、黙って通信の失敗に戻るので、ここで止める。
+    #[tokio::test]
+    async fn a_rejected_certificate_is_told_apart_over_a_real_connection() {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+        // テスト専用の自己署名の証明書と鍵(`CN=localhost`)。どこの認証にも使わない。期限が
+        // 切れても、信頼されていないことに変わりはなく、証明書の検証で断られる。
+        let cert =
+            CertificateDer::from_pem_slice(include_bytes!("test_certificate/cert.pem")).unwrap();
+        let key =
+            PrivateKeyDer::from_pem_slice(include_bytes!("test_certificate/key.pem")).unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let connection = rustls::ServerConnection::new(std::sync::Arc::new(config)).unwrap();
+            // ハンドシェイクを進める。クライアントが証明書を断って切るので、失敗は捨てる。
+            let _ = rustls::StreamOwned::new(connection, stream).read(&mut [0u8; 1]);
+        });
+
+        let url = format!("https://localhost:{port}/");
+        let client = crate::net::hardened_client(
+            &crate::net::ExternalUrl::parse(&url).unwrap(),
+            crate::net::RequestTimeout::None,
+        )
+        .unwrap();
+        let error = client.get(&url).send().await.unwrap_err();
+
+        let classified = LlmError::from_transport(error, &SentSecrets::default());
+        assert!(
+            matches!(classified, LlmError::Certificate(_)),
+            "{classified}"
+        );
     }
 
     /// 1回だけ接続を受け、`delay`だけ待ってから`response`をそのまま書いて閉じる。

@@ -42,6 +42,7 @@
   "command_error.attachment": "Failed to process the file",
   "command_error.attachment_not_found": "File not found",
   "command_error.cancelled": "The registration was cancelled",
+  "command_error.certificate_unverified": "The server certificate could not be verified",
   "command_error.chat_busy": "Generating a response",
   "command_error.config": "Failed to read or write the settings file",
   "command_error.database": "Failed to read or write the data",

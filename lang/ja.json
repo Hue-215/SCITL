@@ -42,6 +42,7 @@
   "command_error.attachment": "ファイルの処理に失敗しました",
   "command_error.attachment_not_found": "ファイルが見つかりません",
   "command_error.cancelled": "登録をキャンセルしました",
+  "command_error.certificate_unverified": "サーバーの証明書を確認できませんでした",
   "command_error.chat_busy": "応答を生成中です",
   "command_error.config": "設定ファイルの読み書きに失敗しました",
   "command_error.database": "データの読み書きに失敗しました",
