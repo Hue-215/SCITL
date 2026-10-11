@@ -140,17 +140,22 @@ pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Transcript>> {
     Ok(rows)
 }
 
-/// 試行の保存に添えた間引きの位置(最初に並べたユーザー発言の行のid)。会話の最初から並べたか、
-/// 保存が無ければ`None`。画面に出す印に使うので、本文は引かない。
-pub fn history_start(conn: &Connection, turn_id: &str, attempt_no: i64) -> Result<Option<i64>> {
-    Ok(conn
-        .query_row(
-            "SELECT history_start FROM turn_transcripts WHERE turn_id = ?1 AND attempt_no = ?2",
-            params![turn_id, attempt_no],
-            |row| row.get::<_, Option<i64>>(0),
-        )
-        .optional()?
-        .flatten())
+/// 会話の保存に添えた間引きの位置(最初に並べた行のid。会話の最初から並べたなら`None`)を、試行
+/// (`turn_id`・`attempt_no`)と一緒に引く。画面に出す印に使うので、本文は引かない。
+pub fn history_starts_for_chat(
+    conn: &Connection,
+    chat: Chat,
+) -> Result<Vec<(String, i64, Option<i64>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT turn_id, attempt_no, history_start FROM turn_transcripts
+         WHERE task_id IS ?1 ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([chat.task_id()], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 /// 会話の保存の`input`だけを、試行(`turn_id`・`attempt_no`)と一緒に保存した順に引く(画面に出す
