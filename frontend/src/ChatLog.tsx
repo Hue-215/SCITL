@@ -10,6 +10,7 @@ import {
   buildTurnSegments,
   finalEntryOf,
   groupMessages,
+  isSegmentShown,
   type LiveTurn,
   type TurnSegment,
 } from './thinking'
@@ -306,7 +307,8 @@ export default function ChatLog({
         entry.role === 'pending' ? (
           // 応答待ちの間の途中経過を、保存済みのターンと同じ形で届いた順に出す。完了したら
           // 読み直したターンに置き換わる。応答を待っていることは入力欄の上に出す(`TypingIndicator`)。
-          live.segments.length > 0 && (
+          // 思考を出さない間は、思考だけが届いた途中経過で空の塊を置かない(会話欄の間隔が1つ増える)。
+          live.segments.some((segment) => isSegmentShown(segment, showReasoning)) && (
             <li key={`pending-${i}`} className="turn-group">
               {live.segments.map((segment, j) => (
                 <TurnSegmentView

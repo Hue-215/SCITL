@@ -96,6 +96,15 @@ export type TurnSegment =
   | { kind: 'truncated'; id: number }
 
 /**
+ * 区切りを描いたときに見えるものがあるか。思考を出さない(`showReasoning`が偽)とき、思考だけの
+ * 並びは何も描かない(思考の途中で長さの上限に達した注記は出す。`ThinkingTools`)。
+ */
+export function isSegmentShown(segment: TurnSegment, showReasoning: boolean): boolean {
+  if (segment.kind !== 'thoughts' || showReasoning) return true
+  return segment.items.some((item) => item.kind === 'tool' || item.truncated === true)
+}
+
+/**
  * 1ターン分のentriesから、起きた順の折りたたみと本文の列を組み立てる。返信の行(最終行)の
  * 中身(`parts`)を順に読み、続く思考・ツールは1つの並びにまとめ、本文はラウンドごとの
  * 吹き出しにする。前置き→ツール→本題の順がそのまま残る。
