@@ -24,6 +24,17 @@ class MainActivity : TauriActivity() {
     keepRequestedChat(intent)
   }
 
+  /**
+   * 画面に閉じるものが無いときの「戻る」(WryActivityがWebViewで戻れないときに呼ぶ)。Activityを
+   * 閉じずに、アプリを裏へ回す。OSの既定は、ホーム画面のアイコンから起動したタスクだけを裏へ回し、
+   * 通知から起動したタスク等ではActivityを閉じてプロセスごと終える。生成中の応答が途中で止まり、
+   * 入力欄の下書きも消えるため、起動のしかたによらず揃える(Issue #526)。
+   */
+  @Suppress("OVERRIDE_DEPRECATION")
+  override fun onBackPressed() {
+    moveTaskToBack(true)
+  }
+
   override fun onStart() {
     super.onStart()
     visible = true
