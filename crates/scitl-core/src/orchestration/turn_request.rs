@@ -21,9 +21,11 @@ use crate::orchestration::TurnContext;
 use crate::tools::{self, external::ExternalToolset};
 
 /// ツールの上限に達したあとの最後の呼び出しで、発言列の末尾に足す一節。
-/// ツールを呼べない理由を伝えないと、モデルがツールを呼ぶつもりの文を返しがちになる。
-const ROUND_LIMIT_NOTE: &str = "The tool call limit for this turn has been reached, so no more \
-     tools can be called. Reply to the user based on the tool results so far.";
+/// ツールを呼べないことを伝えないと、モデルがツールを呼ぶつもりの文を返しがちになる。どう
+/// 答えるかまで指示すると、小さいモデルが思考の中でその指示に縛られるので、呼べないことと
+/// 返事をすることだけを伝える。
+const ROUND_LIMIT_NOTE: &str =
+    "Tool calls are no longer available in this turn. Reply to the user.";
 
 /// 1ターンのうち、ラウンドによらない送信の材料。
 pub(super) struct TurnRequest {

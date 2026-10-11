@@ -85,7 +85,7 @@ fn roles_of(stored: &serde_json::Value) -> Vec<String> {
 
 /// ツールの上限に達したことを伝える一節か。
 fn mentions_round_limit(message: &ChatMessage) -> bool {
-    matches!(message, ChatMessage::User { text, .. } if text.as_str().contains("tool call limit"))
+    matches!(message, ChatMessage::User { text, .. } if text.as_str().contains("Tool calls are no longer available"))
 }
 
 fn tool_names(tools: ToolOffer<'_>) -> Vec<String> {
@@ -461,9 +461,15 @@ fn reasons_around_a_tool_call() -> ScriptedAdapter {
 /// 聞き取りを始めるときの発言(`TurnContext::opening_message`)。
 const OPENING: &str = "新しいタスクを追加したい";
 
-fn opening_message() -> ChatMessage {
-    // 実際に送られた発言ではないので、送信日時を付けない。
-    ChatMessage::user(PromptText::user_message(OPENING, None))
+/// 補われる開始の発言。送信日時はタスクの作成日時。
+fn opening_message(db: &Mutex<Connection>, task_id: i64) -> ChatMessage {
+    let created_at = db::tasks::get_task(&db.lock().unwrap(), task_id)
+        .unwrap()
+        .created_at;
+    ChatMessage::user(PromptText::user_message(
+        OPENING,
+        SentAt::local(&created_at).as_ref(),
+    ))
 }
 
 /// プロバイダー未選択・既定のプロンプト・外部ツール無し・既定の上限の文脈。
@@ -2813,7 +2819,7 @@ async fn a_changed_nickname_is_told_as_a_system_update() {
     assert!(!system_of(sent).contains("Hal"));
     let input = *user_texts(sent).last().unwrap();
     assert!(input.starts_with("<scitl:system-update>"));
-    assert!(input.contains(r#"nickname "Hal""#) && input.contains("2回目"));
+    assert!(input.contains(r#"call you "Hal""#) && input.contains("2回目"));
 }
 
 /// 変更の通知は、それを置いたターンが失敗して保存されなければ、次のターンでまた置く。
@@ -4445,7 +4451,7 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     assert!(saved_rounds[4]["user"]["text"]
         .as_str()
         .unwrap()
-        .contains("tool call limit"));
+        .contains("Tool calls are no longer available"));
 }
 
 fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
@@ -4542,9 +4548,10 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
 
     let histories = adapter.sent_histories();
     assert_eq!(histories[0].len(), 1);
-    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
+    let opening = opening_message(&db, task_id);
+    assert_eq!(user_text(&histories[0][0]), user_text(&opening));
     assert_eq!(histories[1].len(), 3);
-    assert_eq!(histories[1][0], opening_message());
+    assert_eq!(histories[1][0], opening);
     assert!(matches!(
         &histories[1][1],
         ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか"
@@ -4559,10 +4566,7 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
         .unwrap();
     let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
     assert_eq!(input["rows"], json!([]));
-    assert_eq!(
-        input["messages"][0]["user"]["text"],
-        user_text(&opening_message())
-    );
+    assert_eq!(input["messages"][0]["user"]["text"], user_text(&opening));
 }
 
 /// 聞き取りから始まった会話を最初から送っている間は、始めた時点でタスクが空だったと伝える
@@ -4570,7 +4574,7 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
 /// 注記に戻し、通知は置かない。ユーザーの発言から始まった会話は、はじめから通常の注記にする。
 #[tokio::test]
 async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() {
-    const BLANK_NOTE: &str = "created with nothing set";
+    const BLANK_NOTE: &str = "was empty when this conversation began";
     let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.context_length = 20_000;
@@ -4610,7 +4614,7 @@ async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() 
     let trimmed = turn(chat, format!("4回目{padding}")).await;
     assert!(!user_texts(&trimmed).iter().any(|t| t.contains("レポート")));
     assert!(!system_of(&trimmed).contains(BLANK_NOTE));
-    assert!(system_of(&trimmed).contains("not included in the messages"));
+    assert!(system_of(&trimmed).contains("current state is not given automatically"));
     // 間引いたあとのターンも、作り直した先頭のまま並べる。
     let next = turn(chat, "5回目".to_string()).await;
     assert_eq!(system_of(&next), system_of(&trimmed));
@@ -4630,7 +4634,7 @@ async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() 
 /// 間引かずに収まるよう、コンテキスト長を大きくしておく(間引くなら先頭ごと作り直す)。
 #[tokio::test]
 async fn removing_a_turn_that_changed_the_task_stops_telling_the_task_started_blank() {
-    const BLANK_NOTE: &str = "created with nothing set";
+    const BLANK_NOTE: &str = "was empty when this conversation began";
     let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.context_length = 100_000;
@@ -4680,7 +4684,7 @@ async fn removing_a_turn_that_changed_the_task_stops_telling_the_task_started_bl
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains("次の発言"));
         assert!(!notices[0].contains(BLANK_NOTE));
-        assert!(notices[0].contains("not included in the messages"));
+        assert!(notices[0].contains("current state is not given automatically"));
     }
 }
 
@@ -4712,7 +4716,10 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     let histories = adapter.sent_histories();
     assert_eq!(histories.len(), 1);
     assert_eq!(histories[0].len(), 1);
-    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
+    assert_eq!(
+        user_text(&histories[0][0]),
+        user_text(&opening_message(&db, task_id))
+    );
 }
 
 /// 使えるかは軽い写しで判定し、聞き取りはあとで取った写しの文脈で行う。

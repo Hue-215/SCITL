@@ -17,13 +17,10 @@ internal_tool! {
     /// 説明はモデルの能力で変えない(`docs/spec/tools.md`「添付の読み込み」)。
     name: "read_attachment",
     run: Run::ReadAttachment,
-    "Read an attachment in this conversation. attachment_id is the \"id\" listed in a \
-     scitl:attachments block. The result has the same fields as that block. A text \
-     attachment returns its text in \"content\". An image is shown to you with the \
-     result if the current model accepts image input; if it does not, reading an image \
-     fails and the image cannot be seen. Use this to look at an image whose \
-     \"delivered\" is \"name_only\", or at an attachment whose content is no longer in \
-     the conversation. Other kinds of files cannot be read.",
+    "Read an attachment of this conversation by its id in a scitl:attachments block. Use it \
+     for an attachment whose delivered is \"name_only\", or whose content is no longer in the \
+     conversation. Images can be read only if the current model accepts images; other kinds \
+     of files cannot be read.",
     json!({
         "type": "object",
         "properties": {

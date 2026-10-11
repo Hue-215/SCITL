@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::task_steps::{self, MAX_STEPS, MAX_STEP_DESCRIPTION_CHARS};
+use crate::db::task_steps::{self, MAX_STEP_DESCRIPTION_CHARS};
 use crate::error::Result;
 
 use super::args::Args;
@@ -12,16 +12,14 @@ internal_tool! {
     /// タスクチャット版のスキーマ。`task_id`を引数に含めない。説明は常に配列で受ける。
     name: "add_steps",
     run: Run::UpdateTask(execute),
-    "Add steps to the currently open task.",
+    "Add steps to this conversation's task.",
     json!({
         "type": "object",
         "properties": {
             "descriptions": {
                 "type": "array",
                 "items": { "type": "string", "maxLength": MAX_STEP_DESCRIPTION_CHARS },
-                "minItems": 1,
-                // 上限は追加する件数ではなくタスクが持つ件数なので、maxItemsでは書けない。
-                "description": format!("A task can have at most {MAX_STEPS} steps.")
+                "minItems": 1
             }
         },
         "required": ["descriptions"],

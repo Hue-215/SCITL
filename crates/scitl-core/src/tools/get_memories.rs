@@ -11,7 +11,7 @@ internal_tool! {
     /// 引数なし。メモリはどの会話にも属さないので、会話によらず同一のスキーマ。
     name: "get_memories",
     run: Run::Read(execute),
-    "List the memories: facts about the user that are shared across all conversations.",
+    "List the memories.",
     json!({
         "type": "object",
         "properties": {},

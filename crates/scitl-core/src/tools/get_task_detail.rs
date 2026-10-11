@@ -12,7 +12,7 @@ internal_tool! {
     /// `task_id`をモデルに選ばせる。読み取り専用なので、取り違えても書き込みは起きない。
     name: "get_task_detail",
     run: Run::Read(execute),
-    "Get the details of a task, including its description and steps.",
+    "Get a task by its ID.",
     json!({
         "type": "object",
         "properties": {
