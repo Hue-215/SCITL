@@ -112,6 +112,15 @@ adb -s emulator-5556 shell input swipe 5 640 500 640 300        # 左端から�
   `adb shell dumpsys input_method | grep mInputShown`
 - `input text`は英数字だけを送れる(空白は`%s`)。日本語の変換・確定のEnterは確かめられないので実機で見る
 - ジェスチャーナビゲーションでは、画面の左右の端からのスワイプはOSの「戻る」にも取られる
+- `adb shell am kill net.niigo.scitl`は裏にあるプロセスを終わらせるが、最近使ったアプリの一覧の
+  タスクは残る。次に起動するとそのタスクを使い回すので、起点のIntentは最初に起動したときのままに
+  なる。タスクごと無い状態から起動を試すときは、先に`adb shell am stack list`でタスクのIDを見て
+  `adb shell am stack remove <ID>`で消す(`am force-stop`はアプリの通知も消す)
+- 通知を押すときは`adb shell cmd statusbar expand-notifications`でシェードを開き、撮ってから位置を決める
+- Tauriを更新したら、いちばん上の画面での「戻る」でプロセスが残るかを、タスクごと無い状態から
+  `am start`で起動して確かめる(`am stack remove`のあと`am start`→「戻る」→`pidof net.niigo.scitl`)。
+  残るのは`MainActivity.onBackPressed`の上書きによるもので、Tauri本体のAppPluginがこれを呼ぶ実装に
+  頼っている(`docs/spec/ui.md`「戻る」)
 
 ### 実寸を測る(WebViewのDevTools)
 

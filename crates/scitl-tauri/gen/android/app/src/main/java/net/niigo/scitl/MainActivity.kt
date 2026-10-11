@@ -24,6 +24,21 @@ class MainActivity : TauriActivity() {
     keepRequestedChat(intent)
   }
 
+  /**
+   * 画面に閉じるものが無いときの「戻る」。Activityを閉じずに、アプリを裏へ回す。OSの既定は、
+   * ホーム画面のアイコンから起動したタスクだけを裏へ回し、通知から起動したタスク等ではActivityを
+   * 閉じてプロセスごと終える。生成中の応答が途中で止まり、入力欄の下書きも消えるため、起動の
+   * しかたによらず揃える(Issue #526)。
+   *
+   * 呼ぶのはTauri本体のAppPlugin(画面が「戻る」の受け手を登録しておらず、WebViewでも戻れないとき)
+   * で、それがonBackPressed()を呼ぶ実装であることに頼っている。Tauriを更新したら、通知から起動して
+   * 「戻る」でプロセスが残るかを確かめる(android-checkスキル)。
+   */
+  @Suppress("OVERRIDE_DEPRECATION")
+  override fun onBackPressed() {
+    moveTaskToBack(true)
+  }
+
   override fun onStart() {
     super.onStart()
     visible = true
