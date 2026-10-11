@@ -10,6 +10,7 @@ import {
   buildTurnSegments,
   finalEntryOf,
   groupMessages,
+  isSegmentShown,
   type LiveTurn,
   type TurnSegment,
 } from './thinking'
@@ -68,17 +69,21 @@ function EntryActions({
 }
 
 // ターンの中身の1区切り。本文は返信と同じ吹き出しで出す。`footer`は吹き出しの末尾に足すもの
-// (日時と操作)。`streaming`は、応答待ちの間の途中経過か。
+// (日時と操作)。`streaming`は、応答待ちの間の途中経過か。`showReasoning`は思考を出すか。
 function TurnSegmentView({
   segment,
+  showReasoning,
   footer = null,
   streaming = false,
 }: {
   segment: TurnSegment
+  showReasoning: boolean
   footer?: ReactNode
   streaming?: boolean
 }) {
-  if (segment.kind === 'thoughts') return <ThinkingTools items={segment.items} />
+  if (segment.kind === 'thoughts') {
+    return <ThinkingTools items={segment.items} showReasoning={showReasoning} />
+  }
   if (segment.kind === 'truncated') return <p className="entry-truncated">{t('chat.truncated_note')}</p>
   return (
     <div className="entry entry-assistant">
@@ -109,6 +114,8 @@ interface ChatLogProps {
   // 応答待ちの間に届いたターンの中身。
   live: LiveTurn
   failure: string | null
+  // 思考を出すか(設定「一般」)。
+  showReasoning: boolean
   // 応答待ちの会話では、編集・再試行・削除を不可にする。
   disableActions: boolean
   editing: EntryEditing
@@ -125,6 +132,7 @@ export default function ChatLog({
   pending,
   live,
   failure,
+  showReasoning,
   disableActions,
   editing,
   onRetry,
@@ -251,7 +259,7 @@ export default function ChatLog({
           return (
             <li key={`turn-${item.turnId}`} className="turn-group">
               {segments.map((segment, i) => (
-                <TurnSegmentView key={i} segment={segment} />
+                <TurnSegmentView key={i} segment={segment} showReasoning={showReasoning} />
               ))}
               <p className="entry-stopped">{t('chat.stopped_note')}</p>
             </li>
@@ -269,6 +277,7 @@ export default function ChatLog({
               <TurnSegmentView
                 key={i}
                 segment={segment}
+                showReasoning={showReasoning}
                 footer={footerOnText && i === segments.length - 1 ? footer : null}
               />
             ))}
@@ -298,10 +307,16 @@ export default function ChatLog({
         entry.role === 'pending' ? (
           // 応答待ちの間の途中経過を、保存済みのターンと同じ形で届いた順に出す。完了したら
           // 読み直したターンに置き換わる。応答を待っていることは入力欄の上に出す(`TypingIndicator`)。
-          live.segments.length > 0 && (
+          // 思考を出さない間は、思考だけが届いた途中経過で空の塊を置かない(会話欄の間隔が1つ増える)。
+          live.segments.some((segment) => isSegmentShown(segment, showReasoning)) && (
             <li key={`pending-${i}`} className="turn-group">
               {live.segments.map((segment, j) => (
-                <TurnSegmentView key={j} segment={segment} streaming />
+                <TurnSegmentView
+                  key={j}
+                  segment={segment}
+                  showReasoning={showReasoning}
+                  streaming
+                />
               ))}
             </li>
           )

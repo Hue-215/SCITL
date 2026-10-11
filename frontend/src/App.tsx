@@ -7,6 +7,7 @@ import {
   editChatMessage,
   failureText,
   generateChatReply,
+  getSettings,
   getTaskDetail,
   listChatMessages,
   listTasks,
@@ -58,6 +59,26 @@ export default function App() {
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 会話欄に思考を出すか(設定「一般」)。設定画面を閉じるたびに読み直す。最初に読めるまでは
+  // 出さない(切っている人に、起動直後の一瞬だけ見せないため)。最初から読めなければ出し、
+  // 読み直しに失敗したら直前の値のままにする。
+  const [showReasoning, setShowReasoning] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (settingsOpen) return
+    let current = true
+    // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
+    void getSettings().then(
+      (view) => {
+        if (current) setShowReasoning(view.general.show_reasoning)
+      },
+      () => {
+        if (current) setShowReasoning((prev) => prev ?? true)
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [settingsOpen])
   // 編集モード。ユーザー発言のみが対象。応答待ち中は開始できない(`disableActions`参照)。
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
@@ -443,6 +464,7 @@ export default function App() {
           pending={pending}
           live={live}
           failure={failure}
+          showReasoning={showReasoning ?? false}
           disableActions={disableActions}
           editing={{
             id: editingId,
