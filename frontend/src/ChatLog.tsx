@@ -78,9 +78,11 @@ function TurnSegmentView({
   streaming?: boolean
 }) {
   if (segment.kind === 'thoughts') return <ThinkingTools items={segment.items} />
+  if (segment.kind === 'truncated') return <p className="entry-truncated">{t('chat.truncated_note')}</p>
   return (
     <div className="entry entry-assistant">
       <EntryBody role="assistant" content={segment.text} streaming={streaming} />
+      {segment.truncated && <p className="entry-truncated">{t('chat.truncated_note')}</p>}
       {footer}
     </div>
   )

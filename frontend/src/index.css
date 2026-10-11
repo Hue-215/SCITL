@@ -965,7 +965,8 @@ details[open] > summary > .disclosure-mark,
   color: var(--color-on-danger-container);
 }
 
-.entry-stopped {
+.entry-stopped,
+.entry-truncated {
   margin: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);

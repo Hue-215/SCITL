@@ -654,7 +654,7 @@ fn reply_messages(parts: &[ResolvedPart]) -> Vec<ChatMessage> {
             match part {
                 ResolvedPart::Text { text, .. } => texts.push(text),
                 ResolvedPart::Tool { record, .. } => calls.extend(call_and_result(record)),
-                ResolvedPart::Reasoning { .. } => {}
+                ResolvedPart::Reasoning { .. } | ResolvedPart::Truncated { .. } => {}
             }
         }
         if calls.is_empty() && i != last {
@@ -742,6 +742,25 @@ mod tests {
     use crate::orchestration::transcript::{StoredInput, StoredMessage};
 
     const OPENING: &str = "開始の発言";
+
+    /// 長さの上限で切れた印は、モデルへ送る並びを変えない(本文に付いた印も、本文の無いラウンドに
+    /// 残った印も)。保存の無いターンを中身から組み立てても、印の無いときと同じ発言列になる。
+    #[test]
+    fn truncation_marks_do_not_change_what_is_sent() {
+        let text = |round, truncated| ResolvedPart::Text {
+            round,
+            text: "途中まで",
+            truncated,
+        };
+        assert_eq!(
+            reply_messages(&[text(1, true)]),
+            reply_messages(&[text(1, false)])
+        );
+        assert_eq!(
+            reply_messages(&[text(1, false), ResolvedPart::Truncated { round: 2 }]),
+            reply_messages(&[text(1, false)])
+        );
+    }
 
     struct Fixture {
         conn: Connection,

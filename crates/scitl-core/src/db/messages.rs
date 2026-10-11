@@ -135,6 +135,12 @@ pub enum ReplyPart {
         round: u32,
         record: i64,
     },
+    /// そのラウンドの応答が、出力の長さの上限で途中で切れた(終了理由`Length`。Issue #137)。
+    /// 本文の後ろに置く。表示とエクスポート専用で、モデルへの入力には出さない(切れた本文は
+    /// そのまま送り返す。注記を本文に混ぜると、モデルが書いたものとして送り返されるため)。
+    Truncated {
+        round: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,20 +166,56 @@ pub struct Message {
 }
 
 /// 返信の行の中身([`ReplyPart`])の1要素を、ツールなら指した実行記録の行を引いた形にしたもの。
+/// 長さの上限で切れた印は、同じラウンドの本文、無ければ同じラウンドの思考の`truncated`に移し、
+/// どちらも無いラウンド(ツールの引数の途中で切れた等)の印だけを`Truncated`として残す
+/// ([`ReplyRecords::resolve`])。
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResolvedPart<'a> {
-    Reasoning { round: u32, text: &'a str },
-    Text { round: u32, text: &'a str },
-    Tool { round: u32, record: &'a Message },
+    Reasoning {
+        round: u32,
+        text: &'a str,
+        truncated: bool,
+    },
+    Text {
+        round: u32,
+        text: &'a str,
+        truncated: bool,
+    },
+    Tool {
+        round: u32,
+        record: &'a Message,
+    },
+    Truncated {
+        round: u32,
+    },
 }
 
 impl ResolvedPart<'_> {
     pub(crate) fn round(&self) -> u32 {
         match self {
-            Self::Reasoning { round, .. } | Self::Text { round, .. } | Self::Tool { round, .. } => {
-                *round
-            }
+            Self::Reasoning { round, .. }
+            | Self::Text { round, .. }
+            | Self::Tool { round, .. }
+            | Self::Truncated { round } => *round,
         }
+    }
+}
+
+/// 長さの上限で切れた印を付ける先。`round`の本文(最後のもの)、無ければ同じラウンドの思考。
+fn truncation_target<'p>(parts: &'p mut [ResolvedPart<'_>], round: u32) -> Option<&'p mut bool> {
+    let position = |text: bool| {
+        parts.iter().rposition(|p| match p {
+            ResolvedPart::Text { round: r, .. } => text && *r == round,
+            ResolvedPart::Reasoning { round: r, .. } => !text && *r == round,
+            _ => false,
+        })
+    };
+    let i = position(true).or_else(|| position(false))?;
+    match &mut parts[i] {
+        ResolvedPart::Text { truncated, .. } | ResolvedPart::Reasoning { truncated, .. } => {
+            Some(truncated)
+        }
+        _ => None,
     }
 }
 
@@ -209,29 +251,37 @@ impl<'a> ReplyRecords<'a> {
     }
 
     /// 返信の行の中身を、起きた順のまま解く。引けない記録(消した記録)を指す要素は飛ばす。
+    /// 長さの上限で切れた印は、同じラウンドの本文、無ければ思考に付ける(画面とエクスポートが同じ
+    /// 判断を使う)。
     pub(crate) fn resolve(&self, reply: &'a Message) -> Vec<ResolvedPart<'a>> {
-        reply
-            .parts
-            .iter()
-            .filter_map(|part| match part {
-                ReplyPart::Reasoning { round, text } => Some(ResolvedPart::Reasoning {
+        let mut resolved = Vec::with_capacity(reply.parts.len());
+        for part in &reply.parts {
+            match part {
+                ReplyPart::Reasoning { round, text } => resolved.push(ResolvedPart::Reasoning {
                     round: *round,
                     text,
+                    truncated: false,
                 }),
-                ReplyPart::Text { round, text } => Some(ResolvedPart::Text {
+                ReplyPart::Text { round, text } => resolved.push(ResolvedPart::Text {
                     round: *round,
                     text,
+                    truncated: false,
                 }),
-                ReplyPart::Tool { round, record } => self
-                    .0
-                    .get(record)
-                    .filter(|m| same_attempt(m, reply))
-                    .map(|m| ResolvedPart::Tool {
-                        round: *round,
-                        record: m,
-                    }),
-            })
-            .collect()
+                ReplyPart::Tool { round, record } => {
+                    if let Some(m) = self.0.get(record).filter(|m| same_attempt(m, reply)) {
+                        resolved.push(ResolvedPart::Tool {
+                            round: *round,
+                            record: m,
+                        });
+                    }
+                }
+                ReplyPart::Truncated { round } => match truncation_target(&mut resolved, *round) {
+                    Some(truncated) => *truncated = true,
+                    None => resolved.push(ResolvedPart::Truncated { round: *round }),
+                },
+            }
+        }
+        resolved
     }
 }
 

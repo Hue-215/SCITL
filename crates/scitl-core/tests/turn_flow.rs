@@ -796,6 +796,89 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
     assert!(reply_of(&messages).contains("更新しました"));
 }
 
+/// 出力の長さの上限で切れた応答は、そのまま返信として残し、切れたことを中身の印に持つ。
+/// 次のターンでは、切れた本文だけをモデルに送り返す(印を本文に混ぜない)。
+#[tokio::test]
+async fn a_reply_cut_off_at_the_length_limit_is_kept_with_a_mark() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedAdapter::new(vec![
+        vec![
+            ResponseEvent::TextDelta {
+                text: "途中まで".to_string(),
+            },
+            done(FinishReason::Length),
+        ],
+        text("続き"),
+    ]);
+
+    for input in ["長く書いて", "続けて"] {
+        run_turn(
+            db.clone(),
+            &context(&adapter),
+            Chat::Task(task_id),
+            input.to_string(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    assert_eq!(
+        messages[1].parts,
+        vec![
+            ReplyPart::Text {
+                round: 1,
+                text: "途中まで".to_string(),
+            },
+            ReplyPart::Truncated { round: 1 },
+        ]
+    );
+    assert_eq!(messages[3].parts.len(), 1, "切れていない返信は印を持たない");
+    assert!(matches!(
+        &adapter.sent_histories()[1][1],
+        ChatMessage::Assistant { content: Some(c), .. } if c == "途中まで"
+    ));
+}
+
+/// 本文を書く前に長さの上限に達したら、空応答の失敗になり、エラー発言の中身に思考と印が残る。
+#[tokio::test]
+async fn reaching_the_length_limit_before_any_text_is_an_empty_response() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedAdapter::new(vec![vec![
+        ResponseEvent::ReasoningDelta {
+            text: "考え中".to_string(),
+        },
+        done(FinishReason::Length),
+    ]]);
+
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        "長く考えて".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error = messages.last().unwrap();
+    assert_eq!(error.error_kind.as_deref(), Some("empty_response"));
+    assert_eq!(
+        error.parts,
+        vec![
+            ReplyPart::Reasoning {
+                round: 1,
+                text: "考え中".to_string(),
+            },
+            ReplyPart::Truncated { round: 1 },
+        ]
+    );
+}
+
 /// ターンの途中経過は、アダプタのイベントとツールの実行を起きた順に知らせる。
 /// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。
 #[tokio::test]

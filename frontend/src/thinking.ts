@@ -82,13 +82,18 @@ export function operationSourceLabel(source: string | null): MessageKey {
 
 /** `id`は描画のキー。保存済みのツールでは実行記録の行のid、ほかは項目の位置。 */
 export type ThoughtItem =
-  | { kind: 'reasoning'; id: number; text: string }
+  | { kind: 'reasoning'; id: number; text: string; truncated?: boolean }
   | { kind: 'tool'; id: number; execution: ToolExecutionView }
 
-/** ターンの中身を、起きた順に思考・ツールの並び(`ThinkingTools`)と本文の吹き出しに分けたもの。 */
+/**
+ * ターンの中身を、起きた順に思考・ツールの並び(`ThinkingTools`)と本文の吹き出しと、本文も思考も
+ * 無いラウンドで長さの上限に達したことの注記に分けたもの。本文・思考の`truncated`は、そこで出力の
+ * 長さの上限に達したか(保存済みのターンだけが持つ。印をどこに付けるかはRust側が決める)。
+ */
 export type TurnSegment =
   | { kind: 'thoughts'; items: ThoughtItem[] }
-  | { kind: 'text'; id: number; text: string }
+  | { kind: 'text'; id: number; text: string; truncated?: boolean }
+  | { kind: 'truncated'; id: number }
 
 /**
  * 1ターン分のentriesから、起きた順の折りたたみと本文の列を組み立てる。返信の行(最終行)の
@@ -113,13 +118,16 @@ export function buildTurnSegments(entries: MessageView[]): TurnSegment[] {
   finalEntryOf(entries).parts.forEach((part, index) => {
     switch (part.type) {
       case 'reasoning':
-        thought({ kind: 'reasoning', id: index, text: part.text })
+        thought({ kind: 'reasoning', id: index, text: part.text, truncated: part.truncated })
         return
       case 'tool':
         thought({ kind: 'tool', id: part.id, execution: part.execution })
         return
       case 'text':
-        segments.push({ kind: 'text', id: index, text: part.text })
+        segments.push({ kind: 'text', id: index, text: part.text, truncated: part.truncated })
+        return
+      case 'truncated':
+        segments.push({ kind: 'truncated', id: index })
     }
   })
   return segments

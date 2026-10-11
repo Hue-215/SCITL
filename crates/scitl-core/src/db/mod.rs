@@ -24,6 +24,8 @@ const TRANSCRIPT_SERVER_SQL: &str =
 const PARTIAL_REPLY_SQL: &str = include_str!("../../../../migrations/0007_partial_reply.sql");
 const REPLY_PARTS_SQL: &str = include_str!("../../../../migrations/0008_reply_parts.sql");
 const MEMORIES_SQL: &str = include_str!("../../../../migrations/0009_memories.sql");
+const REPLY_PART_TRUNCATED_SQL: &str =
+    include_str!("../../../../migrations/0010_reply_part_truncated.sql");
 
 /// DBの列に文字列で持つ列挙。列の値との対応をここに1度だけ書き、書き込み(`ToSql`)と
 /// 読み出し(`FromSql`)を同じ対応から作る。値は列のCHECK制約と揃える。
@@ -129,6 +131,7 @@ const MIGRATIONS: &[&str] = &[
     PARTIAL_REPLY_SQL,
     REPLY_PARTS_SQL,
     MEMORIES_SQL,
+    REPLY_PART_TRUNCATED_SQL,
 ];
 
 /// 先頭から`target`個目までのマイグレーションを適用する。適用済みの版の読み取りから
