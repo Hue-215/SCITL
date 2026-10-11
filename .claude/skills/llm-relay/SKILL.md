@@ -86,7 +86,8 @@ RELAY_KEY=dummy cli provider add --name sham --api-format open_ai_compat \
 # 出力の providers[].id がプロバイダーのID(以下 <P>)
 cli model add <P> dummy-o
 cli model select <P> dummy-o
-cli settings general --response-timeout-secs 900   # 既定の120秒ではLLM役が間に合わないことがある
+# 既定の120秒ではLLM役が間に合わないことがある。Sham_llmは`stream: true`を400で断るので、ストリーミングを切る
+cli settings general --response-timeout-secs 900 --no-streaming
 ```
 
 `settings general`と`settings tools`は、**指定しなかった項目を既定値に戻す**。値を残したい項目は毎回渡す。

@@ -34,6 +34,9 @@ pub enum SettingsCommand {
         task_opening_message: Option<String>,
         #[arg(long, value_name = "SECONDS")]
         response_timeout_secs: Option<String>,
+        /// Ask for the whole reply at once instead of a stream.
+        #[arg(long)]
+        no_streaming: bool,
     },
     /// Replace the limits on tool calls. Values left out go back to their defaults.
     Tools {
@@ -180,6 +183,7 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
             task_chat_system_prompt,
             task_opening_message,
             response_timeout_secs,
+            no_streaming,
         } => {
             let update = GeneralUpdate {
                 system_prompt,
@@ -187,6 +191,7 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
                 task_opening_message,
                 // 省いた値は既定値に戻す(空欄と同じ)。
                 response_timeout_secs: Some(response_timeout_secs.unwrap_or_default()),
+                streaming: Some(!no_streaming),
             };
             change(settings, move |s| s.update_general(update)).await
         }

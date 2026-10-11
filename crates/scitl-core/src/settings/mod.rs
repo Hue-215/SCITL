@@ -60,6 +60,8 @@ pub struct GeneralUpdate {
     /// `None`は保存済みの値のまま変えない(プロンプトだけを保存するときに、書き換えていない
     /// 欄を検証し直さない)。
     pub response_timeout_secs: Option<String>,
+    /// `None`は保存済みの値のまま変えない。
+    pub streaming: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -353,6 +355,10 @@ impl Settings {
         );
         if let Some(secs) = response_timeout_secs {
             general.response_timeout_secs = secs;
+        }
+        if let Some(streaming) = update.streaming {
+            // 既定(オン)と同じ値は未設定として保存する。
+            general.streaming = (!streaming).then_some(false);
         }
         draft.commit()
     }

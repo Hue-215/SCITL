@@ -124,8 +124,9 @@ pub enum ReasoningEffort {
 pub type ModelOverrides = crate::llm::CapabilityLayer;
 
 /// 応答タイムアウトの既定値(秒)。未設定のときに使う値はここにだけ置く。生成の
-/// 長い非ストリーミング応答も待てるよう、余裕を持たせる。ストリーミングで読む方言では、
-/// 全体ではなくデータの届かない時間の上限になる(`net::RequestTimeout`)。タイムアウト自体は常に掛ける
+/// 長い非ストリーミング応答も待てるよう、余裕を持たせる。データの届かない時間の上限として使うので
+/// (`net::RequestTimeout`)、ストリーミングで読む間は全体の上限にならず、ストリーミングしないとき
+/// ([`GeneralConfig::streaming`])は応答全体を待つ時間の上限になる。タイムアウト自体は常に掛ける
 /// (応答しないエンドポイント1つでターンが固まらないように)。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 
@@ -142,6 +143,9 @@ pub struct GeneralConfig {
     /// 応答タイムアウト(秒)。未設定は[`DEFAULT_RESPONSE_TIMEOUT_SECS`]。値の解釈は
     /// [`Self::response_timeout`]に閉じる。
     pub response_timeout_secs: Option<u64>,
+    /// チャットの応答をストリーミングで受け取るか。未設定はオン。値の解釈は[`Self::streaming`]に
+    /// 閉じる。
+    pub streaming: Option<bool>,
     /// 表示言語のコード([`Language::code`])。未設定と知らない値は[`Language::DEFAULT`]で、
     /// 値の解釈は[`Self::language`]に閉じる。知らない値(打ち間違い、別の版が書いた言語)も
     /// 書かれたまま持ち、言語を選び直すまでファイルから消さない。
@@ -157,6 +161,12 @@ impl GeneralConfig {
                 .filter(|s| *s > 0)
                 .unwrap_or(DEFAULT_RESPONSE_TIMEOUT_SECS),
         )
+    }
+
+    /// オフにすると、どの方言でもストリーミングを頼まずに送る(`stream: true`を断るサーバー・
+    /// まとめて返す中継のため。Issue #560)。
+    pub fn streaming(&self) -> bool {
+        self.streaming.unwrap_or(true)
     }
 
     pub fn language(&self) -> Language {
@@ -317,6 +327,14 @@ pub fn save(path: &Path, config: &Config) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_is_on_unless_the_file_turns_it_off() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.streaming());
+        let config: Config = toml::from_str("[general]\nstreaming = false\n").unwrap();
+        assert!(!config.general.streaming());
+    }
 
     #[test]
     fn load_missing_file_returns_default_config() {
