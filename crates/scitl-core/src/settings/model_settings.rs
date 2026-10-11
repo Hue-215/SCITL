@@ -75,14 +75,19 @@ impl Settings {
         ))
     }
 
-    /// 問い合わせた全モデルの結果を置き換える。サーバーが答えなかったモデルも「検出した
-    /// 項目なし」として覚え、ターンのたびに問い合わせ直さない。問い合わせに失敗したら
-    /// 何も置き換えない(一時的な失敗で、取れていた結果を空にしない)。
+    /// 問い合わせた全モデルの結果を置き換える。サーバーが知らないモデルも「検出した
+    /// 項目なし」として覚え、ターンのたびに問い合わせ直さない。今は答えられないモデル
+    /// (`providers::Detection::pending`)と、問い合わせに失敗したときは何も置き換えない
+    /// (一時的な失敗で、取れていた結果を空にしない。次の機会に問い合わせ直す)。
     async fn detect(&self, provider: &ProviderConfig, models: Vec<String>) -> Result<()> {
-        let mut found = providers::detect_capabilities(provider, &models)
-            .await?
-            .unwrap_or_default();
+        let providers::Detection { mut found, pending } =
+            providers::detect_capabilities(provider, &models)
+                .await?
+                .unwrap_or_default();
         for model in models {
+            if pending.contains(&model) {
+                continue;
+            }
             let detected = found.remove(&model).unwrap_or_default();
             self.detected.store(&provider.id, &model, detected);
         }

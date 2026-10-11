@@ -152,9 +152,12 @@ async fn main() {
         };
         match step.as_str() {
             "@new" => {
-                let creation = create_task(db.clone(), &ctx, |task| {
-                    println!("> @new (task {})", task.id);
-                })
+                let creation = create_task(
+                    db.clone(),
+                    ctx.clone(),
+                    || async { ctx.clone() },
+                    |task| println!("> @new (task {})", task.id),
+                )
                 .await
                 .unwrap();
                 let TaskCreation::Created {

@@ -368,13 +368,31 @@ pub fn can_detect_capabilities(provider: &ProviderConfig) -> bool {
     }
 }
 
+/// 能力の問い合わせの結果([`detect_capabilities`])。
+#[derive(Debug, Default)]
+pub struct Detection {
+    /// 答えたモデルの能力。サーバーが知らないモデルは含めない。
+    pub found: HashMap<String, DetectedCapabilities>,
+    /// サーバーは知っているが、今は答えられないモデル(llama.cppのルーターで読み込まれていない
+    /// 等)。次の機会に問い合わせ直す。
+    pub pending: Vec<String>,
+}
+
+impl From<HashMap<String, DetectedCapabilities>> for Detection {
+    fn from(found: HashMap<String, DetectedCapabilities>) -> Self {
+        Self {
+            found,
+            pending: Vec::new(),
+        }
+    }
+}
+
 /// `models`の能力を推論サーバーに問い合わせる。`Ok(None)`は能力を問い合わせられない
-/// サーバー、`Err`はサーバーに繋がらないか、今は答えられない。サーバーが知らないモデルは
-/// 結果に含めない。
+/// サーバー、`Err`はサーバーに繋がらないか、今は答えられない。
 pub async fn detect_capabilities(
     provider: &ProviderConfig,
     models: &[String],
-) -> Result<Option<HashMap<String, DetectedCapabilities>>, CoreError> {
+) -> Result<Option<Detection>, CoreError> {
     if !can_detect_capabilities(provider) {
         return Ok(None);
     }
@@ -385,10 +403,10 @@ pub async fn detect_capabilities(
         }
         ApiFormat::Anthropic => anthropic::detect(&provider.base_url, &credentials, models)
             .await
-            .map(Some),
+            .map(|found| Some(found.into())),
         ApiFormat::Gemini => gemini::detect(&provider.base_url, &credentials, models)
             .await
-            .map(Some),
+            .map(|found| Some(found.into())),
     }
 }
 

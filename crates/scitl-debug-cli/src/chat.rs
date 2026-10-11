@@ -16,7 +16,7 @@ use scitl_core::db::messages::Chat;
 use scitl_core::db::tasks::Task;
 use scitl_core::orchestration::{
     self, discard_events, MessageView, PreviewOptions, Regeneration, TaskCreation, TurnContext,
-    TurnEvent, TurnEvents, UserInput,
+    TurnEvent, TurnEvents, TurnSource, UserInput,
 };
 use scitl_core::settings::Snapshot;
 
@@ -106,6 +106,24 @@ impl Turns {
     }
 }
 
+/// タスクの作成に渡す、設定の写しとターンの文脈の材料の組。
+struct Opening<'a> {
+    session: &'a Session,
+    attachments: &'a Attachments,
+    snapshot: Snapshot,
+}
+
+impl TurnSource for Opening<'_> {
+    fn turn_context(&self) -> TurnContext<'_> {
+        self.snapshot.turn_context(
+            &self.session.generating,
+            self.attachments,
+            &print_event,
+            &orchestration::discard_finished,
+        )
+    }
+}
+
 pub async fn run(session: &Session, command: ChatCommand) -> Result<(), DebugError> {
     let db = session.db.clone();
     match command {
@@ -164,14 +182,20 @@ pub async fn run(session: &Session, command: ChatCommand) -> Result<(), DebugErr
 }
 
 /// タスクを作り、GUIの新規タスク追加と同じく続けて聞き取りを始める。作ったタスクは聞き取りの
-/// 途中経過より先に出す。
+/// 途中経過より先に出す。モデルの能力の問い合わせは、作ったタスクを出してから行う(GUIと同じ)。
 pub async fn create_task(session: &Session) -> Result<(), DebugError> {
-    let turns = Turns::open(session).await?;
-    let ctx = turns.context(session, &print_event);
-    let creation = orchestration::create_task(session.db.clone(), &ctx, |task| {
-        print_json_line(&Outcome::TaskCreated { task })
-    })
-    .await?;
+    let settings = load_settings(session).await?;
+    let attachments = open_attachments(session)?;
+    let source = |snapshot| Opening {
+        session,
+        attachments: &attachments,
+        snapshot,
+    };
+    let creation = settings
+        .create_task(session.db.clone(), source, |task| {
+            print_json_line(&Outcome::TaskCreated { task })
+        })
+        .await?;
     let task = match creation {
         TaskCreation::Created {
             opening_error: Some(error),
