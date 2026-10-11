@@ -36,3 +36,17 @@ pub struct TurnContext<'a> {
     /// 応答生成が終わったことの受け口([`crate::orchestration::FinishedTurn`])。
     pub finished: TurnFinished<'a>,
 }
+
+/// ターンの文脈を作れる、設定の写しとターンの材料の組([`crate::orchestration::create_task`])。
+/// 写しを取る時点を入口の中で決めるときに使う。文脈は写しを借りるので、写しと材料を1つにして
+/// 渡す。
+pub trait TurnSource {
+    fn turn_context(&self) -> TurnContext<'_>;
+}
+
+/// 写しを取り直さない呼び出し(試験等)は、作った文脈をそのまま渡す。
+impl TurnSource for TurnContext<'_> {
+    fn turn_context(&self) -> TurnContext<'_> {
+        self.clone()
+    }
+}

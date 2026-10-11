@@ -235,6 +235,14 @@ impl Settings {
         self.snapshot()
     }
 
+    /// チャットを使えるかの判定に使う[`Self::snapshot`]。鍵を読めていなければ読み直すが、
+    /// 能力は問い合わせない(応答しない推論サーバーでも待たない)。ターンの開始には
+    /// [`Self::snapshot_for_turn`]を使う。
+    pub async fn snapshot_for_check(&self) -> Snapshot {
+        self.reload_unavailable_key().await;
+        self.snapshot()
+    }
+
     /// 鍵を読めずにいたら、資格情報ストアから読み直してアダプタを組み立て直す。GUIは
     /// 起動したまま使い続けるので、ここで読み直さないと、設定を変えるまで直らない。
     /// Androidでは保存先の初期化が設定の読み込みより後になりうるので、GUIが初期化の後にも呼ぶ。

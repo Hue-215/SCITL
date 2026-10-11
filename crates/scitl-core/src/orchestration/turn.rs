@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -26,7 +27,7 @@ use crate::orchestration::transcript::SavedTurn;
 use crate::orchestration::turn_end;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::turn_request::TurnRequest;
-use crate::orchestration::{TurnContext, TurnEvent, TurnEvents};
+use crate::orchestration::{TurnContext, TurnEvent, TurnEvents, TurnSource};
 use crate::tools::{self, external::ExternalToolset, ToolOutput};
 
 /// 送信する発言。本文と、送信前に預けた添付のトークン(`attachments::Attachments::stage`)。
@@ -144,22 +145,30 @@ pub enum Regeneration {
 /// (モデル未選択等)ならタスクを作らずに理由を返す(作っても聞き取りが失敗し、エラー発言だけの
 /// タスクが残るため)。
 ///
-/// `on_created`は作った直後、聞き取りの前に呼ぶ(画面が作ったタスクの会話を開く)。聞き取りが
-/// 失敗してもタスクは残し、理由を結果に添える。モデルの呼び出しの失敗はエラー発言として
-/// 保存されるので、ここには来ない([`run_turn`]と同じ)。`Err`は作る前の失敗だけ。
-pub async fn create_task(
+/// 設定の写しは2段階で取る。使えるかは`checked`(鍵だけ確かめた軽い写し。
+/// `settings::Settings::snapshot_for_check`)で判定してタスクを作り、聞き取りは`for_turn`が返す
+/// 写し(モデルの能力を問い合わせたもの。`settings::Settings::snapshot_for_turn`)で始める。
+/// 応答しない推論サーバーへの問い合わせを、タスクが画面に出る前に待たないため。2つの間に設定が
+/// 変わって使えなくなれば、聞き取りがエラー発言で終わる。
+///
+/// `on_created`は作った直後、能力の問い合わせと聞き取りの前に呼ぶ(画面が作ったタスクの会話を
+/// 開く)。聞き取りが失敗してもタスクは残し、理由を結果に添える。モデルの呼び出しの失敗は
+/// エラー発言として保存されるので、ここには来ない([`run_turn`]と同じ)。`Err`は作る前の失敗だけ。
+pub async fn create_task<S: TurnSource, F: Future<Output = S>>(
     db: SharedConnection,
-    ctx: &TurnContext<'_>,
+    checked: S,
+    for_turn: impl FnOnce() -> F,
     on_created: impl FnOnce(&Task) + Send,
 ) -> Result<TaskCreation> {
-    if let Err(failure) = ready_adapter(ctx) {
+    if let Err(failure) = ready_adapter(&checked.turn_context()) {
         return Ok(TaskCreation::Unavailable {
             error_kind: failure.kind(),
         });
     }
     let task = with_conn(db.clone(), tasks::create_task).await?;
     on_created(&task);
-    let opening_error = open_task_chat(db, ctx, task.id)
+    let source = for_turn().await;
+    let opening_error = open_task_chat(db, &source.turn_context(), task.id)
         .await
         .err()
         .map(|e| e.to_string());

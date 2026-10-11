@@ -2,7 +2,10 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use scitl_core::db::messages::OperationSource;
-use scitl_core::orchestration::{self, operations, TaskCreation, TaskOpeningEvent};
+use scitl_core::orchestration::{
+    self, operations, TaskCreation, TaskOpeningEvent, TurnContext, TurnEvents, TurnSource,
+};
+use scitl_core::settings::Snapshot;
 
 use super::{with_db, CommandResult};
 use crate::AppState;
@@ -37,18 +40,36 @@ pub async fn create_task(
     state: State<'_, AppState>,
     on_event: Channel<TaskOpeningEvent>,
 ) -> CommandResult<TaskCreation> {
-    let snapshot = state.settings.snapshot_for_turn().await;
     let events = |event| {
         let _ = on_event.send(TaskOpeningEvent::Turn { event });
     };
+    let source = |snapshot| Opening {
+        state: &state,
+        snapshot,
+        events: &events,
+    };
     Ok(orchestration::create_task(
         state.db.clone(),
-        &state.turn_context(&snapshot, &events),
+        source(state.settings.snapshot_for_check().await),
+        || async { source(state.settings.snapshot_for_turn().await) },
         |task| {
             let _ = on_event.send(TaskOpeningEvent::Created { task: task.clone() });
         },
     )
     .await?)
+}
+
+/// タスクの作成に渡す、設定の写しとターンの文脈の材料の組。
+struct Opening<'a> {
+    state: &'a AppState,
+    snapshot: Snapshot,
+    events: TurnEvents<'a>,
+}
+
+impl TurnSource for Opening<'_> {
+    fn turn_context(&self) -> TurnContext<'_> {
+        self.state.turn_context(&self.snapshot, self.events)
+    }
 }
 
 /// ヘッダーからタイトルを変更し、会話ログに記録する。

@@ -4256,13 +4256,22 @@ async fn sent_and_edited_text_is_saved_without_surrounding_whitespace() {
     assert_eq!(text_of(&messages[0]), "編集後\n 2行目");
 }
 
-/// タスクを作ったら、続けて聞き取りを始める。作った知らせは聞き取りより先に届く。
+/// タスクを作ったら、続けて聞き取りを始める。作った知らせは、聞き取りに使う写しを取る(モデルの
+/// 能力を問い合わせる)より先に届く。
 async fn create_task_opening(db: &SharedConnection, ctx: &TurnContext<'_>) -> i64 {
     let created = std::sync::OnceLock::new();
-    let creation = create_task(db.clone(), ctx, |task| {
-        assert!(roles(db, task.id).is_empty());
-        created.set(task.id).unwrap();
-    })
+    let creation = create_task(
+        db.clone(),
+        ctx.clone(),
+        || {
+            assert!(created.get().is_some(), "作った知らせが先に届く");
+            async { ctx.clone() }
+        },
+        |task| {
+            assert!(roles(db, task.id).is_empty());
+            created.set(task.id).unwrap();
+        },
+    )
     .await
     .unwrap();
     let TaskCreation::Created {
@@ -4351,6 +4360,33 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
 }
 
+/// 使えるかは軽い写しで判定し、聞き取りはあとで取った写しの文脈で行う。
+#[tokio::test]
+async fn the_opening_turn_uses_the_snapshot_taken_after_creating_the_task() {
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let checked = ScriptedAdapter::new(Vec::new());
+    let detected = ScriptedAdapter::texts(&["どんなタスクですか"]);
+
+    let creation = create_task(
+        db.clone(),
+        context(&checked),
+        || async { context(&detected) },
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        creation,
+        TaskCreation::Created {
+            opening_error: None,
+            ..
+        }
+    ));
+    assert!(checked.sent().is_empty());
+    assert_eq!(detected.sent().len(), 1);
+}
+
 /// チャットを使えない間はタスクを作らない。
 #[tokio::test]
 async fn create_task_is_refused_while_the_chat_cannot_run() {
@@ -4361,9 +4397,14 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
         (context_without_provider(), "no_provider"),
         (context(&unready), "no_model"),
     ] {
-        let creation = create_task(db.clone(), &ctx, |_| panic!("no task is created"))
-            .await
-            .unwrap();
+        let creation = create_task(
+            db.clone(),
+            ctx.clone(),
+            || async { panic!("no snapshot is taken for the turn") },
+            |_| panic!("no task is created"),
+        )
+        .await
+        .unwrap();
         match creation {
             TaskCreation::Unavailable { error_kind } => assert_eq!(error_kind, expected),
             other => panic!("expected Unavailable, got {other:?}"),
