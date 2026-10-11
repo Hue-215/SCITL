@@ -120,7 +120,6 @@
   "settings.config_unreadable": "Failed to load settings: {error}",
   "settings.general.advanced_settings": "Advanced settings",
   "settings.general.assistant_nickname_label": "Assistant nickname",
-  "settings.general.assistant_nickname_placeholder": "Leave blank to show the provider name",
   "settings.general.export_button": "Export to Markdown",
   "settings.general.export_done": "Exported to {folder}",
   "settings.general.export_failed": "Export failed: {error}",

@@ -107,7 +107,6 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
           type="text"
           value={nickname}
           maxLength={general.assistant_nickname_max_chars}
-          placeholder={t('settings.general.assistant_nickname_placeholder')}
           onChange={(e) => setNickname(e.target.value)}
           onBlur={() => void onSave(current())}
         />

@@ -120,7 +120,6 @@
   "settings.config_unreadable": "設定の読み込みに失敗しました: {error}",
   "settings.general.advanced_settings": "高度な設定",
   "settings.general.assistant_nickname_label": "アシスタントのニックネーム",
-  "settings.general.assistant_nickname_placeholder": "空欄のときはプロバイダー名を表示します",
   "settings.general.export_button": "Markdownに書き出す",
   "settings.general.export_done": "{folder} に書き出しました",
   "settings.general.export_failed": "書き出しに失敗しました: {error}",
