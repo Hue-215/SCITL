@@ -719,6 +719,16 @@ mod tests {
         let kept = Head::frozen(front("then", &reordered), &current, &external).unwrap();
         assert_eq!(kept.tools_body, tools_body(&reordered));
 
+        // キーの順だけが違う本文(`preserve_order`より前の版が名前順で書いた。Issue #446)も、同じ定義
+        // として固定した本文を残す(前を変えない)。
+        let sorted_body =
+            r#"[{"description":"d","name":"get_task","parameters":{"type":"object"}}]"#;
+        assert_ne!(sorted_body, current.tools_body);
+        let mut sorted = front("then", &[]);
+        sorted.tools = sorted_body.to_string();
+        let kept = Head::frozen(sorted, &current, &external).unwrap();
+        assert_eq!(kept.tools_body, sorted_body);
+
         // 繋がっているのに欠けたツール(無効化)・増えたツール・読めない本文は、作り直す。
         let disabled = [internal.clone(), other];
         assert!(Head::frozen(front("then", &disabled), &current, &external).is_none());

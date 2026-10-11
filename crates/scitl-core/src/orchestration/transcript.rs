@@ -479,11 +479,13 @@ mod tests {
             .unwrap()]),
             user_message_format_note(),
         ];
+        // JSONのキーの順だけが変わったとき(`serde_json`の`preserve_order`。Issue #446)は版を上げない。
+        // 前の順で保存した本文も、実際に送ったものとして正しいまま並べられるため。
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
             (
                 6,
-                "4478b80f8c967fcbc52fa5533ca663d0838a8e6c8bd29fad3e0f09281be2b719"
+                "aa706de6a22a612bb305f0212926e9a429584e22eccbb6006571e6e90a98a01b"
             ),
             "無害化の規則か、囲みの形か、その読み方の説明が変わった。前の規則で保存した本文を\
              並べないよう、FORM_VERSIONを上げてから期待値を今の出力に更新する"
@@ -652,6 +654,35 @@ mod tests {
             serde_json::from_str::<StoredMessage>(&text).unwrap(),
             message
         );
+    }
+
+    /// 保存した発言は、引数のキーの順を変えずに読み戻す。前の版が名前順で保存したものも、
+    /// 書き直すと保存した文字列に戻るので、指紋が合ったまま並ぶ(Issue #446)。
+    #[test]
+    fn a_stored_message_reads_back_with_its_keys_in_the_saved_order() {
+        let call = |arguments: &str| {
+            StoredMessage::of(&ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![crate::llm::ToolCallRequest {
+                    id: Some("call_1".to_string()),
+                    name: "update_task".to_string(),
+                    arguments: serde_json::from_str::<serde_json::Value>(arguments)
+                        .unwrap()
+                        .into(),
+                }],
+                replay: Replay::default(),
+            })
+            .unwrap()
+        };
+        for arguments in [
+            r#"{"title":"t","deadline":"d"}"#,
+            r#"{"deadline":"d","title":"t"}"#,
+        ] {
+            let saved = serde_json::to_string(&call(arguments)).unwrap();
+            assert!(saved.contains(arguments), "{saved}");
+            let read: StoredMessage = serde_json::from_str(&saved).unwrap();
+            assert_eq!(serde_json::to_string(&read).unwrap(), saved);
+        }
     }
 
     /// 同じものを同じ順に並べれば同じ指紋になり、何か1つ変われば変わる。

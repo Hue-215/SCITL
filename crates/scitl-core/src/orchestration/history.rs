@@ -1325,7 +1325,7 @@ mod tests {
         f.reply("t1", "a");
         assert_eq!(
             tool_contents(&f.build(Chat::Task(f.task_id), true)),
-            vec![r#"{"delivered":"name_only","id":1,"name":"a.png"}"#]
+            vec![r#"{"id":1,"name":"a.png","delivered":"name_only"}"#]
         );
     }
 

@@ -865,7 +865,7 @@ mod tests {
         );
         let text = serde_json::to_string(&request).unwrap();
         assert!(text.contains(&format!(
-            r#""content":[{thinking},{{"text":"more","type":"text"}}]"#
+            r#""content":[{thinking},{{"type":"text","text":"more"}}]"#
         )));
     }
 

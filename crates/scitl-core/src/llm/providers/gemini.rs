@@ -868,7 +868,7 @@ mod tests {
         ];
         let request = request_body("gemini-test", &messages, ToolOffer::NONE, None);
         let text = serde_json::to_string(&request).unwrap();
-        assert!(text.contains(&format!(r#""type":"user_input"}},{thought},{call}]"#)));
+        assert!(text.contains(&format!(r#"}}]}},{thought},{call}]"#)));
     }
 
     /// 受け取ったまま返した呼び出しにも、続く結果に呼び出しの名前を添える。
