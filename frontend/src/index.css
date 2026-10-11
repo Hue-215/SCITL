@@ -930,6 +930,16 @@ details[open] > summary > .disclosure-mark,
   );
 }
 
+/* モデルへ送っている範囲の始まりの印。吹き出しではないので、幅いっぱいに置いて中央に寄せる。 */
+.chat-log > .history-start {
+  align-self: stretch;
+  margin-right: var(--bubble-margin-near);
+  max-width: none;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .chat-log > .entry-user {
   align-self: flex-end;
   margin-left: var(--bubble-margin-far);

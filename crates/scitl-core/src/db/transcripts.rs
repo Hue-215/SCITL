@@ -140,6 +140,19 @@ pub fn list_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Transcript>> {
     Ok(rows)
 }
 
+/// 試行の保存に添えた間引きの位置(最初に並べたユーザー発言の行のid)。会話の最初から並べたか、
+/// 保存が無ければ`None`。画面に出す印に使うので、本文は引かない。
+pub fn history_start(conn: &Connection, turn_id: &str, attempt_no: i64) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT history_start FROM turn_transcripts WHERE turn_id = ?1 AND attempt_no = ?2",
+            params![turn_id, attempt_no],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
 /// 会話の保存の`input`だけを、試行(`turn_id`・`attempt_no`)と一緒に保存した順に引く(画面に出す
 /// 添付の印に使う。`rounds`は引かない)。どの試行の分を使うかは呼び出し側が`messages`から決める。
 pub fn inputs_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<(String, i64, String)>> {

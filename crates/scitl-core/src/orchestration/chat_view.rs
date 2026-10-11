@@ -29,6 +29,9 @@ pub struct MessageView {
     /// 添付のうち、押して入っているフォルダを開けるもののid(`attachments::revealable`)。
     /// 開けないOS(Android)では空。
     pub revealable_attachments: Vec<i64>,
+    /// 履歴を間引いていて、モデルへ送っている範囲がこの発言から始まるか([`sent_from`])。画面は
+    /// この発言の前に、それより前は送っていないことの印を出す。
+    pub starts_sent_history: bool,
 }
 
 /// ターンの中身の1要素の表示。`round`は1始まりのラウンドの番号。
@@ -97,6 +100,7 @@ pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
     require_chat(conn, chat)?;
     let rows = messages::list_for_chat(conn, chat)?;
     let mut undelivered = undelivered(conn, chat, &rows)?;
+    let sent_from = sent_from(conn, &rows)?;
     let records = ReplyRecords::of(&rows);
     let parts: Vec<Vec<PartView>> = rows
         .iter()
@@ -114,9 +118,37 @@ pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
             parts,
             undelivered_attachments: undelivered.remove(&message.id).unwrap_or_default(),
             revealable_attachments: revealable_ids(&message, CAN_REVEAL),
+            starts_sent_history: sent_from == Some(message.id),
             message,
         })
         .collect())
+}
+
+/// 履歴を間引いているとき、モデルへ送っている範囲が始まるユーザー発言の行のid
+/// (`docs/spec/architecture/transcript.md`「間引きの位置」)。会話の最初から送っていれば`None`。
+///
+/// 示すのは、表示される最後の返信を作ったときに送っていた範囲の始まり(その試行の保存に添えた
+/// 位置)。その発言が消えていれば、それより後ろの最初のユーザー発言にする(履歴の組み立てと同じ)。
+/// 次のターンでさらに間引くかは、送るときに決まるので示さない。それより前に表示する行が無ければ
+/// 印は要らないので`None`。
+fn sent_from(conn: &Connection, rows: &[Message]) -> Result<Option<i64>> {
+    let Some((turn_id, attempt_no)) = rows
+        .iter()
+        .rev()
+        .filter(|m| m.kind == Kind::Normal && m.role == Role::Assistant)
+        .find_map(|m| Some((m.turn_id.as_deref()?, m.attempt_no?)))
+    else {
+        return Ok(None);
+    };
+    let Some(start) = transcripts::history_start(conn, turn_id, attempt_no)? else {
+        return Ok(None);
+    };
+    let normal = || rows.iter().filter(|m| m.kind == Kind::Normal);
+    let first = normal()
+        .filter(|m| m.role == Role::User)
+        .map(|m| m.id)
+        .find(|&id| id >= start);
+    Ok(first.filter(|&id| normal().next().is_some_and(|m| m.id != id)))
 }
 
 fn revealable_ids(message: &Message, can_reveal: bool) -> Vec<i64> {
@@ -347,6 +379,18 @@ mod tests {
 
         /// 試行の保存を書く。`rows`を入力に含め、ユーザー発言1つに`images`を載せる。
         fn save(&self, turn_id: &str, attempt_no: i64, rows: Vec<i64>, images: &[&str]) {
+            self.save_from(turn_id, attempt_no, rows, images, None);
+        }
+
+        /// [`Self::save`]の、間引きの位置(最初に並べたユーザー発言の行)を添える形。
+        fn save_from(
+            &self,
+            turn_id: &str,
+            attempt_no: i64,
+            rows: Vec<i64>,
+            images: &[&str],
+            history_start: Option<i64>,
+        ) {
             let input = StoredInput::new(
                 rows,
                 vec![StoredMessage::User {
@@ -367,12 +411,22 @@ mod tests {
                     settings_system: "s",
                     tools: "[]",
                     prefix_digest: "p",
-                    history_start: None,
+                    history_start,
                     input: &serde_json::to_string(&input).unwrap(),
                     rounds: "[]",
                 },
             )
             .unwrap();
+        }
+
+        /// モデルへ送っている範囲の始まりとして印の付いた発言。
+        fn sent_from(&self) -> Vec<i64> {
+            list_chat(&self.conn, Chat::General)
+                .unwrap()
+                .into_iter()
+                .filter(|v| v.starts_sent_history)
+                .map(|v| v.message.id)
+                .collect()
         }
 
         fn undelivered(&self) -> HashMap<i64, Vec<i64>> {
@@ -383,6 +437,34 @@ mod tests {
                 .map(|v| (v.message.id, v.undelivered_attachments))
                 .collect()
         }
+    }
+
+    /// 履歴を間引いていれば、最後の返信を作ったときに送っていた範囲の始まりの発言に印を付ける。
+    #[test]
+    fn marks_the_message_the_sent_history_starts_from() {
+        let f = Fixture::new();
+        let (u1, _) = f.user(&[]);
+        let a1 = f.reply("t1", 1);
+        f.save("t1", 1, vec![u1], &[]);
+        // 会話の最初から送っていれば、印は無い。
+        assert!(f.sent_from().is_empty());
+
+        let (u2, _) = f.user(&[]);
+        f.reply("t2", 1);
+        f.save_from("t2", 1, vec![u2], &[], Some(u2));
+        assert_eq!(f.sent_from(), [u2]);
+
+        // 印は最後の返信のもの。位置の発言が消えていれば、それより後ろの最初のユーザー発言。
+        let (u3, _) = f.user(&[]);
+        f.reply("t3", 1);
+        f.save_from("t3", 1, vec![u3], &[], Some(a1));
+        assert_eq!(f.sent_from(), [u2]);
+
+        // それより前に表示する行が無ければ、印は要らない。
+        let (u4, _) = f.user(&[]);
+        f.reply("t4", 1);
+        f.save_from("t4", 1, vec![u4], &[], Some(u1));
+        assert!(f.sent_from().is_empty());
     }
 
     /// 返信の中身が指す実行記録は、独立した行として返さず、返信の中身の位置に起きた順で並ぶ。

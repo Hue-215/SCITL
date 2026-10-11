@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import type { ReactNode, RefObject, UIEventHandler, WheelEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
 import CodeBlock from './CodeBlock'
@@ -146,68 +147,80 @@ export default function ChatLog({
             )
           }
 
+          // 履歴を間引いていて、モデルへ送っている範囲がこの発言から始まるなら、その前に印を出す
+          // (どの発言からかはRust側が決める)。
+          const sentFromHere = message.starts_sent_history && (
+            <li className="history-start">{t('chat.history_start_note')}</li>
+          )
+
           // 編集・削除。`plain`項目は常にユーザー発言なので、編集はここでのみ起こりうる。
           const canEditOrDelete = message.role === 'user'
 
           if (editing.id === message.id) {
             return (
-              <li key={message.id} className={`entry entry-${message.role}`}>
-                <textarea
-                  className="entry-edit-textarea"
-                  value={editing.draft}
-                  onChange={(e) => editing.setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault()
-                      editing.submit(message)
-                    } else if (e.key === 'Escape') {
-                      editing.cancel()
-                    }
-                  }}
-                  autoFocus
-                />
+              <Fragment key={message.id}>
+                {sentFromHere}
+                <li className={`entry entry-${message.role}`}>
+                  <textarea
+                    className="entry-edit-textarea"
+                    value={editing.draft}
+                    onChange={(e) => editing.setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault()
+                        editing.submit(message)
+                      } else if (e.key === 'Escape') {
+                        editing.cancel()
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <MessageAttachments
+                    attachments={message.attachments}
+                    undelivered={message.undelivered_attachments}
+                    revealable={message.revealable_attachments}
+                  />
+                  <div className="button-row entry-actions">
+                    <button type="button" onClick={editing.cancel}>
+                      {t('common.cancel')}
+                    </button>
+                    <button type="button" onClick={() => editing.submit(message)}>
+                      {t('chat.send_button')}
+                    </button>
+                  </div>
+                </li>
+              </Fragment>
+            )
+          }
+
+          return (
+            <Fragment key={message.id}>
+              {sentFromHere}
+              <li className={`entry entry-${message.role}`}>
+                {/* 添付だけの発言は本文が空になる */}
+                {message.content && (
+                  <EntryBody
+                    role={message.role}
+                    content={message.content}
+                    errorKind={message.error_kind}
+                  />
+                )}
                 <MessageAttachments
                   attachments={message.attachments}
                   undelivered={message.undelivered_attachments}
                   revealable={message.revealable_attachments}
                 />
-                <div className="button-row entry-actions">
-                  <button type="button" onClick={editing.cancel}>
-                    {t('common.cancel')}
-                  </button>
-                  <button type="button" onClick={() => editing.submit(message)}>
-                    {t('chat.send_button')}
-                  </button>
-                </div>
+                <time className="entry-time">{formatDateTime(message.created_at)}</time>
+                {canEditOrDelete && (
+                  <EntryActions
+                    label={t('chat.edit_button')}
+                    onAction={() => editing.start(message)}
+                    onDelete={() => onRemove(message.id)}
+                    disabled={disableActions}
+                  />
+                )}
               </li>
-            )
-          }
-
-          return (
-            <li key={message.id} className={`entry entry-${message.role}`}>
-              {/* 添付だけの発言は本文が空になる */}
-              {message.content && (
-                <EntryBody
-                  role={message.role}
-                  content={message.content}
-                  errorKind={message.error_kind}
-                />
-              )}
-              <MessageAttachments
-                attachments={message.attachments}
-                undelivered={message.undelivered_attachments}
-                revealable={message.revealable_attachments}
-              />
-              <time className="entry-time">{formatDateTime(message.created_at)}</time>
-              {canEditOrDelete && (
-                <EntryActions
-                  label={t('chat.edit_button')}
-                  onAction={() => editing.start(message)}
-                  onDelete={() => onRemove(message.id)}
-                  disabled={disableActions}
-                />
-              )}
-            </li>
+            </Fragment>
           )
         }
 
