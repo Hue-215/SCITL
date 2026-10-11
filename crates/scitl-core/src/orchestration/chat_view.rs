@@ -511,6 +511,22 @@ mod tests {
         g.reply("t2", 1);
         g.save("t2", 1, vec![next], &[]);
         assert_eq!(g.undelivered(), HashMap::from([(failed, failed_ids)]));
+
+        // 失敗が続いたあとの返信は、それより前の失敗した発言すべてについて決める。最後の返信より
+        // 後ろの失敗は、まだ分からない。
+        let h = Fixture::new();
+        let (first, first_ids) = h.user(&[(AttachmentKind::Image, "h1")]);
+        h.fail("t1", 1);
+        let (second, second_ids) = h.user(&[(AttachmentKind::Image, "h2")]);
+        h.fail("t2", 1);
+        h.user(&[]);
+        h.reply("t3", 1);
+        h.user(&[(AttachmentKind::Image, "h3")]);
+        h.fail("t4", 1);
+        assert_eq!(
+            h.undelivered(),
+            HashMap::from([(first, first_ids), (second, second_ids)])
+        );
     }
 
     /// 送れた試行を作り直して失敗した・返信を消したら、その保存はもう並べない。あとに返信が
