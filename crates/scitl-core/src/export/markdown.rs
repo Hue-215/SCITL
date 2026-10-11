@@ -162,6 +162,9 @@ fn push_parts(out: &mut String, parts: &[ResolvedPart]) {
                 let _ = writeln!(out, "Tool execution ({}):\n", record.created_at);
                 push_record(out, record);
             }
+            ResolvedPart::Truncated { .. } => {
+                out.push_str("The reply above reached the length limit.\n\n");
+            }
         }
     }
 }
@@ -413,6 +416,7 @@ mod tests {
                             round: 2,
                             text: "done",
                         },
+                        ResolvedPart::Truncated { round: 2 },
                     ],
                     attachments: Vec::new(),
                 },
@@ -431,6 +435,7 @@ mod tests {
             "```markdown\n前置き\n```\n",
             "Tool execution (2026-09-28T12:00:00Z):",
             "```markdown\ndone\n```\n",
+            "The reply above reached the length limit.\n",
         ]
         .iter()
         .map(|h| {

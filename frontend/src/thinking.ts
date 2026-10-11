@@ -85,10 +85,13 @@ export type ThoughtItem =
   | { kind: 'reasoning'; id: number; text: string }
   | { kind: 'tool'; id: number; execution: ToolExecutionView }
 
-/** ターンの中身を、起きた順に思考・ツールの並び(`ThinkingTools`)と本文の吹き出しに分けたもの。 */
+/**
+ * ターンの中身を、起きた順に思考・ツールの並び(`ThinkingTools`)と本文の吹き出しに分けたもの。
+ * `truncated`は、その本文が出力の長さの上限で途中で切れたか(保存済みのターンだけが持つ)。
+ */
 export type TurnSegment =
   | { kind: 'thoughts'; items: ThoughtItem[] }
-  | { kind: 'text'; id: number; text: string }
+  | { kind: 'text'; id: number; text: string; truncated?: boolean }
 
 /**
  * 1ターン分のentriesから、起きた順の折りたたみと本文の列を組み立てる。返信の行(最終行)の
@@ -120,6 +123,13 @@ export function buildTurnSegments(entries: MessageView[]): TurnSegment[] {
         return
       case 'text':
         segments.push({ kind: 'text', id: index, text: part.text })
+        return
+      case 'truncated': {
+        // 切れたラウンドの本文は直前に並ぶ。本文を書く前に切れた(思考だけの)ラウンドは、本文が
+        // 無いので印を出さない(返信は空応答の失敗になる)。
+        const last = segments[segments.length - 1]
+        if (last?.kind === 'text') last.truncated = true
+      }
     }
   })
   return segments

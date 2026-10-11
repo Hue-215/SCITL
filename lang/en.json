@@ -37,6 +37,7 @@
   "chat.tool_failed": "failed: {error}",
   "chat.tool_failed_plain": "failed",
   "chat.tool_unknown": "Unknown unit connected",
+  "chat.truncated_note": "The reply reached the length limit.",
   "common.add": "Add",
   "common.adding": "Adding…",
   "common.app_name": "SCITL",

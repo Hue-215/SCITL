@@ -135,6 +135,12 @@ pub enum ReplyPart {
         round: u32,
         record: i64,
     },
+    /// そのラウンドの応答が、出力の長さの上限で途中で切れた(終了理由`Length`。Issue #137)。
+    /// 本文の後ろに置く。表示とエクスポート専用で、モデルへの入力には出さない(切れた本文は
+    /// そのまま送り返す。注記を本文に混ぜると、モデルが書いたものとして送り返されるため)。
+    Truncated {
+        round: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,14 +171,16 @@ pub(crate) enum ResolvedPart<'a> {
     Reasoning { round: u32, text: &'a str },
     Text { round: u32, text: &'a str },
     Tool { round: u32, record: &'a Message },
+    Truncated { round: u32 },
 }
 
 impl ResolvedPart<'_> {
     pub(crate) fn round(&self) -> u32 {
         match self {
-            Self::Reasoning { round, .. } | Self::Text { round, .. } | Self::Tool { round, .. } => {
-                *round
-            }
+            Self::Reasoning { round, .. }
+            | Self::Text { round, .. }
+            | Self::Tool { round, .. }
+            | Self::Truncated { round } => *round,
         }
     }
 }
@@ -230,6 +238,7 @@ impl<'a> ReplyRecords<'a> {
                         round: *round,
                         record: m,
                     }),
+                ReplyPart::Truncated { round } => Some(ResolvedPart::Truncated { round: *round }),
             })
             .collect()
     }

@@ -81,6 +81,7 @@ function TurnSegmentView({
   return (
     <div className="entry entry-assistant">
       <EntryBody role="assistant" content={segment.text} streaming={streaming} />
+      {segment.truncated && <p className="entry-truncated">{t('chat.truncated_note')}</p>}
       {footer}
     </div>
   )

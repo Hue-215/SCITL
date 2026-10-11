@@ -654,7 +654,7 @@ fn reply_messages(parts: &[ResolvedPart]) -> Vec<ChatMessage> {
             match part {
                 ResolvedPart::Text { text, .. } => texts.push(text),
                 ResolvedPart::Tool { record, .. } => calls.extend(call_and_result(record)),
-                ResolvedPart::Reasoning { .. } => {}
+                ResolvedPart::Reasoning { .. } | ResolvedPart::Truncated { .. } => {}
             }
         }
         if calls.is_empty() && i != last {

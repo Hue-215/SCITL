@@ -50,6 +50,10 @@ pub enum PartView {
         id: i64,
         execution: ToolExecutionView,
     },
+    /// そのラウンドの応答が、出力の長さの上限で途中で切れた。
+    Truncated {
+        round: u32,
+    },
 }
 
 impl PartView {
@@ -68,6 +72,7 @@ impl PartView {
                 id: record.id,
                 execution: ToolExecutionView::of_content(&record.content),
             },
+            ResolvedPart::Truncated { round } => Self::Truncated { round },
         }
     }
 }
@@ -439,7 +444,7 @@ mod tests {
                         .unwrap()
                         .to_string()
                 }
-                PartView::Reasoning { .. } => unreachable!(),
+                PartView::Reasoning { .. } | PartView::Truncated { .. } => unreachable!(),
             })
             .collect();
         assert_eq!(parts, ["調べます", "list_tasks", "本題"]);

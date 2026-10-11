@@ -16,8 +16,8 @@ use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet, StopSignal};
 use crate::llm::{
-    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, LlmError, PromptText, ResponseEvent,
-    SessionId, ToolArguments, ToolCallRequest,
+    AdapterIdentity, ChatMessage, FinishReason, InlineImage, LlmAdapter, LlmError, PromptText,
+    ResponseEvent, SessionId, ToolArguments, ToolCallRequest,
 };
 use crate::mcp::McpSessions;
 use crate::orchestration::history;
@@ -639,6 +639,11 @@ impl ReplyParts {
         }
     }
 
+    /// ラウンドの応答が、出力の長さの上限で途中で切れたことを積む。
+    fn push_truncated(&mut self, round: u32) {
+        self.0.push(ReplyPart::Truncated { round });
+    }
+
     /// 実行して記録を書いたツールを積む。`record`は実行記録の行のid。
     fn push_tool(&mut self, round: u32, record: i64) {
         self.0.push(ReplyPart::Tool { round, record });
@@ -809,10 +814,14 @@ async fn run_tool_rounds(
                 text,
                 reasoning,
                 tool_calls,
+                truncated,
             } = RoundResponse::collect(&events);
             // 受け取り終えたラウンドの中身。このあとどの経路で終わっても、返信かエラー発言に残る。
             let round_no = u32::try_from(round).expect("tool rounds are few");
             reply_parts.push_round(round_no, reasoning.as_deref(), &text);
+            if truncated {
+                reply_parts.push_truncated(round_no);
+            }
 
             if tool_calls.is_empty() {
                 // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
@@ -924,6 +933,8 @@ struct RoundResponse {
     /// 要る方言の分は、アダプタが返す`replay`に入っている。無ければ`None`。
     reasoning: Option<String>,
     tool_calls: Vec<ToolCallRequest>,
+    /// 出力の長さの上限で途中で切れたか(終了理由`Length`)。
+    truncated: bool,
 }
 
 impl RoundResponse {
@@ -931,6 +942,7 @@ impl RoundResponse {
         let mut text = String::new();
         let mut reasoning = String::new();
         let mut tool_calls = Vec::new();
+        let mut truncated = false;
         for event in events {
             match event {
                 ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
@@ -946,13 +958,16 @@ impl RoundResponse {
                         arguments: arguments.clone(),
                     });
                 }
-                ResponseEvent::Done { .. } => {}
+                ResponseEvent::Done { finish_reason } => {
+                    truncated = *finish_reason == FinishReason::Length;
+                }
             }
         }
         Self {
             text,
             reasoning: (!reasoning.is_empty()).then_some(reasoning),
             tool_calls,
+            truncated,
         }
     }
 }
