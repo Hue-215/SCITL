@@ -90,6 +90,8 @@ impl CoreError {
             Self::UnknownArgument(_) => "unknown_argument",
             Self::UnknownTool(_) => "unknown_tool",
             Self::InvalidArgument { .. } => "invalid_argument",
+            // 証明書の検証で断られたことは、ほかの通信の失敗と分けて知らせる(エラー発言と同じ文言)。
+            Self::Llm(crate::llm::LlmError::Certificate(_)) => "certificate_unverified",
             Self::Llm(_) => "llm",
             Self::ProviderConfig(_) => "provider_config",
             Self::Secrets(_) => "secrets",
@@ -154,6 +156,9 @@ mod tests {
                 reason: text(),
             },
             CoreError::Llm(crate::llm::LlmError::EmptyResponse),
+            CoreError::Llm(crate::llm::LlmError::Certificate(
+                crate::llm::ErrorDetail::internal("x"),
+            )),
             CoreError::ProviderConfig(text()),
             CoreError::Secrets(text()),
             CoreError::Config(text()),

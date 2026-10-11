@@ -30,6 +30,10 @@ pub enum TurnFailure {
     ConnectionFailed {
         detail: ErrorDetail,
     },
+    /// 接続先の証明書を検証できず、接続を断った。
+    CertificateUnverified {
+        detail: ErrorDetail,
+    },
     /// 応答は届いたが、期待した形として読めなかった。
     InvalidResponse {
         detail: ErrorDetail,
@@ -88,6 +92,7 @@ impl TurnFailure {
             TurnFailure::NoModel => "no_model",
             TurnFailure::ResponseTimeout { .. } => "response_timeout",
             TurnFailure::ConnectionFailed { .. } => "connection_failed",
+            TurnFailure::CertificateUnverified { .. } => "certificate_unverified",
             TurnFailure::InvalidResponse { .. } => "invalid_response",
             TurnFailure::EmptyResponse => "empty_response",
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
@@ -117,6 +122,7 @@ impl TurnFailure {
         match self {
             TurnFailure::ResponseTimeout { detail }
             | TurnFailure::ConnectionFailed { detail }
+            | TurnFailure::CertificateUnverified { detail }
             | TurnFailure::InvalidResponse { detail }
             | TurnFailure::ContextExceeded { detail }
             | TurnFailure::ThinkingUnsupported { detail }
@@ -223,6 +229,9 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
         LlmError::Connection(detail) => TurnFailure::ConnectionFailed {
             detail: detail.clone(),
         },
+        LlmError::Certificate(detail) => TurnFailure::CertificateUnverified {
+            detail: detail.clone(),
+        },
         LlmError::InvalidResponse(detail) => TurnFailure::InvalidResponse {
             detail: detail.clone(),
         },
@@ -278,6 +287,7 @@ mod tests {
             (LlmError::InvalidRequest(detail("x")), "provider_config"),
             (LlmError::Timeout(detail("x")), "response_timeout"),
             (LlmError::Connection(detail("x")), "connection_failed"),
+            (LlmError::Certificate(detail("x")), "certificate_unverified"),
             (LlmError::InvalidResponse(detail("x")), "invalid_response"),
             (LlmError::EmptyResponse, "empty_response"),
             (LlmError::ContextExceeded(detail("x")), "context_exceeded"),
@@ -306,6 +316,7 @@ mod tests {
         let with_detail = [
             LlmError::Timeout(detail("upstream overloaded")),
             LlmError::Connection(detail("upstream overloaded")),
+            LlmError::Certificate(detail("upstream overloaded")),
             LlmError::InvalidResponse(detail("upstream overloaded")),
             LlmError::ContextExceeded(detail("upstream overloaded")),
             LlmError::ReasoningEffortRejected(detail("upstream overloaded")),
@@ -332,6 +343,7 @@ mod tests {
             TurnFailure::NoModel,
             TurnFailure::ResponseTimeout { detail: detail() },
             TurnFailure::ConnectionFailed { detail: detail() },
+            TurnFailure::CertificateUnverified { detail: detail() },
             TurnFailure::InvalidResponse { detail: detail() },
             TurnFailure::EmptyResponse,
             TurnFailure::ContextExceeded { detail: detail() },
@@ -355,6 +367,7 @@ mod tests {
                 | TurnFailure::NoModel
                 | TurnFailure::ResponseTimeout { .. }
                 | TurnFailure::ConnectionFailed { .. }
+                | TurnFailure::CertificateUnverified { .. }
                 | TurnFailure::InvalidResponse { .. }
                 | TurnFailure::EmptyResponse
                 | TurnFailure::ContextExceeded { .. }
