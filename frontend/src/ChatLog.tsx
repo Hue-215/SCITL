@@ -3,7 +3,7 @@ import type { ReactNode, RefObject, UIEventHandler, WheelEventHandler } from 're
 import { MessageAttachments, PendingAttachments } from './Attachments'
 import CodeBlock from './CodeBlock'
 import { ConfirmButton } from './Dialog'
-import { formatDateTime, t, turnErrorText } from './i18n'
+import { formatDateTime, isolated, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
 import {
@@ -15,8 +15,8 @@ import {
 } from './thinking'
 import type { MessageView, PendingEntry } from './types'
 
-// Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
-// 表示はSCITL自身の文言(とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
+// Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言はSCITL自身の文言
+// (とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
 // エラー発言は、ターンの中でも外でもここで表示言語の文言に替える。`streaming`は、書いている
 // 途中の本文か。
 function EntryBody({
@@ -297,18 +297,14 @@ export default function ChatLog({
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
           // 応答待ちの間の途中経過を、保存済みのターンと同じ形で届いた順に出す。完了したら
-          // 読み直したターンに置き換わる。本文が流れている最中は応答待ちの文言を出さない(書き
-          // 終えてツールを実行している間は出す。止める指示を出したあとは、止めていることを出す)。
-          <li key={`pending-${i}`} className="turn-group">
-            {live.segments.map((segment, j) => (
-              <TurnSegmentView key={j} segment={segment} streaming />
-            ))}
-            {(live.open !== 'text' || entry.stopping) && (
-              <div className="entry entry-pending">
-                <EntryBody role={entry.role} content={entry.content} />
-              </div>
-            )}
-          </li>
+          // 読み直したターンに置き換わる。応答を待っていることは入力欄の上に出す(`TypingIndicator`)。
+          live.segments.length > 0 && (
+            <li key={`pending-${i}`} className="turn-group">
+              {live.segments.map((segment, j) => (
+                <TurnSegmentView key={j} segment={segment} streaming />
+              ))}
+            </li>
+          )
         ) : (
           <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
             {entry.content && <EntryBody role={entry.role} content={entry.content} />}
@@ -323,5 +319,16 @@ export default function ChatLog({
         </li>
       )}
     </ul>
+  )
+}
+
+// モデルの応答を待っている間、入力欄の上に出す「入力中」。`provider`は待っているプロバイダーの
+// 名前で、待っていなければ`null`(本文が流れている間・ツールの実行中・止める指示のあと)。
+// 行は生成中ずっと置き、文言だけを出し入れする(ラウンドのたびに会話欄の高さが変わらないように)。
+export function TypingIndicator({ provider }: { provider: string | null }) {
+  return (
+    <p className="typing-indicator" role="status">
+      {provider !== null && t('chat.typing', { provider: isolated(provider) })}
+    </p>
   )
 }

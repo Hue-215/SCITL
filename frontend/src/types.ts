@@ -56,11 +56,13 @@ export type { ToolSettingsView } from './bindings/ToolSettingsView'
 export type { TurnEvent } from './bindings/TurnEvent'
 
 // 送信直後の楽観表示専用のプレースホルダ。確定後はlist_chat_messagesで引き直して置き換える。
-export interface PendingEntry {
-  role: 'user' | 'pending'
-  content: string
-  // 送った添付の名前(ユーザー発言のみ)。確定するまで開けないので、名前だけを出す。
-  attachmentNames?: string[]
-  // 止める指示を出したあとの応答待ち(`content`は止めていることを伝える文言)。
-  stopping?: boolean
-}
+// `pending`は応答を生成するコマンドの実行中の印。文言は持たず、会話欄にはそれまでに届いた
+// 途中経過を出す(応答を待っている間の表示は入力欄の上の`TypingIndicator`)。
+export type PendingEntry =
+  | {
+      role: 'user'
+      content: string
+      // 送った添付の名前。確定するまで開けないので、名前だけを出す。
+      attachmentNames?: string[]
+    }
+  | { role: 'pending' }

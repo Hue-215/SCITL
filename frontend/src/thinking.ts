@@ -144,9 +144,15 @@ export interface LiveTurn {
    * 閉じたあとに届いた思考・本文は、次のラウンドの新しい項目にする。
    */
   open: 'reasoning' | 'text' | null
+  /**
+   * モデルの応答を待っているプロバイダーの名前(`awaiting_model`で入る)。本文が届き始めるか、
+   * ラウンドが終わったら外す。ストリーミングしないときは本文がラウンドの終わりにまとめて届くので、
+   * 応答が返り終わるまで残る。思考が流れている間は残す。
+   */
+  awaiting: string | null
 }
 
-export const NO_LIVE_TURN: LiveTurn = { segments: [], open: null }
+export const NO_LIVE_TURN: LiveTurn = { segments: [], open: null, awaiting: null }
 
 /** 思考・ツールの項目を、末尾の並びに足す(末尾が本文なら新しい並びを始める)。 */
 function withThought(segments: TurnSegment[], item: ThoughtItem): TurnSegment[] {
@@ -166,9 +172,10 @@ function withThought(segments: TurnSegment[], item: ThoughtItem): TurnSegment[] 
  */
 export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
   const { segments, open } = live
+  if (event.type === 'awaiting_model') return { ...live, awaiting: event.provider }
   if (event.type === 'tool_executed') {
     const item: ThoughtItem = { kind: 'tool', id: event.id, execution: event.execution }
-    return { segments: withThought(segments, item), open: null }
+    return { ...live, segments: withThought(segments, item), open: null }
   }
   const response = event.event
   const last = segments[segments.length - 1]
@@ -178,7 +185,7 @@ export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
       if (open === 'reasoning' && last?.kind === 'thoughts' && lastItem?.kind === 'reasoning') {
         const merged: ThoughtItem = { ...lastItem, text: lastItem.text + response.text }
         const thoughts: TurnSegment = { kind: 'thoughts', items: [...last.items.slice(0, -1), merged] }
-        return { segments: [...segments.slice(0, -1), thoughts], open }
+        return { ...live, segments: [...segments.slice(0, -1), thoughts] }
       }
       // 描画のキー。届いた思考の数で振る(ツールの項目は記録のidをキーにするので重ならない)。
       const count = segments.reduce(
@@ -187,21 +194,21 @@ export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
         0,
       )
       const item: ThoughtItem = { kind: 'reasoning', id: count, text: response.text }
-      return { segments: withThought(segments, item), open: 'reasoning' }
+      return { ...live, segments: withThought(segments, item), open: 'reasoning' }
     }
     case 'text_delta': {
       if (open === 'text' && last?.kind === 'text') {
         const merged: TurnSegment = { ...last, text: last.text + response.text }
-        return { segments: [...segments.slice(0, -1), merged], open }
+        return { ...live, segments: [...segments.slice(0, -1), merged] }
       }
       // 空白だけで始まる本文(呼び出しの前に改行だけを流すサーバーがある)は吹き出しにしない。
       // 保存側も空白だけの本文を捨てる。
       if (response.text.trim() === '') return live
       const opened: TurnSegment = { kind: 'text', id: segments.length, text: response.text }
-      return { segments: [...segments, opened], open: 'text' }
+      return { segments: [...segments, opened], open: 'text', awaiting: null }
     }
     case 'done':
-      return { ...live, open: null }
+      return { ...live, open: null, awaiting: null }
     case 'tool_call':
       return live
   }

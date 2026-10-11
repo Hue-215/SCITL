@@ -472,6 +472,7 @@ fn opening_message() -> ChatMessage {
 fn context_without_provider() -> TurnContext<'static> {
     TurnContext {
         adapter: Err(TurnFailure::NoProvider),
+        provider_name: "Test",
         prompts: SystemPrompts::default(),
         opening_message: OPENING,
         capabilities: DEFAULT_CAPABILITIES,
@@ -880,7 +881,8 @@ async fn reaching_the_length_limit_before_any_text_is_an_empty_response() {
 }
 
 /// ターンの途中経過は、アダプタのイベントとツールの実行を起きた順に知らせる。
-/// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。
+/// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。モデルの応答を待ち始めたことは、
+/// ターンの始めとラウンドごとの呼び出しの前に、プロバイダーの名前を添えて知らせる。
 #[tokio::test]
 async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
     let conn = db::open_in_memory().unwrap();
@@ -917,8 +919,20 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
         .collect();
     assert_eq!(
         kinds,
-        vec!["tool_call", "done", "tool_executed", "text_delta", "done"]
+        vec![
+            "awaiting_model",
+            "tool_call",
+            "done",
+            "tool_executed",
+            "awaiting_model",
+            "text_delta",
+            "done"
+        ]
     );
+    assert!(events
+        .iter()
+        .filter(|e| e["type"] == "awaiting_model")
+        .all(|e| e["provider"] == "Test"));
 
     // 知らせた表示は、保存した記録を会話の一覧(返信の中身)で読んだときと同じ。
     let views =
@@ -934,7 +948,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
             _ => None,
         })
         .unwrap();
-    let executed = &events[2];
+    let executed = &events[3];
     assert_eq!(executed["id"], saved.0);
     assert_eq!(
         executed["execution"],
