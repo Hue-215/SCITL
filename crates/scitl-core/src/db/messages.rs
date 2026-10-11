@@ -558,6 +558,21 @@ pub fn soft_delete_trailing_turn_records(conn: &Connection, chat: Chat) -> Resul
     soft_delete_turn_records_after(conn, chat, last_normal.unwrap_or(0), &[])
 }
 
+/// 会話から外したターンの実行記録があるか([`soft_delete_turn_records_after`]で消した、発言の
+/// 削除と、編集・再試行で作り直したターンより後ろの記録)。外した記録の変更はタスクに残るが、
+/// 会話にはもう現れない。
+pub fn has_removed_turn_records(conn: &Connection, chat: Chat) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM messages
+         WHERE task_id IS ?1
+           AND kind = 'tool_execution'
+           AND turn_id IS NOT NULL
+           AND deleted_at IS NOT NULL)",
+        [chat.task_id()],
+        |row| row.get(0),
+    )?)
+}
+
 /// タスクの会話を始めた側。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opener {
