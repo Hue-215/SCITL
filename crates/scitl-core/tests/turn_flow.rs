@@ -19,8 +19,8 @@ use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     create_task, delete_message, discard_events, discard_finished, edit_user_message,
     generate_reply, lacks_reply, preview_request, retry_reply, run_turn, stop_response,
-    FinishedTurn, McpAccess, PartView, PreviewOptions, SystemPrompts, TaskCreation, ToolLimits,
-    TurnContext, TurnEvent, TurnFailure, TurnOutcome, UserInput,
+    FinishedTurn, McpAccess, PartView, PreviewOptions, Regeneration, SystemPrompts, TaskCreation,
+    ToolLimits, TurnContext, TurnEvent, TurnFailure, TurnOutcome, UserInput,
 };
 use serde_json::json;
 
@@ -4372,6 +4372,52 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
     assert!(db::tasks::list_tasks(&db.lock().unwrap())
         .unwrap()
         .is_empty());
+}
+
+/// チャットを使えない間は、再試行・編集が何も消さずに断る(消してから生成すると、成功していた
+/// 返信がエラー発言に置き換わるだけになる)。
+#[tokio::test]
+async fn regenerating_is_refused_without_deleting_while_the_chat_cannot_run() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["応答A"])),
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let before = db::messages::list_for_chat(&db.lock().unwrap(), chat).unwrap();
+    let user_id = before.iter().find(|m| m.role == Role::User).unwrap().id;
+    let reply_id = before
+        .iter()
+        .find(|m| m.role == Role::Assistant)
+        .unwrap()
+        .id;
+
+    let unready = ScriptedAdapter::unready(Readiness::NoModel);
+    for (ctx, expected) in [
+        (context_without_provider(), "no_provider"),
+        (context(&unready), "no_model"),
+    ] {
+        let retried = retry_reply(db.clone(), &ctx, chat, reply_id).await.unwrap();
+        let edited = edit_user_message(db.clone(), &ctx, chat, user_id, "編集".to_string())
+            .await
+            .unwrap();
+        for result in [retried, edited] {
+            match result {
+                Regeneration::Unavailable { error_kind } => assert_eq!(error_kind, expected),
+                other => panic!("expected Unavailable, got {other:?}"),
+            }
+        }
+    }
+    let after = db::messages::list_for_chat(&db.lock().unwrap(), chat).unwrap();
+    let ids =
+        |messages: &[db::messages::Message]| messages.iter().map(|m| m.id).collect::<Vec<_>>();
+    assert_eq!(ids(&after), ids(&before));
 }
 
 /// 1回目に`tool_calls`のツールをまとめて呼び(IDは`call_0`から順)、2回目に本文を返す。

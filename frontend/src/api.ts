@@ -17,6 +17,7 @@ import type {
   NewMcpEndpoint,
   ReasoningEffort,
   ReceivedFiles,
+  Regeneration,
   SettingsView,
   StageOutcome,
   TaskCreation,
@@ -65,6 +66,7 @@ export function deleteTask(taskId: number): Promise<void> {
 
 // 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)はコマンドの
 // 呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が知っている。
+// 編集・再試行は、チャットを使えない間(モデル未選択等)は何も消さずに断る(`unavailable`)。
 // `attachments`は`stageReceivedFile`が返したトークン。
 export function sendChatMessage(
   chat: Chat,
@@ -159,7 +161,7 @@ export function editChatMessage(
   messageId: number,
   text: string,
   onEvent: (event: TurnEvent) => void,
-): Promise<void> {
+): Promise<Regeneration> {
   return invoke('edit_chat_message', { chat, messageId, text, onEvent: new Channel(onEvent) })
 }
 
@@ -167,7 +169,7 @@ export function retryChatMessage(
   chat: Chat,
   messageId: number,
   onEvent: (event: TurnEvent) => void,
-): Promise<void> {
+): Promise<Regeneration> {
   return invoke('retry_chat_message', { chat, messageId, onEvent: new Channel(onEvent) })
 }
 
