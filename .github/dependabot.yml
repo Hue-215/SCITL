@@ -1,23 +1,31 @@
 # Dependabotのバージョン更新。脆弱性の通知(アラート)はリポジトリの設定で有効にしてあり、ここには書かない。
 #
-# 追うのは`rustls-platform-verifier`だけにする。AndroidでHTTPSの証明書の検証に使うKotlinの部品が、
-# CRLの配布元の一覧(平文を許すホスト)を持つ。CAが新しい中間CAを使い始めると、一覧を更新した版へ
-# 上げてAPKを配り直すまで、その証明書の通信先につながらない。脆弱性ではないのでアラートは出ず、
-# 新しい版が出たことに気付く手立てがほかに無い(Issue #536。
+# 追うのは`rustls-platform-verifier`と`rustls-platform-verifier-android`だけにする。AndroidでHTTPSの
+# 証明書の検証に使うKotlinの部品が、CRLの配布元の一覧(平文を許すホスト)を持つ。CAが新しい中間CAを
+# 使い始めると、一覧を更新した版へ上げてAPKを配り直すまで、その証明書の通信先につながらない。
+# 脆弱性ではないのでアラートは出ず、新しい版が出たことに気付く手立てがほかに無い(Issue #536。
 # `docs/spec/architecture/network-secrets.md`「証明書の失効の確認」)。
 #
-# ここで来るPRは、新しい版が出た知らせとして使う。この版はreqwestが引き込む版と合わせる必要があり
-# (`Cargo.toml`の`rustls-platform-verifier`のコメント)、これだけを上げると版が2つに分かれうるので、
-# そのままマージできるとは限らない。上げるときは、Kotlinの部品を照らす
-# `crates/scitl-tauri/gen/android/gradle/verification-metadata.xml`も上げる(上げ忘れはCIが止める)。
-#
-# ほかの依存は追わない(全部を対象にすると、毎週のPRが多くなりすぎる)。
+# - Kotlinの部品の版は`rustls-platform-verifier-android`の版に合わせる。こちらは直接の依存ではなく、
+#   `rustls-platform-verifier`が0.2系として要求するので、単独で上がりうる。直接でない依存も追うよう、
+#   種類を`all`にする
+# - ここで来るPRは、新しい版が出た知らせとして使う。`rustls-platform-verifier`の版はreqwestが
+#   引き込む版と合わせる必要があり(`Cargo.toml`のコメント)、これだけを上げると版が2つに分かれうる
+#   ので、そのままマージできるとは限らない
+# - 上げるときは、Kotlinの部品を照らす`crates/scitl-tauri/gen/android/gradle/verification-metadata.xml`も
+#   上げる(上げ忘れはCIが止める)
+# - ほかの依存は追わない(全部を対象にすると、毎週のPRが多くなりすぎる)
+# - `allow`の絞りはセキュリティ更新(脆弱性を直すPR。今は無効)にも効く。有効にするときは、ここを
+#   見直す(このままだと、この2つ以外の修正のPRが出ない)
+# - 向き先は指定しない(default branchの`develop`になる)
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
-    target-branch: develop
     schedule:
       interval: weekly
     allow:
       - dependency-name: rustls-platform-verifier
+        dependency-type: all
+      - dependency-name: rustls-platform-verifier-android
+        dependency-type: all
