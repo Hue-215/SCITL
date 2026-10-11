@@ -135,5 +135,7 @@ export function turnErrorText(errorKind: string | null, content: string): string
 export function commandFailureText(failure: CommandFailure): string {
   const message = state().messages.get(`${COMMAND_ERROR_KEY_PREFIX}${failure.kind}`)
   if (message === undefined) return failure.detail
-  return t('common.failure_with_detail', { message, detail: failure.detail })
+  // 診断文は外部から来た文字列(プロバイダーやMCPサーバーの応答)を含みうる。並び順を変える
+  // 文字が、後ろの括弧や前置きへ波及しないよう閉じ込める。
+  return t('common.failure_with_detail', { message, detail: isolated(failure.detail) })
 }
