@@ -20,6 +20,7 @@
   "chat.error_detail_label": "詳細",
   "chat.general_title": "総合チャット",
   "chat.generate_reply_button": "応答を生成",
+  "chat.history_start_note": "以降の会話がモデルに送信されます",
   "chat.input_hint": "メッセージを入力",
   "chat.pending_reply": "応答を待っています…",
   "chat.retry_button": "再試行",
