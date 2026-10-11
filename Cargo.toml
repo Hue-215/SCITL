@@ -106,6 +106,10 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
     "client",
     "transport-streamable-http-client-reqwest",
 ] }
+# rmcpに渡すHTTPクライアント(`scitl-core/src/mcp/http.rs`の`AbortableClient`)で、rmcpのトレイトが
+# 返すSSEのストリームを打ち切りの合図で終わらせる(Issue #400)。rmcpが使うものと同じ版が既に
+# ビルドされている
+futures = { version = "0.3", default-features = false, features = ["std"] }
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"

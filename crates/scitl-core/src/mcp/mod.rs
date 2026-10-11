@@ -151,7 +151,7 @@ impl ToolCatalog {
 /// 失敗どちらの経路でも必ず`close`を通ること。
 #[derive(Default)]
 pub struct McpSessions {
-    by_server: HashMap<String, ClientService>,
+    by_server: HashMap<String, http::Connection>,
 }
 
 impl McpSessions {
@@ -199,9 +199,9 @@ impl McpSessions {
                 // 止めた時間で進めるテストでも測れるよう、tokioの時計で測る。
                 let started = tokio::time::Instant::now();
                 let (service, listed) = match connect_with(&server, headers).await {
-                    Ok(service) => {
-                        let listed = list_tools_of(&service, &server.name).await;
-                        (Some(service), listed)
+                    Ok(connection) => {
+                        let listed = list_tools_of(&connection.service, &server.name).await;
+                        (Some(connection), listed)
                     }
                     Err(e) => (None, Err(e)),
                 };
@@ -300,18 +300,20 @@ impl McpSessions {
             let service = connect(server).await?;
             self.by_server.insert(server.id.clone(), service);
         }
-        Ok(self
+        Ok(&self
             .by_server
             .get(&server.id)
-            .expect("session inserted above"))
+            .expect("session inserted above")
+            .service)
     }
 
     /// 開いたセッションをすべて閉じる。ターンの終わりに必ず呼ぶ。
     /// 切断にも上限を設ける(応じないサーバーがあっても待ち続けない)。閉じきれなかった
     /// 接続は`RunningService`のDropが後始末する。
     pub async fn close(self) {
-        for (_, mut service) in self.by_server {
-            let _ = service.close_with_timeout(CLOSE_TIMEOUT).await;
+        // 閉じたあとに接続を捨て、閉じきれずに残った要求も打ち切る(`http::Connection`)。
+        for (_, mut connection) in self.by_server {
+            let _ = connection.service.close_with_timeout(CLOSE_TIMEOUT).await;
         }
     }
 }
@@ -391,7 +393,7 @@ async fn list_tool_pages(
 
 /// サーバーへ接続する。接続自体にもタイムアウトを設ける(応答しないサーバーで
 /// ターンが止まらないようにする)。
-async fn connect(server: &McpServerConfig) -> Result<ClientService, CoreError> {
+async fn connect(server: &McpServerConfig) -> Result<http::Connection, CoreError> {
     let headers = endpoint_headers(server).await?;
     connect_with(server, headers).await
 }
@@ -411,7 +413,7 @@ async fn endpoint_headers(
 async fn connect_with(
     server: &McpServerConfig,
     headers: HashMap<reqwest::header::HeaderName, reqwest::header::HeaderValue>,
-) -> Result<ClientService, CoreError> {
+) -> Result<http::Connection, CoreError> {
     let McpEndpoint::StreamableHttp { url, .. } = &server.endpoint;
     tokio::time::timeout(CONNECT_TIMEOUT, http::connect(url, headers))
         .await
@@ -694,6 +696,45 @@ mod tests {
         }
         catalog.store("s", Vec::new());
         assert!(!catalog.record_failure("s"));
+    }
+
+    /// 接続の途中で待つのをやめたら、サーバーとのTCPの接続も閉じる(Issue #400)。rmcpは最初の
+    /// `initialize`の要求を自分の打ち切りの合図と並べずに待つので、以前は応答しないサーバーとの
+    /// 接続とヘッダーの値が、サーバーが閉じるまで残っていた。
+    #[tokio::test]
+    async fn giving_up_while_connecting_closes_the_connection() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            // 要求は読むが答えない。接続を閉じられたら(0バイト読めたら)知らせる。
+            let mut buf = [0u8; 4096];
+            let closed = loop {
+                match socket.read(&mut buf) {
+                    Ok(0) => break true,
+                    Ok(_) => continue,
+                    Err(_) => break false,
+                }
+            };
+            let _ = closed_tx.send(closed);
+        });
+
+        let attempt = tokio::time::timeout(
+            Duration::from_millis(500),
+            http::connect(&url, HashMap::new()),
+        )
+        .await;
+        assert!(attempt.is_err(), "the server never answers");
+
+        let closed = tokio::task::spawn_blocking(move || closed_rx.recv().unwrap())
+            .await
+            .unwrap();
+        assert!(closed, "the connection to the server was left open");
     }
 
     /// `initialize`と`tools/list`に、それぞれ`initialize_delay`・`list_delay`だけ待ってから
