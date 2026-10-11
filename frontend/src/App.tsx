@@ -250,6 +250,7 @@ export default function App() {
     const text = editDraft
     if ((text.trim() === '' && message.attachments.length === 0) || disableActions) return
     const target = chat
+    let refused = false
     setEditingId(null)
     stick()
     hideSuperseded(messageId, null)
@@ -263,9 +264,19 @@ export default function App() {
         },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      (onEvent) => editChatMessage(target, messageId, text, onEvent).then(refuseUnavailable),
+      (onEvent) =>
+        editChatMessage(target, messageId, text, onEvent).then((result) => {
+          refused = result.status === 'unavailable'
+          refuseUnavailable(result)
+        }),
       settle,
     )
+    // 断られたら書き直した本文を失わないよう、編集欄をその本文で開き直す。その間に別の会話へ
+    // 移っていたら、そのままにする。
+    if (refused && selectedRef.current === chatKey(target)) {
+      setEditingId(messageId)
+      setEditDraft(text)
+    }
   }
 
   const stop = () => {
