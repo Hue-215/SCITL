@@ -115,7 +115,9 @@ Androidでは次のとおり(`rustls-platform-verifier-android` 0.2.0。Issue #5
   - CRLの配布元に届かないとき。インターネットに出られない環境で、公的CAの証明書(CRLだけ)を
     持つLANのHTTPSサーバーにつなぐ場合を含む(平文httpのLANのサーバーには当たらない)
   - CRLの配布元が、平文を許す一覧に無いとき。一覧は中間CAごとのホスト名(`r10.c.lencr.org`等)で、
-    CAが新しい中間CAを使い始めると、部品の版を上げてAPKを配り直すまでつながらない
+    CAが新しい中間CAを使い始めると、部品の版を上げてAPKを配り直すまでつながらない。クレートの版を
+    上げたのに照合の一覧(`verification-metadata.xml`)を上げ忘れることは、CIが止める(Issue #536。
+    Gradleも止めるが、CIはGradleを動かさない)。上流に新しい版が出たことに気付く手立ては無い
   - OCSPの宛先もCRLの配布元も持たない証明書
 - 検証の部品は、確かめられなかった理由をすべて`Revoked`として返す。失効していない証明書でも
   `invalid peer certificate: Revoked`と出る
