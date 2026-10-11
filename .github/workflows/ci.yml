@@ -161,6 +161,21 @@ jobs:
           expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-$version-wrapper.jar.sha256")
           echo "$expected  gradle-wrapper.jar" | sha256sum -c -
 
+      # HTTPSの証明書の検証に使うKotlinの部品は、cargoが解決したクレート
+      # `rustls-platform-verifier-android`と同じ版を取り、取った中身を一覧のSHA-256と照らす
+      # (`docs/spec/architecture/network-secrets.md`「Androidの信頼ルート」)。一覧にその版が無いと
+      # Gradleが止まるが、このCIはGradleを動かさないので、依存の更新でクレートの版だけが上がっても
+      # APKを作るまで気付けない。部品はCRLの配布元の一覧(平文を許すホスト)も持つので、版を上げ
+      # 忘れたまま配らないよう、ここで照らす(Issue #536)。見るものは`app/build.gradle.kts`と同じ。
+      - name: 証明書検証の部品の版の照合
+        run: |
+          versions=$(awk '$0 == "name = \"rustls-platform-verifier-android\"" { getline; gsub(/version = |"/, ""); print }' Cargo.lock)
+          test "$(printf '%s\n' "$versions" | grep -c .)" = 1 \
+            || { echo "rustls-platform-verifier-androidが1つの版にまとまっていない: $versions"; exit 1; }
+          grep -qF "<component group=\"org.rustls\" name=\"rustls-platform-verifier\" version=\"$versions\">" \
+            crates/scitl-tauri/gen/android/gradle/verification-metadata.xml \
+            || { echo "gradle/verification-metadata.xmlに、Kotlinの部品の $versions のSHA-256が無い"; exit 1; }
+
       - name: Rustのターゲットを入れる
         run: rustup target add aarch64-linux-android
 
