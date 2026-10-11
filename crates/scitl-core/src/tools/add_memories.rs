@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::db::memories::{self, MAX_MEMORIES, MAX_MEMORY_CHARS};
+use crate::db::memories::{self, MAX_MEMORY_CHARS};
 use crate::error::Result;
 
 use super::args::Args;
@@ -12,19 +12,15 @@ internal_tool! {
     /// 本文は常に配列で受ける(工程の追加と同じ)。
     name: "add_memories",
     run: Run::Write(execute),
-    "Save facts about the user that will also help in other tasks and conversations, such as \
-     their schedule, habits and preferences. Write one fact per item as a short sentence. Do \
-     not save details that belong to a single task, secrets such as passwords or API keys, or \
-     anything the user asked you not to remember.",
+    "Save facts about the user, one short sentence each. Do not save details of a single task, \
+     secrets such as passwords or API keys, or anything the user asked you not to remember.",
     json!({
         "type": "object",
         "properties": {
             "contents": {
                 "type": "array",
                 "items": { "type": "string", "maxLength": MAX_MEMORY_CHARS },
-                "minItems": 1,
-                // 上限は追加する件数ではなく持てる件数なので、maxItemsでは書けない。
-                "description": format!("At most {MAX_MEMORIES} memories can be kept.")
+                "minItems": 1
             }
         },
         "required": ["contents"],

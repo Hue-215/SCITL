@@ -17,7 +17,7 @@ internal_tool! {
     /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
     name: "update_task",
     run: Run::UpdateTask(execute),
-    "Update the currently open task.",
+    "Update this conversation's task.",
     json!({
         "type": "object",
         "properties": {

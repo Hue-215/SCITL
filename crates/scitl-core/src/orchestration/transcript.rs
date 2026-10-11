@@ -23,7 +23,7 @@ use crate::llm::{
 ///
 /// 画面に出す添付の印([`SentInput`])は、版によらず`input`の含めた行とユーザー発言の画像を読む。
 /// その2つの形を変えるときは、版を上げるだけでなく[`SentInput::read`]も古い形を読めるようにする。
-const FORM_VERSION: u32 = 6;
+const FORM_VERSION: u32 = 7;
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
@@ -485,8 +485,8 @@ mod tests {
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
             (
-                6,
-                "c345561759e5cef79211534b98411303261aa7d1d69efdeab7ad69be592b79e8"
+                7,
+                "7c09d9d111cf158af988799fbe714388a2131dc16bd8df0e4765d7102ae53090"
             ),
             "無害化の規則か、囲みの形か、その読み方の説明が変わった。前の規則で保存した本文を\
              並べないよう、FORM_VERSIONを上げてから期待値を今の出力に更新する"
