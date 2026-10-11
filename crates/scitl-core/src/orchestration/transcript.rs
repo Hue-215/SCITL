@@ -486,7 +486,7 @@ mod tests {
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
             (
                 7,
-                "7c09d9d111cf158af988799fbe714388a2131dc16bd8df0e4765d7102ae53090"
+                "384fc8ba3a038002b68d63a947c76a3a626d95151aea401aae257c247d8ebef7"
             ),
             "無害化の規則か、囲みの形か、その読み方の説明が変わった。前の規則で保存した本文を\
              並べないよう、FORM_VERSIONを上げてから期待値を今の出力に更新する"

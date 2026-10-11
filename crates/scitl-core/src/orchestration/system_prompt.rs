@@ -74,13 +74,13 @@ fn state_note(chat: Chat, start: ConversationStart) -> String {
              appears in this conversation. {RETURNS_WHOLE_TASK}"
         ),
         (Chat::Task(_), ConversationStart::Other) => format!(
-            "The task's current state is not in this conversation; read it with {} when \
+            "The task's current state is not given automatically; read it with {} when \
              needed. {RETURNS_WHOLE_TASK}",
             get_current_task_detail::NAME
         ),
         // 総合チャットには、各タスクの会話や画面での変更が積まれない。
         (Chat::General, _) => format!(
-            "The current tasks are not in this conversation; read them with {} and {} when \
+            "The current tasks are not given automatically; read them with {} and {} when \
              needed. Tasks also change outside this conversation, so earlier results may be \
              outdated.",
             get_task_list::NAME,

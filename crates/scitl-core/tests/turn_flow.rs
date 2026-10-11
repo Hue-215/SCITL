@@ -4614,7 +4614,7 @@ async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() 
     let trimmed = turn(chat, format!("4回目{padding}")).await;
     assert!(!user_texts(&trimmed).iter().any(|t| t.contains("レポート")));
     assert!(!system_of(&trimmed).contains(BLANK_NOTE));
-    assert!(system_of(&trimmed).contains("current state is not in this conversation"));
+    assert!(system_of(&trimmed).contains("current state is not given automatically"));
     // 間引いたあとのターンも、作り直した先頭のまま並べる。
     let next = turn(chat, "5回目".to_string()).await;
     assert_eq!(system_of(&next), system_of(&trimmed));
@@ -4684,7 +4684,7 @@ async fn removing_a_turn_that_changed_the_task_stops_telling_the_task_started_bl
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains("次の発言"));
         assert!(!notices[0].contains(BLANK_NOTE));
-        assert!(notices[0].contains("current state is not in this conversation"));
+        assert!(notices[0].contains("current state is not given automatically"));
     }
 }
 
