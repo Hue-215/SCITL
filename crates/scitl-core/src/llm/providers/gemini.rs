@@ -443,14 +443,19 @@ fn metadata_error(status: StatusCode, body: &str, secrets: &SentSecrets) -> LlmE
     LlmError::from_status(status, body, secrets)
 }
 
+/// 送ったリクエストに含めたもの。断られた理由を本文の文面から見分けるときに、関係する指定を
+/// 送っていた場合に限る。
+#[derive(Clone, Copy, Default)]
+struct Sent {
+    /// 思考の強さ(`thinking_level`)。
+    thinking: bool,
+    /// 受け取ったまま送り返すステップ([`Replay`])。
+    replay: bool,
+}
+
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
 /// ここで判定し、残りは状態コードによる共通の分類に任せる。
-fn http_error(
-    status: StatusCode,
-    body: &str,
-    secrets: &SentSecrets,
-    thinking_sent: bool,
-) -> LlmError {
+fn http_error(status: StatusCode, body: &str, secrets: &SentSecrets, sent: Sent) -> LlmError {
     let detail = || ErrorDetail::http(status, body, secrets);
     let parsed = serde_json::from_str::<Value>(body).ok();
     let error = parsed.as_ref().and_then(|v| v.get("error"));
@@ -471,8 +476,13 @@ fn http_error(
         if message.contains("token") && (message.contains("exceed") || message.contains("limit")) {
             return LlmError::ContextExceeded(detail());
         }
-        if thinking_sent && message.contains("thinking_level") {
+        if sent.thinking && message.contains("thinking_level") {
             return LlmError::ReasoningEffortValueRejected(detail());
+        }
+        // 送り返した思考の署名が通らない(`Invalid thought signature.`)。別のモデルの思考を
+        // 送り返したときに起きうる(`docs/spec/architecture/llm-adapter.md`「Gemini形式」)。
+        if sent.replay && message.contains("signature") {
+            return LlmError::ReplayRejected(detail());
         }
     }
     LlmError::from_status(status, body, secrets)
@@ -487,6 +497,13 @@ impl GeminiAdapter {
         thinking_level: Option<&'static str>,
     ) -> Result<reqwest::Response, LlmError> {
         let body = request_body(&self.model, messages, tools, thinking_level);
+        let sent = Sent {
+            thinking: thinking_level.is_some(),
+            replay: body
+                .input
+                .iter()
+                .any(|step| matches!(step, RequestPart::Received(_))),
+        };
         let endpoint = super::endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
@@ -499,7 +516,7 @@ impl GeminiAdapter {
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
         super::reject_failure(response, secrets, |status, body| {
-            http_error(status, body, secrets, thinking_level.is_some())
+            http_error(status, body, secrets, sent)
         })
         .await
     }
@@ -1085,6 +1102,38 @@ mod tests {
         assert_eq!(events.len(), 2, "本文とDoneが1回ずつ");
     }
 
+    /// 送り返した思考の署名が断られたら、呼び直さずに思考の拒否として返す(外して送り直すのは
+    /// ターンの側)。
+    #[tokio::test]
+    async fn reports_a_rejected_thought_signature_without_retrying() {
+        let (base_url, handle) = spawn_server(vec![(
+            400,
+            r#"{"error":{"code":"invalid_request","message":"Invalid thought signature."}}"#,
+        )]);
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: Some("hello".to_string()),
+                tool_calls: Vec::new(),
+                replay: Replay::from_json(
+                    r#"[{"type":"thought","signature":"sig"},{"type":"model_output","content":[{"type":"text","text":"hello"}]}]"#,
+                ),
+            },
+            user("again"),
+        ];
+        let result = adapter(&base_url, "")
+            .send(None, &messages, ToolOffer::NONE, None, &mut |_| {})
+            .await;
+        let received = handle.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(CoreError::Llm(LlmError::ReplayRejected(_)))
+        ));
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].body["input"][1]["signature"], "sig");
+    }
+
     #[test]
     fn classifies_errors_found_only_in_the_body() {
         let error = |code: &str, message: &str| {
@@ -1095,7 +1144,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 &error("safety", "blocked"),
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::Refused(_)
         ));
@@ -1107,7 +1156,7 @@ mod tests {
                     "The input token count exceeds the maximum number of tokens allowed."
                 ),
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::ContextExceeded(_)
         ));
@@ -1116,7 +1165,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 &error("invalid_request", "thinking_level is not supported"),
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::Http(_)
         ));
@@ -1125,9 +1174,35 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
                 &error("authentication", "bad key"),
                 &SentSecrets::default(),
-                true
+                Sent {
+                    thinking: true,
+                    replay: true
+                }
             ),
             LlmError::Auth(_)
+        ));
+        // 署名が通らないことは、送り返したステップがあったときだけ思考の拒否にする。
+        let signature = error("invalid_request", "Invalid thought signature.");
+        assert!(matches!(
+            http_error(
+                StatusCode::BAD_REQUEST,
+                &signature,
+                &SentSecrets::default(),
+                Sent {
+                    thinking: false,
+                    replay: true
+                }
+            ),
+            LlmError::ReplayRejected(_)
+        ));
+        assert!(matches!(
+            http_error(
+                StatusCode::BAD_REQUEST,
+                &signature,
+                &SentSecrets::default(),
+                Sent::default()
+            ),
+            LlmError::Http(_)
         ));
     }
 
@@ -1140,7 +1215,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 body,
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::Auth(_)
         ));

@@ -92,6 +92,13 @@ impl StoredMessage {
         messages.iter().map(Self::of).collect()
     }
 
+    /// 送り返す思考を外す。
+    pub(super) fn drop_replay(&mut self) {
+        if let Self::Assistant { replay, .. } = self {
+            *replay = Replay::default();
+        }
+    }
+
     /// 保存した発言を読み戻す。画像の実体を読めなければ`None`。
     fn restore(&self, store: &AttachmentStore) -> Option<ChatMessage> {
         Some(match self {

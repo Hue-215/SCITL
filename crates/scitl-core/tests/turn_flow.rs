@@ -11,9 +11,9 @@ use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{
-    AdapterIdentity, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    Replay, RequestPreview, ResponseEvent, SentAt, SentSecrets, SessionId, ToolArguments,
-    ToolOffer, DEFAULT_CAPABILITIES,
+    AdapterIdentity, ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText,
+    Readiness, Replay, RequestPreview, ResponseEvent, SentAt, SentSecrets, SessionId,
+    ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
@@ -2456,6 +2456,61 @@ async fn thinking_is_not_sent_back_to_a_provider_that_cannot_read_it() {
         replay_of(&second.sent_messages()[0], "返信1"),
         Replay::default()
     );
+}
+
+/// 送り返した思考を断られたら、前のターンの思考を外して送り直す。次のターンからも外したまま
+/// 並べ(同じ失敗を繰り返さない)、外したあとに受け取った思考は送り返す。
+#[tokio::test]
+async fn thinking_rejected_by_the_provider_is_dropped_from_then_on() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let rejected = LlmError::ReplayRejected(ErrorDetail::http(
+        reqwest::StatusCode::BAD_REQUEST,
+        "Invalid thought signature.",
+        &SentSecrets::default(),
+    ));
+    let second = ScriptedAdapter {
+        script: vec![Err(rejected), Ok(text("返信2"))],
+        ..ScriptedAdapter::new(Vec::new())
+    }
+    .with_replay(THINKING_2);
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+    let thinking_1: Replay = serde_json::from_str(THINKING_1).unwrap();
+    let sent = second.sent_messages();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(replay_of(&sent[0], "返信1"), thinking_1);
+    assert_eq!(replay_of(&sent[1], "返信1"), Replay::default());
+
+    let third = ScriptedAdapter::texts(&["返信3"]);
+    turn_with(&db, &third, prompts, task_id, "3回目").await;
+    let sent = &third.sent_messages()[0];
+    assert_eq!(replay_of(sent, "返信1"), Replay::default());
+    let thinking_2: Replay = serde_json::from_str(THINKING_2).unwrap();
+    assert_eq!(replay_of(sent, "返信2"), thinking_2);
+}
+
+/// 外せる思考が無ければ、送り直さずにエラー発言にする。
+#[tokio::test]
+async fn a_rejection_without_thinking_to_drop_ends_the_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedAdapter::failing(LlmError::ReplayRejected(ErrorDetail::http(
+        reqwest::StatusCode::BAD_REQUEST,
+        "Invalid thought signature.",
+        &SentSecrets::default(),
+    )));
+    turn_with(&db, &adapter, SystemPrompts::default(), task_id, "1回目").await;
+
+    assert_eq!(adapter.sent().len(), 1);
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("provider"));
 }
 
 /// 送った発言列に並んだツール呼び出しのIDと、ツール結果が指すID(並んだ順)。

@@ -15,8 +15,8 @@ use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet, StopSignal};
 use crate::llm::{
-    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, SessionId,
-    ToolArguments, ToolCallRequest,
+    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, LlmError, PromptText, ResponseEvent,
+    SessionId, ToolArguments, ToolCallRequest,
 };
 use crate::mcp::McpSessions;
 use crate::orchestration::history;
@@ -752,7 +752,7 @@ async fn run_tool_rounds(
             Ok((history::load(conn, chat)?, session_id(conn, chat)?))
         })
         .await?;
-        let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
+        let mut request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
         // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
         // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
         let mut round_trip: Vec<ChatMessage> = Vec::new();
@@ -762,31 +762,38 @@ async fn run_tool_rounds(
         let tool_rounds = request.tool_rounds(ctx);
         for round in 1..=tool_rounds + 1 {
             let final_call = round > tool_rounds;
-            let (messages_to_send, offered) = request.round(&round_trip, final_call);
+            let (messages_to_send, events, replay) = loop {
+                let (messages_to_send, offered) = request.round(&round_trip, final_call);
 
-            // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
-            let mut events = Vec::new();
-            let notify = ctx.events;
-            let sent = stop
-                .unless_requested(adapter.send(
-                    session.as_ref(),
-                    &messages_to_send,
-                    offered,
-                    ctx.reasoning_effort,
-                    &mut |event| {
-                        notify(TurnEvent::Response {
-                            event: event.clone(),
-                        });
-                        events.push(event);
-                    },
-                ))
-                .await;
-            let replay = match sent {
-                Some(Ok(replay)) => replay,
-                Some(Err(e)) => {
-                    return fail_turn(db, attempt, turn_error::classify(&e), reply_parts).await
+                // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
+                let mut events = Vec::new();
+                let notify = ctx.events;
+                let sent = stop
+                    .unless_requested(adapter.send(
+                        session.as_ref(),
+                        &messages_to_send,
+                        offered,
+                        ctx.reasoning_effort,
+                        &mut |event| {
+                            notify(TurnEvent::Response {
+                                event: event.clone(),
+                            });
+                            events.push(event);
+                        },
+                    ))
+                    .await;
+                match sent {
+                    Some(Ok(replay)) => break (messages_to_send, events, replay),
+                    // 最初のラウンドで送り返した思考を断られたら、前のターンの思考を外して送り
+                    // 直す。後のラウンドでは前に送った部分を書き換えることになるので、外さない。
+                    // 断る応答はイベントを渡す前に返るので、画面に二重に出ない。
+                    Some(Err(CoreError::Llm(LlmError::ReplayRejected(_))))
+                        if round == 1 && request.drop_replays() => {}
+                    Some(Err(e)) => {
+                        return fail_turn(db, attempt, turn_error::classify(&e), reply_parts).await
+                    }
+                    None => return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await,
                 }
-                None => return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await,
             };
 
             let RoundResponse {
