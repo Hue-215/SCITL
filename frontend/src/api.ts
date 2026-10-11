@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
+import { commandFailureText } from './i18n'
 import type {
   ApiFormat,
   BaseUrlHint,
@@ -6,6 +7,7 @@ import type {
   Capability,
   Chat,
   ChatModelsView,
+  CommandFailure,
   DataDirError,
   ExportOutcome,
   ExportTarget,
@@ -29,13 +31,23 @@ import type {
 
 // フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
 
+/** コマンドが返した失敗(`CommandFailure`。`crates/scitl-tauri/src/commands/mod.rs`)か。 */
+function isCommandFailure(e: unknown): e is CommandFailure {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    typeof (e as CommandFailure).kind === 'string' &&
+    typeof (e as CommandFailure).detail === 'string'
+  )
+}
+
 /**
- * コマンドの失敗を画面に出す文字列にする唯一の入口。今はcoreのエラー文(英語の診断文)
- * をそのまま返し、表示言語には訳していない。
+ * コマンドの失敗を画面に出す文字列にする唯一の入口。失敗の種類から表示言語の文言を引き、
+ * coreの診断文(英語)は詳細として添える(`commandFailureText`)。コマンドが返したもの以外
+ * (IPCそのものの失敗等)は、届いたものを文字列にして出す。
  */
-// TODO(#199): 表示言語に訳す。
 export function failureText(e: unknown): string {
-  return String(e)
+  return isCommandFailure(e) ? commandFailureText(e) : String(e)
 }
 export function getTaskDetail(taskId: number): Promise<TaskDetailView> {
   return invoke('get_task_detail', { taskId })

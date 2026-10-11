@@ -12,27 +12,21 @@ pub mod tasks;
 use std::sync::Arc;
 
 use scitl_core::db::{self, Connection};
-use scitl_core::error::{CoreError, Result};
+use scitl_core::error::{CommandFailure, CoreError, Result};
 use scitl_core::settings::Settings;
 use tauri::ipc::InvokeError;
 use tauri::State;
 
 use crate::AppState;
 
-/// コマンドの失敗。画面には`CoreError`の表示文を文字列として渡す。コマンドは`?`で返すだけに
-/// して、画面へ渡す形をここ1箇所で決める。
+/// コマンドの失敗。画面には、失敗の種類と`CoreError`の表示文の組を渡す(`CommandFailure`。画面は
+/// 種類から表示言語の文言を引く)。コマンドは`?`で返すだけにして、画面へ渡す形をここ1箇所で決める。
 #[derive(Debug)]
-pub struct CommandError(String);
+pub struct CommandError(CommandFailure);
 
 impl From<CoreError> for CommandError {
     fn from(error: CoreError) -> Self {
-        Self(error.to_string())
-    }
-}
-
-impl From<&str> for CommandError {
-    fn from(message: &str) -> Self {
-        Self(message.to_string())
+        Self(CommandFailure::from(&error))
     }
 }
 
