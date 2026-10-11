@@ -21,10 +21,10 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::error::CoreError;
-use crate::llm::{DetectedCapabilities, LlmError};
+use crate::llm::{DetectedCapabilities, ErrorDetail, LlmError};
 use crate::net::{self, ExternalUrl, HostClass};
 
-use super::Credentials;
+use super::{Credentials, Detection};
 
 /// 検出1回の問い合わせごとの上限。手元のサーバーはすぐに答えるので短くてよく、
 /// ターンの開始([`crate::settings::Settings::snapshot_for_turn`])を長く待たせないため。
@@ -47,7 +47,7 @@ pub async fn detect(
     base_url: &str,
     credentials: &Credentials,
     models: &[String],
-) -> Result<Option<HashMap<String, DetectedCapabilities>>, CoreError> {
+) -> Result<Option<Detection>, CoreError> {
     if !is_detectable(base_url) {
         return Ok(None);
     }
@@ -58,26 +58,36 @@ pub async fn detect(
         credentials,
     };
 
-    // llama.cppは起動時に読み込んだ1モデルだけを出すので、登録名によらず同じ能力になる。
-    if let Some(props) = probe.get::<LlamaCppProps>("props").await? {
+    if let Some(props) = probe.get::<LlamaCppProps>("props", &[]).await? {
+        if props.role.as_deref() == Some(ROUTER_ROLE) {
+            return probe.llama_cpp_router(models).await.map(Some);
+        }
+        // 1モデルを読み込んで起動したllama.cppはそのモデルだけを出すので、登録名によらず
+        // 同じ能力になる。
         let detected = props.detected();
         return Ok(Some(
             models
                 .iter()
                 .map(|m| (m.clone(), detected.clone()))
-                .collect(),
+                .collect::<HashMap<_, _>>()
+                .into(),
         ));
     }
-    if let Some(list) = probe.get::<LmStudioModels>("api/v0/models").await? {
+    if let Some(list) = probe.get::<LmStudioModels>("api/v0/models", &[]).await? {
         return Ok(Some(
             list.data
                 .into_iter()
                 .filter(|m| models.contains(&m.id))
                 .map(|m| (m.id.clone(), m.detected()))
-                .collect(),
+                .collect::<HashMap<_, _>>()
+                .into(),
         ));
     }
-    if probe.get::<OllamaVersion>("api/version").await?.is_some() {
+    if probe
+        .get::<OllamaVersion>("api/version", &[])
+        .await?
+        .is_some()
+    {
         let mut found = HashMap::new();
         for model in models {
             let body = serde_json::json!({ "model": model });
@@ -85,10 +95,16 @@ pub async fn detect(
                 found.insert(model.clone(), show.detected());
             }
         }
-        return Ok(Some(found));
+        return Ok(Some(found.into()));
     }
     Ok(None)
 }
+
+/// 複数のモデルを切り替えるllama.cpp(ルーターモード)の`/props`の`role`。
+const ROUTER_ROLE: &str = "router";
+
+/// ルーターで、モデルを読み込み済みとする状態(`/models`の`status.value`)。
+const LOADED_STATUS: &str = "loaded";
 
 /// OpenAI互換APIは`/v1`の下にあり、独自APIはその1つ上にある。`base_url`が`/v1`で
 /// 終わらなければそのまま使う(リバースプロキシで前置きのパスが付いていても崩さない)。
@@ -107,8 +123,16 @@ struct Probe<'a> {
 }
 
 impl Probe<'_> {
-    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>, CoreError> {
-        self.send(self.client.get(self.endpoint(path)?)).await
+    async fn get<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Option<T>, CoreError> {
+        let mut url = self.endpoint(path)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+        self.send(self.client.get(url)).await
     }
 
     async fn post<T: DeserializeOwned>(
@@ -118,6 +142,39 @@ impl Probe<'_> {
     ) -> Result<Option<T>, CoreError> {
         self.send(self.client.post(self.endpoint(path)?).json(body))
             .await
+    }
+
+    /// llama.cppのルーターモード。モデルを指定しない`/props`はどのモデルの値も持たないので、
+    /// モデルごとに`/props?model=`で問い合わせる。読み込まれていないモデルは問い合わせずに、
+    /// 今は答えられないモデルにする。問い合わせると読み込みが始まり(`models_autoload`)、
+    /// 読み込み済みの別のモデルを追い出しうるうえ、読み込みは検出の上限より長くかかるため。
+    /// 次の機会(チャットのリクエストが読み込んだあと)に問い合わせ直す。
+    async fn llama_cpp_router(&self, models: &[String]) -> Result<Detection, CoreError> {
+        let list = self
+            .get::<RouterModels>("models", &[])
+            .await?
+            .ok_or_else(|| {
+                CoreError::Llm(LlmError::InvalidResponse(ErrorDetail::internal(
+                    "llama.cpp router did not list its models",
+                )))
+            })?;
+        let mut detection = Detection::default();
+        for model in models {
+            let Some(entry) = list.data.iter().find(|m| m.serves(model)) else {
+                continue;
+            };
+            if entry.status.value != LOADED_STATUS {
+                detection.pending.push(model.clone());
+                continue;
+            }
+            // 確かめてから問い合わせるまでの間に追い出されたら、400(読み込まれていない)で
+            // 問い合わせ全体が失敗し、次の機会に問い合わせ直す。
+            let query = [("model", model.as_str()), ("autoload", "false")];
+            if let Some(props) = self.get::<LlamaCppProps>("props", &query).await? {
+                detection.found.insert(model.clone(), props.detected());
+            }
+        }
+        Ok(detection)
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, CoreError> {
@@ -155,6 +212,9 @@ impl Probe<'_> {
 /// llama.cpp(llama-server)の`GET /props`。
 #[derive(Deserialize)]
 struct LlamaCppProps {
+    /// ルーターモードなら`router`。1モデルで起動したサーバーには無い。
+    #[serde(default)]
+    role: Option<String>,
     default_generation_settings: LlamaCppGenerationSettings,
     #[serde(default)]
     modalities: Option<LlamaCppModalities>,
@@ -190,6 +250,32 @@ impl LlamaCppProps {
             thinking: None,
             context_length: self.default_generation_settings.n_ctx,
         }
+    }
+}
+
+/// llama.cppのルーターモードの`GET /models`。
+#[derive(Deserialize)]
+struct RouterModels {
+    data: Vec<RouterModel>,
+}
+
+#[derive(Deserialize)]
+struct RouterModel {
+    id: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    status: RouterModelStatus,
+}
+
+#[derive(Deserialize)]
+struct RouterModelStatus {
+    /// `loaded`・`unloaded`・`loading`等。
+    value: String,
+}
+
+impl RouterModel {
+    fn serves(&self, model: &str) -> bool {
+        self.id == model || self.aliases.iter().any(|a| a == model)
     }
 }
 
@@ -344,7 +430,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            found["gemma3:4b"],
+            found.found["gemma3:4b"],
             DetectedCapabilities {
                 image: Some(true),
                 tools: Some(false),
@@ -361,6 +447,59 @@ mod tests {
                 "GET /api/v0/models HTTP/1.1",
                 "GET /api/version HTTP/1.1",
                 "POST /api/show HTTP/1.1",
+            ]
+        );
+    }
+
+    /// llama.cppのルーターモードでは、読み込み済みのモデルだけをモデルごとに問い合わせ、読み込ま
+    /// れていないモデルは今は答えられないモデルにする。知らないモデルは結果に含めない。
+    #[tokio::test]
+    async fn asks_a_llama_cpp_router_about_each_loaded_model() {
+        let (base_url, requests) = spawn_server(|line| match line {
+            "GET /props HTTP/1.1" => Reply::Json(
+                r#"{"role":"router","models_autoload":true,"default_generation_settings":{"params":null,"n_ctx":0}}"#,
+            ),
+            "GET /models HTTP/1.1" => Reply::Json(
+                r#"{"object":"list","data":[
+                    {"id":"loaded-model","aliases":[],"status":{"value":"loaded"}},
+                    {"id":"other-model","aliases":["other"],"status":{"value":"unloaded"}}
+                ]}"#,
+            ),
+            "GET /props?model=loaded-model&autoload=false HTTP/1.1" => Reply::Json(
+                r#"{"default_generation_settings":{"n_ctx":65536},
+                    "modalities":{"vision":true},
+                    "chat_template_caps":{"supports_tool_calls":true}}"#,
+            ),
+            _ => Reply::Status("400 Bad Request"),
+        });
+        let models = ["loaded-model", "other", "unknown"].map(String::from);
+
+        let detection = detect(&base_url, &no_key(), &models)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            detection.found.keys().collect::<Vec<_>>(),
+            vec!["loaded-model"]
+        );
+        assert_eq!(
+            detection.found["loaded-model"],
+            DetectedCapabilities {
+                image: Some(true),
+                tools: Some(true),
+                thinking: None,
+                context_length: Some(65536),
+            }
+        );
+        assert_eq!(detection.pending, vec!["other".to_string()]);
+        let paths: Vec<String> = requests.try_iter().collect();
+        assert_eq!(
+            paths,
+            vec![
+                "GET /props HTTP/1.1",
+                "GET /models HTTP/1.1",
+                "GET /props?model=loaded-model&autoload=false HTTP/1.1",
             ]
         );
     }

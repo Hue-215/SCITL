@@ -1030,3 +1030,65 @@ fn detected_capabilities_are_the_layer_below_manual_settings() {
     settings.remove_model(&id, "m").unwrap();
     assert!(settings.detected.get(&id, "m").is_none());
 }
+
+/// 接続ごとに`bodies`を順に1つずつ返す(状態は200)サーバー。返り値は`http://127.0.0.1:{port}`。
+fn serve_in_order(bodies: Vec<&'static str>) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for body in bodies {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// 今は答えられないモデル(llama.cppのルーターで読み込まれていない)は覚えず、次の機会に問い
+/// 合わせ直す。答えたモデルは覚える。
+#[tokio::test]
+async fn models_that_cannot_answer_now_are_asked_again_later() {
+    let (settings, _path, _dir) = temp_settings();
+    let base_url = serve_in_order(vec![
+        r#"{"role":"router","default_generation_settings":{"params":null,"n_ctx":0}}"#,
+        r#"{"data":[{"id":"loaded","status":{"value":"loaded"}},{"id":"unloaded","status":{"value":"unloaded"}}]}"#,
+        r#"{"default_generation_settings":{"n_ctx":65536}}"#,
+    ]);
+    let id = settings
+        .add_provider(
+            NewProvider {
+                name: "router".to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: format!("{base_url}/v1"),
+                api_key: None,
+                headers: HeaderInput::default(),
+            },
+            |_| true,
+        )
+        .unwrap()
+        .providers[0]
+        .id
+        .clone();
+    settings
+        .register_models(&id, &["loaded", "unloaded"])
+        .unwrap();
+
+    settings.detect_model_capabilities(&id).await.unwrap();
+
+    assert_eq!(
+        settings
+            .detected
+            .get(&id, "loaded")
+            .and_then(|d| d.context_length),
+        Some(65_536)
+    );
+    assert!(settings.detected.get(&id, "unloaded").is_none());
+}
