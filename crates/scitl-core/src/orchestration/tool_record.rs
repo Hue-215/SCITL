@@ -188,6 +188,17 @@ mod tests {
         assert_eq!(view.error, None);
     }
 
+    /// 引数は、モデルが出した順(保存した順)のまま要約する(Issue #446)。
+    #[test]
+    fn summary_keeps_the_order_the_model_wrote_the_arguments_in() {
+        let content = r#"{"tool":"update_task","arguments":{"title":"買い物","deadline":"2026-10-12"},"result":{}}"#;
+        let view = ToolExecutionView::of_content(content);
+        assert_eq!(
+            view.summary,
+            "\"title\": \"買い物\", \"deadline\": \"2026-10-12\""
+        );
+    }
+
     #[test]
     fn a_multiline_error_is_folded_to_one_line() {
         let content = json!({

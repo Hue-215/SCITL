@@ -458,7 +458,11 @@ mod tests {
         })
         .collect();
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{out}");
-        assert!(out.contains("```json\n{\n  \"arguments\": {},"), "{out}");
+        // 記録は保存した順のまま整形する。
+        assert!(
+            out.contains("```json\n{\n  \"tool\": \"update_task\",\n  \"arguments\": {},"),
+            "{out}"
+        );
         assert!(!out.contains("secret thoughts"));
         assert!(!out.contains("provider body"));
     }

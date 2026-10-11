@@ -334,7 +334,8 @@ pub(super) struct SavedTurn {
 }
 
 /// 渡したツール定義の一覧の本文。定義が変わったかを本文の指紋で見分けるため、毎回同じ形に
-/// 直列化する。
+/// 直列化する。外部ツールの引数スキーマのキーはサーバーが返した順になるので、順だけが違う本文は
+/// 中身で比べ直す(`turn_request::Head::frozen`)。
 pub(super) fn tools_body(tools: &[ToolSchema]) -> String {
     let tools: Vec<_> = tools.iter().map(tool_entry).collect();
     serde_json::to_string(&tools).expect("tool definitions serialize")
@@ -479,11 +480,13 @@ mod tests {
             .unwrap()]),
             user_message_format_note(),
         ];
+        // JSONのキーの順だけが変わったとき(`serde_json`の`preserve_order`。Issue #446)は版を上げない。
+        // 前の順で保存した本文も、実際に送ったものとして正しいまま並べられるため。
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
             (
                 6,
-                "4478b80f8c967fcbc52fa5533ca663d0838a8e6c8bd29fad3e0f09281be2b719"
+                "c345561759e5cef79211534b98411303261aa7d1d69efdeab7ad69be592b79e8"
             ),
             "無害化の規則か、囲みの形か、その読み方の説明が変わった。前の規則で保存した本文を\
              並べないよう、FORM_VERSIONを上げてから期待値を今の出力に更新する"
@@ -652,6 +655,35 @@ mod tests {
             serde_json::from_str::<StoredMessage>(&text).unwrap(),
             message
         );
+    }
+
+    /// 保存した発言は、引数のキーの順を変えずに読み戻す。前の版が名前順で保存したものも、
+    /// 書き直すと保存した文字列に戻るので、指紋が合ったまま並ぶ(Issue #446)。
+    #[test]
+    fn a_stored_message_reads_back_with_its_keys_in_the_saved_order() {
+        let call = |arguments: &str| {
+            StoredMessage::of(&ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![crate::llm::ToolCallRequest {
+                    id: Some("call_1".to_string()),
+                    name: "update_task".to_string(),
+                    arguments: serde_json::from_str::<serde_json::Value>(arguments)
+                        .unwrap()
+                        .into(),
+                }],
+                replay: Replay::default(),
+            })
+            .unwrap()
+        };
+        for arguments in [
+            r#"{"title":"t","deadline":"d"}"#,
+            r#"{"deadline":"d","title":"t"}"#,
+        ] {
+            let saved = serde_json::to_string(&call(arguments)).unwrap();
+            assert!(saved.contains(arguments), "{saved}");
+            let read: StoredMessage = serde_json::from_str(&saved).unwrap();
+            assert_eq!(serde_json::to_string(&read).unwrap(), saved);
+        }
     }
 
     /// 同じものを同じ順に並べれば同じ指紋になり、何か1つ変われば変わる。

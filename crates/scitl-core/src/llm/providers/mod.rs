@@ -212,8 +212,8 @@ fn read_elements(
 }
 
 /// ストリーミングで差分から組み立て直した要素を、送り返す要素([`crate::llm::Replay`])にする。
-/// `Value`から書き出すので、キーの順は受け取った順ではなく名前順になる(方言ごとに、キーの順を
-/// 見ないことを確かめてある。`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
+/// `Value`から書き出すので、キーの順は受け取った順ではなく組み立てた順になる(方言ごとに、キーの
+/// 順を見ないことを確かめてある。`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
 fn assembled_element(value: &serde_json::Value) -> Box<RawValue> {
     serde_json::value::to_raw_value(value).expect("a JSON value serializes")
 }

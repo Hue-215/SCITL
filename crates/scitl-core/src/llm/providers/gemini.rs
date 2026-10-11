@@ -853,10 +853,10 @@ mod tests {
         assert_eq!(input[3]["result"][1]["mime_type"], "image/png");
     }
 
-    /// 受け取ったステップは、キーの順も変えずにそのまま返す。
+    /// 受け取ったステップは、書き方(空白・エスケープ)も変えずにそのまま返す。
     #[test]
     fn echoes_the_replayed_steps_instead_of_rebuilding_the_assistant_message() {
-        let thought = r#"{"type":"thought","signature":"sig"}"#;
+        let thought = r#"{"type": "thought", "signature": "\u3042"}"#;
         let call = r#"{"type":"function_call","id":"call_1","name":"add_steps","arguments":{}}"#;
         let messages = [
             user("hi"),
@@ -868,7 +868,7 @@ mod tests {
         ];
         let request = request_body("gemini-test", &messages, ToolOffer::NONE, None);
         let text = serde_json::to_string(&request).unwrap();
-        assert!(text.contains(&format!(r#""type":"user_input"}},{thought},{call}]"#)));
+        assert!(text.contains(&format!(r#"}}]}},{thought},{call}]"#)));
     }
 
     /// 受け取ったまま返した呼び出しにも、続く結果に呼び出しの名前を添える。
