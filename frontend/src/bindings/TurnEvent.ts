@@ -6,4 +6,4 @@ import type { ToolExecutionView } from "./ToolExecutionView";
  * どのタスクのイベントかは持たない。受け口はターンの呼び出しごとに渡されるので、
  * 呼び出し側が知っている。
  */
-export type TurnEvent = { "type": "awaiting_model", provider: string, } | { "type": "response", event: ResponseEvent, } | { "type": "tool_executed", id: number, execution: ToolExecutionView, };
+export type TurnEvent = { "type": "awaiting_model", name: string, } | { "type": "response", event: ResponseEvent, } | { "type": "tool_executed", id: number, execution: ToolExecutionView, };

@@ -12,6 +12,10 @@ use crate::text;
 
 pub(super) const PROVIDER_NAME_MAX_CHARS: usize = 64;
 
+/// アシスタントのニックネームの長さの上限。画面は入力欄の上限にこの値を使う
+/// (`settings::GeneralSettingsView`)。入力中…の1行に収まる長さ。
+pub(super) const ASSISTANT_NICKNAME_MAX_CHARS: usize = 32;
+
 /// リポジトリのパスや量子化の種類を含む長い名前(`hf.co/…/…-GGUF:Q4_K_M`等)が収まる長さ。
 pub(super) const MODEL_NAME_MAX_CHARS: usize = 256;
 

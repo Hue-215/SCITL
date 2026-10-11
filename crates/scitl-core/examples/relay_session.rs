@@ -146,10 +146,11 @@ async fn main() {
         }
         let ctx = TurnContext {
             adapter: Ok(adapter),
-            provider_name: "sham",
+            assistant_name: "sham",
             prompts: SystemPrompts {
                 base: base.as_deref().or(defaults.base),
                 task_chat: defaults.task_chat,
+                nickname: None,
             },
             opening_message: orchestration::opening_message(&general),
             capabilities,

@@ -5,7 +5,7 @@ import type { Language } from "./Language";
  * 一般設定。既定値を持つものは、`ToolSettingsView`と同じく設定値(未設定は`None`)と
  * 未設定時の既定値の両方を渡す。
  */
-export type GeneralSettingsView = { system_prompt: string | null, task_chat_system_prompt: string | null, 
+export type GeneralSettingsView = { assistant_nickname: string | null, assistant_nickname_max_chars: number, system_prompt: string | null, task_chat_system_prompt: string | null, 
 /**
  * 表示言語の既定の文面(`default_task_opening_message`も同じ)。
  */

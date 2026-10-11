@@ -4,11 +4,22 @@ use crate::tools::{
 };
 
 /// ユーザーが設定するシステムプロンプト。総合チャットは`base`だけを、タスクチャットは両方を
-/// 使う。`Option<&str>`を2つ並べて渡すと取り違えうるため、名前で縛る。
+/// 使う。`Option<&str>`を並べて渡すと取り違えうるため、名前で縛る。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemPrompts<'a> {
     pub base: Option<&'a str>,
     pub task_chat: Option<&'a str>,
+    /// アシスタントのニックネーム(`config::GeneralConfig::assistant_nickname`)。どちらの会話でも
+    /// 先頭で伝える。利用者がこの名前で呼ぶことがあるため。
+    pub nickname: Option<&'a str>,
+}
+
+/// ニックネームの伝え方。名前はJSONの文字列として書き、文の地の部分と区切る。
+fn nickname_note(nickname: &str) -> String {
+    format!(
+        "In this app, the user calls you by the nickname {}. They may address you by this name.",
+        serde_json::to_string(nickname).expect("a string serializes to JSON")
+    )
 }
 
 /// 総合チャットであることの注記。総合チャットにはタスクについて読み取り専用のツールしか
@@ -70,14 +81,18 @@ fn state_note(chat: Chat) -> String {
     }
 }
 
-/// 基本システムプロンプト + タスクチャット用システムプロンプト(総合チャットなら代わりに
-/// 総合チャットの注記) + ツール結果と状態とメモリの読み方 + 予約タグの読み方。会話と設定だけで決まり、
-/// リクエストごとには変わらない。現在日時と状態は添えず、モデルがユーザー発言の送信日時と
-/// ツールで知る(`docs/spec/architecture/prompt-shape.md`「状態と日時の伝え方」)。
+/// ニックネームの注記(設定したときだけ) + 基本システムプロンプト + タスクチャット用システム
+/// プロンプト(総合チャットなら代わりに総合チャットの注記) + ツール結果と状態とメモリの読み方 +
+/// 予約タグの読み方。会話と設定だけで決まり、リクエストごとには変わらない。現在日時と状態は添えず、
+/// モデルがユーザー発言の送信日時とツールで知る(`docs/spec/architecture/prompt-shape.md`
+/// 「状態と日時の伝え方」)。
 ///
-/// 自由入力は載せない。
+/// 利用者が書いたものは、設定のプロンプトとニックネームだけを載せる(会話の中身は載せない)。
 pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts) -> String {
     let mut sections = Vec::new();
+    if let Some(nickname) = prompts.nickname.filter(|n| !n.trim().is_empty()) {
+        sections.push(nickname_note(nickname));
+    }
     if let Some(prompt) = prompts.base.filter(|p| !p.is_empty()) {
         sections.push(prompt.to_string());
     }
@@ -110,6 +125,7 @@ mod tests {
         let prompts = SystemPrompts {
             base: Some("base prompt"),
             task_chat: Some("task chat prompt"),
+            nickname: None,
         };
         let prompt = build_system_prompt(Chat::Task(1), &prompts);
 
@@ -118,11 +134,36 @@ mod tests {
         assert!(base_pos < task_chat_pos);
     }
 
+    /// ニックネームは設定したときだけ、どちらの会話でも先頭で伝える。
+    #[test]
+    fn tells_the_nickname_first_only_when_set() {
+        let nickname = "Hal \"9000\"";
+        let prompts = SystemPrompts {
+            base: Some("base prompt"),
+            task_chat: None,
+            nickname: Some(nickname),
+        };
+        for chat in [Chat::Task(1), Chat::General] {
+            let prompt = build_system_prompt(chat, &prompts);
+            assert!(prompt.starts_with(&nickname_note(nickname)));
+            assert!(prompt.contains(r#"nickname "Hal \"9000\"". "#));
+        }
+        let without = build_system_prompt(
+            Chat::Task(1),
+            &SystemPrompts {
+                nickname: None,
+                ..prompts
+            },
+        );
+        assert!(without.starts_with("base prompt"));
+    }
+
     #[test]
     fn works_with_only_task_chat_prompt() {
         let prompts = SystemPrompts {
             base: None,
             task_chat: Some("task chat prompt"),
+            nickname: None,
         };
         let prompt = build_system_prompt(Chat::Task(1), &prompts);
 
@@ -154,6 +195,7 @@ mod tests {
         let prompts = SystemPrompts {
             base: Some("base prompt"),
             task_chat: Some("task chat prompt"),
+            nickname: None,
         };
 
         let prompt = build_system_prompt(Chat::General, &prompts);

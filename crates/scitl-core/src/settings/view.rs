@@ -112,6 +112,8 @@ pub struct McpServerView {
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct GeneralSettingsView {
+    pub assistant_nickname: Option<String>,
+    pub assistant_nickname_max_chars: usize,
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
     /// 表示言語の既定の文面(`default_task_opening_message`も同じ)。
@@ -296,6 +298,8 @@ pub(super) fn build(
     SettingsView {
         config_error: problems.config_error.map(str::to_string),
         general: GeneralSettingsView {
+            assistant_nickname: config.general.assistant_nickname.clone(),
+            assistant_nickname_max_chars: super::input::ASSISTANT_NICKNAME_MAX_CHARS,
             system_prompt: config.general.system_prompt.clone(),
             task_chat_system_prompt: config.general.task_chat_system_prompt.clone(),
             default_task_chat_system_prompt: default_task_chat_prompt(config.general.language()),

@@ -13,10 +13,11 @@ use crate::orchestration::ToolExecutionView;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnEvent {
     /// モデルの応答を待ち始めた。ターンの始め(外部ツールの接続と履歴の組み立ての前)と、
-    /// ラウンドごとにモデルを呼ぶ前に送る。`provider`はこの応答生成が使うプロバイダーの
-    /// 表示名(利用者が登録したもの)。画面は、これから本文が届き始めるまで「入力中」を出す
-    /// (Issue #561)。生成中にモデルを切り替えても、ターンの始めに取った設定の名前のまま。
-    AwaitingModel { provider: String },
+    /// ラウンドごとにモデルを呼ぶ前に送る。`name`は画面に出すアシスタントの名前(ニックネーム、
+    /// 無ければこの応答生成が使うプロバイダーの名前。どちらも利用者が登録したもの)。画面は、これから
+    /// 本文が届き始めるまで「入力中」を出す(Issue #561)。生成中に設定を変えても、ターンの始めに
+    /// 取った設定の名前のまま。
+    AwaitingModel { name: String },
     /// アダプタが渡したイベントをそのまま転送する(`llm::LlmAdapter::send`の約束事に従う)。
     Response { event: ResponseEvent },
     /// ツールを1件実行し、実行記録を保存した。`id`は保存した行のid、`execution`はその行を

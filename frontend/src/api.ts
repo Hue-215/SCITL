@@ -233,6 +233,7 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
 // 既定値に戻る。nullは保存済みの値のまま変えない(書き換えた欄だけを送る)。解釈と検証は
 // Rust側が行い、欄の誤りは`rejected`で返る。真偽値の欄のnullも保存済みの値のまま。
 export function updateGeneralSettings(args: {
+  assistantNickname: string | null
   systemPrompt: string | null
   taskChatSystemPrompt: string | null
   taskOpeningMessage: string | null

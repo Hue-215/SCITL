@@ -53,6 +53,8 @@ pub use view::{AvailableModel, ChatModelsView, SettingsView};
 /// 設定画面「一般」タブの入力(表示言語を除く)。プロンプトは`Option<String>`が並ぶので、
 /// 位置引数にせず名前で渡す。
 pub struct GeneralUpdate {
+    /// 空欄(空白だけを含む)と`None`は未設定。
+    pub assistant_nickname: Option<String>,
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
     pub task_opening_message: Option<String>,
@@ -137,10 +139,11 @@ impl Snapshot {
                 Ok(adapter) => Ok(adapter.as_ref() as &dyn LlmAdapter),
                 Err(failure) => Err(failure.clone()),
             },
-            provider_name: self
-                .config
-                .active_provider()
-                .map_or("", |provider| provider.name.as_str()),
+            assistant_name: self.config.general.assistant_name(
+                self.config
+                    .active_provider()
+                    .map_or("", |provider| provider.name.as_str()),
+            ),
             prompts: SystemPrompts::from_config(&self.config.general),
             opening_message: orchestration::opening_message(&self.config.general),
             capabilities: self.capabilities,
@@ -347,8 +350,20 @@ impl Settings {
                 )
             })
             .transpose()?;
+        let assistant_nickname = update
+            .assistant_nickname
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| {
+                input::name(
+                    &n,
+                    "assistant nickname",
+                    input::ASSISTANT_NICKNAME_MAX_CHARS,
+                )
+            })
+            .transpose()?;
         let mut draft = self.edit();
         let general = &mut draft.config.general;
+        general.assistant_nickname = assistant_nickname;
         general.system_prompt = stored_prompt(update.system_prompt, None);
         let language = general.language();
         general.task_chat_system_prompt = stored_prompt(
