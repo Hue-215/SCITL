@@ -2881,7 +2881,7 @@ async fn a_rebuilt_front_is_told_again_over_an_older_update_left_in_the_sequence
     let task_id = seed_task(&conn);
     let db: SharedConnection = Arc::new(Mutex::new(conn));
     // 見積もりは英数字以外が1文字1トークン。1回目と3回目を合わせると予算を超え、2回目と
-    // 3回目だけなら予算の半分に収まる(先頭とツール定義の分を多めに見ても)。
+    // 3回目だけなら、3回目を除いた予算の半分に2回目が収まる(先頭とツール定義の分を多めに見ても)。
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.context_length = 100_000;
     let turn = |adapter, base, text: String| {
@@ -2980,7 +2980,7 @@ async fn an_older_update_trimmed_away_by_the_notice_needs_no_notice() {
     let task_id = seed_task(&conn);
     let db: SharedConnection = Arc::new(Mutex::new(conn));
     // 見積もりは英数字以外が1文字1トークン。3回目は作り直した先頭(30,000)の下で、通知なしなら
-    // 2回目から予算の半分に収まり、通知(30,000)を含めると3回目だけになる(先頭の固定の文言と
+    // 2回目からが目標(3回目を除いた予算の半分)に収まり、通知(30,000)を含めると3回目だけになる(先頭の固定の文言と
     // ツール定義の分を多めに見ても)。
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.context_length = 100_000;
@@ -3120,7 +3120,8 @@ async fn a_trimmed_turn_takes_the_new_system_prompt_instead_of_telling_it() {
     assert!(!texts.iter().any(|t| t.contains("<scitl:system-update>")));
 }
 
-/// 間引きの位置はターンをまたいで保ち、予算を超えたときだけ予算の半分までまとめて動かす。
+/// 間引きの位置はターンをまたいで保ち、予算を超えたときだけ、新しい発言を除いた予算の半分まで
+/// まとめて動かす。
 /// 位置が動かないターンでは前が変わらないので、前のターンの思考も送り返す。
 #[tokio::test]
 async fn the_trimming_position_holds_across_turns() {
