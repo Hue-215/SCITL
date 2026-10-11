@@ -173,9 +173,9 @@ impl McpSessions {
     /// このターンの間は残す(呼び出しに使い回し、[`Self::close`]で閉じる)。
     ///
     /// まだ接続していないサーバーだけを渡すこと(ターンの始めに呼ぶ)。返る前にこのfutureを
-    /// 捨てると(停止の指示)、待つのをやめて結果を捨てる。一覧の取得の途中の接続はその場で
-    /// 切れるが、接続の途中(`initialize`の応答待ち)のものは、rmcpの内部のタスクがサーバーが
-    /// 閉じるまで残る(rmcp 3.4.0。タイムアウトで捨てるときも同じ)。
+    /// 捨てると(停止の指示)、待つのをやめて結果を捨てる。接続の途中のものも、一覧の取得の
+    /// 途中のものも、その場で打ち切る(`http::AbortableClient`)。セッションを持つサーバーには、
+    /// rmcpが後始末の`DELETE`を送る。
     pub async fn list_tools_all(
         &mut self,
         servers: &[&McpServerConfig],
@@ -308,10 +308,9 @@ impl McpSessions {
     }
 
     /// 開いたセッションをすべて閉じる。ターンの終わりに必ず呼ぶ。
-    /// 切断にも上限を設ける(応じないサーバーがあっても待ち続けない)。閉じきれなかった
-    /// 接続は`RunningService`のDropが後始末する。
+    /// 切断にも上限を設ける(応じないサーバーがあっても待ち続けない)。閉じたあとに接続を
+    /// 捨てるので、閉じきれずに残った要求もそこで打ち切られる(`http::Connection`)。
     pub async fn close(self) {
-        // 閉じたあとに接続を捨て、閉じきれずに残った要求も打ち切る(`http::Connection`)。
         for (_, mut connection) in self.by_server {
             let _ = connection.service.close_with_timeout(CLOSE_TIMEOUT).await;
         }
@@ -735,6 +734,111 @@ mod tests {
             .await
             .unwrap();
         assert!(closed, "the connection to the server was left open");
+    }
+
+    /// セッションIDを返し、`tools/list`には答えないサーバー。受けた要求のメソッドを`seen`に積む。
+    /// 共通のSSE(GET)には対応しないと答える。
+    async fn session_server(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    // ヘッダーと、Content-Length分の本文を読む。
+                    let (method, body) = loop {
+                        let n = socket.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                        let text = String::from_utf8_lossy(&request).to_string();
+                        let Some(end) = text.find("\r\n\r\n") else {
+                            continue;
+                        };
+                        let length = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                let (name, value) = l.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())?
+                            })
+                            .unwrap_or(0);
+                        if text.len() >= end + 4 + length {
+                            let method = text.split(' ').next().unwrap_or_default().to_string();
+                            break (method, text[end + 4..end + 4 + length].to_string());
+                        }
+                    };
+                    let message: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                    let rpc = message["method"].as_str().unwrap_or_default().to_string();
+                    seen.lock().unwrap().push(if rpc.is_empty() {
+                        method.clone()
+                    } else {
+                        rpc.clone()
+                    });
+                    let empty = |status: &str| {
+                        format!(
+                            "HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                        )
+                    };
+                    let response = match (method.as_str(), rpc.as_str()) {
+                        ("POST", "initialize") => {
+                            let reply = json!({
+                                "jsonrpc": "2.0", "id": message["id"],
+                                "result": {
+                                    "protocolVersion": message["params"]["protocolVersion"],
+                                    "capabilities": { "tools": {} },
+                                    "serverInfo": { "name": "session", "version": "1" },
+                                },
+                            })
+                            .to_string();
+                            format!(
+                                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nmcp-session-id: s1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                                reply.len()
+                            )
+                        }
+                        // 答えずに、相手が閉じるまで待つ。
+                        ("POST", "tools/list") => {
+                            let _ = socket.read(&mut buf).await;
+                            return;
+                        }
+                        ("POST", _) => empty("202 Accepted"),
+                        ("DELETE", _) => empty("200 OK"),
+                        _ => empty("405 Method Not Allowed"),
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/mcp")
+    }
+
+    /// 一覧の取得の途中で待つのをやめても、セッションを持つサーバーには後始末の`DELETE`が届く
+    /// (待っている要求は打ち切るが、後始末は打ち切らない)。
+    #[tokio::test]
+    async fn giving_up_while_listing_still_ends_the_session() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server = server_at("s", session_server(seen.clone()).await);
+
+        let mut sessions = McpSessions::new();
+        let listing =
+            tokio::time::timeout(Duration::from_secs(1), sessions.list_tools_all(&[&server])).await;
+        assert!(listing.is_err(), "the server never answers tools/list");
+
+        let deleted = || seen.lock().unwrap().iter().any(|m| m == "DELETE");
+        for _ in 0..50 {
+            if deleted() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.contains(&"tools/list".to_string()), "{seen:?}");
+        assert!(seen.contains(&"DELETE".to_string()), "{seen:?}");
     }
 
     /// `initialize`と`tools/list`に、それぞれ`initialize_delay`・`list_delay`だけ待ってから

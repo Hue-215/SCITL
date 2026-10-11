@@ -82,7 +82,8 @@ pub(super) async fn connect(
 }
 
 /// 送り手([`Connection`]か、接続の途中の[`connect`])が捨てられたら、待っている要求とSSEの
-/// ストリームを打ち切るHTTPクライアント(Issue #400)。
+/// ストリームを打ち切るHTTPクライアント(Issue #400)。セッションの後始末(`DELETE`)だけは
+/// 打ち切らない。
 ///
 /// rmcp(3.4.0)は、接続の最初の`initialize`のPOSTを、自分の打ち切りの合図と並べずに待つ。この
 /// 要求を待つ処理は独立して`tokio::spawn`されているので、外から接続の試みを捨てても届かず、
@@ -108,9 +109,11 @@ impl AbortableClient {
         &self,
         request: impl Future<Output = Result<T, HttpError>>,
     ) -> Result<T, HttpError> {
+        // 打ち切りを先に見る。打ち切り済みなら、要求を始めて接続を張ることもしない。
         tokio::select! {
-            result = request => result,
+            biased;
             () = self.aborted() => Err(StreamableHttpError::TransportChannelClosed),
+            result = request => result,
         }
     }
 
@@ -175,10 +178,11 @@ impl StreamableHttpClient for AbortableClient {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), HttpError> {
-        let request = self
-            .client
-            .delete_session(uri, session_id, auth_header, custom_headers);
-        self.unless_aborted(request).await
+        // セッションの後始末は打ち切らない。rmcpが接続を捨てたあとに1回だけ送るもので、打ち切ると
+        // サーバーの側にセッションが期限切れまで残る。rmcpが上限(5秒)を掛けているので有界。
+        self.client
+            .delete_session(uri, session_id, auth_header, custom_headers)
+            .await
     }
 
     async fn get_stream(
