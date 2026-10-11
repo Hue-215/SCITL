@@ -128,6 +128,18 @@ pub enum TaskCreation {
     Unavailable { error_kind: &'static str },
 }
 
+/// 返信を消してから生成し直す操作([`edit_user_message`]・[`retry_reply`])の結果。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Regeneration {
+    /// 置き換えて応答を生成した。生成の失敗はエラー発言として保存される。
+    Generated,
+    /// チャットを使えないので何も消さなかった(生成に進めないのに消すと、元の返信がエラー発言に
+    /// 置き換わるだけになるため)。`error_kind`はエラー発言と同じ種別コードで、画面は同じ文言を出す。
+    Unavailable { error_kind: &'static str },
+}
+
 /// 新規タスクを作り、続けて聞き取りを始める(`open_task_chat`)。チャットを使えない
 /// (モデル未選択等)ならタスクを作らずに理由を返す(作っても聞き取りが失敗し、エラー発言だけの
 /// タスクが残るため)。
@@ -234,14 +246,21 @@ async fn generate_new_turn(
 ///
 /// 対象の発言に答えたターンより後ろのターンのツール実行記録も論理削除する。答えたターン自身の
 /// 記録は、置き換える前の試行で実行したこととして新しいターンに伝える。
+///
+/// チャットを使えない(モデル未選択等)なら何も消さずに断る([`Regeneration::Unavailable`])。
 pub async fn edit_user_message(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     chat: Chat,
     message_id: i64,
     new_text: String,
-) -> Result<()> {
+) -> Result<Regeneration> {
     let generating = begin_generating(ctx.generating, chat)?;
+    if let Err(failure) = ready_adapter(ctx) {
+        return Ok(Regeneration::Unavailable {
+            error_kind: failure.kind(),
+        });
+    }
     with_conn(db.clone(), move |conn| {
         // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
         in_transaction(conn, |conn| {
@@ -258,7 +277,8 @@ pub async fn edit_user_message(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await?;
+    Ok(Regeneration::Generated)
 }
 
 /// ターンの返信(アシスタント発言またはエラー発言)の再試行。対象の発言以降(自身を含む)の
@@ -269,13 +289,20 @@ pub async fn edit_user_message(
 /// ターンのユーザー発言だけが削除されていることがあるので、返信以降を消した残りが応答すべき
 /// 発言で終わらなければ断る(`history::awaits_reply`)。新規送信と編集は必ずユーザー発言を
 /// 用意してから生成するので、この確認は再試行にだけ要る。
+///
+/// チャットを使えない(モデル未選択等)なら何も消さずに断る([`Regeneration::Unavailable`])。
 pub async fn retry_reply(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     chat: Chat,
     message_id: i64,
-) -> Result<()> {
+) -> Result<Regeneration> {
     let generating = begin_generating(ctx.generating, chat)?;
+    if let Err(failure) = ready_adapter(ctx) {
+        return Ok(Regeneration::Unavailable {
+            error_kind: failure.kind(),
+        });
+    }
     let attempt = with_conn(db.clone(), move |conn| {
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
@@ -306,7 +333,8 @@ pub async fn retry_reply(
     })
     .await?;
 
-    generate_turn_response(db, ctx, attempt, &generating).await
+    generate_turn_response(db, ctx, attempt, &generating).await?;
+    Ok(Regeneration::Generated)
 }
 
 /// 発言と、それより後ろの通常発言をまとめて論理削除する(編集・再試行と同じく、その地点から

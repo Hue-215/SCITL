@@ -26,7 +26,15 @@ import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
 import { stoppedTurnAtEnd } from './thinking'
-import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent } from './types'
+import type {
+  Chat,
+  MessageView,
+  Regeneration,
+  Task,
+  TaskDetailView,
+  TaskListItem,
+  TurnEvent,
+} from './types'
 import { useChatRequests } from './useChatRequests'
 import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
@@ -227,6 +235,14 @@ export default function App() {
     )
   }
 
+  // 編集・再試行を、チャットを使えない(モデル未選択等)ために断られたら、その会話の失敗として
+  // 理由をエラー発言と同じ文言で出す。何も消えていないので、外した行は引き直しで戻る。
+  const refuseUnavailable = (result: Regeneration) => {
+    if (result.status === 'unavailable') {
+      throw turnErrorText(result.error_kind, result.error_kind)
+    }
+  }
+
   // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。空白だけで
   // 確定させないのは入力の補助で、受け付けるかと前後の空白を削るかはRust側が決める。
   const submitEdit = async (message: MessageView) => {
@@ -234,6 +250,7 @@ export default function App() {
     const text = editDraft
     if ((text.trim() === '' && message.attachments.length === 0) || disableActions) return
     const target = chat
+    let refused = false
     setEditingId(null)
     stick()
     hideSuperseded(messageId, null)
@@ -247,9 +264,19 @@ export default function App() {
         },
         { role: 'pending', content: t('chat.pending_reply') },
       ],
-      (onEvent) => editChatMessage(target, messageId, text, onEvent),
+      (onEvent) =>
+        editChatMessage(target, messageId, text, onEvent).then((result) => {
+          refused = result.status === 'unavailable'
+          refuseUnavailable(result)
+        }),
       settle,
     )
+    // 断られたら書き直した本文を失わないよう、編集欄をその本文で開き直す。その間に別の会話へ
+    // 移っていたら、そのままにする。
+    if (refused && selectedRef.current === chatKey(target)) {
+      setEditingId(messageId)
+      setEditDraft(text)
+    }
   }
 
   const stop = () => {
@@ -265,7 +292,7 @@ export default function App() {
     await requests.run(
       target,
       [{ role: 'pending', content: t('chat.pending_reply') }],
-      (onEvent) => retryChatMessage(target, messageId, onEvent),
+      (onEvent) => retryChatMessage(target, messageId, onEvent).then(refuseUnavailable),
       settle,
     )
   }

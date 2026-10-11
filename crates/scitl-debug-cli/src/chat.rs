@@ -15,8 +15,8 @@ use scitl_core::db;
 use scitl_core::db::messages::Chat;
 use scitl_core::db::tasks::Task;
 use scitl_core::orchestration::{
-    self, discard_events, MessageView, PreviewOptions, TaskCreation, TurnContext, TurnEvent,
-    TurnEvents, UserInput,
+    self, discard_events, MessageView, PreviewOptions, Regeneration, TaskCreation, TurnContext,
+    TurnEvent, TurnEvents, UserInput,
 };
 use scitl_core::settings::Snapshot;
 
@@ -145,7 +145,11 @@ pub async fn run(session: &Session, command: ChatCommand) -> Result<(), DebugErr
             let chat = chat.chat();
             let turns = Turns::open(session).await?;
             let ctx = turns.context(session, &print_event);
-            orchestration::retry_reply(db, &ctx, chat, message_id).await?;
+            if let Regeneration::Unavailable { error_kind } =
+                orchestration::retry_reply(db, &ctx, chat, message_id).await?
+            {
+                return Err(DebugError::ChatUnavailable(error_kind.to_string()));
+            }
             print_last_message(session, chat).await?;
         }
         ChatCommand::Reply { chat } => {
