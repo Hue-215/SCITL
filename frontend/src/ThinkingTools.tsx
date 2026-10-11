@@ -65,13 +65,14 @@ function ToolLine({
   )
 }
 
-/** 続いた思考の折りたたみ。 */
-function Thinking({ texts }: { texts: { id: number; text: string }[] }) {
+/** 続いた思考の折りたたみ。思考の途中で長さの上限に達していれば、閉じた行に続けて知らせる。 */
+function Thinking({ texts }: { texts: { id: number; text: string; truncated?: boolean }[] }) {
   return (
     <details className="thinking">
       <summary>
         <DisclosureMark />
         {t('chat.thinking')}
+        {texts.some((item) => item.truncated) && ` ${t('chat.truncated_note')}`}
       </summary>
       <div className="thinking-list detail-box">
         {texts.map((item) => (
@@ -87,7 +88,7 @@ function Thinking({ texts }: { texts: { id: number; text: string }[] }) {
 /** 思考・ツールの項目を、起きた順に思考の折りたたみとツールの1行に分けて並べる。 */
 export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
   const blocks: ReactNode[] = []
-  let thinking: { id: number; text: string }[] = []
+  let thinking: { id: number; text: string; truncated?: boolean }[] = []
   const closeThinking = () => {
     if (thinking.length === 0) return
     blocks.push(<Thinking key={`reasoning-${thinking[0].id}`} texts={thinking} />)

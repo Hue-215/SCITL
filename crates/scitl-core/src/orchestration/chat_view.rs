@@ -36,13 +36,17 @@ pub struct MessageView {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PartView {
+    /// `truncated`は、このラウンドが本文を書く前に出力の長さの上限に達したか。
     Reasoning {
         round: u32,
         text: String,
+        truncated: bool,
     },
+    /// `truncated`は、この本文が出力の長さの上限で途中で切れたか。
     Text {
         round: u32,
         text: String,
+        truncated: bool,
     },
     /// `id`は実行記録の行のid。
     Tool {
@@ -50,22 +54,31 @@ pub enum PartView {
         id: i64,
         execution: ToolExecutionView,
     },
-    /// そのラウンドの応答が、出力の長さの上限で途中で切れた。
-    Truncated {
-        round: u32,
-    },
+    /// 本文も思考も無いラウンド(ツールの引数の途中等)で、出力の長さの上限に達した。本文か思考の
+    /// あるラウンドでは、その`truncated`で表す。
+    Truncated { round: u32 },
 }
 
 impl PartView {
     fn of(part: ResolvedPart) -> Self {
         match part {
-            ResolvedPart::Reasoning { round, text } => Self::Reasoning {
+            ResolvedPart::Reasoning {
+                round,
+                text,
+                truncated,
+            } => Self::Reasoning {
                 round,
                 text: text.to_string(),
+                truncated,
             },
-            ResolvedPart::Text { round, text } => Self::Text {
+            ResolvedPart::Text {
+                round,
+                text,
+                truncated,
+            } => Self::Text {
                 round,
                 text: text.to_string(),
+                truncated,
             },
             ResolvedPart::Tool { round, record } => Self::Tool {
                 round,
@@ -448,6 +461,84 @@ mod tests {
             })
             .collect();
         assert_eq!(parts, ["調べます", "list_tasks", "本題"]);
+    }
+
+    /// 長さの上限で切れた印は、同じラウンドの本文、無ければ同じラウンドの思考に付ける。どちらも
+    /// 無いラウンドの印だけを単独で残す(前のラウンドの本文には付けない)。
+    #[test]
+    fn a_truncation_mark_goes_on_the_text_of_its_round() {
+        let f = Fixture::new();
+        messages::insert_message(
+            &f.conn,
+            NewMessage {
+                chat: Chat::General,
+                role: Role::User,
+                content: "質問",
+                kind: Kind::Normal,
+                origin: Origin::User,
+                error_kind: None,
+                error_detail: None,
+                parts: None,
+            },
+        )
+        .unwrap();
+        let text = |round, text: &str| ReplyPart::Text {
+            round,
+            text: text.to_string(),
+        };
+        messages::insert_message(
+            &f.conn,
+            NewMessage {
+                chat: Chat::General,
+                role: Role::Assistant,
+                content: "",
+                kind: Kind::Normal,
+                origin: Origin::Turn {
+                    turn_id: "t",
+                    attempt_no: 1,
+                },
+                error_kind: None,
+                error_detail: None,
+                parts: Some(&[
+                    text(1, "前置き"),
+                    text(2, "途中まで"),
+                    ReplyPart::Truncated { round: 2 },
+                    ReplyPart::Reasoning {
+                        round: 3,
+                        text: "考え中".to_string(),
+                    },
+                    ReplyPart::Truncated { round: 3 },
+                    ReplyPart::Truncated { round: 4 },
+                ]),
+            },
+        )
+        .unwrap();
+
+        let views = list_chat(&f.conn, Chat::General).unwrap();
+
+        let parts: Vec<String> = views
+            .last()
+            .unwrap()
+            .parts
+            .iter()
+            .map(|p| match p {
+                PartView::Text {
+                    text, truncated, ..
+                } => format!("{text}:{truncated}"),
+                PartView::Reasoning { truncated, .. } => format!("reasoning:{truncated}"),
+                PartView::Truncated { round } => format!("truncated:{round}"),
+                PartView::Tool { .. } => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                "前置き:false",
+                "途中まで:true",
+                "reasoning:true",
+                "truncated:4"
+            ]
+        );
     }
 
     #[test]

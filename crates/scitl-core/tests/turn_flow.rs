@@ -842,6 +842,43 @@ async fn a_reply_cut_off_at_the_length_limit_is_kept_with_a_mark() {
     ));
 }
 
+/// 本文を書く前に長さの上限に達したら、空応答の失敗になり、エラー発言の中身に思考と印が残る。
+#[tokio::test]
+async fn reaching_the_length_limit_before_any_text_is_an_empty_response() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedAdapter::new(vec![vec![
+        ResponseEvent::ReasoningDelta {
+            text: "考え中".to_string(),
+        },
+        done(FinishReason::Length),
+    ]]);
+
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        "長く考えて".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error = messages.last().unwrap();
+    assert_eq!(error.error_kind.as_deref(), Some("empty_response"));
+    assert_eq!(
+        error.parts,
+        vec![
+            ReplyPart::Reasoning {
+                round: 1,
+                text: "考え中".to_string(),
+            },
+            ReplyPart::Truncated { round: 1 },
+        ]
+    );
+}
+
 /// ターンの途中経過は、アダプタのイベントとツールの実行を起きた順に知らせる。
 /// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。
 #[tokio::test]
