@@ -163,15 +163,20 @@ impl Probe<'_> {
             let Some(entry) = list.data.iter().find(|m| m.serves(model)) else {
                 continue;
             };
-            if entry.status.value != LOADED_STATUS {
+            if !entry.is_loaded() {
                 detection.pending.push(model.clone());
                 continue;
             }
-            // 確かめてから問い合わせるまでの間に追い出されたら、400(読み込まれていない)で
-            // 問い合わせ全体が失敗し、次の機会に問い合わせ直す。
-            let query = [("model", model.as_str()), ("autoload", "false")];
-            if let Some(props) = self.get::<LlamaCppProps>("props", &query).await? {
-                detection.found.insert(model.clone(), props.detected());
+            // 別名で登録したモデルも、ルーターが出す名前で問い合わせる。確かめてから問い合わせる
+            // までの間に追い出された(400)等、そのモデルだけ答えられなければ、ほかのモデルの結果は
+            // 残して、そのモデルを次の機会に問い合わせ直す。
+            let query = [("model", entry.id.as_str()), ("autoload", "false")];
+            match self.get::<LlamaCppProps>("props", &query).await {
+                Ok(Some(props)) => {
+                    detection.found.insert(model.clone(), props.detected());
+                }
+                Ok(None) => {}
+                Err(_) => detection.pending.push(model.clone()),
             }
         }
         Ok(detection)
@@ -264,7 +269,9 @@ struct RouterModel {
     id: String,
     #[serde(default)]
     aliases: Vec<String>,
-    status: RouterModelStatus,
+    /// 無ければ、読み込まれているか分からないので問い合わせない。
+    #[serde(default)]
+    status: Option<RouterModelStatus>,
 }
 
 #[derive(Deserialize)]
@@ -276,6 +283,12 @@ struct RouterModelStatus {
 impl RouterModel {
     fn serves(&self, model: &str) -> bool {
         self.id == model || self.aliases.iter().any(|a| a == model)
+    }
+
+    fn is_loaded(&self) -> bool {
+        self.status
+            .as_ref()
+            .is_some_and(|s| s.value == LOADED_STATUS)
     }
 }
 
@@ -461,8 +474,11 @@ mod tests {
             ),
             "GET /models HTTP/1.1" => Reply::Json(
                 r#"{"object":"list","data":[
-                    {"id":"loaded-model","aliases":[],"status":{"value":"loaded"}},
-                    {"id":"other-model","aliases":["other"],"status":{"value":"unloaded"}}
+                    {"id":"loaded-model","aliases":["loaded"],"status":{"value":"loaded"}},
+                    {"id":"other-model","aliases":["other"],"status":{"value":"unloaded"}},
+                    {"id":"loading-model","status":{"value":"loading"}},
+                    {"id":"evicted-model","status":{"value":"loaded"}},
+                    {"id":"no-status-model"}
                 ]}"#,
             ),
             "GET /props?model=loaded-model&autoload=false HTTP/1.1" => Reply::Json(
@@ -472,19 +488,24 @@ mod tests {
             ),
             _ => Reply::Status("400 Bad Request"),
         });
-        let models = ["loaded-model", "other", "unknown"].map(String::from);
+        let models = [
+            "loaded",
+            "other",
+            "loading-model",
+            "evicted-model",
+            "no-status-model",
+            "unknown",
+        ]
+        .map(String::from);
 
         let detection = detect(&base_url, &no_key(), &models)
             .await
             .unwrap()
             .unwrap();
 
+        assert_eq!(detection.found.keys().collect::<Vec<_>>(), vec!["loaded"]);
         assert_eq!(
-            detection.found.keys().collect::<Vec<_>>(),
-            vec!["loaded-model"]
-        );
-        assert_eq!(
-            detection.found["loaded-model"],
+            detection.found["loaded"],
             DetectedCapabilities {
                 image: Some(true),
                 tools: Some(true),
@@ -492,7 +513,12 @@ mod tests {
                 context_length: Some(65536),
             }
         );
-        assert_eq!(detection.pending, vec!["other".to_string()]);
+        // 追い出された(400)モデルも、ほかのモデルの結果を捨てずに次の機会へ回す。
+        assert_eq!(
+            detection.pending,
+            ["other", "loading-model", "evicted-model", "no-status-model"].map(String::from)
+        );
+        // 別名で登録したモデルも、ルーターが出す名前で問い合わせる。
         let paths: Vec<String> = requests.try_iter().collect();
         assert_eq!(
             paths,
@@ -500,6 +526,7 @@ mod tests {
                 "GET /props HTTP/1.1",
                 "GET /models HTTP/1.1",
                 "GET /props?model=loaded-model&autoload=false HTTP/1.1",
+                "GET /props?model=evicted-model&autoload=false HTTP/1.1",
             ]
         );
     }

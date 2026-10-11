@@ -28,6 +28,8 @@ use secrecy::SecretString;
 
 use crate::config::{self, Config, SecretRef};
 use crate::db::messages::Chat;
+use crate::db::tasks::Task;
+use crate::db::SharedConnection;
 use crate::error::{CoreError, Result};
 use crate::i18n::Language;
 use crate::in_flight::InFlightSet;
@@ -36,7 +38,8 @@ use crate::llm::{DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{
     self, default_opening_message, default_task_chat_prompt, stored_prompt, McpAccess,
-    SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure, TurnFinished,
+    SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvents, TurnFailure, TurnFinished,
+    TurnSource,
 };
 use crate::secrets;
 
@@ -238,9 +241,27 @@ impl Settings {
     /// チャットを使えるかの判定に使う[`Self::snapshot`]。鍵を読めていなければ読み直すが、
     /// 能力は問い合わせない(応答しない推論サーバーでも待たない)。ターンの開始には
     /// [`Self::snapshot_for_turn`]を使う。
-    pub async fn snapshot_for_check(&self) -> Snapshot {
+    async fn snapshot_for_check(&self) -> Snapshot {
         self.reload_unavailable_key().await;
         self.snapshot()
+    }
+
+    /// 新規タスクを作り、続けて聞き取りを始める([`orchestration::create_task`])。使えるかは
+    /// 鍵だけ確かめた写しで判定し、能力を問い合わせた写しはタスクを作ってから取る(応答しない
+    /// 推論サーバーで、タスクが出るのを待たせないため)。`source`は写しにターンの材料を添える。
+    pub async fn create_task<S: TurnSource>(
+        &self,
+        db: SharedConnection,
+        source: impl Fn(Snapshot) -> S,
+        on_created: impl FnOnce(&Task) + Send,
+    ) -> Result<TaskCreation> {
+        orchestration::create_task(
+            db,
+            source(self.snapshot_for_check().await),
+            || async { source(self.snapshot_for_turn().await) },
+            on_created,
+        )
+        .await
     }
 
     /// 鍵を読めずにいたら、資格情報ストアから読み直してアダプタを組み立て直す。GUIは

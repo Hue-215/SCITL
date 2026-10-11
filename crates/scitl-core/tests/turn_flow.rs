@@ -4387,6 +4387,28 @@ async fn the_opening_turn_uses_the_snapshot_taken_after_creating_the_task() {
     assert_eq!(detected.sent().len(), 1);
 }
 
+/// 作ってから聞き取りの写しを取るまでの間に使えなくなったら、タスクは残し、聞き取りはエラー発言で
+/// 終わる。
+#[tokio::test]
+async fn a_task_stays_when_the_chat_becomes_unavailable_before_the_opening() {
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let checked = ScriptedAdapter::new(Vec::new());
+
+    let creation = create_task(
+        db.clone(),
+        context(&checked),
+        || async { context_without_provider() },
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    let TaskCreation::Created { task, .. } = creation else {
+        panic!("expected Created, got {creation:?}");
+    };
+    assert_eq!(roles(&db, task.id), vec!["error"]);
+}
+
 /// チャットを使えない間はタスクを作らない。
 #[tokio::test]
 async fn create_task_is_refused_while_the_chat_cannot_run() {

@@ -3,7 +3,7 @@ use tauri::State;
 
 use scitl_core::db::messages::OperationSource;
 use scitl_core::orchestration::{
-    self, operations, TaskCreation, TaskOpeningEvent, TurnContext, TurnEvents, TurnSource,
+    operations, TaskCreation, TaskOpeningEvent, TurnContext, TurnEvents, TurnSource,
 };
 use scitl_core::settings::Snapshot;
 
@@ -31,7 +31,7 @@ pub async fn list_tasks(
     with_db(&state, scitl_core::db::tasks::list_tasks).await
 }
 
-/// 新規タスク追加ボタン。作ったら続けて聞き取りを始める([`orchestration::create_task`])。
+/// 新規タスク追加ボタン。作ったら続けて聞き取りを始める([`scitl_core::settings::Settings::create_task`])。
 /// 作ったタスクと聞き取りの途中経過は、この順で`on_event`へ送る。送れなくても(画面が
 /// 閉じた等)聞き取りは最後まで走らせるので、送信の失敗は捨てる。チャットを使えない間は
 /// 作らずに理由を返す。
@@ -48,15 +48,12 @@ pub async fn create_task(
         snapshot,
         events: &events,
     };
-    Ok(orchestration::create_task(
-        state.db.clone(),
-        source(state.settings.snapshot_for_check().await),
-        || async { source(state.settings.snapshot_for_turn().await) },
-        |task| {
+    Ok(state
+        .settings
+        .create_task(state.db.clone(), source, |task| {
             let _ = on_event.send(TaskOpeningEvent::Created { task: task.clone() });
-        },
-    )
-    .await?)
+        })
+        .await?)
 }
 
 /// タスクの作成に渡す、設定の写しとターンの文脈の材料の組。

@@ -191,13 +191,11 @@ pub async fn create_task(session: &Session) -> Result<(), DebugError> {
         attachments: &attachments,
         snapshot,
     };
-    let creation = orchestration::create_task(
-        session.db.clone(),
-        source(settings.snapshot_for_check().await),
-        || async { source(settings.snapshot_for_turn().await) },
-        |task| print_json_line(&Outcome::TaskCreated { task }),
-    )
-    .await?;
+    let creation = settings
+        .create_task(session.db.clone(), source, |task| {
+            print_json_line(&Outcome::TaskCreated { task })
+        })
+        .await?;
     let task = match creation {
         TaskCreation::Created {
             opening_error: Some(error),
