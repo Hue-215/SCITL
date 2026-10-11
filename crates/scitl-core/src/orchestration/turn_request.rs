@@ -12,7 +12,7 @@ use crate::llm::{
 };
 use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
-use crate::orchestration::system_prompt::build_system_prompt;
+use crate::orchestration::system_prompt::{build_system_prompt, ConversationStart};
 use crate::orchestration::transcript::{
     tool_entry, tools_body, tools_from_body, PrefixDigest, SavedHead, SavedTurn, StoredInput,
     StoredMessage,
@@ -61,6 +61,7 @@ impl TurnRequest {
         stored: StoredChat,
         external: &ExternalToolset,
     ) -> Result<Self> {
+        let from_opening = stored.starts_with_opening();
         let options = HistoryOptions {
             image_input: ctx.capabilities.image,
             opening: ctx.opening_message.to_string(),
@@ -74,17 +75,29 @@ impl TurnRequest {
         // `ExternalToolset`が済ませてある。
         let mut current_tools = tools::schemas(chat);
         current_tools.extend(external.schemas());
-        let current = Head::current(build_system_prompt(chat, &ctx.prompts), current_tools);
         let starts = history.unit_starts();
         let from = match history.front.as_ref().and_then(|f| f.history_start) {
             Some(row) => history.start_at(&starts, row),
             None => 0,
         };
+        // 聞き取りから始まった会話を最初から送っている間は、始めた時点で空だったと伝える。
+        // 間引いて始まりが見えなくなったら、作り直す先頭では通常の注記にする(`unseen`)。
+        let head_for = |start| {
+            Head::current(
+                build_system_prompt(chat, start, &ctx.prompts),
+                current_tools.clone(),
+            )
+        };
+        let unseen = head_for(ConversationStart::Other);
+        let current = if from_opening && from == 0 {
+            head_for(ConversationStart::BlankTaskInView)
+        } else {
+            unseen.clone()
+        };
         let frozen = history
             .head
             .take()
             .and_then(|head| Head::frozen(head, &current, external));
-        let notice = ChatMessage::user(PromptText::system_update(&current.system));
         // 間引きの見積もりには、送る先頭と、置くなら変更の通知も含める。
         let trim = |head: &Head, notice: Option<&ChatMessage>| {
             let system = ChatMessage::System(head.system.clone());
@@ -98,8 +111,8 @@ impl TurnRequest {
             )
         };
         // `keep_from`から並べたとき、変更の通知が要るか。モデルは並びに残った最後の通知に従い、
-        // 無ければ先頭に従うので、それが今の設定と違えば伝える。
-        let needs_notice = |head: &Head, keep_from: usize| {
+        // 無ければ先頭に従うので、それが今の設定(`current`)と違えば伝える。
+        let needs_notice = |head: &Head, current: &Head, keep_from: usize| {
             let before_input =
                 &history.messages[keep_from.min(history.input_from)..history.input_from];
             !last_update_tells(before_input, &current.system)
@@ -108,25 +121,33 @@ impl TurnRequest {
         // 通知が要るかは並べ始める位置で決まり、位置は見積もりに通知を含めるかで決まる。まず
         // 含めずに見積もり、その位置で要るなら含めて見積もり直す。見積もり直して前の通知が落ち、
         // 要らなくなったときも、見積もり直した位置を使う(多めに間引くだけで、収まりはする)。
-        let settle = |head: &Head| -> (usize, bool, bool) {
+        let settle = |head: &Head, current: &Head| -> (usize, bool, bool) {
             let plain = trim(head, None);
-            if !needs_notice(head, plain.keep_from) {
+            if !needs_notice(head, current, plain.keep_from) {
                 return (plain.keep_from, plain.trimmed, false);
             }
+            let notice = ChatMessage::user(PromptText::system_update(&current.system));
             let told = trim(head, Some(&notice));
             (
                 told.keep_from,
                 told.trimmed,
-                needs_notice(head, told.keep_from),
+                needs_notice(head, current, told.keep_from),
             )
         };
+        // 間引いて会話の始まりが見えなくなったら、`unseen`で見積もり直す。通常の注記のほうが
+        // 短く、見積もり直すと間引かずに収まることもあるが、そのときも`unseen`のままにする
+        // (常に正しい注記で、次のターンで始めた時点の注記に戻すなら通知で伝わる)。
         let rebuilt = || {
-            let (keep_from, _, notify) = settle(&current);
-            (current.clone(), keep_from, notify)
+            let (keep_from, trimmed, notify) = settle(&current, &current);
+            if !trimmed || current.system == unseen.system {
+                return (current.clone(), keep_from, notify, &current);
+            }
+            let (keep_from, _, notify) = settle(&unseen, &unseen);
+            (unseen.clone(), keep_from, notify, &unseen)
         };
-        let (front, keep_from, notify) = match frozen {
-            Some(head) => match settle(&head) {
-                (keep_from, false, notify) => (head, keep_from, notify),
+        let (front, keep_from, notify, current) = match frozen {
+            Some(head) => match settle(&head, &current) {
+                (keep_from, false, notify) => (head, keep_from, notify, &current),
                 // 間引いたら前はどのみち変わるので、今の設定で固定し直す。
                 _ => rebuilt(),
             },
@@ -169,7 +190,7 @@ impl TurnRequest {
             input_from,
             input_rows,
             history_start,
-            settings_system: current.system,
+            settings_system: current.system.clone(),
             exposed_tools: front.tools,
             tools_body: front.tools_body,
         })

@@ -4565,6 +4565,59 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
     );
 }
 
+/// 聞き取りから始まった会話を最初から送っている間は、始めた時点でタスクが空だったと伝える
+/// (最初に状態を読ませない)。間引いて始まりが見えなくなったら、先頭の作り直しに合わせて通常の
+/// 注記に戻し、通知は置かない。ユーザーの発言から始まった会話は、はじめから通常の注記にする。
+#[tokio::test]
+async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() {
+    const BLANK_NOTE: &str = "created with nothing set";
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 20_000;
+    let turn = |chat, text: String| {
+        let db = db.clone();
+        async move {
+            let adapter = ScriptedAdapter::texts(&["返信"]);
+            let ctx = TurnContext {
+                capabilities,
+                ..context(&adapter)
+            };
+            run_turn(db, &ctx, chat, text).await.unwrap();
+            adapter.sent_messages().remove(0)
+        }
+    };
+
+    let opening = ScriptedAdapter::texts(&["どんなタスクですか"]);
+    let opening_ctx = TurnContext {
+        capabilities,
+        ..context(&opening)
+    };
+    let task_id = create_task_opening(&db, &opening_ctx).await;
+    let chat = Chat::Task(task_id);
+    assert!(system_of(&opening.sent_messages()[0]).contains(BLANK_NOTE));
+    let second = turn(chat, "レポート".to_string()).await;
+    assert!(system_of(&second).contains(BLANK_NOTE));
+
+    let padding = "あ".repeat(8_000);
+    turn(chat, format!("3回目{padding}")).await;
+    let trimmed = turn(chat, format!("4回目{padding}")).await;
+    assert!(!user_texts(&trimmed).iter().any(|t| t.contains("レポート")));
+    assert!(!system_of(&trimmed).contains(BLANK_NOTE));
+    assert!(system_of(&trimmed).contains("not included in the messages"));
+    // 間引いたあとのターンも、作り直した先頭のまま並べる。
+    let next = turn(chat, "5回目".to_string()).await;
+    assert_eq!(system_of(&next), system_of(&trimmed));
+    for sent in [&trimmed, &next] {
+        assert!(!user_texts(sent)
+            .iter()
+            .any(|t| t.contains("<scitl:system-update>")));
+    }
+
+    let typed = seed_task(&db.lock().unwrap());
+    let first = turn(Chat::Task(typed), "最初の発言".to_string()).await;
+    assert!(!system_of(&first).contains(BLANK_NOTE));
+}
+
 #[tokio::test]
 async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));

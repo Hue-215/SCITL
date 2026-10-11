@@ -67,6 +67,14 @@ pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
     })
 }
 
+impl StoredChat {
+    /// 聞き取りから始まった会話か。始めた時点でタスクが空だったことの伝え方に使う
+    /// (`system_prompt::ConversationStart`)。
+    pub(super) fn starts_with_opening(&self) -> bool {
+        self.starts_with_opening
+    }
+}
+
 fn starts_with_opening(conn: &Connection, chat: Chat) -> Result<bool> {
     Ok(match chat {
         Chat::Task(task_id) => messages::opener(conn, task_id)? != Some(Opener::User),

@@ -1,4 +1,5 @@
 use crate::db::messages::Chat;
+use crate::llm::OPERATIONS_TAG;
 use crate::tools::{
     add_memories, get_current_task_detail, get_memories, get_task_detail, get_task_list,
 };
@@ -57,11 +58,38 @@ fn memory_note() -> String {
     )
 }
 
+/// 会話の始まりがモデルから見えているか。タスクチャットの状態の注記を選ぶ。
+///
+/// 会話の途中で変わりうるのは、間引いて`BlankTaskInView`でなくなるときだけ。間引くときは
+/// 先頭をどのみち作り直すので、システムプロンプトが変わっても前に送った部分は変わらない
+/// (`docs/spec/architecture/prompt-shape.md`「状態と日時の伝え方」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationStart {
+    /// 聞き取りから始まったタスクの会話(`db::messages::opener`)を、最初から送っている。
+    /// タスクは作った直後で何も設定されておらず、以後の変更はすべて会話の中に並ぶ。
+    BlankTaskInView,
+    /// それ以外(ユーザーの発言から始まった会話、間引いた会話、総合チャット)。
+    Other,
+}
+
 /// タスクの状態の読み方。状態はリクエストに添えないので、伝えないと、会話の始まりや
 /// 間引きで古い結果が落ちたあとに、モデルがタスクの中身を知らないまま答える。
-fn state_note(chat: Chat) -> String {
-    match chat {
-        Chat::Task(_) => format!(
+///
+/// 聞き取りから始まった会話では、始めた時点で空だったことを伝え、最初に読ませない。読んでも
+/// 空の結果が返るだけで、往復が1回増える。「始めた時点で」と過去の事実として書くのは、
+/// 何か設定されたあとも偽にならず、システムプロンプトを書き換えずに済むため。
+fn state_note(chat: Chat, start: ConversationStart) -> String {
+    match (chat, start) {
+        (Chat::Task(_), ConversationStart::BlankTaskInView) => format!(
+            "This task was created with nothing set (no title, description, deadline, or \
+             steps) just before this conversation began, and every change to it since then \
+             appears in this conversation: in your tool results and in {OPERATIONS_TAG} \
+             blocks. So you do not need to read the task at the start. Every tool that \
+             changes the task returns the whole task and its steps. If the current state is \
+             unclear, read it with {}.",
+            get_current_task_detail::NAME
+        ),
+        (Chat::Task(_), ConversationStart::Other) => format!(
             "The task's current state is not included in the messages. Read it with {} \
              when you need it, for example at the start of the conversation or when earlier \
              results are no longer in the conversation. Tool results show the state at the \
@@ -70,7 +98,7 @@ fn state_note(chat: Chat) -> String {
             get_current_task_detail::NAME
         ),
         // 総合チャットには、各タスクの会話や画面での変更が積まれない。
-        Chat::General => format!(
+        (Chat::General, _) => format!(
             "The current tasks are not included in the messages. Read them with {} and {} \
              when you need them. Tasks also change in their own conversations and on screen, \
              and those changes do not appear here, so task lists and details in earlier tool \
@@ -83,12 +111,17 @@ fn state_note(chat: Chat) -> String {
 
 /// ニックネームの注記(設定したときだけ) + 基本システムプロンプト + タスクチャット用システム
 /// プロンプト(総合チャットなら代わりに総合チャットの注記) + ツール結果と状態とメモリの読み方 +
-/// 予約タグの読み方。会話と設定だけで決まり、リクエストごとには変わらない。現在日時と状態は添えず、
+/// 予約タグの読み方。会話と設定と会話の始まりの見え方([`ConversationStart`])だけで決まり、
+/// リクエストごとには変わらない。現在日時と状態は添えず、
 /// モデルがユーザー発言の送信日時とツールで知る(`docs/spec/architecture/prompt-shape.md`
 /// 「状態と日時の伝え方」)。
 ///
 /// 利用者が書いたものは、設定のプロンプトとニックネームだけを載せる(会話の中身は載せない)。
-pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts) -> String {
+pub fn build_system_prompt(
+    chat: Chat,
+    start: ConversationStart,
+    prompts: &SystemPrompts,
+) -> String {
     let mut sections = Vec::new();
     if let Some(nickname) = prompts.nickname.filter(|n| !n.trim().is_empty()) {
         sections.push(nickname_note(nickname));
@@ -105,7 +138,7 @@ pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts) -> String {
         Chat::General => sections.push(GENERAL_CHAT_NOTE.to_string()),
     }
     sections.push(TOOL_RESULTS_NOTE.to_string());
-    sections.push(state_note(chat));
+    sections.push(state_note(chat, start));
     sections.push(memory_note());
 
     // ユーザー発言を包む予約タグの読み方。囲みと`sent_at`の意味を伝えないと、
@@ -127,7 +160,7 @@ mod tests {
             task_chat: Some("task chat prompt"),
             nickname: None,
         };
-        let prompt = build_system_prompt(Chat::Task(1), &prompts);
+        let prompt = build_system_prompt(Chat::Task(1), ConversationStart::Other, &prompts);
 
         let base_pos = prompt.find("base prompt").unwrap();
         let task_chat_pos = prompt.find("task chat prompt").unwrap();
@@ -144,12 +177,13 @@ mod tests {
             nickname: Some(nickname),
         };
         for chat in [Chat::Task(1), Chat::General] {
-            let prompt = build_system_prompt(chat, &prompts);
+            let prompt = build_system_prompt(chat, ConversationStart::Other, &prompts);
             assert!(prompt.starts_with(&nickname_note(nickname)));
             assert!(prompt.contains(r#"nickname "Hal \"9000\"". "#));
         }
         let without = build_system_prompt(
             Chat::Task(1),
+            ConversationStart::Other,
             &SystemPrompts {
                 nickname: None,
                 ..prompts
@@ -165,7 +199,7 @@ mod tests {
             task_chat: Some("task chat prompt"),
             nickname: None,
         };
-        let prompt = build_system_prompt(Chat::Task(1), &prompts);
+        let prompt = build_system_prompt(Chat::Task(1), ConversationStart::Other, &prompts);
 
         assert!(prompt.contains("task chat prompt"));
     }
@@ -174,18 +208,40 @@ mod tests {
     #[test]
     fn tells_how_to_read_the_state() {
         for chat in [Chat::Task(1), Chat::General] {
-            let prompt = build_system_prompt(chat, &SystemPrompts::default());
-            assert!(prompt.contains(&state_note(chat)));
-            assert!(prompt.contains(&memory_note()));
-            assert!(prompt.contains(TOOL_RESULTS_NOTE));
+            for start in [ConversationStart::BlankTaskInView, ConversationStart::Other] {
+                let prompt = build_system_prompt(chat, start, &SystemPrompts::default());
+                assert!(prompt.contains(&state_note(chat, start)));
+                assert!(prompt.contains(&memory_note()));
+                assert!(prompt.contains(TOOL_RESULTS_NOTE));
+            }
         }
-        assert!(state_note(Chat::Task(1)).contains(get_current_task_detail::NAME));
-        assert!(state_note(Chat::General).contains(get_task_list::NAME));
+        for start in [ConversationStart::BlankTaskInView, ConversationStart::Other] {
+            assert!(state_note(Chat::Task(1), start).contains(get_current_task_detail::NAME));
+        }
+        assert!(state_note(Chat::General, ConversationStart::Other).contains(get_task_list::NAME));
+    }
+
+    /// 聞き取りから始まった会話を最初から送っている間だけ、始めた時点で空だったと伝える。
+    /// 総合チャットはタスクを対象にしないので、見え方によらず同じ注記にする。
+    #[test]
+    fn tells_that_the_task_started_blank_only_while_the_start_is_in_view() {
+        let blank = state_note(Chat::Task(1), ConversationStart::BlankTaskInView);
+        assert!(blank.contains("nothing set"));
+        assert!(blank.contains(OPERATIONS_TAG));
+        assert!(!state_note(Chat::Task(1), ConversationStart::Other).contains("nothing set"));
+        assert_eq!(
+            state_note(Chat::General, ConversationStart::BlankTaskInView),
+            state_note(Chat::General, ConversationStart::Other)
+        );
     }
 
     #[test]
     fn works_with_no_prompts_at_all() {
-        let prompt = build_system_prompt(Chat::Task(1), &SystemPrompts::default());
+        let prompt = build_system_prompt(
+            Chat::Task(1),
+            ConversationStart::Other,
+            &SystemPrompts::default(),
+        );
 
         assert!(prompt.contains("user messages are wrapped"));
     }
@@ -198,7 +254,7 @@ mod tests {
             nickname: None,
         };
 
-        let prompt = build_system_prompt(Chat::General, &prompts);
+        let prompt = build_system_prompt(Chat::General, ConversationStart::Other, &prompts);
 
         assert!(prompt.contains("base prompt"));
         assert!(!prompt.contains("task chat prompt"));
