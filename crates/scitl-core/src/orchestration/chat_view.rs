@@ -116,9 +116,9 @@ fn revealable_ids(message: &Message, can_reveal: bool) -> Vec<i64> {
 ///
 /// - テキスト・その他は、モデルによらず渡し方が決まる(`attachments::delivery_without_model`)
 /// - 画像は、表示される返信のある試行のうち、その発言を入力に含めたものの送った形の保存に載って
-///   いるかで決める。そうした保存が無いとき、返信があれば送った形を保存する前の会話で分からない
-///   ので含めず、返信が無ければ(失敗・停止したターン)渡していない。応答を生成中の発言もこれに
-///   当たるので、画面はその間の印を出さない
+///   いるかで決める。そうした保存が無いとき、その発言に答えた返信が無く、あとの発言に答えた返信が
+///   あれば渡していない。それ以外は分からないので含めない(答えた返信があれば送った形を保存する前の
+///   会話。あとに返信が1つも無ければ、失敗・停止したターンか応答を生成中の発言で、再試行すれば渡る)
 fn undelivered(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<HashMap<i64, Vec<i64>>> {
     let has_images = rows
         .iter()
@@ -158,8 +158,8 @@ struct SentImages {
     inputs: HashMap<i64, HashSet<String>>,
     /// 添付のidから実体のハッシュ。
     hashes: HashMap<i64, String>,
-    /// 返信のあるターンが答えたユーザー発言。
-    replied: HashSet<i64>,
+    /// 返信の有無から見たユーザー発言。
+    replies: Replies,
 }
 
 impl SentImages {
@@ -186,7 +186,7 @@ impl SentImages {
         Ok(Self {
             inputs,
             hashes: attachments::file_hashes_in_chat(conn, chat)?,
-            replied: replied_users(rows),
+            replies: Replies::of(rows),
         })
     }
 
@@ -198,25 +198,46 @@ impl SentImages {
                     .get(&attachment)
                     .is_some_and(|hash| images.contains(hash)),
             ),
-            None if self.replied.contains(&message) => None,
-            None => Some(false),
+            None if self.replies.followed.contains(&message)
+                && !self.replies.answered.contains(&message) =>
+            {
+                Some(false)
+            }
+            None => None,
         }
     }
 }
 
-/// 返信のあるターンが答えたユーザー発言。発言の直後から次のユーザー発言の手前までに、
-/// アシスタントの通常の発言がある。
-fn replied_users(rows: &[Message]) -> HashSet<i64> {
-    let mut replied = HashSet::new();
-    let mut current = None;
-    for m in rows.iter().filter(|m| m.kind == Kind::Normal) {
-        match m.role {
-            Role::User => current = Some(m.id),
-            Role::Assistant => replied.extend(current),
-            _ => {}
+/// 返信の有無から見たユーザー発言。返信は、アシスタントの通常の発言。
+struct Replies {
+    /// 返信のあるターンが答えた発言。発言の直後から次のユーザー発言の手前までに返信がある。
+    answered: HashSet<i64>,
+    /// あとに返信がある発言(自身に答えた返信を含む)。
+    followed: HashSet<i64>,
+}
+
+impl Replies {
+    fn of(rows: &[Message]) -> Self {
+        let mut answered = HashSet::new();
+        let mut users = Vec::new();
+        let mut followed_until = 0;
+        for m in rows.iter().filter(|m| m.kind == Kind::Normal) {
+            match m.role {
+                Role::User => users.push(m.id),
+                Role::Assistant => {
+                    answered.extend(users.last().copied());
+                    followed_until = users.len();
+                }
+                _ => {}
+            }
+        }
+        // 最後の返信より前の発言だけが、あとに返信を持つ。
+        users.truncate(followed_until);
+        Self {
+            answered,
+            followed: users.into_iter().collect(),
         }
     }
-    replied
 }
 
 #[cfg(test)]
@@ -463,39 +484,56 @@ mod tests {
         assert_eq!(f.undelivered(), HashMap::from([(u, vec![ids[1]])]));
     }
 
+    /// 失敗したターンの画像は、あとの返信が載せずに書かれたら渡していない。まだ返信が1つも無い
+    /// うちは、再試行すれば渡るので分からない扱いにする。
     #[test]
-    fn an_image_of_a_failed_turn_is_not_delivered_even_after_the_next_message() {
+    fn an_image_of_a_failed_turn_is_not_delivered_once_a_later_reply_left_it_out() {
         let f = Fixture::new();
         let (failed, failed_ids) = f.user(&[(AttachmentKind::Image, "h1")]);
         f.fail("t1", 1);
+        assert_eq!(f.undelivered(), HashMap::new());
+
+        // 次の発言の試行は、失敗した発言も入力に含めるが、画像は直近の発言の分だけを載せる。
+        let (next, _) = f.user(&[(AttachmentKind::Image, "h2")]);
+        assert_eq!(f.undelivered(), HashMap::new());
+        f.reply("t2", 1);
+        f.save("t2", 1, vec![failed, next], &["h2"]);
         assert_eq!(
             f.undelivered(),
             HashMap::from([(failed, failed_ids.clone())])
         );
 
-        // 次の発言の試行は、失敗した発言も入力に含めるが、画像は直近の発言の分だけを載せる。
-        let (next, _) = f.user(&[(AttachmentKind::Image, "h2")]);
-        f.reply("t2", 1);
-        f.save("t2", 1, vec![failed, next], &["h2"]);
-        assert_eq!(f.undelivered(), HashMap::from([(failed, failed_ids)]));
+        // あとの返信の送った形にその行が含まれない(間引かれた等)ときも、渡していない。
+        let g = Fixture::new();
+        let (failed, failed_ids) = g.user(&[(AttachmentKind::Image, "h1")]);
+        g.fail("t1", 1);
+        let (next, _) = g.user(&[]);
+        g.reply("t2", 1);
+        g.save("t2", 1, vec![next], &[]);
+        assert_eq!(g.undelivered(), HashMap::from([(failed, failed_ids)]));
     }
 
-    /// 送れた試行を作り直して失敗した・返信を消したら、その保存はもう並べないので渡していない。
+    /// 送れた試行を作り直して失敗した・返信を消したら、その保存はもう並べない。あとに返信が
+    /// 無ければ、失敗したターンと同じく分からない扱いになる。
     #[test]
     fn a_saved_attempt_that_is_no_longer_shown_does_not_count() {
         let f = Fixture::new();
-        let (u, ids) = f.user(&[(AttachmentKind::Image, "h1")]);
+        let (u, _) = f.user(&[(AttachmentKind::Image, "h1")]);
         f.reply("t1", 1);
         f.save("t1", 1, vec![u], &["h1"]);
         assert_eq!(f.undelivered(), HashMap::new());
         f.fail("t1", 2);
-        assert_eq!(f.undelivered(), HashMap::from([(u, ids.clone())]));
+        assert_eq!(f.undelivered(), HashMap::new());
 
         let g = Fixture::new();
         let (u, ids) = g.user(&[(AttachmentKind::Image, "h1")]);
         let reply = g.reply("t1", 1);
         g.save("t1", 1, vec![u], &["h1"]);
         messages::soft_delete_message(&g.conn, reply).unwrap();
+        assert_eq!(g.undelivered(), HashMap::new());
+        let (next, _) = g.user(&[]);
+        g.reply("t2", 1);
+        g.save("t2", 1, vec![u, next], &[]);
         assert_eq!(g.undelivered(), HashMap::from([(u, ids)]));
     }
 
