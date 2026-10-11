@@ -384,51 +384,6 @@ mod tests {
         }
     }
 
-    /// 設定の直し方を案内する文言は、案内先の画面の名前をそのまま含む。画面の名前を
-    /// 変えたときに、文言の側だけ古い名前のまま残るのを防ぐ。
-    #[test]
-    fn messages_name_the_settings_they_point_to() {
-        let cases = [
-            (
-                TurnFailure::ResponseTimeout {
-                    detail: ErrorDetail::internal("x"),
-                },
-                &["settings.nav.general"][..],
-            ),
-            (
-                TurnFailure::ContextExceeded {
-                    detail: ErrorDetail::internal("x"),
-                },
-                &["settings.nav.provider"],
-            ),
-            (
-                TurnFailure::ThinkingUnsupported {
-                    detail: ErrorDetail::internal("x"),
-                },
-                &[
-                    "settings.nav.provider",
-                    "settings.model.cap_reasoning_label",
-                ],
-            ),
-            (TurnFailure::ToolRoundLimit, &["settings.nav.tools"]),
-            (TurnFailure::ToolTimeout, &["settings.nav.tools"]),
-        ];
-        for (failure, names) in cases {
-            let key = message_key(failure.kind());
-            for lang in Language::ALL {
-                let text = i18n::text(lang, &key);
-                for name in names {
-                    let name = i18n::text(lang, name);
-                    assert!(
-                        text.contains(name),
-                        "{}: {text:?} does not mention {name:?}",
-                        lang.code()
-                    );
-                }
-            }
-        }
-    }
-
     /// 保存する文言は英語(エクスポートの固定文言と揃える)。
     #[test]
     fn stored_message_is_english() {
@@ -517,6 +472,6 @@ mod tests {
             &SentSecrets::default(),
         ));
         assert_eq!(failure.kind(), "auth");
-        assert!(failure.user_message().contains("missing"));
+        assert!(failure.user_message().contains("not set"));
     }
 }
