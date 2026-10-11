@@ -17,8 +17,14 @@ pub(super) struct Trim {
 
 /// `history`のうち、どこから並べるかを決める(`docs/spec/architecture/transcript.md`
 /// 「間引きの位置」)。`from`(保っている間引きの位置)から後ろが予算に収まれば、そこから
-/// 並べる。超えたときだけ、予算の半分に収まるまで古い単位から落とす。間引くと前が変わり
-/// 思考も外れるので、毎ターン少しずつではなく、まれにまとめて行う。
+/// 並べる。超えたときだけ、古い単位からまとめて落とす。間引くと前が変わり思考も外れるので、
+/// 毎ターン少しずつではなく、まれにまとめて行う。
+///
+/// 落とす量は、最後の単位(このターンのユーザー発言。必ず送る)を予算から先に引き、残りの
+/// 半分にそれより前の履歴が収まるまでとする。全体を予算の半分に収めようとすると、新しい
+/// 発言ひとつが半分を超えただけで、直前のやり取りまで1件も残らなくなる(Issue #342)。
+/// 新しい入力が複数の単位にわたるとき(返信の無いユーザー発言が続いた)も、先に引くのは最後の
+/// 単位だけで、それより前の発言はほかの履歴と同じく古い方から落ちうる。
 ///
 /// `others`(システムプロンプト)と`tools`は間引かずに必ず送るので、先に予算から引く。
 /// `starts`は間引く単位の始まりの位置(昇順、`History::unit_starts`)で、`from`もその1つ。
@@ -52,8 +58,9 @@ pub(super) fn trim_history<'b>(
             trimmed: false,
         };
     }
-    let target = budget / 2;
-    let mut keep_from = starts.last().copied().unwrap_or(from).max(from);
+    let latest = starts.last().copied().unwrap_or(from).max(from);
+    let target = sizes[latest] + budget.saturating_sub(sizes[latest]) / 2;
+    let mut keep_from = latest;
     for &start in starts.iter().rev().filter(|&&s| s >= from) {
         if sizes[start] > target {
             break;
@@ -149,7 +156,14 @@ mod tests {
         u32::try_from(budget.div_ceil(3) * 4).unwrap()
     }
 
-    /// 超えたら、ぎりぎりまでではなく予算の半分まで、ユーザー発言の境目で落とす。
+    /// 最後の単位を除いた予算の半分に、それより前の履歴が収まる上限(最後の単位を含む見積もり)。
+    fn target(history: &[ChatMessage], starts: &[usize], budget: usize) -> usize {
+        let latest = size(history, *starts.last().unwrap());
+        latest + budget.saturating_sub(latest) / 2
+    }
+
+    /// 超えたら、ぎりぎりまでではなく、新しい発言を除いた予算の半分まで、ユーザー発言の境目で
+    /// 落とす。
     #[test]
     fn drops_the_oldest_units_down_to_half_the_budget() {
         let [call, result] = tool_round_trip();
@@ -170,10 +184,66 @@ mod tests {
         let trim = trim_history(&history, &starts, 0, length_with_budget(budget), &[], &[]);
         assert!(trim.trimmed);
         let budget = budget.div_ceil(3) * 3;
+        let target = target(&history, &starts, budget);
         assert!(starts.contains(&trim.keep_from));
-        assert!(size(&history, trim.keep_from) <= budget / 2);
+        assert!(size(&history, trim.keep_from) <= target);
         let before = starts[starts.iter().position(|&s| s == trim.keep_from).unwrap() - 1];
-        assert!(size(&history, before) > budget / 2);
+        assert!(size(&history, before) > target);
+    }
+
+    /// 新しい発言ひとつが予算の半分を超えても、残りの予算の半分までは直前のやり取りを残す
+    /// (全体を予算の半分に収めようとすると、新しい発言のほかに1往復しか残らない)。
+    #[test]
+    fn keeps_recent_history_beside_a_message_over_half_the_budget() {
+        // 同じ大きさの7往復(0, 2, …, 12から始まる)と、その8往復分を超える新しい発言(14)。
+        let mut history = Vec::new();
+        for _ in 0..7 {
+            history.push(user(&"あ".repeat(20)));
+            history.push(assistant(&"い".repeat(20)));
+        }
+        let pair = size(&history, 12);
+        let mut long = "う".to_string();
+        while estimate_message(&user(&long)) < pair * 8 {
+            long.push('う');
+        }
+        history.push(user(&long));
+        let starts = starts(&history);
+        let latest = size(&history, 14);
+        // 予算は6往復と新しい発言の分。全体(7往復)は超え、新しい発言を除いた残りの半分は3往復。
+        let budget = pair * 6 + latest;
+        assert!(latest > budget / 2);
+        assert_eq!(
+            trim_history(&history, &starts, 0, length_with_budget(budget), &[], &[]),
+            Trim {
+                keep_from: 8,
+                trimmed: true
+            }
+        );
+        // 保っている位置から後ろが予算に収まっていれば、動かさない。
+        assert_eq!(
+            trim_history(&history, &starts, 10, length_with_budget(budget), &[], &[]),
+            Trim {
+                keep_from: 10,
+                trimmed: false
+            }
+        );
+    }
+
+    /// 新しい発言が予算を使い切るときは、それだけを送る。
+    #[test]
+    fn keeps_only_the_latest_message_when_it_uses_up_the_budget() {
+        let history = vec![user("u1"), assistant("a1"), user(&"長い発言 ".repeat(200))];
+        let budget = size(&history, 2);
+        let trim = trim_history(
+            &history,
+            &starts(&history),
+            0,
+            length_with_budget(budget),
+            &[],
+            &[],
+        );
+        assert_eq!(trim.keep_from, 2);
+        assert!(trim.trimmed);
     }
 
     #[test]
