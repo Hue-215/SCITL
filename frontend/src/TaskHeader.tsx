@@ -56,43 +56,61 @@ export default function TaskHeader({
     <header className="chat-header">
       <div className="chat-header-row">
         {drawerToggle}
-        <h1>
-          {editing ? (
-            <input
-              className="chat-header-title-input"
-              value={draft}
-              maxLength={MAX_TITLE_CHARS}
-              // 未設定のタスクは、画面で呼んでいる名前(フォールバック)を手掛かりに出す。
-              placeholder={name}
-              aria-label={t('task_header.title_input_label')}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (isCommitEnter(e)) {
-                  e.preventDefault()
-                  commit()
-                } else if (e.key === 'Escape') {
-                  setEditing(false)
-                }
-              }}
-              // フォーカスを外したら取り消す。確定はEnterだけ。
-              onBlur={() => setEditing(false)}
-              autoFocus
-            />
-          ) : (
-            <button
-              type="button"
-              className="chat-header-title"
-              disabled={disabled}
-              title={t('task_header.rename_hint')}
-              onClick={() => {
-                setDraft(task.title ?? '')
-                setEditing(true)
-              }}
-            >
-              {name}
-            </button>
-          )}
-        </h1>
+        {/* 名前・締切と進捗・説明を1つの列に置き、狭い窓で引き出すボタンが並んでも名前の左端に揃える */}
+        <div className="chat-header-main">
+          <h1>
+            {editing ? (
+              <input
+                className="chat-header-title-input"
+                value={draft}
+                maxLength={MAX_TITLE_CHARS}
+                // 未設定のタスクは、画面で呼んでいる名前(フォールバック)を手掛かりに出す。
+                placeholder={name}
+                aria-label={t('task_header.title_input_label')}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (isCommitEnter(e)) {
+                    e.preventDefault()
+                    commit()
+                  } else if (e.key === 'Escape') {
+                    setEditing(false)
+                  }
+                }}
+                // フォーカスを外したら取り消す。確定はEnterだけ。
+                onBlur={() => setEditing(false)}
+                autoFocus
+              />
+            ) : (
+              <button
+                type="button"
+                className="chat-header-title"
+                disabled={disabled}
+                title={t('task_header.rename_hint')}
+                onClick={() => {
+                  setDraft(task.title ?? '')
+                  setEditing(true)
+                }}
+              >
+                {name}
+              </button>
+            )}
+          </h1>
+          <div className="chat-header-meta">
+            <p>{t('task_header.meta', taskProgress(task))}</p>
+            {task.description && (
+              <button
+                type="button"
+                className="chat-header-description-toggle"
+                aria-expanded={descriptionOpen}
+                onClick={() => setDescriptionOpen((open) => !open)}
+              >
+                <DisclosureMark />
+                {t('task_header.description_toggle')}
+              </button>
+            )}
+          </div>
+          {task.description && descriptionOpen && <p>{task.description}</p>}
+        </div>
         {/* 名前の長さや編集中かによらず、右上の同じ位置に置く。名前の変更は名前を押して行うので
             ここには入れない。編集中に押すと、名前の欄からフォーカスが外れて編集を取り消してから開く */}
         <MenuButton
@@ -113,24 +131,6 @@ export default function TaskHeader({
           ]}
         />
       </div>
-      <div className="chat-header-meta">
-        {task.description && (
-          <button
-            type="button"
-            className="chat-header-description-toggle"
-            aria-expanded={descriptionOpen}
-            onClick={() => setDescriptionOpen((open) => !open)}
-          >
-            <DisclosureMark />
-            {t('task_header.description_toggle')}
-          </button>
-        )}
-        {/* 説明を開くと左端から下へ続くので、開け閉めする行を左に、締切と進捗を右に置く */}
-        <p>{t('task_header.meta', taskProgress(task))}</p>
-      </div>
-      {task.description && descriptionOpen && (
-        <p>{task.description}</p>
-      )}
       {confirmingDelete && (
         <ConfirmDialog
           title={t('task_header.delete_dialog_title')}

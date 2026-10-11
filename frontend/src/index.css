@@ -462,10 +462,22 @@ option {
   gap: var(--space-2);
 }
 
-/* 1行の名前は隣のボタンの高さの中で縦の中央に置き、折り返したら下へ伸ばす。 */
-.chat-header-row h1 {
+/* 残りの幅は、総合チャットでは名前が、タスクでは名前・締切と進捗・説明の列が占める。 */
+.chat-header-row > h1,
+.chat-header-main {
   flex: 1;
   min-width: 0;
+}
+
+.chat-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* 1行の名前は隣のボタンの高さの中で縦の中央に置き、折り返したら下へ伸ばす。 */
+.chat-header-row > h1,
+.chat-header-main > h1 {
   min-height: var(--control-size-md);
   display: flex;
   align-items: center;
@@ -486,21 +498,19 @@ option {
   width: 100%;
 }
 
-/* 締切と工程の進捗を右端に置き、説明があれば左端に開け閉めするボタンを置く。 */
+/* 締切と工程の進捗を名前の真下の左端に置き、説明があればその後ろに開け閉めするボタンを続ける。 */
 .chat-header-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
+  column-gap: var(--space-1);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-/* 押せる範囲(平らなボタンの内側の余白と、描かない枠線の幅)は左へはみ出させ、印の左端を見出しの
-   列の左端(会話欄の思考・ツール呼び出しの行の印と同じ位置)に揃える。 */
+/* 締切と進捗の文に続けて置く。間隔はボタンの内側の余白が作る。 */
 .chat-header-description-toggle {
   flex-shrink: 0;
-  margin-inline: calc(-1 * (var(--space-2) + var(--border-width))) auto;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
@@ -893,8 +903,8 @@ details[open] > summary > .disclosure-mark,
   /* 端の吹き出しの影(--shadow-lift)を切らさないための余白。影はスクロールで見せる範囲に
      含まれないため、余白が無いと一番下まで送っても最後の発言の影が欠けて見える。
      左右は吹き出しのマージンが同じ役を担う(左右にpaddingを置かない理由は
-     ui.md「スクロール領域」)。 */
-  padding-block: var(--space-2);
+     ui.md「スクロール領域」)。上は見出しの帯の影の分も空ける(--pinned-shadow-reach)。 */
+  padding-block: calc(var(--space-2) + var(--pinned-shadow-reach)) var(--space-2);
 }
 
 .entry {
@@ -1319,8 +1329,9 @@ details[open] > summary > .disclosure-mark,
   min-height: 0;
   /* 左右は空けない。ログ・サイドバーと同じ理由で、スクロールバーを窓の端に出す。
      上は会話欄(.chat-log)と同じく、見出しの帯の下の余白と合わせて見出しと本文の間を作る。
-     端の部品のフォーカスの光を切らさない幅(--focus-glow-spread)も兼ねる。 */
-  padding: var(--space-2) 0 var(--pane-padding);
+     端の部品のフォーカスの光を切らさない幅(--focus-glow-spread)も兼ねる。見出しの帯の影の分
+     (--pinned-shadow-reach)も会話欄と同じく足す。 */
+  padding: calc(var(--space-2) + var(--pinned-shadow-reach)) 0 var(--pane-padding);
   overflow-y: auto;
 }
 
