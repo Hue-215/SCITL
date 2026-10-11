@@ -1166,10 +1166,12 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-2);
 }
 
+/* URLのような区切りの無い長い文字列も、箱の幅を越えずに折り返す。 */
 .thinking-item {
   margin: 0;
   font-style: italic;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ツール呼び出し1件の1行。枠を持たず、名前と引数の要約を等幅で並べる。行内の間隔はmarginで持つ。 */
