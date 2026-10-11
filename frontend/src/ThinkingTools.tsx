@@ -85,8 +85,18 @@ function Thinking({ texts }: { texts: { id: number; text: string; truncated?: bo
   )
 }
 
-/** 思考・ツールの項目を、起きた順に思考の折りたたみとツールの1行に分けて並べる。 */
-export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
+/**
+ * 思考・ツールの項目を、起きた順に思考の折りたたみとツールの1行に分けて並べる。`showReasoning`が
+ * 偽なら思考を出さない(設定「一般」)。思考の途中で長さの上限に達していたことは、思考を出さなくても
+ * 知らせる。
+ */
+export function ThinkingTools({
+  items,
+  showReasoning,
+}: {
+  items: ThoughtItem[]
+  showReasoning: boolean
+}) {
   const blocks: ReactNode[] = []
   let thinking: { id: number; text: string; truncated?: boolean }[] = []
   const closeThinking = () => {
@@ -96,7 +106,15 @@ export function ThinkingTools({ items }: { items: ThoughtItem[] }) {
   }
   for (const item of items) {
     if (item.kind === 'reasoning') {
-      thinking.push(item)
+      if (showReasoning) {
+        thinking.push(item)
+      } else if (item.truncated) {
+        blocks.push(
+          <p key={`truncated-${item.id}`} className="entry-truncated">
+            {t('chat.truncated_note')}
+          </p>,
+        )
+      }
       continue
     }
     closeThinking()

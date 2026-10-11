@@ -611,7 +611,47 @@ fn general_update(system_prompt: Option<&str>, response_timeout_secs: &str) -> G
         task_opening_message: None,
         response_timeout_secs: Some(response_timeout_secs.to_string()),
         streaming: None,
+        show_reasoning: None,
     }
+}
+
+#[test]
+fn reasoning_is_shown_until_hidden_and_shown_is_saved_as_unset() {
+    let (settings, _, _dir) = temp_settings();
+    assert!(settings.view().general.show_reasoning);
+
+    let hide = GeneralUpdate {
+        show_reasoning: Some(false),
+        ..general_update(None, "")
+    };
+    assert!(
+        !settings
+            .update_general(hide)
+            .unwrap()
+            .general
+            .show_reasoning
+    );
+    assert_eq!(
+        settings.snapshot().config.general.show_reasoning,
+        Some(false)
+    );
+
+    // ほかの欄だけの保存では変わらない。
+    let view = settings.update_general(general_update(None, "")).unwrap();
+    assert!(!view.general.show_reasoning);
+
+    let show = GeneralUpdate {
+        show_reasoning: Some(true),
+        ..general_update(None, "")
+    };
+    assert!(
+        settings
+            .update_general(show)
+            .unwrap()
+            .general
+            .show_reasoning
+    );
+    assert_eq!(settings.snapshot().config.general.show_reasoning, None);
 }
 
 #[test]

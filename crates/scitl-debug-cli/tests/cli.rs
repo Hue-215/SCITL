@@ -272,6 +272,7 @@ fn providers_and_models_are_registered_into_the_config_file() {
         "--response-timeout-secs",
         "300",
         "--no-streaming",
+        "--hide-reasoning",
     ]));
 
     // 起動のたびに設定ファイルから読み直すので、ここで見えるのは保存されたもの。
@@ -281,10 +282,12 @@ fn providers_and_models_are_registered_into_the_config_file() {
     assert_eq!(shown["providers"][0]["models"].as_array().unwrap().len(), 2);
     assert_eq!(shown["general"]["response_timeout_secs"], 300);
     assert_eq!(shown["general"]["streaming"], false);
+    assert_eq!(shown["general"]["show_reasoning"], false);
 
     // 省いた値は既定値に戻る。
     let reset = stdout_json(&data.run(&["settings", "general"]));
     assert_eq!(reset["general"]["streaming"], true);
+    assert_eq!(reset["general"]["show_reasoning"], true);
 
     let removed = stdout_json(&data.run(&["provider", "delete", &provider]));
     assert_eq!(removed["providers"], serde_json::json!([]));

@@ -37,6 +37,9 @@ pub enum SettingsCommand {
         /// Ask for the whole reply at once instead of a stream.
         #[arg(long)]
         no_streaming: bool,
+        /// Hide the model's reasoning in the chat log of the GUI.
+        #[arg(long)]
+        hide_reasoning: bool,
     },
     /// Replace the limits on tool calls. Values left out go back to their defaults.
     Tools {
@@ -184,6 +187,7 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
             task_opening_message,
             response_timeout_secs,
             no_streaming,
+            hide_reasoning,
         } => {
             let update = GeneralUpdate {
                 system_prompt,
@@ -192,6 +196,7 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
                 // 省いた値は既定値に戻す(空欄と同じ)。
                 response_timeout_secs: Some(response_timeout_secs.unwrap_or_default()),
                 streaming: Some(!no_streaming),
+                show_reasoning: Some(!hide_reasoning),
             };
             change(settings, move |s| s.update_general(update)).await
         }

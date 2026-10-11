@@ -62,6 +62,8 @@ pub struct GeneralUpdate {
     pub response_timeout_secs: Option<String>,
     /// `None`は保存済みの値のまま変えない。
     pub streaming: Option<bool>,
+    /// `None`は保存済みの値のまま変えない。
+    pub show_reasoning: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -363,6 +365,9 @@ impl Settings {
         if let Some(streaming) = update.streaming {
             // 既定(オン)と同じ値は未設定として保存する。
             general.streaming = (!streaming).then_some(false);
+        }
+        if let Some(show) = update.show_reasoning {
+            general.show_reasoning = (!show).then_some(false);
         }
         draft.commit()
     }

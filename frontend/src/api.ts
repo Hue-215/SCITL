@@ -231,13 +231,14 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
 // プロンプトはどれも`string | null`で並ぶため、取り違えないようオブジェクト引数にする。
 // 数値の欄(`responseTimeoutSecs`等)は入力欄の文字列のまま送る。空欄は「未設定」で、Rust側の
 // 既定値に戻る。nullは保存済みの値のまま変えない(書き換えた欄だけを送る)。解釈と検証は
-// Rust側が行い、欄の誤りは`rejected`で返る。`streaming`のnullも保存済みの値のまま。
+// Rust側が行い、欄の誤りは`rejected`で返る。真偽値の欄のnullも保存済みの値のまま。
 export function updateGeneralSettings(args: {
   systemPrompt: string | null
   taskChatSystemPrompt: string | null
   taskOpeningMessage: string | null
   responseTimeoutSecs: string | null
   streaming: boolean | null
+  showReasoning: boolean | null
 }): Promise<FormOutcome<SettingsView>> {
   return invoke('update_general_settings', args)
 }

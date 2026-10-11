@@ -122,6 +122,8 @@ pub struct GeneralSettingsView {
     pub default_response_timeout_secs: u64,
     /// チャットの応答をストリーミングで受け取るか(未設定はオンに解決した値)。
     pub streaming: bool,
+    /// 会話欄にモデルの思考を出すか(未設定は出すに解決した値)。
+    pub show_reasoning: bool,
     /// 未設定・知らない値なら既定の言語に解決した値。画面は「未設定」を扱わない。
     pub language: Language,
     /// 設定ファイルに書かれているが使えない表示言語の値(見えない文字を除き、切り詰めた写し)。
@@ -302,6 +304,7 @@ pub(super) fn build(
             response_timeout_secs: config.general.response_timeout_secs,
             default_response_timeout_secs: DEFAULT_RESPONSE_TIMEOUT_SECS,
             streaming: config.general.streaming(),
+            show_reasoning: config.general.show_reasoning(),
             language: config.general.language(),
             unknown_language: config
                 .general

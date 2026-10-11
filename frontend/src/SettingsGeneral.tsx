@@ -68,6 +68,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     // 数値の欄はその欄を書き換えたときだけ送る(プロンプトの保存で検証し直さない)。
     responseTimeoutSecs: null,
     streaming: null,
+    showReasoning: null,
   })
 
   return (
@@ -130,6 +131,16 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
             {!general.streaming && (
               <p className="settings-hint">{t('settings.general.streaming_off_hint')}</p>
             )}
+          </div>
+          <div className="settings-field">
+            <label className="choice">
+              <input
+                type="checkbox"
+                checked={general.show_reasoning}
+                onChange={(e) => void onSave({ ...current(), showReasoning: e.target.checked })}
+              />
+              {t('settings.general.show_reasoning_label')}
+            </label>
           </div>
           <PromptField
             label={t('settings.general.task_chat_prompt_label')}

@@ -132,6 +132,7 @@
   "settings.general.language_unknown_note": "Invalid language setting",
   "settings.general.open_export_folder": "Open folder",
   "settings.general.open_export_folder_failed": "Could not open the folder: {error}",
+  "settings.general.show_reasoning_label": "Show thinking",
   "settings.general.streaming_label": "Enable streaming",
   "settings.general.streaming_off_hint": "Replies appear all at once",
   "settings.general.system_prompt_label": "System prompt",

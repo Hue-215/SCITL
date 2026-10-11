@@ -146,6 +146,8 @@ pub struct GeneralConfig {
     /// チャットの応答をストリーミングで受け取るか。未設定はオン。値の解釈は[`Self::streaming`]に
     /// 閉じる。
     pub streaming: Option<bool>,
+    /// 会話欄にモデルの思考を出すか。未設定は出す。値の解釈は[`Self::show_reasoning`]に閉じる。
+    pub show_reasoning: Option<bool>,
     /// 表示言語のコード([`Language::code`])。未設定と知らない値は[`Language::DEFAULT`]で、
     /// 値の解釈は[`Self::language`]に閉じる。知らない値(打ち間違い、別の版が書いた言語)も
     /// 書かれたまま持ち、言語を選び直すまでファイルから消さない。
@@ -167,6 +169,11 @@ impl GeneralConfig {
     /// まとめて返す中継のため。Issue #560)。
     pub fn streaming(&self) -> bool {
         self.streaming.unwrap_or(true)
+    }
+
+    /// 表示だけの設定で、思考の強さの指定や保存は変えない(Issue #562)。
+    pub fn show_reasoning(&self) -> bool {
+        self.show_reasoning.unwrap_or(true)
     }
 
     pub fn language(&self) -> Language {
@@ -334,6 +341,14 @@ mod tests {
         assert!(config.general.streaming());
         let config: Config = toml::from_str("[general]\nstreaming = false\n").unwrap();
         assert!(!config.general.streaming());
+    }
+
+    #[test]
+    fn reasoning_is_shown_unless_the_file_hides_it() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.show_reasoning());
+        let config: Config = toml::from_str("[general]\nshow_reasoning = false\n").unwrap();
+        assert!(!config.general.show_reasoning());
     }
 
     #[test]

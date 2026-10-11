@@ -15,6 +15,10 @@ default_task_chat_system_prompt: string, task_opening_message: string | null, de
  */
 streaming: boolean, 
 /**
+ * 会話欄にモデルの思考を出すか(未設定は出すに解決した値)。
+ */
+show_reasoning: boolean, 
+/**
  * 未設定・知らない値なら既定の言語に解決した値。画面は「未設定」を扱わない。
  */
 language: Language, 
