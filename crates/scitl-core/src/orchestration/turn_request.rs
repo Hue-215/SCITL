@@ -61,7 +61,7 @@ impl TurnRequest {
         stored: StoredChat,
         external: &ExternalToolset,
     ) -> Result<Self> {
-        let from_opening = stored.starts_with_opening();
+        let since_blank = stored.shows_every_change_since_blank();
         let options = HistoryOptions {
             image_input: ctx.capabilities.image,
             opening: ctx.opening_message.to_string(),
@@ -82,6 +82,7 @@ impl TurnRequest {
         };
         // 聞き取りから始まった会話を最初から送っている間は、始めた時点で空だったと伝える。
         // 間引いて始まりが見えなくなったら、作り直す先頭では通常の注記にする(`unseen`)。
+        // 変更の記録を会話から外したら、先頭は変えず、通常の注記を変更の通知で伝える。
         let head_for = |start| {
             Head::current(
                 build_system_prompt(chat, start, &ctx.prompts),
@@ -89,7 +90,7 @@ impl TurnRequest {
             )
         };
         let unseen = head_for(ConversationStart::Other);
-        let current = if from_opening && from == 0 {
+        let current = if since_blank && from == 0 {
             head_for(ConversationStart::BlankTaskInView)
         } else {
             unseen.clone()
@@ -98,6 +99,7 @@ impl TurnRequest {
             .head
             .take()
             .and_then(|head| Head::frozen(head, &current, external));
+
         // 間引きの見積もりには、送る先頭と、置くなら変更の通知も含める。
         let trim = |head: &Head, notice: Option<&ChatMessage>| {
             let system = ChatMessage::System(head.system.clone());

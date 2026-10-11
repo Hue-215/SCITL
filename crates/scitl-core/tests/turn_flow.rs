@@ -4599,7 +4599,14 @@ async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() 
     assert!(system_of(&second).contains(BLANK_NOTE));
 
     let padding = "あ".repeat(8_000);
-    turn(chat, format!("3回目{padding}")).await;
+    let third = turn(chat, format!("3回目{padding}")).await;
+    // 間引くまでは、固定した先頭をそのまま並べる。
+    assert_eq!(system_of(&third), system_of(&second));
+    for sent in [&second, &third] {
+        assert!(!user_texts(sent)
+            .iter()
+            .any(|t| t.contains("<scitl:system-update>")));
+    }
     let trimmed = turn(chat, format!("4回目{padding}")).await;
     assert!(!user_texts(&trimmed).iter().any(|t| t.contains("レポート")));
     assert!(!system_of(&trimmed).contains(BLANK_NOTE));
@@ -4616,6 +4623,65 @@ async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() 
     let typed = seed_task(&db.lock().unwrap());
     let first = turn(Chat::Task(typed), "最初の発言".to_string()).await;
     assert!(!system_of(&first).contains(BLANK_NOTE));
+}
+
+/// 発言を消すと、そのターンの変更はタスクに残るが会話からは消える。「変更はすべて会話に現れる」
+/// と言えなくなるので、先頭は変えずに、通常の注記を変更の通知で1度だけ伝える。通知を含めても
+/// 間引かずに収まるよう、コンテキスト長を大きくしておく(間引くなら先頭ごと作り直す)。
+#[tokio::test]
+async fn removing_a_turn_that_changed_the_task_stops_telling_the_task_started_blank() {
+    const BLANK_NOTE: &str = "created with nothing set";
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 100_000;
+    let opening = ScriptedAdapter::texts(&["返信"]);
+    let opening_ctx = TurnContext {
+        capabilities,
+        ..context(&opening)
+    };
+    let task_id = create_task_opening(&db, &opening_ctx).await;
+    let chat = Chat::Task(task_id);
+    let adder = adds_a_step();
+    let adder_ctx = TurnContext {
+        capabilities,
+        ..context(&adder)
+    };
+    run_turn(db.clone(), &adder_ctx, chat, "工程を足して".to_string())
+        .await
+        .unwrap();
+    let user = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
+    };
+    delete_message(db.clone(), &InFlightSet::new(), chat, user)
+        .await
+        .unwrap();
+
+    let mut sent = Vec::new();
+    for text in ["次の発言", "その次の発言"] {
+        let adapter = ScriptedAdapter::texts(&["返信"]);
+        let ctx = TurnContext {
+            capabilities,
+            ..context(&adapter)
+        };
+        run_turn(db.clone(), &ctx, chat, text.to_string())
+            .await
+            .unwrap();
+        sent.push(adapter.sent_messages().remove(0));
+    }
+    assert!(system_of(&sent[0]).contains(BLANK_NOTE));
+    // 次のターンにも、前のターンに置いた通知が1つだけ並ぶ(新しく置かない)。
+    for sent in &sent {
+        let notices: Vec<_> = user_texts(sent)
+            .into_iter()
+            .filter(|t| t.contains("<scitl:system-update>"))
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("次の発言"));
+        assert!(!notices[0].contains(BLANK_NOTE));
+        assert!(notices[0].contains("not included in the messages"));
+    }
 }
 
 #[tokio::test]

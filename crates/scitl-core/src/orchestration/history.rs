@@ -33,6 +33,8 @@ pub(super) struct StoredChat {
     blobs: HashMap<String, String>,
     /// 保存していない開始の発言を先頭に補うか。
     starts_with_opening: bool,
+    /// 会話から外したターンの実行記録があるか(`messages::has_removed_turn_records`)。
+    removed_records: bool,
 }
 
 /// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
@@ -64,14 +66,16 @@ pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
         transcripts,
         blobs,
         starts_with_opening: starts_with_opening(conn, chat)?,
+        removed_records: messages::has_removed_turn_records(conn, chat)?,
     })
 }
 
 impl StoredChat {
-    /// 聞き取りから始まった会話か。始めた時点でタスクが空だったことの伝え方に使う
-    /// (`system_prompt::ConversationStart`)。
-    pub(super) fn starts_with_opening(&self) -> bool {
-        self.starts_with_opening
+    /// 聞き取りから始まり(タスクは空から始まった)、それ以後の変更の記録を会話から外して
+    /// いないか。始めた時点で空だったことの伝え方に使う(`system_prompt::ConversationStart`)。
+    /// 外した記録の変更はタスクに残るので、外したあとは「変更はすべて会話に現れる」と言えない。
+    pub(super) fn shows_every_change_since_blank(&self) -> bool {
+        self.starts_with_opening && !self.removed_records
     }
 }
 
