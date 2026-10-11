@@ -117,7 +117,10 @@ Androidでは次のとおり(`rustls-platform-verifier-android` 0.2.0。Issue #5
   - CRLの配布元が、平文を許す一覧に無いとき。一覧は中間CAごとのホスト名(`r10.c.lencr.org`等)で、
     CAが新しい中間CAを使い始めると、部品の版を上げてAPKを配り直すまでつながらない。クレートの版を
     上げたのに照合の一覧(`verification-metadata.xml`)を上げ忘れることは、CIが止める(Issue #536。
-    Gradleも止めるが、CIはGradleを動かさない)。上流に新しい版が出たことに気付く手立ては無い
+    Gradleも止めるが、CIはGradleを動かさない)。上流に新しい版が出たことは、Dependabotのバージョン更新の
+    PRで知る(`.github/dependabot.yml`。追うのは`rustls-platform-verifier`と、Kotlinの部品の版を決める
+    `rustls-platform-verifier-android`だけ。前者はreqwestが引き込む版と合わせる必要があるので、PRは
+    知らせとして使い、そのままマージできるとは限らない)
   - OCSPの宛先もCRLの配布元も持たない証明書
 - 検証の部品は、確かめられなかった理由をすべて`Revoked`として返す。失効していない証明書でも
   `invalid peer certificate: Revoked`と出る
