@@ -472,7 +472,7 @@ fn opening_message() -> ChatMessage {
 fn context_without_provider() -> TurnContext<'static> {
     TurnContext {
         adapter: Err(TurnFailure::NoProvider),
-        provider_name: "Test",
+        assistant_name: "Test",
         prompts: SystemPrompts::default(),
         opening_message: OPENING,
         capabilities: DEFAULT_CAPABILITIES,
@@ -882,7 +882,7 @@ async fn reaching_the_length_limit_before_any_text_is_an_empty_response() {
 
 /// ターンの途中経過は、アダプタのイベントとツールの実行を起きた順に知らせる。
 /// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。モデルの応答を待ち始めたことは、
-/// ターンの始めとラウンドごとの呼び出しの前に、プロバイダーの名前を添えて知らせる。
+/// ターンの始めとラウンドごとの呼び出しの前に、アシスタントの名前を添えて知らせる。
 #[tokio::test]
 async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
     let conn = db::open_in_memory().unwrap();
@@ -932,7 +932,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
     assert!(events
         .iter()
         .filter(|e| e["type"] == "awaiting_model")
-        .all(|e| e["provider"] == "Test"));
+        .all(|e| e["name"] == "Test"));
 
     // 知らせた表示は、保存した記録を会話の一覧(返信の中身)で読んだときと同じ。
     let views =
@@ -966,6 +966,7 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
     let prompts_config = SystemPrompts {
         base: Some("base prompt"),
         task_chat: Some("task chat prompt"),
+        nickname: None,
     };
     run_turn(
         db.clone(),
@@ -2754,10 +2755,12 @@ async fn a_changed_system_prompt_is_told_without_changing_the_front() {
     let before = SystemPrompts {
         base: Some("BEFORE"),
         task_chat: None,
+        nickname: None,
     };
     let after = SystemPrompts {
         base: Some("AFTER"),
         task_chat: None,
+        nickname: None,
     };
     let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
     turn_with(&db, &first, before, task_id, "1回目").await;
@@ -2795,10 +2798,12 @@ async fn a_system_update_is_told_again_when_the_turn_that_told_it_failed() {
     let before = SystemPrompts {
         base: Some("BEFORE"),
         task_chat: None,
+        nickname: None,
     };
     let after = SystemPrompts {
         base: Some("AFTER"),
         task_chat: None,
+        nickname: None,
     };
     let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
     turn_with(&db, &first, before, task_id, "1回目").await;
@@ -2831,6 +2836,7 @@ async fn a_system_update_still_in_the_sequence_is_not_told_again() {
     let prompts = |base| SystemPrompts {
         base: Some(base),
         task_chat: None,
+        nickname: None,
     };
     let turn = |adapter, image: bool, base, input: UserInput| {
         let db = db.clone();
@@ -2906,6 +2912,7 @@ async fn a_rebuilt_front_is_told_again_over_an_older_update_left_in_the_sequence
                 prompts: SystemPrompts {
                     base: Some(base),
                     task_chat: None,
+                    nickname: None,
                 },
                 ..context(adapter)
             };
@@ -2955,6 +2962,7 @@ async fn a_front_rebuilt_for_new_tools_is_told_again_over_an_older_update() {
     let prompts = |base| SystemPrompts {
         base: Some(base),
         task_chat: None,
+        nickname: None,
     };
     let first = ScriptedAdapter::texts(&["返信1"]);
     turn_with(&db, &first, prompts("ALPHA"), task_id, "1回目").await;
@@ -3006,6 +3014,7 @@ async fn an_older_update_trimmed_away_by_the_notice_needs_no_notice() {
                 prompts: SystemPrompts {
                     base: Some(&base),
                     task_chat: None,
+                    nickname: None,
                 },
                 ..context(adapter)
             };
@@ -3055,6 +3064,7 @@ async fn a_front_matching_the_settings_is_told_again_over_an_older_update() {
                 prompts: SystemPrompts {
                     base: Some(base),
                     task_chat: None,
+                    nickname: None,
                 },
                 ..context(adapter)
             };
@@ -3118,12 +3128,14 @@ async fn a_trimmed_turn_takes_the_new_system_prompt_instead_of_telling_it() {
     let before = SystemPrompts {
         base: Some("BEFORE"),
         task_chat: None,
+        nickname: None,
     };
     turn(&first, before, format!("1回目{padding}")).await;
     let second = ScriptedAdapter::texts(&["返信2"]);
     let after = SystemPrompts {
         base: Some("AFTER"),
         task_chat: None,
+        nickname: None,
     };
     turn(&second, after, format!("2回目{padding}")).await;
 

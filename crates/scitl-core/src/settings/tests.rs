@@ -606,6 +606,7 @@ fn mcp_endpoint_refuses_repeated_or_malformed_secret_names() {
 
 fn general_update(system_prompt: Option<&str>, response_timeout_secs: &str) -> GeneralUpdate {
     GeneralUpdate {
+        assistant_nickname: None,
         system_prompt: system_prompt.map(str::to_string),
         task_chat_system_prompt: None,
         task_opening_message: None,
@@ -613,6 +614,36 @@ fn general_update(system_prompt: Option<&str>, response_timeout_secs: &str) -> G
         streaming: None,
         show_reasoning: None,
     }
+}
+
+#[test]
+fn the_nickname_is_trimmed_checked_and_blank_is_unset() {
+    let (settings, _, _dir) = temp_settings();
+    let with = |nickname: &str| GeneralUpdate {
+        assistant_nickname: Some(nickname.to_string()),
+        ..general_update(None, "")
+    };
+
+    let view = settings.update_general(with("  Hal  ")).unwrap();
+    assert_eq!(view.general.assistant_nickname.as_deref(), Some("Hal"));
+    let snapshot = settings.snapshot();
+    assert_eq!(snapshot.config.general.assistant_name("Provider"), "Hal");
+
+    let too_long = "a".repeat(input::ASSISTANT_NICKNAME_MAX_CHARS + 1);
+    assert!(settings.update_general(with(&too_long)).is_err());
+    assert!(settings.update_general(with("Hal\u{200B}")).is_err());
+    assert_eq!(
+        settings.view().general.assistant_nickname.as_deref(),
+        Some("Hal")
+    );
+
+    let view = settings.update_general(with(" ")).unwrap();
+    assert_eq!(view.general.assistant_nickname, None);
+    let snapshot = settings.snapshot();
+    assert_eq!(
+        snapshot.config.general.assistant_name("Provider"),
+        "Provider"
+    );
 }
 
 #[test]

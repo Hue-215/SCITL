@@ -154,7 +154,7 @@ export interface LiveTurn {
    */
   open: 'reasoning' | 'text' | null
   /**
-   * モデルの応答を待っているプロバイダーの名前(`awaiting_model`で入る)。本文が届き始めるか、
+   * モデルの応答を待っているアシスタントの名前(`awaiting_model`で入る。ニックネームかプロバイダー名)。本文が届き始めるか、
    * ラウンドが終わったら外す。ストリーミングしないときは本文がラウンドの終わりにまとめて届くので、
    * 応答が返り終わるまで残る。思考が流れている間は残す。
    */
@@ -181,7 +181,7 @@ function withThought(segments: TurnSegment[], item: ThoughtItem): TurnSegment[] 
  */
 export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
   const { segments, open } = live
-  if (event.type === 'awaiting_model') return { ...live, awaiting: event.provider }
+  if (event.type === 'awaiting_model') return { ...live, awaiting: event.name }
   if (event.type === 'tool_executed') {
     const item: ThoughtItem = { kind: 'tool', id: event.id, execution: event.execution }
     return { ...live, segments: withThought(segments, item), open: null }

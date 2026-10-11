@@ -16,8 +16,9 @@ pub struct TurnContext<'a> {
     /// 使えるアダプタ、または使えない理由(プロバイダー未選択・組み立てられない・設定ファイルを
     /// 読めない)。使えなければ、ターンはその理由のエラー発言で終わる。
     pub adapter: Result<&'a dyn LlmAdapter, TurnFailure>,
-    /// `adapter`のプロバイダーの表示名([`crate::orchestration::TurnEvent::AwaitingModel`])。
-    pub provider_name: &'a str,
+    /// 画面に出すアシスタントの名前。ニックネーム、無ければ`adapter`のプロバイダーの名前
+    /// ([`crate::orchestration::TurnEvent::AwaitingModel`]、`config::GeneralConfig::assistant_name`)。
+    pub assistant_name: &'a str,
     pub prompts: SystemPrompts<'a>,
     /// 聞き取りから始まった会話で、最初の返信が答えた発言([`crate::orchestration::create_task`])。
     pub opening_message: &'a str,

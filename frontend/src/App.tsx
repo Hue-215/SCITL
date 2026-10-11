@@ -482,7 +482,7 @@ export default function App() {
         />
 
         {requests.isGenerating(chat) && (
-          <TypingIndicator provider={requests.isStopping(chat) ? null : live.awaiting} />
+          <TypingIndicator name={requests.isStopping(chat) ? null : live.awaiting} />
         )}
 
         <ChatCompose

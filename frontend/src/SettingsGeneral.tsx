@@ -41,6 +41,7 @@ function PromptField({ label, value, onChange, onBlur }: PromptFieldProps) {
 export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps) {
   const { general } = settings
   const languageLabelId = useId()
+  const [nickname, setNickname] = useState(general.assistant_nickname ?? '')
   const [systemPrompt, setSystemPrompt] = useState(general.system_prompt ?? '')
   const [taskChatSystemPrompt, setTaskChatSystemPrompt] = useState(
     general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
@@ -54,6 +55,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
   const [shown, setShown] = useState(general)
   if (shown !== general) {
     setShown(general)
+    setNickname(general.assistant_nickname ?? '')
     setSystemPrompt(general.system_prompt ?? '')
     setTaskChatSystemPrompt(
       general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
@@ -62,6 +64,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
   }
 
   const current = (): GeneralUpdate => ({
+    assistantNickname: nickname || null,
     systemPrompt: systemPrompt || null,
     taskChatSystemPrompt: taskChatSystemPrompt || null,
     taskOpeningMessage: taskOpeningMessage || null,
@@ -96,6 +99,19 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
           </p>
         )}
       </div>
+
+      {/* 空欄ならモデルに伝えず、入力中…にはプロバイダー名を出す(Rust側の`GeneralConfig::assistant_name`) */}
+      <label className="settings-field">
+        <span>{t('settings.general.assistant_nickname_label')}</span>
+        <input
+          type="text"
+          value={nickname}
+          maxLength={general.assistant_nickname_max_chars}
+          placeholder={t('settings.general.assistant_nickname_placeholder')}
+          onChange={(e) => setNickname(e.target.value)}
+          onBlur={() => void onSave(current())}
+        />
+      </label>
 
       <PromptField
         label={t('settings.general.system_prompt_label')}

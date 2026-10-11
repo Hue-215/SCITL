@@ -524,7 +524,7 @@ async fn report_finished(db: SharedConnection, ctx: &TurnContext<'_>, attempt: &
 /// モデルの応答を待ち始めたことを知らせる([`TurnEvent::AwaitingModel`])。
 fn awaiting_model(ctx: &TurnContext<'_>) {
     (ctx.events)(TurnEvent::AwaitingModel {
-        provider: ctx.provider_name.to_string(),
+        name: ctx.assistant_name.to_string(),
     });
 }
 

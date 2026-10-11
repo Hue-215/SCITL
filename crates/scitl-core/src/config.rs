@@ -133,6 +133,9 @@ pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 /// システムプロンプト等、モデル・プロバイダーに依存しない全般設定。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeneralConfig {
+    /// アシスタントのニックネーム。未設定ならモデルに伝えず、画面の表示名はプロバイダー名にする
+    /// ([`Self::assistant_name`])。
+    pub assistant_nickname: Option<String>,
     pub system_prompt: Option<String>,
     /// タスクチャットでのみ追加するシステムプロンプト(工程ツールの使い方など)。未設定は
     /// 表示言語の既定の文面で、解釈は`orchestration::SystemPrompts::from_config`に閉じる。
@@ -174,6 +177,11 @@ impl GeneralConfig {
     /// 表示だけの設定で、思考の強さの指定や保存は変えない(Issue #562)。
     pub fn show_reasoning(&self) -> bool {
         self.show_reasoning.unwrap_or(true)
+    }
+
+    /// 画面に出すアシスタントの名前。ニックネームが無ければ、使うプロバイダーの名前(Issue #563)。
+    pub fn assistant_name<'a>(&'a self, provider_name: &'a str) -> &'a str {
+        self.assistant_nickname.as_deref().unwrap_or(provider_name)
     }
 
     pub fn language(&self) -> Language {

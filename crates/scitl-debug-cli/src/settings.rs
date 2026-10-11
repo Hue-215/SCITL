@@ -26,6 +26,9 @@ pub enum SettingsCommand {
     Show,
     /// Replace the general settings. Values left out go back to their defaults.
     General {
+        /// The name the assistant is called by (shown while it is typing, and told to the model).
+        #[arg(long, value_name = "NAME")]
+        assistant_nickname: Option<String>,
         #[arg(long, value_name = "TEXT")]
         system_prompt: Option<String>,
         #[arg(long, value_name = "TEXT")]
@@ -182,6 +185,7 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
             Ok(())
         }
         SettingsCommand::General {
+            assistant_nickname,
             system_prompt,
             task_chat_system_prompt,
             task_opening_message,
@@ -190,6 +194,7 @@ pub async fn run_settings(session: &Session, command: SettingsCommand) -> Result
             hide_reasoning,
         } => {
             let update = GeneralUpdate {
+                assistant_nickname,
                 system_prompt,
                 task_chat_system_prompt,
                 task_opening_message,

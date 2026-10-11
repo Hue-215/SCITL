@@ -337,13 +337,13 @@ export default function ChatLog({
   )
 }
 
-// モデルの応答を待っている間、入力欄の上に出す「入力中」。`provider`は待っているプロバイダーの
-// 名前で、待っていなければ`null`(本文が流れている間・ツールの実行中・止める指示のあと)。
+// モデルの応答を待っている間、入力欄の上に出す「入力中」。`name`は待っているアシスタントの
+// 名前(ニックネームかプロバイダー名)で、待っていなければ`null`(本文が流れている間・ツールの実行中・止める指示のあと)。
 // 行は生成中ずっと置き、文言だけを出し入れする(ラウンドのたびに会話欄の高さが変わらないように)。
-export function TypingIndicator({ provider }: { provider: string | null }) {
+export function TypingIndicator({ name }: { name: string | null }) {
   return (
     <p className="typing-indicator" role="status">
-      {provider !== null && t('chat.typing', { provider: isolated(provider) })}
+      {name !== null && t('chat.typing', { name: isolated(name) })}
     </p>
   )
 }
