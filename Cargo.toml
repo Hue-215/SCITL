@@ -29,6 +29,10 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # `rustls-platform-verifier`の要求する版で、Tauri(tao・wry)の使う0.21と同居する。0.7.1以上が要る
 # (AndroidでCRLの配布元への平文を許す設定を、Kotlinの部品が持つ。Issue #535)
 rustls-platform-verifier = "0.7.1"
+# 通信の失敗が、サーバーの証明書の検証で断られたものかを、エラーの型で見分ける
+# (`scitl-core/src/llm/error.rs`)。reqwestが使うものと同じ版が既にビルドされている。版が分かれると
+# 型が別になり、見分けられなくなる(`cargo tree -d -i rustls`で確認)
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 jni = "0.22"
 thiserror = "2"
 secrecy = { version = "0.10", features = ["serde"] }

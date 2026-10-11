@@ -268,6 +268,7 @@
   "task_header.title_input_label": "Task name",
   "task_header.unarchive": "Unarchive",
   "turn_error.auth": "The API key is invalid or not set",
+  "turn_error.certificate_unverified": "The server certificate could not be verified",
   "turn_error.connection_failed": "Failed to communicate with the API provider",
   "turn_error.context_exceeded": "The context length reached the model's limit",
   "turn_error.empty_response": "Received an empty response",

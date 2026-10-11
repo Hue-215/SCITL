@@ -33,6 +33,12 @@ pub enum LlmError {
     /// 接続が切れた。
     #[error("failed to communicate with the provider: {0}")]
     Connection(ErrorDetail),
+    /// 接続先の証明書を検証できず、接続を断った(期限切れ・発行元が不明・失効等)。Androidの検証の
+    /// 部品は、失効を確かめられなかったときも失効として返す
+    /// (`docs/spec/architecture/network-secrets.md`「証明書の失効の確認」)ので、失効しているとは
+    /// 限らない。
+    #[error("the server certificate could not be verified: {0}")]
+    Certificate(ErrorDetail),
     /// 応答は届いたが、期待した形として読めなかった。
     #[error("failed to parse the response: {0}")]
     InvalidResponse(ErrorDetail),
@@ -81,9 +87,12 @@ impl LlmError {
             e.is_timeout(),
             e.is_decode(),
         );
+        let certificate = rejected_certificate(&e);
         let detail = ErrorDetail::transport(e, secrets);
         if builder {
             Self::InvalidRequest(detail)
+        } else if certificate {
+            Self::Certificate(detail)
         } else if connect {
             Self::Connection(detail)
         } else if timeout {
@@ -119,6 +128,31 @@ impl LlmError {
             _ => Self::Http(detail),
         }
     }
+}
+
+/// 失敗の原因をたどり、TLSがサーバーの証明書の検証で断ったものかを見る。文言ではなく型で
+/// 見分ける(文言で見分けると、依存の表示が変わったときに黙って漏れる)。
+///
+/// rustlsのエラーは`std::io::Error`に包まれて届く(reqwest 0.13では二重に包まれている)。
+/// `io::Error`の`source`は包んだものを返さないので、包んだものがあればそちらへ進む。
+fn rejected_certificate(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cause = Some(e);
+    while let Some(e) = cause {
+        if matches!(
+            e.downcast_ref::<rustls::Error>(),
+            Some(rustls::Error::InvalidCertificate(_))
+        ) {
+            return true;
+        }
+        cause = match e
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+        {
+            Some(inner) => Some(inner),
+            None => e.source(),
+        };
+    }
+    false
 }
 
 /// エラー発言の詳細(`messages.error_detail`)になる文字列。プロバイダーや通信経路から来た
@@ -244,6 +278,45 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    /// 原因を1つ持つだけのエラー(reqwestやhyperが原因を包む形の代わり)。
+    #[derive(Debug)]
+    struct Wrapped(Box<dyn std::error::Error + Send + Sync>);
+
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapped")
+        }
+    }
+
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.0.as_ref())
+        }
+    }
+
+    /// 証明書の検証で断られたことは、原因の連鎖の奥にあっても、`io::Error`に包まれていても
+    /// 見分ける。証明書以外のTLSの失敗や、ただの通信の失敗は含めない。
+    #[test]
+    fn finds_a_rejected_certificate_in_the_causes() {
+        let revoked = || rustls::Error::InvalidCertificate(rustls::CertificateError::Revoked);
+        assert!(rejected_certificate(&revoked()));
+        assert!(rejected_certificate(&std::io::Error::other(revoked())));
+        // 実際の連鎖の形(`io::Error`が二重に包む)。
+        let twice = std::io::Error::other(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            revoked(),
+        ));
+        assert!(rejected_certificate(&Wrapped(Box::new(twice))));
+        let nested = Wrapped(Box::new(Wrapped(Box::new(std::io::Error::other(
+            rustls::Error::InvalidCertificate(rustls::CertificateError::Expired),
+        )))));
+        assert!(rejected_certificate(&nested));
+
+        assert!(!rejected_certificate(&rustls::Error::HandshakeNotComplete));
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(!rejected_certificate(&Wrapped(Box::new(refused))));
+    }
 
     /// 1回だけ接続を受け、`delay`だけ待ってから`response`をそのまま書いて閉じる。
     fn spawn_once(response: &'static str, delay: Duration) -> String {

@@ -123,7 +123,9 @@ Androidでは次のとおり(`rustls-platform-verifier-android` 0.2.0。Issue #5
     知らせとして使い、そのままマージできるとは限らない)
   - OCSPの宛先もCRLの配布元も持たない証明書
 - 検証の部品は、確かめられなかった理由をすべて`Revoked`として返す。失効していない証明書でも
-  `invalid peer certificate: Revoked`と出る
+  `invalid peer certificate: Revoked`と出る。画面では、証明書の検証で断られた失敗を通信の失敗と
+  分けて「サーバーの証明書を確認できませんでした」と出し(`llm::LlmError::Certificate`、Issue #536)、
+  `Revoked`等の中身は詳細に出す。失効していると言い切らない文言にしてある
 - CRLは平文httpで配られ、取得はJavaのHTTPで行うので、Network Security Configの平文の可否に従う
   (「Androidでの平文http」)。CRLの配布元への平文を止めると、OCSPの宛先を持たない証明書の
   通信先にはすべてつながらない

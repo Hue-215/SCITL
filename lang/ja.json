@@ -268,6 +268,7 @@
   "task_header.title_input_label": "タスク名",
   "task_header.unarchive": "アーカイブ解除",
   "turn_error.auth": "APIキーが無効か、設定されていません",
+  "turn_error.certificate_unverified": "サーバーの証明書を確認できませんでした",
   "turn_error.connection_failed": "APIプロバイダーとの通信に失敗しました",
   "turn_error.context_exceeded": "コンテキスト長がモデルの上限に達しました",
   "turn_error.empty_response": "空の応答を受け取りました",
