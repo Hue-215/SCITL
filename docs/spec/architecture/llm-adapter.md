@@ -251,7 +251,7 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   エラー(`LlmError::Http`)にする
 - 入力が長すぎることを表す専用のエラーコードは無いので、400(`invalid_request`)の応答の文面から見分けて
   `LlmError::ContextExceeded`にする
-- 送り返したステップを含めたリクエストが400で断られ、文面が署名を指すとき(`Invalid thought signature.`)は
+- 送り返したステップを含めたリクエストが400で断られ、文面が署名の無効を指すとき(`Invalid thought signature.`)は
   `LlmError::ReplayRejected`にする(Issue #303)。アダプタは呼び直さず、ターンが前のターンの思考を外して
   送り直す(`transcript.md`「送り返した思考を断られたとき」)。外したターンの`thought`と`function_call`は、
   本文と呼び出しから組み立て直したステップ(署名を持たない)で並ぶ。保存の無い古いターンと同じ形で、

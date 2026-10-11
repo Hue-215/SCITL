@@ -481,7 +481,8 @@ fn http_error(status: StatusCode, body: &str, secrets: &SentSecrets, sent: Sent)
         }
         // 送り返した思考の署名が通らない(`Invalid thought signature.`)。別のモデルの思考を
         // 送り返したときに起きうる(`docs/spec/architecture/llm-adapter.md`「Gemini形式」)。
-        if sent.replay && message.contains("signature") {
+        // 署名が欠けていることを指す文面は、思考を外しても直らないので含めない。
+        if sent.replay && message.contains("invalid") && message.contains("signature") {
             return LlmError::ReplayRejected(detail());
         }
     }
@@ -1201,6 +1202,21 @@ mod tests {
                 &signature,
                 &SentSecrets::default(),
                 Sent::default()
+            ),
+            LlmError::Http(_)
+        ));
+        assert!(matches!(
+            http_error(
+                StatusCode::BAD_REQUEST,
+                &error(
+                    "invalid_request",
+                    "Function call is missing a thought_signature."
+                ),
+                &SentSecrets::default(),
+                Sent {
+                    thinking: false,
+                    replay: true
+                }
             ),
             LlmError::Http(_)
         ));

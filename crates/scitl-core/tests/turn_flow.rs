@@ -2469,13 +2469,8 @@ async fn thinking_rejected_by_the_provider_is_dropped_from_then_on() {
     let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
     turn_with(&db, &first, prompts, task_id, "1回目").await;
 
-    let rejected = LlmError::ReplayRejected(ErrorDetail::http(
-        reqwest::StatusCode::BAD_REQUEST,
-        "Invalid thought signature.",
-        &SentSecrets::default(),
-    ));
     let second = ScriptedAdapter {
-        script: vec![Err(rejected), Ok(text("返信2"))],
+        script: vec![Err(replay_rejected()), Ok(text("返信2"))],
         ..ScriptedAdapter::new(Vec::new())
     }
     .with_replay(THINKING_2);
@@ -2494,17 +2489,66 @@ async fn thinking_rejected_by_the_provider_is_dropped_from_then_on() {
     assert_eq!(replay_of(sent, "返信2"), thinking_2);
 }
 
+fn replay_rejected() -> LlmError {
+    LlmError::ReplayRejected(ErrorDetail::http(
+        reqwest::StatusCode::BAD_REQUEST,
+        "Invalid thought signature.",
+        &SentSecrets::default(),
+    ))
+}
+
+/// 思考を外して送り直しても断られたら、それ以上は送り直さずにエラー発言にする。
+#[tokio::test]
+async fn thinking_is_dropped_and_resent_only_once() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let second = ScriptedAdapter::failing(replay_rejected());
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+
+    assert_eq!(second.sent().len(), 2);
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("provider"));
+}
+
+/// 後のラウンドで断られたときは、前のラウンドで受け付けられた部分を書き換えないよう、思考を
+/// 外さずにエラー発言にする。
+#[tokio::test]
+async fn thinking_is_not_dropped_after_the_first_round() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let second = ScriptedAdapter {
+        script: vec![Ok(calls(vec![add_a_step()])), Err(replay_rejected())],
+        ..ScriptedAdapter::new(Vec::new())
+    };
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+
+    let sent = second.sent_messages();
+    assert_eq!(sent.len(), 2);
+    let thinking_1: Replay = serde_json::from_str(THINKING_1).unwrap();
+    assert_eq!(replay_of(&sent[1], "返信1"), thinking_1);
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("provider"));
+}
+
 /// 外せる思考が無ければ、送り直さずにエラー発言にする。
 #[tokio::test]
 async fn a_rejection_without_thinking_to_drop_ends_the_turn() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db: SharedConnection = Arc::new(Mutex::new(conn));
-    let adapter = ScriptedAdapter::failing(LlmError::ReplayRejected(ErrorDetail::http(
-        reqwest::StatusCode::BAD_REQUEST,
-        "Invalid thought signature.",
-        &SentSecrets::default(),
-    )));
+    let adapter = ScriptedAdapter::failing(replay_rejected());
     turn_with(&db, &adapter, SystemPrompts::default(), task_id, "1回目").await;
 
     assert_eq!(adapter.sent().len(), 1);
