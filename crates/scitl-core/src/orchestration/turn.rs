@@ -480,6 +480,8 @@ async fn respond(
         Ok(adapter) => adapter,
         Err(failure) => return fail_turn(db, attempt, failure, &ReplyParts::default()).await,
     };
+    // 外部ツールの接続と履歴の組み立ての間も、応答を待っていることを出す。
+    awaiting_model(ctx);
 
     let mut sessions = McpSessions::new();
     let result =
@@ -517,6 +519,13 @@ async fn report_finished(db: SharedConnection, ctx: &TurnContext<'_>, attempt: &
             crate::diagnostics::report(format_args!("could not report that the turn finished: {e}"))
         }
     }
+}
+
+/// モデルの応答を待ち始めたことを知らせる([`TurnEvent::AwaitingModel`])。
+fn awaiting_model(ctx: &TurnContext<'_>) {
+    (ctx.events)(TurnEvent::AwaitingModel {
+        provider: ctx.provider_name.to_string(),
+    });
 }
 
 /// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
@@ -776,6 +785,10 @@ async fn run_tool_rounds(
         let tool_rounds = request.tool_rounds(ctx);
         for round in 1..=tool_rounds + 1 {
             let final_call = round > tool_rounds;
+            // 最初のラウンドの分は、ターンの始めに知らせてある(`respond`)。
+            if round > 1 {
+                awaiting_model(ctx);
+            }
             let (messages_to_send, events, replay) = loop {
                 let (messages_to_send, offered) = request.round(&round_trip, final_call);
 

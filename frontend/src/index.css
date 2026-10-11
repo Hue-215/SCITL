@@ -963,11 +963,24 @@ details[open] > summary > .disclosure-mark,
   color: var(--color-text);
 }
 
-/* 操作の記録の行と送信待ち行は、どちらも「本文ではない補助的な発言」として同じ見た目。 */
-.entry-tool,
-.entry-pending {
+/* 操作の記録の行は「本文ではない補助的な発言」の見た目。 */
+.entry-tool {
   font-style: italic;
   color: var(--color-text-secondary);
+}
+
+/* 応答を待っている間の「入力中」(ChatLog.tsxのTypingIndicator)。操作の記録の行と同じ補助的な
+   見た目にする。文言の無い間も1行分の高さを保ち(行は生成中ずっと置く)、長いプロバイダー名は
+   1行に収めて省略する。左右の余白はmainの直接の子として持つ。 */
+.typing-indicator {
+  min-height: calc(var(--font-size-sm) * var(--line-height-normal));
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  font-style: italic;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .entry-error {

@@ -138,6 +138,7 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
   タスク操作(`rename`等)は成功しても何も出さない
 - 生成するコマンドは**1行に1つのJSON**を出す。`type`で見分ける
   - `task_created`: 作られたタスク(`task create`のみ、最初の行)
+  - `awaiting_model`: モデルの応答を待ち始めた(ターンの始めと、2回目以降のラウンドの前)。`provider`はプロバイダーの名前
   - `response`: モデルの応答の途中経過。`event.type`が`reasoning_delta`・`text_delta`・`tool_call`・`done`
   - `tool_executed`: アプリがツールを実行した結果
   - `last_message`: 最後の行。会話の最後の発言。返信(アシスタント発言・エラー発言)の中身は`parts`に起きた順で

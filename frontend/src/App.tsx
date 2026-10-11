@@ -18,7 +18,7 @@ import {
   watchRequestedChats,
 } from './api'
 import ChatCompose, { type ComposedMessage } from './ChatCompose'
-import ChatLog from './ChatLog'
+import ChatLog, { TypingIndicator } from './ChatLog'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
 import { Drawer, DrawerToggle } from './Drawer'
 import { t, turnErrorText } from './i18n'
@@ -165,7 +165,7 @@ export default function App() {
       selectChat(taskChat(task.id))
       void requests.run(
         taskChat(task.id),
-        [{ role: 'pending', content: t('chat.pending_reply') }],
+        [{ role: 'pending' }],
         (onEvent) => {
           forward = onEvent
           // 聞き取りを始められなかった理由は、その会話の失敗として出す。
@@ -212,7 +212,7 @@ export default function App() {
       target,
       [
         { role: 'user', content: text, attachmentNames: attachments.names },
-        { role: 'pending', content: t('chat.pending_reply') },
+        { role: 'pending' },
       ],
       (onEvent) =>
         sendChatMessage(target, text, attachments.tokens, onEvent).catch((e: unknown) => {
@@ -262,7 +262,7 @@ export default function App() {
           content: text,
           attachmentNames: message.attachments.map((a) => a.original_name),
         },
-        { role: 'pending', content: t('chat.pending_reply') },
+        { role: 'pending' },
       ],
       (onEvent) =>
         editChatMessage(target, messageId, text, onEvent).then((result) => {
@@ -291,7 +291,7 @@ export default function App() {
     hideSuperseded(messageId, messages.find((m) => m.id === messageId)?.turn_id ?? null)
     await requests.run(
       target,
-      [{ role: 'pending', content: t('chat.pending_reply') }],
+      [{ role: 'pending' }],
       (onEvent) => retryChatMessage(target, messageId, onEvent).then(refuseUnavailable),
       settle,
     )
@@ -305,7 +305,7 @@ export default function App() {
     setLacksReply(false)
     await requests.run(
       target,
-      [{ role: 'pending', content: t('chat.pending_reply') }],
+      [{ role: 'pending' }],
       (onEvent) => generateChatReply(target, onEvent),
       settle,
     )
@@ -458,6 +458,10 @@ export default function App() {
           onRetry={(messageId) => void retry(messageId)}
           onRemove={(messageId) => void remove(messageId)}
         />
+
+        {requests.isGenerating(chat) && (
+          <TypingIndicator provider={requests.isStopping(chat) ? null : live.awaiting} />
+        )}
 
         <ChatCompose
           disabled={disableActions}

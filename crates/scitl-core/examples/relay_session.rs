@@ -89,7 +89,7 @@ async fn main() {
         TurnEvent::ToolExecuted { execution, .. } => {
             println!("  [tool] {}", serde_json::to_string(&execution).unwrap())
         }
-        TurnEvent::Response { .. } => {}
+        TurnEvent::Response { .. } | TurnEvent::AwaitingModel { .. } => {}
     };
     let adapter: &dyn LlmAdapter = adapter.as_ref();
     let mut capabilities = DEFAULT_CAPABILITIES;
@@ -146,6 +146,7 @@ async fn main() {
         }
         let ctx = TurnContext {
             adapter: Ok(adapter),
+            provider_name: "sham",
             prompts: SystemPrompts {
                 base: base.as_deref().or(defaults.base),
                 task_chat: defaults.task_chat,

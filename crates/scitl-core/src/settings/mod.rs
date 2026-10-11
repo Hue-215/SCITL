@@ -135,6 +135,10 @@ impl Snapshot {
                 Ok(adapter) => Ok(adapter.as_ref() as &dyn LlmAdapter),
                 Err(failure) => Err(failure.clone()),
             },
+            provider_name: self
+                .config
+                .active_provider()
+                .map_or("", |provider| provider.name.as_str()),
             prompts: SystemPrompts::from_config(&self.config.general),
             opening_message: orchestration::opening_message(&self.config.general),
             capabilities: self.capabilities,
