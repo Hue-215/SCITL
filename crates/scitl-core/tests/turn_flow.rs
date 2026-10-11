@@ -2789,6 +2789,33 @@ async fn a_changed_system_prompt_is_told_without_changing_the_front() {
     assert_eq!(replay_of(sent, "返信2"), thinking_2);
 }
 
+/// ニックネームはシステムプロンプトに入るので、変えたらシステムプロンプトの変更と同じく通知で伝える。
+#[tokio::test]
+async fn a_changed_nickname_is_told_as_a_system_update() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let before = SystemPrompts {
+        base: Some("BASE"),
+        task_chat: None,
+        nickname: None,
+    };
+    let after = SystemPrompts {
+        nickname: Some("Hal"),
+        ..before
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]);
+    turn_with(&db, &first, before, task_id, "1回目").await;
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    turn_with(&db, &second, after, task_id, "2回目").await;
+
+    let sent = &second.sent_messages()[0];
+    assert!(!system_of(sent).contains("Hal"));
+    let input = *user_texts(sent).last().unwrap();
+    assert!(input.starts_with("<scitl:system-update>"));
+    assert!(input.contains(r#"nickname "Hal""#) && input.contains("2回目"));
+}
+
 /// 変更の通知は、それを置いたターンが失敗して保存されなければ、次のターンでまた置く。
 #[tokio::test]
 async fn a_system_update_is_told_again_when_the_turn_that_told_it_failed() {

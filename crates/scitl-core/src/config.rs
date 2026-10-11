@@ -180,8 +180,12 @@ impl GeneralConfig {
     }
 
     /// 画面に出すアシスタントの名前。ニックネームが無ければ、使うプロバイダーの名前(Issue #563)。
+    /// 手で書いた空白だけの値は、未設定と同じに扱う。
     pub fn assistant_name<'a>(&'a self, provider_name: &'a str) -> &'a str {
-        self.assistant_nickname.as_deref().unwrap_or(provider_name)
+        self.assistant_nickname
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or(provider_name)
     }
 
     pub fn language(&self) -> Language {

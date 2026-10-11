@@ -81,15 +81,16 @@ fn state_note(chat: Chat) -> String {
     }
 }
 
-/// ニックネームの注記(設定したときだけ) + 基本システムプロンプト + タスクチャット用システムプロンプト(総合チャットなら代わりに
-/// 総合チャットの注記) + ツール結果と状態とメモリの読み方 + 予約タグの読み方。会話と設定だけで決まり、
-/// リクエストごとには変わらない。現在日時と状態は添えず、モデルがユーザー発言の送信日時と
-/// ツールで知る(`docs/spec/architecture/prompt-shape.md`「状態と日時の伝え方」)。
+/// ニックネームの注記(設定したときだけ) + 基本システムプロンプト + タスクチャット用システム
+/// プロンプト(総合チャットなら代わりに総合チャットの注記) + ツール結果と状態とメモリの読み方 +
+/// 予約タグの読み方。会話と設定だけで決まり、リクエストごとには変わらない。現在日時と状態は添えず、
+/// モデルがユーザー発言の送信日時とツールで知る(`docs/spec/architecture/prompt-shape.md`
+/// 「状態と日時の伝え方」)。
 ///
-/// 自由入力は載せない。
+/// 利用者が書いたものは、設定のプロンプトとニックネームだけを載せる(会話の中身は載せない)。
 pub fn build_system_prompt(chat: Chat, prompts: &SystemPrompts) -> String {
     let mut sections = Vec::new();
-    if let Some(nickname) = prompts.nickname.filter(|n| !n.is_empty()) {
+    if let Some(nickname) = prompts.nickname.filter(|n| !n.trim().is_empty()) {
         sections.push(nickname_note(nickname));
     }
     if let Some(prompt) = prompts.base.filter(|p| !p.is_empty()) {
