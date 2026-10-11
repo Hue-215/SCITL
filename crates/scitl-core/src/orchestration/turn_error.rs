@@ -245,7 +245,9 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
         LlmError::Refused(detail) => TurnFailure::Refused {
             detail: detail.clone(),
         },
-        LlmError::Http(detail) => TurnFailure::Provider {
+        // 前のターンの思考は外して送り直すので(`turn::run_tool_rounds`)、ここへ来るのは外しても
+        // 断られたとき。
+        LlmError::ReplayRejected(detail) | LlmError::Http(detail) => TurnFailure::Provider {
             detail: detail.clone(),
         },
     }
@@ -290,6 +292,7 @@ mod tests {
             (LlmError::Auth(detail("x")), "auth"),
             (LlmError::RateLimit(detail("x")), "rate_limit"),
             (LlmError::Refused(detail("x")), "refused"),
+            (LlmError::ReplayRejected(detail("x")), "provider"),
             (LlmError::Http(detail("x")), "provider"),
         ];
         for (e, kind) in cases {
@@ -310,6 +313,7 @@ mod tests {
             LlmError::Auth(detail("upstream overloaded")),
             LlmError::RateLimit(detail("upstream overloaded")),
             LlmError::Refused(detail("upstream overloaded")),
+            LlmError::ReplayRejected(detail("upstream overloaded")),
             LlmError::Http(detail("upstream overloaded")),
         ];
         for e in with_detail {

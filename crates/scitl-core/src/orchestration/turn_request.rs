@@ -175,6 +175,16 @@ impl TurnRequest {
         })
     }
 
+    /// 前のターンから並べた思考(`Replay`)をすべて外す。最初のリクエストで送り返した思考を
+    /// 送り先が断ったときに、外して送り直すため(`docs/spec/architecture/transcript.md`「思考を
+    /// 送り返す範囲」)。外したものが無ければ`false`。
+    ///
+    /// 断られたリクエストは受け付けられていないので、前に送った部分を書き換えることにはならない。
+    /// 送った形の保存の指紋は外した形で取るので、次のターンでも外したまま並ぶ(`settle_replays`)。
+    pub(super) fn drop_replays(&mut self) -> bool {
+        drop_replays(&mut self.opening)
+    }
+
     /// ラウンドで送った発言列(`round`の結果)のうち、最初のリクエストの後ろに足した分。
     pub(super) fn appended<'a>(&self, sent: &'a [ChatMessage]) -> &'a [ChatMessage] {
         &sent[self.opening.len()..]
@@ -324,6 +334,9 @@ struct OpeningSegment {
 /// 渡さない(`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。途中の`Replay`
 /// だけを外すと、それより後ろの区間の指紋も合わなくなる。
 ///
+/// 今と同じ送り先が、それより前の思考をすべて外して送った区間(送り返した思考を断られて
+/// 外した。`TurnRequest::drop_replays`)は、その形の指紋で見分け、前の思考を外したまま並べる。
+/// 断られた思考をまた並べないため。
 fn settle_replays(
     opening: &mut [ChatMessage],
     segments: &[OpeningSegment],
@@ -333,16 +346,26 @@ fn settle_replays(
     let ChatMessage::System(system) = &opening[0] else {
         unreachable!("the opening starts with the system prompt");
     };
-    // 保存できない形の発言があれば、それより後ろの指紋は取れず、どの区間とも一致しない。
+    // 並べた形の指紋と、それまでの思考をすべて外した形の指紋。保存できない形の発言があれば、
+    // それより後ろの指紋は取れず、どの区間とも一致しない。
     let mut digest = Some(PrefixDigest::start(system, tools));
-    let server = adapter.identity().map(|current| current.server);
+    let mut bare = digest.clone();
+    let current = adapter.identity();
+    let server = current.as_ref().map(|current| current.server.as_str());
     let mut keep_until = 0;
-    for (i, message) in opening.iter_mut().enumerate().skip(1) {
+    for i in 1..opening.len() {
         if let Some(segment) = segments.iter().find(|s| s.start == i) {
-            let matches = digest
-                .as_ref()
-                .is_some_and(|d| d.as_str() == segment.prefix_digest);
-            let same_server = server.as_deref() == Some(segment.origin.server.as_str());
+            let saved = |d: &Option<PrefixDigest>| {
+                d.as_ref()
+                    .is_some_and(|d| d.as_str() == segment.prefix_digest)
+            };
+            let mut matches = saved(&digest);
+            if !matches && current.as_ref() == Some(&segment.origin) && saved(&bare) {
+                drop_replays(&mut opening[1..i]);
+                digest.clone_from(&bare);
+                matches = true;
+            }
+            let same_server = server == Some(segment.origin.server.as_str());
             keep_until = if matches && same_server && adapter.accepts_replay(&segment.origin) {
                 segment.end
             } else {
@@ -350,15 +373,33 @@ fn settle_replays(
             };
         }
         if i >= keep_until {
-            if let ChatMessage::Assistant { replay, .. } = message {
-                *replay = Replay::default();
-            }
+            drop_replays(&mut opening[i..=i]);
         }
-        digest = digest.and_then(|mut d| {
-            d.push(&StoredMessage::of(message)?);
-            Some(d)
-        });
+        match StoredMessage::of(&opening[i]) {
+            Some(mut message) => {
+                if let Some(d) = digest.as_mut() {
+                    d.push(&message);
+                }
+                message.drop_replay();
+                if let Some(d) = bare.as_mut() {
+                    d.push(&message);
+                }
+            }
+            None => (digest, bare) = (None, None),
+        }
     }
+}
+
+/// 発言の思考(`Replay`)を外す。外したものがあれば`true`。
+fn drop_replays(messages: &mut [ChatMessage]) -> bool {
+    let mut dropped = false;
+    for message in messages {
+        if let ChatMessage::Assistant { replay, .. } = message {
+            dropped |= *replay != Replay::default();
+            *replay = Replay::default();
+        }
+    }
+    dropped
 }
 
 #[cfg(test)]
@@ -552,6 +593,43 @@ mod tests {
         assert_eq!(kept(&messages), [false, true]);
 
         // 元の方言に戻ると、1つ目の思考が返り、2つ目は前が変わるので外れる。
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Gemini),
+        );
+        assert_eq!(kept(&messages), [true, false]);
+    }
+
+    /// 今と同じ送り先が前の思考をすべて外して送った区間(送り返した思考を断られた)があれば、
+    /// 前の思考を外したまま並べ、その区間からの思考を返す。
+    #[test]
+    fn keeps_the_thinking_dropped_after_a_rejection_out() {
+        let mut sent = opening();
+        drop_replays(&mut sent[..3]);
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Gemini, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Gemini),
+        );
+        assert_eq!(kept(&messages), [false, true]);
+
+        // 外して送ったのが別のモデルなら、外した理由がそのモデルに限るかもしれないので、前の
+        // 思考は返す(前が変わるので、その区間の思考は外れる)。
+        let mut other = segment(3, ApiFormat::Gemini, digest_before(&sent, 3));
+        other.origin.model = "other".to_string();
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            other,
+        ];
         let mut messages = opening();
         settle_replays(
             &mut messages,

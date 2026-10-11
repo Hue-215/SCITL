@@ -251,6 +251,12 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   エラー(`LlmError::Http`)にする
 - 入力が長すぎることを表す専用のエラーコードは無いので、400(`invalid_request`)の応答の文面から見分けて
   `LlmError::ContextExceeded`にする
+- 送り返したステップを含めたリクエストが400で断られ、文面が署名の無効を指すとき(`Invalid thought signature.`)は
+  `LlmError::ReplayRejected`にする(Issue #303)。アダプタは呼び直さず、ターンが前のターンの思考を外して
+  送り直す(`transcript.md`「送り返した思考を断られたとき」)。外したターンの`thought`と`function_call`は、
+  本文と呼び出しから組み立て直したステップ(署名を持たない)で並ぶ。保存の無い古いターンと同じ形で、
+  `thought`を送らない前のターンはエラーにならなかった(上記)。署名の無い`function_call`を前のターンに
+  並べた場合は確かめていない
 - 能力の自動検出は`GET /v1beta/models/{id}`で行う。コンテキスト長は`inputTokenLimit`、思考は`thinking`で
   決め、ツールは常にありとする。画像入力の可否は情報に無いので決めない
 

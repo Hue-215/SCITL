@@ -48,6 +48,10 @@ pub enum LlmError {
     /// 受け付ける強さが違う(`none`を持たない等)。
     #[error("the provider rejected the reasoning effort value: {0}")]
     ReasoningEffortValueRejected(ErrorDetail),
+    /// 送り返した思考([`super::Replay`])を受け付けなかった(署名が通らない等)。前のターンの
+    /// 思考を外せば受け付けられうる。
+    #[error("the provider rejected the replayed reasoning: {0}")]
+    ReplayRejected(ErrorDetail),
     #[error("authentication failed: {0}")]
     Auth(ErrorDetail),
     #[error("rate limited: {0}")]
