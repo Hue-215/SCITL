@@ -31,6 +31,7 @@ pub struct GeminiAdapter {
     base_url: ExternalUrl,
     credentials: Credentials,
     model: String,
+    streaming: bool,
 }
 
 impl GeminiAdapter {
@@ -45,7 +46,8 @@ impl GeminiAdapter {
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
         // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
-        // 届き続けている間は切らない)。
+        // 届き続けている間は切らない)。ストリーミングしないときは、生成が終わるまで何も届かない
+        // ので、同じ上限が実質、生成の完了を待つ時間の上限になる。
         let client = crate::net::hardened_client(
             &base_url,
             crate::net::RequestTimeout::BetweenReads(request_timeout),
@@ -55,7 +57,26 @@ impl GeminiAdapter {
             base_url,
             credentials,
             model: model.into(),
+            streaming: true,
         })
+    }
+
+    /// ストリーミングで受け取るか(`config::GeneralConfig::streaming`)。組み立てた直後はオン。
+    pub fn streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
+        self
+    }
+
+    fn request_body(
+        &self,
+        messages: &[ChatMessage],
+        tools: ToolOffer<'_>,
+        thinking_level: Option<&'static str>,
+    ) -> RequestBody<'_> {
+        RequestBody {
+            stream: self.streaming,
+            ..request_body(&self.model, messages, tools, thinking_level)
+        }
     }
 }
 
@@ -264,7 +285,8 @@ fn request_body<'a>(
             })
             .collect(),
         generation_config: (!config.is_empty()).then_some(Value::Object(config)),
-        // 無視して1つのJSONで返す中継もある(`GeminiAdapter::send`)。
+        // 設定で切ったときは`GeminiAdapter::request_body`が置き換える。頼んでも、無視して
+        // 1つのJSONで返す中継もある(`GeminiAdapter::send`)。
         stream: true,
     }
 }
@@ -497,7 +519,7 @@ impl GeminiAdapter {
         tools: ToolOffer<'_>,
         thinking_level: Option<&'static str>,
     ) -> Result<reqwest::Response, LlmError> {
-        let body = request_body(&self.model, messages, tools, thinking_level);
+        let body = self.request_body(messages, tools, thinking_level);
         let sent = Sent {
             thinking: thinking_level.is_some(),
             replay: body
@@ -508,12 +530,11 @@ impl GeminiAdapter {
         let endpoint = super::endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
-        // ストリーミングを頼んでいることをヘッダーでも示す(公式SDKと同じ)。
-        let request = self
-            .client
-            .post(endpoint)
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&body);
+        let mut request = self.client.post(endpoint).json(&body);
+        if self.streaming {
+            // ストリーミングを頼んでいることをヘッダーでも示す(公式SDKと同じ)。
+            request = request.header(reqwest::header::ACCEPT, "text/event-stream");
+        }
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
         super::reject_failure(response, secrets, |status, body| {
@@ -676,12 +697,7 @@ impl LlmAdapter for GeminiAdapter {
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Option<RequestPreview> {
-        let body = request_body(
-            &self.model,
-            messages,
-            tools,
-            thinking_level(reasoning_effort),
-        );
+        let body = self.request_body(messages, tools, thinking_level(reasoning_effort));
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
         super::abbreviate(&mut body["input"], NESTED, ABBREVIATED);
         Some(RequestPreview { body })
@@ -994,7 +1010,9 @@ mod tests {
         assert!(headers.starts_with("post /v1beta/interactions "));
         assert!(headers.contains("x-goog-api-key: key-test"));
         assert!(!headers.contains("authorization"));
+        assert!(headers.contains("accept: text/event-stream"));
         assert_eq!(received[0].body["store"], false);
+        assert_eq!(received[0].body["stream"], true);
 
         assert_eq!(
             events,
@@ -1019,6 +1037,42 @@ mod tests {
         let expected: Vec<&str> = expected.steps.iter().map(|s| s.get()).collect();
         let replayed: Vec<&str> = replay.elements().iter().map(|s| s.get()).collect();
         assert_eq!(replayed, expected);
+    }
+
+    #[tokio::test]
+    async fn asks_for_one_json_reply_when_streaming_is_off() {
+        let (base_url, handle) = spawn_server(vec![(
+            200,
+            r#"{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}"#,
+        )]);
+        let adapter = adapter(&base_url, "key-test").streaming(false);
+        let messages = [user("hi")];
+        let preview = adapter
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap();
+        let mut events = Vec::new();
+        adapter
+            .send(None, &messages, ToolOffer::NONE, None, &mut |e| {
+                events.push(e)
+            })
+            .await
+            .unwrap();
+        let received = handle.join().unwrap();
+
+        assert_eq!(received[0].body["stream"], false);
+        assert!(!received[0].headers.contains("text/event-stream"));
+        assert_eq!(preview.body["stream"], false);
+        assert_eq!(
+            events,
+            vec![
+                ResponseEvent::TextDelta {
+                    text: "ok".to_string()
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop
+                },
+            ]
+        );
     }
 
     #[tokio::test]

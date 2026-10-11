@@ -11,6 +11,10 @@ export type GeneralSettingsView = { system_prompt: string | null, task_chat_syst
  */
 default_task_chat_system_prompt: string, task_opening_message: string | null, default_task_opening_message: string, response_timeout_secs: number | null, default_response_timeout_secs: number, 
 /**
+ * チャットの応答をストリーミングで受け取るか(未設定はオンに解決した値)。
+ */
+streaming: boolean, 
+/**
  * 未設定・知らない値なら既定の言語に解決した値。画面は「未設定」を扱わない。
  */
 language: Language, 

@@ -266,7 +266,13 @@ fn providers_and_models_are_registered_into_the_config_file() {
 
     stdout_json(&data.run(&["model", "add", &provider, "model-a", "model-b"]));
     stdout_json(&data.run(&["model", "select", &provider, "model-b"]));
-    stdout_json(&data.run(&["settings", "general", "--response-timeout-secs", "300"]));
+    stdout_json(&data.run(&[
+        "settings",
+        "general",
+        "--response-timeout-secs",
+        "300",
+        "--no-streaming",
+    ]));
 
     // 起動のたびに設定ファイルから読み直すので、ここで見えるのは保存されたもの。
     let shown = stdout_json(&data.run(&["settings", "show"]));
@@ -274,6 +280,11 @@ fn providers_and_models_are_registered_into_the_config_file() {
     assert_eq!(shown["providers"][0]["active_model"], "model-b");
     assert_eq!(shown["providers"][0]["models"].as_array().unwrap().len(), 2);
     assert_eq!(shown["general"]["response_timeout_secs"], 300);
+    assert_eq!(shown["general"]["streaming"], false);
+
+    // 省いた値は既定値に戻る。
+    let reset = stdout_json(&data.run(&["settings", "general"]));
+    assert_eq!(reset["general"]["streaming"], true);
 
     let removed = stdout_json(&data.run(&["provider", "delete", &provider]));
     assert_eq!(removed["providers"], serde_json::json!([]));

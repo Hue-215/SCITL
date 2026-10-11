@@ -86,7 +86,8 @@ RELAY_KEY=dummy cli provider add --name sham --api-format open_ai_compat \
 # 出力の providers[].id がプロバイダーのID(以下 <P>)
 cli model add <P> dummy-o
 cli model select <P> dummy-o
-cli settings general --response-timeout-secs 900   # 既定の120秒ではLLM役が間に合わないことがある
+# 既定の120秒ではLLM役が間に合わないことがある。Sham_llmは`stream: true`を400で断るので、ストリーミングを切る
+cli settings general --response-timeout-secs 900 --no-streaming
 ```
 
 `settings general`と`settings tools`は、**指定しなかった項目を既定値に戻す**。値を残したい項目は毎回渡す。
@@ -248,6 +249,8 @@ cargo run -p scitl-core --example relay_session -- \
 
 - 方言は環境変数`RELAY_DIALECT`(`openai`(既定)・`anthropic`・`gemini`)で選ぶ。BASE_URLは1節の表の
   とおりで、Anthropic形式とGemini形式は`/v1`を付けない。この2つは思考の強さ「中」で呼ぶ
+- ストリーミングは頼まない(Sham_llmは`stream: true`を400で断る)。本物のサーバーでストリーミングを
+  確かめるときは、環境変数`RELAY_STREAMING=1`を付ける
 - STEPは次のとおり。途中経過(本文・思考・ツールの実行)は標準出力に出る
   - `@new`: タスクを作って聞き取りを始める
   - `@task <id>`: 既にあるタスクの会話へ移る
@@ -272,6 +275,7 @@ cargo run -p scitl-core --example relay_session -- \
    (`docs/spec/architecture/concurrency.md`「多重起動の防止」)
 2. 設定の「APIプロバイダー」で、1節の表の方言・URL・モデルで登録する
 3. 設定「一般」の応答のタイムアウト(既定120秒)を延ばす。LLM役が考え込むと超える
+4. 設定「一般」の「高度な設定」で、ストリーミングを切る(Sham_llmは`stream: true`を400で断る)
 
 能力の自動検出には疑似APIが答える(答える値はSham_llmの文書を参照)。検出結果はアプリの起動中、
 モデルごとに覚えられる。

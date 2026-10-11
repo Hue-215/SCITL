@@ -21,7 +21,7 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     state.settings.view()
 }
 
-/// 数値の欄は文字列のまま受け取る(解釈はcore。`None`は保存済みの値のまま)。欄の誤りは
+/// 数値の欄は文字列のまま受け取る(解釈はcore)。数値の欄と`streaming`の`None`は保存済みの値のまま。欄の誤りは
 /// `FormOutcome::Rejected`で返す。
 #[tauri::command]
 pub async fn update_general_settings(
@@ -30,12 +30,14 @@ pub async fn update_general_settings(
     task_chat_system_prompt: Option<String>,
     task_opening_message: Option<String>,
     response_timeout_secs: Option<String>,
+    streaming: Option<bool>,
 ) -> CommandResult<FormOutcome<SettingsView>> {
     let update = GeneralUpdate {
         system_prompt,
         task_chat_system_prompt,
         task_opening_message,
         response_timeout_secs,
+        streaming,
     };
     with_settings(&state, move |s| {
         FormOutcome::from_result(s.update_general(update))

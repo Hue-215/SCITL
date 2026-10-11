@@ -610,7 +610,32 @@ fn general_update(system_prompt: Option<&str>, response_timeout_secs: &str) -> G
         task_chat_system_prompt: None,
         task_opening_message: None,
         response_timeout_secs: Some(response_timeout_secs.to_string()),
+        streaming: None,
     }
+}
+
+#[test]
+fn streaming_is_on_until_turned_off_and_on_is_saved_as_unset() {
+    let (settings, _, _dir) = temp_settings();
+    assert!(settings.view().general.streaming);
+
+    let off = GeneralUpdate {
+        streaming: Some(false),
+        ..general_update(None, "")
+    };
+    assert!(!settings.update_general(off).unwrap().general.streaming);
+    assert_eq!(settings.snapshot().config.general.streaming, Some(false));
+
+    // ほかの欄だけの保存では変わらない。
+    let view = settings.update_general(general_update(None, "")).unwrap();
+    assert!(!view.general.streaming);
+
+    let on = GeneralUpdate {
+        streaming: Some(true),
+        ..general_update(None, "")
+    };
+    assert!(settings.update_general(on).unwrap().general.streaming);
+    assert_eq!(settings.snapshot().config.general.streaming, None);
 }
 
 #[test]
@@ -940,6 +965,15 @@ fn adapter_is_rebuilt_only_when_its_inputs_change() {
         .set_model_context_length(&id, "m1", "4096")
         .unwrap();
     assert!(Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
+
+    // ストリーミングの切り替えは、次のターンから効くように組み立て直す。
+    let off = GeneralUpdate {
+        streaming: Some(false),
+        response_timeout_secs: None,
+        ..general_update(None, "")
+    };
+    settings.update_general(off).unwrap();
+    assert!(!Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
 }
 
 #[test]

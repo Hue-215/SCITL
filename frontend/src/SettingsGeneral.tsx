@@ -67,6 +67,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     taskOpeningMessage: taskOpeningMessage || null,
     // 数値の欄はその欄を書き換えたときだけ送る(プロンプトの保存で検証し直さない)。
     responseTimeoutSecs: null,
+    streaming: null,
   })
 
   return (
@@ -117,6 +118,19 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
         {/* <details>自体はflexにしないので(index.cssの.settings-advanced)、欄の間隔は
             中の入れ物のgapで持つ */}
         <div className="settings-section">
+          <div className="settings-field">
+            <label className="choice">
+              <input
+                type="checkbox"
+                checked={general.streaming}
+                onChange={(e) => void onSave({ ...current(), streaming: e.target.checked })}
+              />
+              {t('settings.general.streaming_label')}
+            </label>
+            {!general.streaming && (
+              <p className="settings-hint">{t('settings.general.streaming_off_hint')}</p>
+            )}
+          </div>
           <PromptField
             label={t('settings.general.task_chat_prompt_label')}
             value={taskChatSystemPrompt}

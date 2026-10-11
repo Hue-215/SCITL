@@ -31,6 +31,7 @@ pub struct AnthropicAdapter {
     base_url: ExternalUrl,
     credentials: Credentials,
     model: String,
+    streaming: bool,
 }
 
 impl AnthropicAdapter {
@@ -45,7 +46,8 @@ impl AnthropicAdapter {
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
         // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
-        // 届き続けている間は切らない)。
+        // 届き続けている間は切らない)。ストリーミングしないときは、生成が終わるまで何も届かない
+        // ので、同じ上限が実質、生成の完了を待つ時間の上限になる。
         let client = crate::net::hardened_client(
             &base_url,
             crate::net::RequestTimeout::BetweenReads(request_timeout),
@@ -55,7 +57,26 @@ impl AnthropicAdapter {
             base_url,
             credentials,
             model: model.into(),
+            streaming: true,
         })
+    }
+
+    /// ストリーミングで受け取るか(`config::GeneralConfig::streaming`)。組み立てた直後はオン。
+    pub fn streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
+        self
+    }
+
+    fn request_body(
+        &self,
+        messages: &[ChatMessage],
+        tools: ToolOffer<'_>,
+        thinking: Thinking,
+    ) -> RequestBody<'_> {
+        RequestBody {
+            stream: self.streaming,
+            ..request_body(&self.model, messages, tools, thinking)
+        }
     }
 }
 
@@ -287,7 +308,8 @@ fn request_body<'a>(
         thinking,
         output_config,
         cache_control: ephemeral(),
-        // 無視して1つのJSONで返す中継もある(`AnthropicAdapter::send`)。
+        // 設定で切ったときは`AnthropicAdapter::request_body`が置き換える。頼んでも、無視して
+        // 1つのJSONで返す中継もある(`AnthropicAdapter::send`)。
         stream: true,
     }
 }
@@ -493,7 +515,7 @@ impl AnthropicAdapter {
         tools: ToolOffer<'_>,
         thinking: Thinking,
     ) -> Result<reqwest::Response, LlmError> {
-        let body = request_body(&self.model, messages, tools, thinking);
+        let body = self.request_body(messages, tools, thinking);
         let endpoint = super::endpoint(&self.base_url, MESSAGES).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
@@ -619,12 +641,7 @@ impl LlmAdapter for AnthropicAdapter {
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Option<RequestPreview> {
-        let body = request_body(
-            &self.model,
-            messages,
-            tools,
-            Thinking::from_effort(reasoning_effort),
-        );
+        let body = self.request_body(messages, tools, Thinking::from_effort(reasoning_effort));
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
         super::abbreviate(&mut body["messages"], NESTED, ABBREVIATED);
         Some(RequestPreview { body })
@@ -1097,6 +1114,41 @@ mod tests {
             Some(&ResponseEvent::Done {
                 finish_reason: FinishReason::Length
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn asks_for_one_json_reply_when_streaming_is_off() {
+        let (base_url, handle) = spawn_server(vec![(
+            200,
+            r#"{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}"#,
+        )]);
+        let adapter = adapter(&base_url, "sk-ant-test").streaming(false);
+        let messages = [user("hi")];
+        let preview = adapter
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap();
+        let mut events = Vec::new();
+        adapter
+            .send(None, &messages, ToolOffer::NONE, None, &mut |e| {
+                events.push(e)
+            })
+            .await
+            .unwrap();
+        let received = handle.join().unwrap();
+
+        assert_eq!(received[0].body["stream"], false);
+        assert_eq!(preview.body["stream"], false);
+        assert_eq!(
+            events,
+            vec![
+                ResponseEvent::TextDelta {
+                    text: "ok".to_string()
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop
+                },
+            ]
         );
     }
 

@@ -139,6 +139,24 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 入れるかは方言ごとに下に書く。ターンをまたいでは、送った形のまま保存したものを次のターンに並べて
 返す(`transcript.md`「送った形のまま積む」)。最後の応答(ツールを呼ばなかった応答)の`Replay`も保存する
 
+## ストリーミングの切り替え(Issue #560)
+
+チャットは既定でストリーミング(SSE)で受け取る。一般設定(`config::GeneralConfig::streaming`)でオフにすると、
+どの方言でもストリーミングを頼まずに送り、応答を1つのJSONで受け取る。`stream: true`を断るサーバーや、
+応答をまとめて返す中継を挟む環境のため。送り先の事情だが、設定は全体で1つにする(メンテナの判断)。
+
+- 送るかどうかはアダプタが組み立てのときに受け取り(`providers::AdapterInputs`)、リクエストでの書き方は
+  アダプタが決める。オフでは欄を省かずに`stream: false`を送る(サーバーの既定に任せない)。`orchestration`は
+  知らない
+- 受け取る側は設定を見ず、応答の`Content-Type`で読み方を決める(下の各方言)。オフでもSSEで返すサーバーは
+  ストリーミングとして読む
+- オフでは本文・思考が最後にまとめてイベントになる。`Replay`の中身はどちらで受け取っても同じなので、会話の
+  途中で切り替えても送り返す思考は外れない(`transcript.md`「送った形のまま積む」)
+- オフでは生成が終わるまで何も届かないのが普通なので、応答タイムアウトが実質、生成の完了を待つ時間の上限になる
+  (`network-secrets.md`「外部通信の一元化とネットワーク設定」)
+
+以下の各方言の節は、ストリーミングで送るときの形を書く。
+
 ## OpenAI互換
 
 **OpenAI互換**(`llm::providers::openai_compat`): Chat Completions(`POST {base_url}/chat/completions`)を
@@ -147,7 +165,8 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 - `stream`を無視して1つのJSONで返すサーバーもあるので、応答の`Content-Type`が`text/event-stream`で
   なければ、ストリーミングしない応答として読む。`stream: true`そのものを拒むサーバー(ツールと同時の
-  ストリーミングに対応しない古い推論サーバー等)には対応しない
+  ストリーミングに対応しない古い推論サーバー等)には、自動では合わせない。利用者が設定でストリーミングを
+  切る(上の「ストリーミングの切り替え」)
 - 応答タイムアウトは、データの届かない時間の上限として使う(`network-secrets.md`「外部通信の一元化とネットワーク設定」)
 - 本文(`delta.content`)と思考(`delta.reasoning_content`)は、届いたらすぐ渡す
 - ツール呼び出しは`index`ごとに断片を組み立て、終わってから最初の断片が届いた順に渡す。最初の断片が
@@ -275,7 +294,7 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 ストリーミングの読み方:
 
-- `Accept: text/event-stream`を付けて頼む(公式SDKと同じ)。`Content-Type`が`text/event-stream`でなければ、
+- `Accept: text/event-stream`を付けて頼む(公式SDKと同じ。ストリーミングを切ったときは付けない)。`Content-Type`が`text/event-stream`でなければ、
   ストリーミングしない応答として読む。応答タイムアウトと大きさの上限はOpenAI互換と同じ
 - イベントは`data`のJSONの`event_type`で見分ける。出力のステップごとに`step.start`・`step.delta`・`step.stop`が
   `index`付きで届き、`interaction.completed`の状態(`interaction.status`)が届いたら完了とする。状態の無いまま

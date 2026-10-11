@@ -133,6 +133,8 @@
   "settings.general.language_unknown_note": "無効な言語設定です",
   "settings.general.open_export_folder": "フォルダを開く",
   "settings.general.open_export_folder_failed": "フォルダを開けませんでした: {error}",
+  "settings.general.streaming_label": "ストリーミングを有効化",
+  "settings.general.streaming_off_hint": "応答はまとめて表示されます",
   "settings.general.system_prompt_label": "システムプロンプト",
   "settings.general.task_chat_prompt_label": "タスクチャット用プロンプト",
   "settings.general.task_opening_label": "タスク開始時のダミー発言",

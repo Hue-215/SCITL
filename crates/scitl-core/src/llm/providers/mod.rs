@@ -289,6 +289,7 @@ fn object_arguments(arguments: &crate::llm::ToolArguments) -> serde_json::Value 
 pub struct AdapterInputs<'a> {
     provider: Option<ProviderInputs<'a>>,
     timeout: Duration,
+    streaming: bool,
 }
 
 #[derive(PartialEq)]
@@ -311,6 +312,7 @@ impl<'a> AdapterInputs<'a> {
                 model: p.resolved_model().unwrap_or_default(),
             }),
             timeout: config.general.response_timeout(),
+            streaming: config.general.streaming(),
         }
     }
 }
@@ -322,7 +324,11 @@ impl<'a> AdapterInputs<'a> {
 /// [`ActiveAdapter::KeyUnavailable`]を返す(起動や、鍵と無関係な設定の変更を止めないため)。
 /// 読めなかった値の代わりに、その値を抜いて送ることはしない。
 pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError> {
-    let AdapterInputs { provider, timeout } = AdapterInputs::of(config);
+    let AdapterInputs {
+        provider,
+        timeout,
+        streaming,
+    } = AdapterInputs::of(config);
     let Some(provider) = provider else {
         return Ok(ActiveAdapter::NoProvider);
     };
@@ -338,24 +344,33 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
 
     // 方言を足したらここがコンパイルエラーになり、黙ってOpenAI互換で組み立てることはない。
     let adapter: SharedAdapter = match provider.api_format {
-        ApiFormat::OpenAiCompat => Arc::new(OpenAiCompatAdapter::new(
-            provider.base_url.to_string(),
-            credentials,
-            provider.model,
-            timeout,
-        )?),
-        ApiFormat::Anthropic => Arc::new(AnthropicAdapter::new(
-            provider.base_url.to_string(),
-            credentials,
-            provider.model,
-            timeout,
-        )?),
-        ApiFormat::Gemini => Arc::new(GeminiAdapter::new(
-            provider.base_url.to_string(),
-            credentials,
-            provider.model,
-            timeout,
-        )?),
+        ApiFormat::OpenAiCompat => Arc::new(
+            OpenAiCompatAdapter::new(
+                provider.base_url.to_string(),
+                credentials,
+                provider.model,
+                timeout,
+            )?
+            .streaming(streaming),
+        ),
+        ApiFormat::Anthropic => Arc::new(
+            AnthropicAdapter::new(
+                provider.base_url.to_string(),
+                credentials,
+                provider.model,
+                timeout,
+            )?
+            .streaming(streaming),
+        ),
+        ApiFormat::Gemini => Arc::new(
+            GeminiAdapter::new(
+                provider.base_url.to_string(),
+                credentials,
+                provider.model,
+                timeout,
+            )?
+            .streaming(streaming),
+        ),
     };
     Ok(ActiveAdapter::Ready(adapter))
 }
