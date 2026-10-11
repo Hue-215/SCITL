@@ -90,7 +90,8 @@ function buildElevation(h: number, s: number, mode: 'light' | 'dark'): Elevation
       raise: `0 2px 4px -1px ${shade(0.19)}`,
       sink: `inset 0 2px 4px -2px ${shade(0.34)}, inset 0 1px 1px ${shade(0.1)}`,
       lift,
-      // 見出しの帯は吹き出しと同じだけ浮かせる。
+      // 見出しの帯は吹き出しと同じだけ浮かせる。影の広がりを変えたら、tokens.cssの
+      // --pinned-shadow-reachも合わせる(liftを変えても変わる)。
       pinned: lift,
       focus: `0 0 var(--focus-glow-spread) hsl(${hue} ${s.toFixed(1)}% 50% / 0.45)`,
     }
@@ -102,6 +103,7 @@ function buildElevation(h: number, s: number, mode: 'light' | 'dark'): Elevation
     lift: `inset 0 1px 0 ${light(0.1)}`,
     // 帯で見えるのは下端だけで、縁の光の理屈では光の当たらない側になる。光ではなく影を落とす。
     // 純黒の背景の上では見えず、帯の下へ潜った中身(吹き出し等)の上にだけ見える。
+    // 広がりはライトと同じにする(tokens.cssの--pinned-shadow-reach)。
     pinned: `0 2px 5px -1px hsl(0 0% 0% / 0.6)`,
     focus: `0 0 var(--focus-glow-spread) hsl(${hue} ${s.toFixed(1)}% 65% / 0.5)`,
   }

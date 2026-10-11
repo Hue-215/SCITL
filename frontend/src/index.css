@@ -453,13 +453,23 @@ option {
   gap: var(--space-1);
 }
 
-/* 引き出すボタン(狭い窓)・名前・︙のメニューを1行に並べる。名前は残りの幅で折り返し、ボタンは
-   名前が何行になっても上端に留める。︙のメニューの一覧の位置と幅の基準(MenuButton.tsx)。 */
+/* 引き出すボタン(狭い窓)・名前(タスクでは名前・締切と進捗・説明の列)・︙のメニューを1行に並べる。
+   名前は残りの幅で折り返し、ボタンは名前が何行になっても上端に留める。 */
 .chat-header-row {
-  position: relative;
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
+}
+
+/* ︙のメニューの一覧の位置の基準(MenuButton.tsx)は︙自身にする。行を基準にすると、行の高さに
+   締切と進捗・開いた説明が入るので、一覧が︙から離れて開く。一覧は︙の右端に揃えて左へ広げる。
+   項目は短い固定の文言だけなので、幅の上限(基準の幅。ここでは︙の幅)は外す。 */
+.chat-header-row > .menu {
+  position: relative;
+}
+
+.chat-header-row > .menu > .dropdown-popup {
+  max-width: none;
 }
 
 /* 残りの幅は、総合チャットでは名前が、タスクでは名前・締切と進捗・説明の列が占める。 */
