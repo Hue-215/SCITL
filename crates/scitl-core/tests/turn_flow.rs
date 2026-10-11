@@ -461,9 +461,15 @@ fn reasons_around_a_tool_call() -> ScriptedAdapter {
 /// 聞き取りを始めるときの発言(`TurnContext::opening_message`)。
 const OPENING: &str = "新しいタスクを追加したい";
 
-fn opening_message() -> ChatMessage {
-    // 実際に送られた発言ではないので、送信日時を付けない。
-    ChatMessage::user(PromptText::user_message(OPENING, None))
+/// 補われる開始の発言。送信日時はタスクの作成日時。
+fn opening_message(db: &Mutex<Connection>, task_id: i64) -> ChatMessage {
+    let created_at = db::tasks::get_task(&db.lock().unwrap(), task_id)
+        .unwrap()
+        .created_at;
+    ChatMessage::user(PromptText::user_message(
+        OPENING,
+        SentAt::local(&created_at).as_ref(),
+    ))
 }
 
 /// プロバイダー未選択・既定のプロンプト・外部ツール無し・既定の上限の文脈。
@@ -4542,9 +4548,10 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
 
     let histories = adapter.sent_histories();
     assert_eq!(histories[0].len(), 1);
-    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
+    let opening = opening_message(&db, task_id);
+    assert_eq!(user_text(&histories[0][0]), user_text(&opening));
     assert_eq!(histories[1].len(), 3);
-    assert_eq!(histories[1][0], opening_message());
+    assert_eq!(histories[1][0], opening);
     assert!(matches!(
         &histories[1][1],
         ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか"
@@ -4559,10 +4566,7 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
         .unwrap();
     let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
     assert_eq!(input["rows"], json!([]));
-    assert_eq!(
-        input["messages"][0]["user"]["text"],
-        user_text(&opening_message())
-    );
+    assert_eq!(input["messages"][0]["user"]["text"], user_text(&opening));
 }
 
 /// 聞き取りから始まった会話を最初から送っている間は、始めた時点でタスクが空だったと伝える
@@ -4712,7 +4716,10 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     let histories = adapter.sent_histories();
     assert_eq!(histories.len(), 1);
     assert_eq!(histories[0].len(), 1);
-    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
+    assert_eq!(
+        user_text(&histories[0][0]),
+        user_text(&opening_message(&db, task_id))
+    );
 }
 
 /// 使えるかは軽い写しで判定し、聞き取りはあとで取った写しの文脈で行う。
