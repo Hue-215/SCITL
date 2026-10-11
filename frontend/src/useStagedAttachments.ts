@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { discardStagedAttachment, failureText, stageReceivedFile } from './api'
 import { formatBytes, isolated, t } from './i18n'
-import type { AttachmentKind, ReceivedFiles, StageOutcome } from './types'
+import type { AttachmentKind, ReceivedFiles, Rejection } from './types'
 
 /** 送信前の添付1件。 */
 export type StagedItem = { key: string; name: string } & (
@@ -36,11 +36,19 @@ export interface StagedAttachments {
   busy: boolean
   /** 送れるものがある。 */
   ready: boolean
+  /**
+   * 1つの発言に付けられる数を超えて断った添付があれば、その数の上限。チップを積まずにダイアログで
+   * 知らせる(超えた分を1件ずつチップにすると、連続して貼り付けたときに入力欄を押し上げるため)。
+   */
+  overLimit: number | null
+  /** `overLimit`のダイアログを閉じる。 */
+  dismissOverLimit: () => void
 }
 
 /** 入力欄の送信前の添付。受け取ったファイルはRust側で判定させて預け、トークンで持つ。 */
 export function useStagedAttachments(): StagedAttachments {
   const [items, setItems] = useState<StagedItem[]>([])
+  const [overLimit, setOverLimit] = useState<number | null>(null)
   // 判定を待つ間に取り消した添付。戻ってきたトークンをその場で破棄する。
   const withdrawn = useRef(new Set<string>())
   const nextKey = useRef(0)
@@ -56,6 +64,12 @@ export function useStagedAttachments(): StagedAttachments {
         (outcome) => {
           if (withdrawn.current.delete(key)) {
             if (outcome.status === 'staged') void discardStagedAttachment(outcome.token)
+            return
+          }
+          // 上限に収まる分は足したまま、超えた分はチップから外してダイアログで知らせる。
+          if (outcome.status === 'rejected' && outcome.reason === 'too_many') {
+            setItems((prev) => prev.filter((item) => item.key !== key))
+            setOverLimit(outcome.limit)
             return
           }
           settle(
@@ -111,6 +125,8 @@ export function useStagedAttachments(): StagedAttachments {
     setItems((prev) => [...taken.items, ...prev])
   }, [])
 
+  const dismissOverLimit = useCallback(() => setOverLimit(null), [])
+
   return {
     items,
     addReceived,
@@ -119,18 +135,18 @@ export function useStagedAttachments(): StagedAttachments {
     restore,
     busy: items.some((i) => i.state === 'staging'),
     ready: items.some((i) => i.state === 'staged'),
+    overLimit,
+    dismissOverLimit,
   }
 }
 
-/** 預けなかった理由の文言。 */
-function rejectionText(outcome: StageOutcome & { status: 'rejected' }): string {
+/** 預けなかった理由の文言(チップに出すもの。数の上限はダイアログで知らせる)。 */
+function rejectionText(outcome: Exclude<Rejection, { reason: 'too_many' }>): string {
   switch (outcome.reason) {
     case 'too_large':
       return t('attachment.too_large', { limit: formatBytes(outcome.limit_bytes) })
     case 'not_a_file':
       return t('attachment.not_a_file')
-    case 'too_many':
-      return t('attachment.too_many', { count: outcome.limit })
     case 'unsupported':
       return t('attachment.unsupported')
     case 'image_unreadable':

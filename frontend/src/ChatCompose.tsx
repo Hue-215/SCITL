@@ -17,6 +17,7 @@ import {
 } from './api'
 import { StagedAttachmentChips } from './Attachments'
 import ChatModelBar from './ChatModelBar'
+import { NoticeDialog } from './Dialog'
 import { t } from './i18n'
 import Icon from './Icon'
 import { isSendEnter } from './keyboard'
@@ -72,6 +73,14 @@ export function ComposeProvider({ children }: { children: ReactNode }) {
   return (
     <ComposeContext value={{ draft, setDraft, staged, setReceiveTarget, receive }}>
       {children}
+      {/* 入力欄の外で描く。判定を待つ間に設定画面へ移っても、断ったときに知らせる。 */}
+      {staged.overLimit !== null && (
+        <NoticeDialog
+          title={t('attachment.too_many_title')}
+          message={t('attachment.too_many', { count: staged.overLimit })}
+          onClose={staged.dismissOverLimit}
+        />
+      )}
     </ComposeContext>
   )
 }

@@ -107,6 +107,26 @@ export function ConfirmDialog({
   )
 }
 
+interface NoticeDialogProps {
+  title: string
+  message: string
+  onClose: () => void
+}
+
+// 知らせるだけのダイアログ。「閉じる」の1つだけを置く。
+export function NoticeDialog({ title, message, onClose }: NoticeDialogProps) {
+  return (
+    <Dialog title={title} onClose={onClose}>
+      <p>{message}</p>
+      <div className="button-row dialog-actions">
+        <button type="button" onClick={onClose}>
+          {t('common.close')}
+        </button>
+      </div>
+    </Dialog>
+  )
+}
+
 interface ConfirmButtonProps {
   label: string
   confirmTitle: string

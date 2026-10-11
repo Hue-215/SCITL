@@ -11,6 +11,7 @@
   "attachment.reveal_tooltip": "フォルダを開く",
   "attachment.too_large": "ファイルが大きすぎます。ファイルサイズの上限は{limit}です。",
   "attachment.too_many": "{count}件を超えるファイルは添付できません",
+  "attachment.too_many_title": "添付の上限",
   "attachment.unsupported": "非対応のファイル形式です",
   "chat.command_failed": "操作に失敗しました: {error}",
   "chat.delete_dialog_message": "以降の発言はすべて削除されます",

@@ -11,6 +11,7 @@
   "attachment.reveal_tooltip": "Open folder",
   "attachment.too_large": "The file is too large. The size limit is {limit}.",
   "attachment.too_many": "Can't attach more than {count} files",
+  "attachment.too_many_title": "Attachment limit",
   "attachment.unsupported": "Unsupported file type",
   "chat.command_failed": "The operation failed: {error}",
   "chat.delete_dialog_message": "All later messages will also be deleted",
