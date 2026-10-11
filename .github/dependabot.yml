@@ -1,0 +1,23 @@
+# Dependabotのバージョン更新。脆弱性の通知(アラート)はリポジトリの設定で有効にしてあり、ここには書かない。
+#
+# 追うのは`rustls-platform-verifier`だけにする。AndroidでHTTPSの証明書の検証に使うKotlinの部品が、
+# CRLの配布元の一覧(平文を許すホスト)を持つ。CAが新しい中間CAを使い始めると、一覧を更新した版へ
+# 上げてAPKを配り直すまで、その証明書の通信先につながらない。脆弱性ではないのでアラートは出ず、
+# 新しい版が出たことに気付く手立てがほかに無い(Issue #536。
+# `docs/spec/architecture/network-secrets.md`「証明書の失効の確認」)。
+#
+# ここで来るPRは、新しい版が出た知らせとして使う。この版はreqwestが引き込む版と合わせる必要があり
+# (`Cargo.toml`の`rustls-platform-verifier`のコメント)、これだけを上げると版が2つに分かれうるので、
+# そのままマージできるとは限らない。上げるときは、Kotlinの部品を照らす
+# `crates/scitl-tauri/gen/android/gradle/verification-metadata.xml`も上げる(上げ忘れはCIが止める)。
+#
+# ほかの依存は追わない(全部を対象にすると、毎週のPRが多くなりすぎる)。
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: rustls-platform-verifier
