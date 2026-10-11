@@ -78,15 +78,19 @@ impl<'a> AttachmentNote<'a> {
 /// 操作の記録1件(会話の外での操作か、捨てた試行での実行)についてモデルに伝える情報。項目は
 /// モデルが呼ぶツールと同じ語彙にそろえる(読み方の説明を増やさないため)。JSONに直列化してから
 /// 予約タグを無害化する。
+///
+/// フィールドは名前順に宣言する。`Value`を経由して書き出すので、宣言順がそのままキーの順になる。
+/// 保存の無いターンの操作の記録は毎回組み立て直すので、`serde_json`がキーを名前順に並べていた版と
+/// 同じ文字列にしておかないと、更新したときに前が変わる(Issue #446)。
 #[derive(Debug, Clone, Serialize)]
 pub struct OperationNote<'a> {
-    /// どこからの操作か(`db::messages::OperationSource`の値か、[`DISCARDED_ATTEMPT_SOURCE`])。
-    pub source: &'a str,
+    pub arguments: &'a Value,
     /// 記録の日時(ISO8601 UTC)。
     pub at: &'a str,
-    pub tool: &'a str,
-    pub arguments: &'a Value,
     pub result: &'a Value,
+    /// どこからの操作か(`db::messages::OperationSource`の値か、[`DISCARDED_ATTEMPT_SOURCE`])。
+    pub source: &'a str,
+    pub tool: &'a str,
 }
 
 impl OperationNote<'_> {
@@ -406,6 +410,25 @@ mod tests {
         assert!(omitted.contains(&large.to_string().chars().count().to_string()));
         assert_eq!(notes[1]["tool"], "update_task");
         assert_eq!(notes[1]["arguments"], arguments);
+    }
+
+    /// 操作の囲みは、前の版(キーを名前順に並べていた)と同じ文字列になる。保存の無いターンで
+    /// 毎回組み立て直すので、変わると前が変わる(Issue #446)。引数と結果は保存した順のまま。
+    #[test]
+    fn operations_keep_the_text_of_the_versions_that_sorted_the_keys() {
+        let arguments: Value = serde_json::from_str(r#"{"title":"t","deadline":"d"}"#).unwrap();
+        let result = json!({ "ok": true });
+        let text = PromptText::operations(&[OperationNote {
+            arguments: &arguments,
+            at: "2026-10-01T00:00:00Z",
+            result: &result,
+            source: "ui",
+            tool: "update_task",
+        }]);
+        assert_eq!(
+            text.as_str(),
+            r#"<scitl:operations>[{"arguments":{"title":"t","deadline":"d"},"at":"2026-10-01T00:00:00Z","result":{"ok":true},"source":"ui","tool":"update_task"}]</scitl:operations>"#
+        );
     }
 
     /// 日本時間で表した送信日時。

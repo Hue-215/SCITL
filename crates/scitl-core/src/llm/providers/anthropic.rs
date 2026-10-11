@@ -816,10 +816,10 @@ mod tests {
             .contains("limit reached"));
     }
 
-    /// 受け取ったブロックは、キーの順も変えずにそのまま返す。
+    /// 受け取ったブロックは、書き方(空白・エスケープ)も変えずにそのまま返す。
     #[test]
     fn echoes_the_replayed_blocks_instead_of_rebuilding_the_assistant_message() {
-        let thinking = r#"{"type":"thinking","thinking":"","signature":"sig"}"#;
+        let thinking = r#"{"type": "thinking", "thinking": "\u3042", "signature": "sig"}"#;
         let tool_use = r#"{"type":"tool_use","id":"toolu_1","name":"add_steps","input":{}}"#;
         let messages = [
             user("hi"),
