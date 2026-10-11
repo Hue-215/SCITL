@@ -126,7 +126,7 @@ pub type ModelOverrides = crate::llm::CapabilityLayer;
 /// 応答タイムアウトの既定値(秒)。未設定のときに使う値はここにだけ置く。生成の
 /// 長い非ストリーミング応答も待てるよう、余裕を持たせる。データの届かない時間の上限として使うので
 /// (`net::RequestTimeout`)、ストリーミングで読む間は全体の上限にならず、ストリーミングしないとき
-/// ([`GeneralConfig::streaming`])は応答全体を待つ時間の上限になる。タイムアウト自体は常に掛ける
+/// ([`GeneralConfig::streaming`])は実質、生成の完了を待つ時間の上限になる。タイムアウト自体は常に掛ける
 /// (応答しないエンドポイント1つでターンが固まらないように)。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 

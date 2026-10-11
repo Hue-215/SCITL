@@ -47,7 +47,7 @@ impl GeminiAdapter {
         let base_url = super::parse_base_url(&base_url.into())?;
         // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
         // 届き続けている間は切らない)。ストリーミングしないときは、生成が終わるまで何も届かない
-        // ので、同じ上限が応答全体を待つ時間の上限になる。
+        // ので、同じ上限が実質、生成の完了を待つ時間の上限になる。
         let client = crate::net::hardened_client(
             &base_url,
             crate::net::RequestTimeout::BetweenReads(request_timeout),
@@ -285,7 +285,8 @@ fn request_body<'a>(
             })
             .collect(),
         generation_config: (!config.is_empty()).then_some(Value::Object(config)),
-        // 無視して1つのJSONで返す中継もある(`GeminiAdapter::send`)。
+        // 設定で切ったときは`GeminiAdapter::request_body`が置き換える。頼んでも、無視して
+        // 1つのJSONで返す中継もある(`GeminiAdapter::send`)。
         stream: true,
     }
 }

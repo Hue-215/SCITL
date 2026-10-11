@@ -965,6 +965,15 @@ fn adapter_is_rebuilt_only_when_its_inputs_change() {
         .set_model_context_length(&id, "m1", "4096")
         .unwrap();
     assert!(Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
+
+    // ストリーミングの切り替えは、次のターンから効くように組み立て直す。
+    let off = GeneralUpdate {
+        streaming: Some(false),
+        response_timeout_secs: None,
+        ..general_update(None, "")
+    };
+    settings.update_general(off).unwrap();
+    assert!(!Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
 }
 
 #[test]

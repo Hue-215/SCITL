@@ -53,14 +53,24 @@ async fn main() {
     let dialect = std::env::var("RELAY_DIALECT").unwrap_or_else(|_| "openai".to_string());
     let model = std::env::var("RELAY_MODEL").ok();
     let model = |default: &'static str| model.as_deref().unwrap_or(default);
+    // 疑似APIは`stream: true`を断るので、頼まれたときだけストリーミングで送る。
+    let streaming = std::env::var_os("RELAY_STREAMING").is_some();
     let adapter: Box<dyn LlmAdapter> = match dialect.as_str() {
-        "openai" => {
-            Box::new(OpenAiCompatAdapter::new(base_url, key, model("dummy-o"), timeout).unwrap())
-        }
-        "anthropic" => {
-            Box::new(AnthropicAdapter::new(base_url, key, model("dummy-a"), timeout).unwrap())
-        }
-        "gemini" => Box::new(GeminiAdapter::new(base_url, key, model("dummy-g"), timeout).unwrap()),
+        "openai" => Box::new(
+            OpenAiCompatAdapter::new(base_url, key, model("dummy-o"), timeout)
+                .unwrap()
+                .streaming(streaming),
+        ),
+        "anthropic" => Box::new(
+            AnthropicAdapter::new(base_url, key, model("dummy-a"), timeout)
+                .unwrap()
+                .streaming(streaming),
+        ),
+        "gemini" => Box::new(
+            GeminiAdapter::new(base_url, key, model("dummy-g"), timeout)
+                .unwrap()
+                .streaming(streaming),
+        ),
         other => panic!("unknown RELAY_DIALECT: {other}"),
     };
     let general = GeneralConfig::default();
