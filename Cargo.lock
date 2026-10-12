@@ -3856,7 +3856,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "scitl-core",
@@ -3869,7 +3869,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "android-native-keyring-store",
  "async-trait",
@@ -3908,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-debug-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "scitl-cli",
@@ -3923,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-tauri"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "scitl-core",
  "secrecy",
