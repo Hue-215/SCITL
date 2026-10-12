@@ -105,7 +105,6 @@ impl Settings {
             .unwrap_or(llm::DEFAULT_CAPABILITIES)
     }
 
-    /// 手動設定より下の層(自動検出 → 既定値)で決まる値。
     fn fallback_capabilities(&self, provider_id: &str, model: &str) -> ModelCapabilities {
         llm::fallback_capabilities(self.detected.get(provider_id, model).as_ref())
     }
@@ -206,7 +205,6 @@ impl Settings {
         draft.commit().map(drop)
     }
 
-    /// チャットのモデル一覧に出すかどうか。
     pub fn set_model_visible(
         &self,
         provider_id: &str,

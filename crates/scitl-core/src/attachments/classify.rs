@@ -22,7 +22,7 @@ pub const LIMITS: Limits = Limits {
 };
 
 impl Limits {
-    /// その種別の大きさの上限。その他は受け付けないので`None`(Issue #506。モデルが中身に
+    /// その種別の大きさの上限。その他は受け付けないので`None`(モデルが中身に
     /// 何もできないのに、読んだかのように見えて紛らわしいため)。
     pub fn bytes_for(&self, kind: AttachmentKind) -> Option<u64> {
         match kind {

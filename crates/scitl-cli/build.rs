@@ -37,7 +37,6 @@ fn link_vcruntime_statically() {
     ] {
         println!("cargo:rustc-link-arg=/NODEFAULTLIB:{lib}");
     }
-    // 使うライブラリ。
     for lib in ["libcmt.lib", "libvcruntime.lib", "ucrt.lib"] {
         println!("cargo:rustc-link-arg=/DEFAULTLIB:{lib}");
     }

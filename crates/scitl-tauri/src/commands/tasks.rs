@@ -10,7 +10,7 @@ use scitl_core::settings::Snapshot;
 use super::{with_db, CommandResult};
 use crate::AppState;
 
-/// フロントエンド向けIPCコマンド。`task_id`は表示中のタスクとしてフロントエンドが渡す
+/// `task_id`は表示中のタスクとしてフロントエンドが渡す
 /// (ターン開始時に対象を固定するツール`get_current_task_detail`とは別の境界)。
 #[tauri::command]
 pub async fn get_task_detail(

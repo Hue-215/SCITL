@@ -25,7 +25,6 @@ mod stream;
 /// ([`super::validate_header_name`])。
 pub(super) const OWN_HEADERS: &[&str] = &["x-api-key", "anthropic-version"];
 
-/// Anthropic形式のアダプタ。
 pub struct AnthropicAdapter {
     client: reqwest::Client,
     base_url: ExternalUrl,
@@ -45,9 +44,6 @@ impl AnthropicAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
-        // 届き続けている間は切らない)。ストリーミングしないときは、生成が終わるまで何も届かない
-        // ので、同じ上限が実質、生成の完了を待つ時間の上限になる。
         let client = crate::net::hardened_client(
             &base_url,
             crate::net::RequestTimeout::BetweenReads(request_timeout),
@@ -97,7 +93,8 @@ pub(super) fn includes_version_path(path: &str) -> bool {
 const API_VERSION: &str = "2023-06-01";
 
 /// 1回の応答で生成してよいトークン数の上限。Anthropic形式では必須。出力の上限がこれより
-/// 小さい古いモデルもあるので、大きくはしない(設定で変えられるようにするのはIssue #271)。
+/// 小さい古いモデルもあるので、大きくはしない。
+// TODO(#271): 設定で変えられるようにする。
 const MAX_TOKENS: u32 = 16_000;
 
 /// 鍵と版、カスタムヘッダーを付けて送る。`session`は[`super::send_with_key`]と同じ。

@@ -32,7 +32,6 @@ pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<TaskStep>> {
     Ok(rows)
 }
 
-/// 工程の説明の上限文字数。
 pub(crate) const MAX_STEP_DESCRIPTION_CHARS: usize = 100;
 
 /// 1つのタスクが持てる工程(未削除)の上限件数。書き込み系のツールは毎回工程の全体を返すので、

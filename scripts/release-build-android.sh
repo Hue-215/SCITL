@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Androidの配布用のビルド(署名したAPK)。手順と確かめ方は.claude/skills/release-build/SKILL.md 7節。
+# Androidの配布用のビルド(署名したAPK)。手順と確かめ方は.claude/skills/release-build/SKILL.md「Androidの配布物」。
 #
 # デスクトップ向け(release-build.sh)と同じく、ビルドした人の絶対パスをネイティブのライブラリ(.so)から
 # 外してビルドし、出来たAPKの中身(入っているABI・第三者ライセンスの一覧・残ったパス)を確かめてから、

@@ -31,7 +31,6 @@ pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
 /// [`build_active_adapter`]の結果。
 pub enum ActiveAdapter {
     Ready(SharedAdapter),
-    /// アクティブなプロバイダーが無い。
     NoProvider,
     /// 鍵を登録したプロバイダーなのに、資格情報ストアから鍵を読めなかった。理由(画面に
     /// 出してよい文)を持つ。資格情報ストアのロック解除後などに読み直せるよう、呼び出し元は
@@ -134,7 +133,7 @@ async fn read_success_json_with<T: DeserializeOwned>(
 
 /// 応答の欄が`null`でも、欄が無いときと同じ既定値にする(`#[serde(default, deserialize_with =
 /// "super::null_as_default")]`)。`#[serde(default)]`だけでは、無い欄は受けても`null`は型の誤りに
-/// なる。空の欄を省かずに`null`で返す互換サーバーがある(Issue #458)。
+/// なる。空の欄を省かずに`null`で返す互換サーバーがある。
 fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -528,7 +527,7 @@ async fn reject_failure(
     })
 }
 
-/// エラー応答の本文として読む量の上限。分類と詳細(`ErrorDetail`は512文字まで)には先頭だけで
+/// エラー応答の本文として読む量の上限。分類と詳細(`ErrorDetail`が切り詰める)には先頭だけで
 /// 足りる。ストリーミングで読む方言では待つ時間の上限が無通信の間隔だけなので、流し続ける
 /// 本文を読み切ろうとしない。
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;

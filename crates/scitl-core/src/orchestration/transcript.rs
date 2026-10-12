@@ -480,7 +480,7 @@ mod tests {
             .unwrap()]),
             user_message_format_note(),
         ];
-        // JSONのキーの順だけが変わったとき(`serde_json`の`preserve_order`。Issue #446)は版を上げない。
+        // JSONのキーの順だけが変わったとき(`serde_json`の`preserve_order`)は版を上げない。
         // 前の順で保存した本文も、実際に送ったものとして正しいまま並べられるため。
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
@@ -658,7 +658,7 @@ mod tests {
     }
 
     /// 保存した発言は、引数のキーの順を変えずに読み戻す。前の版が名前順で保存したものも、
-    /// 書き直すと保存した文字列に戻るので、指紋が合ったまま並ぶ(Issue #446)。
+    /// 書き直すと保存した文字列に戻るので、指紋が合ったまま並ぶ。
     #[test]
     fn a_stored_message_reads_back_with_its_keys_in_the_saved_order() {
         let call = |arguments: &str| {

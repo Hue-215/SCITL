@@ -11,7 +11,6 @@ use std::fmt;
 use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 
-/// 詳細に載せる文字列の上限。
 const MAX_DETAIL_CHARS: usize = 512;
 /// 送信した秘密情報が現れたときの置き換え先。
 const REDACTED: &str = "[redacted]";

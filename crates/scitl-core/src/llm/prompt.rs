@@ -81,7 +81,7 @@ impl<'a> AttachmentNote<'a> {
 ///
 /// フィールドは名前順に宣言する。`Value`を経由して書き出すので、宣言順がそのままキーの順になる。
 /// 保存の無いターンの操作の記録は毎回組み立て直すので、`serde_json`がキーを名前順に並べていた版と
-/// 同じ文字列にしておかないと、更新したときに前が変わる(Issue #446)。
+/// 同じ文字列にしておかないと、更新したときに前が変わる。
 #[derive(Debug, Clone, Serialize)]
 pub struct OperationNote<'a> {
     pub arguments: &'a Value,
@@ -403,7 +403,7 @@ mod tests {
     }
 
     /// 操作の囲みは、前の版(キーを名前順に並べていた)と同じ文字列になる。保存の無いターンで
-    /// 毎回組み立て直すので、変わると前が変わる(Issue #446)。引数と結果は保存した順のまま。
+    /// 毎回組み立て直すので、変わると前が変わる。引数と結果は保存した順のまま。
     #[test]
     fn operations_keep_the_text_of_the_versions_that_sorted_the_keys() {
         let arguments: Value = serde_json::from_str(r#"{"title":"t","deadline":"d"}"#).unwrap();

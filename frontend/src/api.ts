@@ -29,8 +29,6 @@ import type {
   TurnEvent,
 } from './types'
 
-// フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
-
 /** コマンドが返した失敗(`CommandFailure`。`crates/scitl-tauri/src/commands/mod.rs`)か。 */
 function isCommandFailure(e: unknown): e is CommandFailure {
   return (
@@ -94,8 +92,6 @@ export function sendChatMessage(
   })
 }
 
-// 添付。中身は生のバイト列で送り、名前はヘッダーに載せる(ヘッダーはASCIIしか
-// 運べないので符号化する)。パスを渡すコマンドは無い。
 export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
 }

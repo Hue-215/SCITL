@@ -3,8 +3,8 @@
 # 追うのは`rustls-platform-verifier`と`rustls-platform-verifier-android`だけにする。AndroidでHTTPSの
 # 証明書の検証に使うKotlinの部品が、CRLの配布元の一覧(平文を許すホスト)を持つ。CAが新しい中間CAを
 # 使い始めると、一覧を更新した版へ上げてAPKを配り直すまで、その証明書の通信先につながらない。
-# 脆弱性ではないのでアラートは出ず、新しい版が出たことに気付く手立てがほかに無い(Issue #536。
-# `docs/spec/architecture/network-secrets.md`「証明書の失効の確認」)。
+# 脆弱性ではないのでアラートは出ず、新しい版が出たことに気付く手立てがほかに無い
+# (`docs/spec/architecture/network-secrets.md`「証明書の失効の確認」)。
 #
 # - Kotlinの部品の版は`rustls-platform-verifier-android`の版に合わせる。こちらは直接の依存ではなく、
 #   `rustls-platform-verifier`が0.2系として要求するので、単独で上がりうる。直接でない依存も追うよう、

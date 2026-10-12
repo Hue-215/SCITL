@@ -1,4 +1,3 @@
-// 設定画面の「一般」タブ。
 import { useEffect, useId, useState } from 'react'
 import { exportMarkdown, getExportTarget, openExportFolder, updateGeneralSettings } from './api'
 import type { ExportOutcome, ExportTarget, Language, SettingsView } from './types'

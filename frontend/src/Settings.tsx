@@ -42,7 +42,6 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id']
 
-// 設定画面。
 export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)

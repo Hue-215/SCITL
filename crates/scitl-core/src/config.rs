@@ -34,7 +34,6 @@ pub struct ProviderConfig {
     pub name: String,
     pub api_format: ApiFormat,
     pub base_url: String,
-    /// 登録したモデルの一覧。
     #[serde(default)]
     pub models: Vec<ModelConfig>,
     /// `models`のうちチャットで実際に使うモデル。`models`に無い値は無効。
@@ -65,7 +64,6 @@ impl ProviderConfig {
     }
 }
 
-/// 登録済みの1モデル。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub name: String,
@@ -169,17 +167,17 @@ impl GeneralConfig {
     }
 
     /// オフにすると、どの方言でもストリーミングを頼まずに送る(`stream: true`を断るサーバー・
-    /// まとめて返す中継のため。Issue #560)。
+    /// まとめて返す中継のため)。
     pub fn streaming(&self) -> bool {
         self.streaming.unwrap_or(true)
     }
 
-    /// 表示だけの設定で、思考の強さの指定や保存は変えない(Issue #562)。
+    /// 表示だけの設定で、思考の強さの指定や保存は変えない。
     pub fn show_reasoning(&self) -> bool {
         self.show_reasoning.unwrap_or(true)
     }
 
-    /// 画面に出すアシスタントの名前。ニックネームが無ければ、使うプロバイダーの名前(Issue #563)。
+    /// 画面に出すアシスタントの名前。ニックネームが無ければ、使うプロバイダーの名前。
     /// 手で書いた空白だけの値は、未設定と同じに扱う。
     pub fn assistant_name<'a>(&'a self, provider_name: &'a str) -> &'a str {
         self.assistant_nickname

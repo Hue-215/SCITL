@@ -103,7 +103,6 @@ impl AdapterState {
     }
 }
 
-/// 組み立ての結果を状態に直す。
 fn adapter_state(built: Result<providers::ActiveAdapter>) -> AdapterState {
     match built {
         Ok(providers::ActiveAdapter::Ready(adapter)) => AdapterState::Ready(adapter),

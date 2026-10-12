@@ -16,7 +16,6 @@ pub struct DestinationDialog {
     pub cancel_label: String,
 }
 
-/// 登録しようとしている通信先。
 pub(super) enum NewDestination<'a> {
     Provider {
         name: &'a str,

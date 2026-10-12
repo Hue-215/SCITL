@@ -177,7 +177,7 @@ function withThought(segments: TurnSegment[], item: ThoughtItem): TurnSegment[] 
  * まとめる。実行前のツール呼び出しは描かず、実行の知らせ(`tool_executed`)で結果と一緒に出す。
  *
  * 受け取りの途中で失敗したラウンドの本文も流れたまま見えるが、保存はされない(断片なので。
- * `docs/spec/principles.md` 3節)。完了後に読み直した返信に置き換わる。
+ * `docs/spec/principles.md`「保存するのは組み立て終わった応答」)。完了後に読み直した返信に置き換わる。
  */
 export function appendTurnEvent(live: LiveTurn, event: TurnEvent): LiveTurn {
   const { segments, open } = live

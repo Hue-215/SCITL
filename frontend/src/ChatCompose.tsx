@@ -114,7 +114,6 @@ export default function ChatCompose({
   onGenerateReply: (() => void) | null
   onStop: () => void
   onError: (message: string) => void
-  // モデルの選択を変えられたとき。
   onModelChanged: () => void
 }) {
   const compose = useContext(ComposeContext)
