@@ -7,6 +7,9 @@ export const DEFAULT_LANGUAGE: Language = "ja";
 /** エラー発言の文言のキーの前置き(`orchestration::turn_error::MESSAGE_KEY_PREFIX`)。 */
 export const TURN_ERROR_KEY_PREFIX = "turn_error.";
 
+/** コマンドの失敗の文言のキーの前置き(`error::MESSAGE_KEY_PREFIX`)。 */
+export const COMMAND_ERROR_KEY_PREFIX = "command_error.";
+
 /** メモリ1件の本文の上限文字数(`db::memories::MAX_MEMORY_CHARS`)。 */
 export const MAX_MEMORY_CHARS = 200;
 

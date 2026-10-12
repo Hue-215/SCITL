@@ -4,4 +4,4 @@ import type { ToolExecutionView } from "./ToolExecutionView";
 /**
  * ターンの中身の1要素の表示。`round`は1始まりのラウンドの番号。
  */
-export type PartView = { "type": "reasoning", round: number, text: string, } | { "type": "text", round: number, text: string, } | { "type": "tool", round: number, id: number, execution: ToolExecutionView, };
+export type PartView = { "type": "reasoning", round: number, text: string, truncated: boolean, } | { "type": "text", round: number, text: string, truncated: boolean, } | { "type": "tool", round: number, id: number, execution: ToolExecutionView, } | { "type": "truncated", round: number, };

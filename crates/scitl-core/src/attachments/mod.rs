@@ -61,7 +61,7 @@ pub fn delivery_without_model(kind: AttachmentKind) -> Option<Delivery> {
 pub const CAN_REVEAL: bool = cfg!(not(target_os = "android"));
 
 /// 画面で押して入っているフォルダを開ける添付か。その他は今は受け付けないが、受け付けていた
-/// 頃に付けたものは、利用者が取り出せるよう開けるままにする(Issue #506)。
+/// 頃に付けたものは、利用者が取り出せるよう開けるままにする。
 pub fn revealable(kind: AttachmentKind, can_reveal: bool) -> bool {
     can_reveal && kind == AttachmentKind::Other
 }

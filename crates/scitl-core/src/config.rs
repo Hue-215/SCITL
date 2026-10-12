@@ -34,7 +34,6 @@ pub struct ProviderConfig {
     pub name: String,
     pub api_format: ApiFormat,
     pub base_url: String,
-    /// 登録したモデルの一覧。
     #[serde(default)]
     pub models: Vec<ModelConfig>,
     /// `models`のうちチャットで実際に使うモデル。`models`に無い値は無効。
@@ -65,7 +64,6 @@ impl ProviderConfig {
     }
 }
 
-/// 登録済みの1モデル。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub name: String,
@@ -124,14 +122,18 @@ pub enum ReasoningEffort {
 pub type ModelOverrides = crate::llm::CapabilityLayer;
 
 /// 応答タイムアウトの既定値(秒)。未設定のときに使う値はここにだけ置く。生成の
-/// 長い非ストリーミング応答も待てるよう、余裕を持たせる。ストリーミングで読む方言では、
-/// 全体ではなくデータの届かない時間の上限になる(`net::RequestTimeout`)。タイムアウト自体は常に掛ける
+/// 長い非ストリーミング応答も待てるよう、余裕を持たせる。データの届かない時間の上限として使うので
+/// (`net::RequestTimeout`)、ストリーミングで読む間は全体の上限にならず、ストリーミングしないとき
+/// ([`GeneralConfig::streaming`])は実質、生成の完了を待つ時間の上限になる。タイムアウト自体は常に掛ける
 /// (応答しないエンドポイント1つでターンが固まらないように)。
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 120;
 
 /// システムプロンプト等、モデル・プロバイダーに依存しない全般設定。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeneralConfig {
+    /// アシスタントのニックネーム。未設定ならモデルに伝えず、画面の表示名はプロバイダー名にする
+    /// ([`Self::assistant_name`])。
+    pub assistant_nickname: Option<String>,
     pub system_prompt: Option<String>,
     /// タスクチャットでのみ追加するシステムプロンプト(工程ツールの使い方など)。未設定は
     /// 表示言語の既定の文面で、解釈は`orchestration::SystemPrompts::from_config`に閉じる。
@@ -142,6 +144,11 @@ pub struct GeneralConfig {
     /// 応答タイムアウト(秒)。未設定は[`DEFAULT_RESPONSE_TIMEOUT_SECS`]。値の解釈は
     /// [`Self::response_timeout`]に閉じる。
     pub response_timeout_secs: Option<u64>,
+    /// チャットの応答をストリーミングで受け取るか。未設定はオン。値の解釈は[`Self::streaming`]に
+    /// 閉じる。
+    pub streaming: Option<bool>,
+    /// 会話欄にモデルの思考を出すか。未設定は出す。値の解釈は[`Self::show_reasoning`]に閉じる。
+    pub show_reasoning: Option<bool>,
     /// 表示言語のコード([`Language::code`])。未設定と知らない値は[`Language::DEFAULT`]で、
     /// 値の解釈は[`Self::language`]に閉じる。知らない値(打ち間違い、別の版が書いた言語)も
     /// 書かれたまま持ち、言語を選び直すまでファイルから消さない。
@@ -159,6 +166,29 @@ impl GeneralConfig {
         )
     }
 
+    /// オフにすると、どの方言でもストリーミングを頼まずに送る(`stream: true`を断るサーバー・
+    /// まとめて返す中継のため)。
+    pub fn streaming(&self) -> bool {
+        self.streaming.unwrap_or(true)
+    }
+
+    /// 表示だけの設定で、思考の強さの指定や保存は変えない。
+    pub fn show_reasoning(&self) -> bool {
+        self.show_reasoning.unwrap_or(true)
+    }
+
+    /// 手で書いた空白だけの値は、未設定と同じに扱う。
+    pub fn assistant_nickname(&self) -> Option<&str> {
+        self.assistant_nickname
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+    }
+
+    /// 画面に出すアシスタントの名前。ニックネームが無ければ、使うプロバイダーの名前。
+    pub fn assistant_name<'a>(&'a self, provider_name: &'a str) -> &'a str {
+        self.assistant_nickname().unwrap_or(provider_name)
+    }
+
     pub fn language(&self) -> Language {
         self.language
             .as_deref()
@@ -174,7 +204,7 @@ impl GeneralConfig {
     }
 }
 
-/// ツール呼び出しの上限(設定画面「ツール/MCP」タブ)。`None`は未設定で、既定値は
+/// ツール呼び出しの上限(設定画面「MCPサーバー」タブ)。`None`は未設定で、既定値は
 /// [`crate::orchestration::ToolLimits`]が持つ。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolConfig {
@@ -317,6 +347,32 @@ pub fn save(path: &Path, config: &Config) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_is_on_unless_the_file_turns_it_off() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.streaming());
+        let config: Config = toml::from_str("[general]\nstreaming = false\n").unwrap();
+        assert!(!config.general.streaming());
+    }
+
+    #[test]
+    fn reasoning_is_shown_unless_the_file_hides_it() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.show_reasoning());
+        let config: Config = toml::from_str("[general]\nshow_reasoning = false\n").unwrap();
+        assert!(!config.general.show_reasoning());
+    }
+
+    #[test]
+    fn a_blank_nickname_counts_as_unset() {
+        let config: Config = toml::from_str("[general]\nassistant_nickname = \"  \"\n").unwrap();
+        assert_eq!(config.general.assistant_nickname(), None);
+        assert_eq!(config.general.assistant_name("provider"), "provider");
+
+        let config: Config = toml::from_str("[general]\nassistant_nickname = \"Hal\"\n").unwrap();
+        assert_eq!(config.general.assistant_name("provider"), "Hal");
+    }
 
     #[test]
     fn load_missing_file_returns_default_config() {

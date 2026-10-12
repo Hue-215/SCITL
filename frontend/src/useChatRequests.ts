@@ -8,13 +8,10 @@ import type { Chat, PendingEntry, TurnEvent } from './types'
 
 // 会話に対するコマンド(聞き取りの開始・送信・編集・再試行・削除と、ヘッダーからのタスク操作)
 // の実行中の状態と失敗を、会話ごとに持つ。応答待ちの会話を離れて別の会話を操作でき、
-// 戻ってきたときも応答待ちの表示・途中経過・失敗・停止中の表示がその会話に残る。
+// 戻ってきたときも応答待ちの表示・途中経過・失敗・停止中の状態がその会話に残る。
 
 export interface ChatRequests {
-  /**
-   * 実行中のコマンドの楽観表示。実行中でなければ空。止める指示を出したあとは、応答待ちの
-   * 文言が停止中のものに変わる。
-   */
+  /** 実行中のコマンドの楽観表示。実行中でなければ空。 */
   pendingOf: (chat: Chat) => PendingEntry[]
   /** 応答待ちの間に届いたターンの中身(思考・ツールの並びと本文)。届いた順。 */
   liveOf: (chat: Chat) => LiveTurn
@@ -139,15 +136,7 @@ export function useChatRequests(): ChatRequests {
   const isStopping = (chat: Chat) => stopping[chatKey(chat)] !== undefined
 
   return {
-    pendingOf: (chat) => {
-      const entries = pending[chatKey(chat)] ?? []
-      if (!isStopping(chat)) return entries
-      return entries.map((entry) =>
-        entry.role === 'pending'
-          ? { ...entry, content: t('chat.stopping_reply'), stopping: true }
-          : entry,
-      )
-    },
+    pendingOf: (chat) => pending[chatKey(chat)] ?? [],
     liveOf: (chat) => live[chatKey(chat)] ?? NO_LIVE_TURN,
     isBusy: (chat) => pending[chatKey(chat)] !== undefined,
     isGenerating: (chat) =>

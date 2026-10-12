@@ -20,7 +20,6 @@ pub struct Memory {
 /// [`row_to_memory`]の並び。
 const MEMORY_COLUMNS: &str = "id, content, created_at, updated_at";
 
-/// 1件の本文の上限文字数。
 pub const MAX_MEMORY_CHARS: usize = 200;
 
 /// 持てるメモリ(未削除)の上限件数。読み取りと書き込み系のツールは毎回全体を返すので、

@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use crate::config::ToolConfig;
 
-/// ラウンド数の既定値。
 pub const DEFAULT_MAX_ROUNDS_PER_TURN: u32 = 4;
 
 /// ツール実行に使える合計時間の既定値。応答タイムアウトの既定値に揃える。普段は発動せず、

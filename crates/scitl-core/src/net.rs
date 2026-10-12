@@ -320,7 +320,7 @@ mod tests {
         assert!(rejected("http://[fd00:ec2::254]/"));
         assert!(rejected("http://[fd00:ec2::253]/"));
         assert!(rejected("http://[fd20:ce::254]/"));
-        // 外す範囲の外のULAは、従来どおり許す
+        // 外す範囲の外のULAは許す
         assert!(!rejected("http://[fd00:ec3::254]/"));
         assert!(!rejected("http://[fd20:ce::253]/"));
         assert!(!rejected("http://[fd12:3456::1]/"));
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn rejects_http_for_ipv6_link_local() {
-        // `url`クレートがスコープIDなしのfe80::をパースする場合に備えた回帰確認
+        // `url`クレートがスコープIDなしのfe80::をパースする場合に備える
         // (スコープID付きは`url::Url::parse`自体が失敗するため、ここでは対象外)。
         assert!(validate_external_url(&Url::parse("http://[fe80::1]/").unwrap()).is_err());
     }

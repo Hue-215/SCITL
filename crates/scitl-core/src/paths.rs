@@ -20,7 +20,6 @@ const DATA_DIR_NAME: &str = "data";
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DataDirError {
-    /// 実行ファイルの場所が分からない。
     #[error("could not locate this executable: {reason}")]
     NoExecutable { reason: String },
     /// 実行ファイルが一時ディレクトリの中にある(アーカイブを展開せずに中から起動した等)。
@@ -29,7 +28,6 @@ pub enum DataDirError {
         "this executable is in a temporary directory ({dir}); extract it to a permanent location"
     )]
     TemporaryDir { dir: String },
-    /// OSがアプリのデータ・キャッシュの置き場所を示さない。
     #[error("the OS did not give a directory for this application: {reason}")]
     NoAppDir { reason: String },
     /// データディレクトリを作れない・書き込めない(書き込めない場所に置いた等)。

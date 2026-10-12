@@ -104,16 +104,17 @@ fn a_failed_turn_is_saved_and_printed_as_the_last_message() {
 }
 
 #[test]
-fn retrying_a_reply_makes_another_attempt_of_the_same_turn() {
+fn retrying_a_reply_is_refused_without_deleting_while_the_chat_is_unavailable() {
     let data = DataDir::new();
     let failed = stdout_lines(&data.run(&["chat", "send", "こんにちは"]));
     let reply_id = failed[0]["message"]["id"].to_string();
+    let before = stdout_json(&data.run(&["chat", "show"]));
 
-    let retried = stdout_lines(&data.run(&["chat", "retry", &reply_id]));
+    let refused = data.run(&["chat", "retry", &reply_id]);
 
-    let (first, second) = (&failed[0]["message"], &retried[0]["message"]);
-    assert_eq!(second["turn_id"], first["turn_id"]);
-    assert_eq!(second["attempt_no"], 2);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("no_provider"));
+    assert_eq!(stdout_json(&data.run(&["chat", "show"])), before);
 }
 
 /// 返信の無い会話にだけ応答を生成する。エラー発言で終わったあとは断る(作り直しを使う)。
@@ -265,7 +266,16 @@ fn providers_and_models_are_registered_into_the_config_file() {
 
     stdout_json(&data.run(&["model", "add", &provider, "model-a", "model-b"]));
     stdout_json(&data.run(&["model", "select", &provider, "model-b"]));
-    stdout_json(&data.run(&["settings", "general", "--response-timeout-secs", "300"]));
+    stdout_json(&data.run(&[
+        "settings",
+        "general",
+        "--response-timeout-secs",
+        "300",
+        "--no-streaming",
+        "--hide-reasoning",
+        "--assistant-nickname",
+        "Hal",
+    ]));
 
     // 起動のたびに設定ファイルから読み直すので、ここで見えるのは保存されたもの。
     let shown = stdout_json(&data.run(&["settings", "show"]));
@@ -273,6 +283,18 @@ fn providers_and_models_are_registered_into_the_config_file() {
     assert_eq!(shown["providers"][0]["active_model"], "model-b");
     assert_eq!(shown["providers"][0]["models"].as_array().unwrap().len(), 2);
     assert_eq!(shown["general"]["response_timeout_secs"], 300);
+    assert_eq!(shown["general"]["streaming"], false);
+    assert_eq!(shown["general"]["show_reasoning"], false);
+    assert_eq!(shown["general"]["assistant_nickname"], "Hal");
+
+    // 省いた値は既定値に戻る。
+    let reset = stdout_json(&data.run(&["settings", "general"]));
+    assert_eq!(reset["general"]["streaming"], true);
+    assert_eq!(reset["general"]["show_reasoning"], true);
+    assert_eq!(
+        reset["general"]["assistant_nickname"],
+        serde_json::Value::Null
+    );
 
     let removed = stdout_json(&data.run(&["provider", "delete", &provider]));
     assert_eq!(removed["providers"], serde_json::json!([]));

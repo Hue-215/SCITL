@@ -31,8 +31,10 @@ pub(super) struct StoredChat {
     transcripts: Vec<Transcript>,
     /// 保存が指すシステムプロンプトとツール定義の本文(指紋ごと)。
     blobs: HashMap<String, String>,
-    /// 保存していない開始の発言を先頭に補うか。
-    starts_with_opening: bool,
+    /// 保存していない開始の発言を先頭に補うなら、その送信日時に使うタスクの作成日時。
+    opening_at: Option<String>,
+    /// 会話から外したターンの実行記録があるか(`messages::has_removed_turn_records`)。
+    removed_records: bool,
 }
 
 /// 聞き取りから始まったタスクの会話(`messages::Opener::Reply`)は、保存していない開始の
@@ -63,7 +65,28 @@ pub(super) fn load(conn: &Connection, chat: Chat) -> Result<StoredChat> {
         attachments: db_attachments::for_chat(conn, chat)?,
         transcripts,
         blobs,
-        starts_with_opening: starts_with_opening(conn, chat)?,
+        opening_at: opening_at(conn, chat)?,
+        removed_records: messages::has_removed_turn_records(conn, chat)?,
+    })
+}
+
+impl StoredChat {
+    /// 聞き取りから始まり(タスクは空から始まった)、それ以後の変更の記録を会話から外して
+    /// いないか。始めた時点で空だったことの伝え方に使う(`system_prompt::ConversationStart`)。
+    /// 外した記録の変更はタスクに残るので、外したあとは「変更はすべて会話に現れる」と言えない。
+    pub(super) fn shows_every_change_since_blank(&self) -> bool {
+        self.opening_at.is_some() && !self.removed_records
+    }
+}
+
+/// 開始の発言を補う会話なら、タスクの作成日時。開始の発言はタスクを作ったときに送ったものと
+/// して扱う。
+fn opening_at(conn: &Connection, chat: Chat) -> Result<Option<String>> {
+    Ok(match chat {
+        Chat::Task(task_id) if starts_with_opening(conn, chat)? => {
+            Some(crate::db::tasks::get_task(conn, task_id)?.created_at)
+        }
+        _ => None,
     })
 }
 
@@ -153,10 +176,10 @@ pub(super) fn build_history(
     let records = ReplyRecords::of(&stored.messages);
     let rows = in_order(&stored.messages, &stored.discarded_records);
     let mut history = History::with_capacity(rows.len() + 1);
-    if stored.starts_with_opening {
+    if let Some(at) = &stored.opening_at {
         history.opening = Some(ChatMessage::user(PromptText::user_message(
             &options.opening,
-            None,
+            SentAt::local(at).as_ref(),
         )));
     }
     // 置く位置を待っている操作の記録と、いま行を読んでいる返信のある試行。
@@ -629,7 +652,7 @@ fn replied_turns(stored: &[Message]) -> HashSet<String> {
 }
 
 /// 返信のある試行の中身を、ラウンドごとに`assistant(本文・呼び出し)` + 呼び出しごとの
-/// `tool(結果)`の並びにする。思考は送らない(`docs/spec/principles.md` 3節「思考は受け取ったまま
+/// `tool(結果)`の並びにする。思考は送らない(`docs/spec/principles.md`「思考は受け取ったまま
 /// 送り返す」。送り返す思考は送った形の保存の側にある)。
 ///
 /// 呼び出しがすべて送られず本文だけが残ったラウンドは、その本文を次のラウンドの本文の前に
@@ -654,7 +677,7 @@ fn reply_messages(parts: &[ResolvedPart]) -> Vec<ChatMessage> {
             match part {
                 ResolvedPart::Text { text, .. } => texts.push(text),
                 ResolvedPart::Tool { record, .. } => calls.extend(call_and_result(record)),
-                ResolvedPart::Reasoning { .. } => {}
+                ResolvedPart::Reasoning { .. } | ResolvedPart::Truncated { .. } => {}
             }
         }
         if calls.is_empty() && i != last {
@@ -742,6 +765,25 @@ mod tests {
     use crate::orchestration::transcript::{StoredInput, StoredMessage};
 
     const OPENING: &str = "開始の発言";
+
+    /// 長さの上限で切れた印は、モデルへ送る並びを変えない(本文に付いた印も、本文の無いラウンドに
+    /// 残った印も)。保存の無いターンを中身から組み立てても、印の無いときと同じ発言列になる。
+    #[test]
+    fn truncation_marks_do_not_change_what_is_sent() {
+        let text = |round, truncated| ResolvedPart::Text {
+            round,
+            text: "途中まで",
+            truncated,
+        };
+        assert_eq!(
+            reply_messages(&[text(1, true)]),
+            reply_messages(&[text(1, false)])
+        );
+        assert_eq!(
+            reply_messages(&[text(1, false), ResolvedPart::Truncated { round: 2 }]),
+            reply_messages(&[text(1, false)])
+        );
+    }
 
     struct Fixture {
         conn: Connection,
@@ -1306,7 +1348,7 @@ mod tests {
         f.reply("t1", "a");
         assert_eq!(
             tool_contents(&f.build(Chat::Task(f.task_id), true)),
-            vec![r#"{"delivered":"name_only","id":1,"name":"a.png"}"#]
+            vec![r#"{"id":1,"name":"a.png","delivered":"name_only"}"#]
         );
     }
 
@@ -1390,8 +1432,8 @@ mod tests {
         let history = f.history();
         assert_eq!(history.len(), 3);
         let texts = user_texts(&history);
-        let opening = PromptText::user_message(OPENING, None);
-        assert!(texts[0].starts_with(opening.as_str()));
+        let opening = f.opening_message();
+        assert!(texts[0].starts_with(user_texts(&[opening])[0]));
         assert_eq!(operations_in(texts[0])[0]["result"], json!({ "n": 1 }));
         assert_eq!(operations_in(texts[1])[0]["result"], json!({ "n": 2 }));
     }
@@ -1529,7 +1571,7 @@ mod tests {
     fn the_opening_message_is_part_of_the_first_input() {
         let f = Fixture::new();
         let history = f.build_full(Chat::Task(f.task_id), false);
-        assert_eq!(history.messages, vec![opening_message()]);
+        assert_eq!(history.messages, vec![f.opening_message()]);
         assert_eq!(history.input_from, 0);
         assert_eq!(history.first_row(0), None);
     }
@@ -1640,14 +1682,23 @@ mod tests {
         assert_eq!(f.build_full(Chat::Task(f.task_id), false).segments.len(), 1);
     }
 
-    fn opening_message() -> ChatMessage {
-        ChatMessage::user(PromptText::user_message(OPENING, None))
+    impl Fixture {
+        /// 補われる開始の発言。送信日時はタスクの作成日時。
+        fn opening_message(&self) -> ChatMessage {
+            let created_at = db::tasks::get_task(&self.conn, self.task_id)
+                .unwrap()
+                .created_at;
+            ChatMessage::user(PromptText::user_message(
+                OPENING,
+                SentAt::local(&created_at).as_ref(),
+            ))
+        }
     }
 
     #[test]
     fn starts_an_opened_conversation_with_the_opening_message() {
         let f = Fixture::new();
-        assert_eq!(f.history(), vec![opening_message()]);
+        assert_eq!(f.history(), vec![f.opening_message()]);
 
         let greeting = f.insert(
             Role::Assistant,
@@ -1658,14 +1709,14 @@ mod tests {
         f.user("レポート");
         let history = f.history();
         assert_eq!(history.len(), 3);
-        assert_eq!(history[0], opening_message());
+        assert_eq!(history[0], f.opening_message());
         assert!(
             matches!(&history[1], ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか")
         );
 
         // 最初の返信を消しても、聞き取りから始まった会話であることは変わらない。
         messages::soft_delete_message(&f.conn, greeting).unwrap();
-        assert_eq!(f.history()[0], opening_message());
+        assert_eq!(f.history()[0], f.opening_message());
     }
 
     #[test]
@@ -1674,7 +1725,7 @@ mod tests {
         let first = f.user("レポート");
         f.reply("t1", "了解しました");
         messages::soft_delete_message(&f.conn, first).unwrap();
-        assert!(!f.history().contains(&opening_message()));
+        assert!(!f.history().contains(&f.opening_message()));
     }
 
     fn saved_call(id: Option<&str>) -> ToolCallRequest {
@@ -1981,7 +2032,7 @@ mod tests {
 
         let history = f.build(Chat::General, false);
         assert_eq!(history.len(), 1);
-        assert!(!history.contains(&opening_message()));
+        assert!(!history.contains(&f.opening_message()));
     }
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\nbody";

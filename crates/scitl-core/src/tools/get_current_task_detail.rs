@@ -11,7 +11,7 @@ internal_tool! {
     /// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない。
     name: "get_current_task_detail",
     run: Run::ReadTask(execute),
-    "Get the details of the currently open task, including its description and steps.",
+    "Get this conversation's task.",
     json!({
         "type": "object",
         "properties": {},

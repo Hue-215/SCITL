@@ -178,7 +178,7 @@ export function MemoryTab() {
     <div className="settings-panel">
       <div className="settings-field">
         <p>{t('settings.memory.intro')}</p>
-        <p className="settings-hint">{t('settings.memory.intro_hint')}</p>
+        <p>{t('settings.memory.intro_hint')}</p>
       </div>
 
       <section className="settings-field" aria-labelledby={headingId}>

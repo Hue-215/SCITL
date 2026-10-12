@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   addMcpServer,
   addProvider,
@@ -23,6 +23,8 @@ import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
 import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
+import { type Drafts, DraftsContext } from './settingsInput'
+import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
 import { useSwipeToOpen } from './useDrawerSwipe'
 
@@ -40,11 +42,13 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id']
 
-// 設定画面。
 export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 自動保存の欄の書きかけ(`useDraft`)と、その保存でコマンド自体が失敗した回数。
+  const [drafts] = useState<Drafts>(() => ({ entries: new Set(), closed: false }))
+  const saveFailures = useRef(0)
   // 狭い窓で畳む左のメニュー。タブを選んだら閉じる。
   const drawer = useDrawer()
   const swipeToOpen = useSwipeToOpen(drawer)
@@ -91,10 +95,62 @@ export default function Settings({ onClose }: SettingsProps) {
         setError(null)
       }
     } catch (e) {
+      saveFailures.current++
       setError(failureText(e))
     }
     return []
   }
+
+  // 自動保存の欄の書きかけをすべて保存する。`rejected`は欄の誤りで断られたもの、`failed`は
+  // コマンド自体が失敗したものがある。
+  const flushDrafts = useCallback(async () => {
+    const failuresBefore = saveFailures.current
+    let rejected = false
+    for (const flush of [...drafts.entries]) {
+      try {
+        if ((await flush()).length > 0) rejected = true
+      } catch {
+        saveFailures.current++
+      }
+    }
+    if (rejected) return 'rejected'
+    return saveFailures.current === failuresBefore ? 'saved' : 'failed'
+  }, [drafts])
+
+  // 設定画面を閉じる(「←」とAndroidの「戻る」)。書きかけを保存してから閉じ、保存できなければ
+  // 留まる(断られた理由は欄の下に、コマンドの失敗は上のエラー欄に出ている)。閉じたあと会話側が
+  // 設定を読み直すので、保存を待ってから閉じる。コマンドの失敗は欄を直しても解けないので、
+  // 続けてもう一度閉じようとしたら、書きかけを捨てて閉じる(閉じられなくならないように)。
+  const leaving = useRef(false)
+  const failedToLeave = useRef(false)
+  const leave = async () => {
+    if (leaving.current) return
+    leaving.current = true
+    try {
+      const outcome = await flushDrafts()
+      if (outcome === 'saved' || (outcome === 'failed' && failedToLeave.current)) {
+        drafts.closed = true
+        onClose()
+        return
+      }
+      failedToLeave.current = outcome === 'failed'
+      // 狭い窓では「←」が引き出した左のカラムにあり、開いたままだと理由が隠れる。
+      drawer.close()
+    } finally {
+      leaving.current = false
+    }
+  }
+  // 設定画面の中で開いたもの(ダイアログ・左のカラム)が先に閉じる。
+  useCloseOnBack(true, () => void leave())
+
+  // 裏へ回ったときにも保存する(Androidで、裏へ回したまま終了されても残るように)。
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') void flushDrafts()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [flushDrafts])
 
   // 追加のフォームは、欄の誤りもコマンド自体の失敗もフォームの直下に出すため、失敗は握らず
   // 呼び出し元へ投げる。欄の誤りは文言にして返す。
@@ -148,7 +204,7 @@ export default function Settings({ onClose }: SettingsProps) {
             <button
               type="button"
               className="icon-button"
-              onClick={onClose}
+              onClick={() => void leave()}
               aria-label={t('settings.back_tooltip')}
               title={t('settings.back_tooltip')}
             >
@@ -189,62 +245,64 @@ export default function Settings({ onClose }: SettingsProps) {
             )}
             {error && <p className="error">{error}</p>}
 
-            {settings === null ? (
-              <p>{t('common.loading')}</p>
-            ) : tab === 'general' ? (
-              <GeneralTab
-                settings={settings}
-                onSave={(update) => saveField(() => updateGeneralSettings(update))}
-                onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
-              />
-            ) : tab === 'memory' ? (
-              <MemoryTab />
-            ) : tab === 'providers' ? (
-              <ProvidersTab
-                settings={settings}
-                onAddProvider={(name, format, baseUrl, apiKey, headers) =>
-                  applyAdded(
-                    () => addProvider(name, format, baseUrl, apiKey, headers),
-                    (next) => next,
-                  )
-                }
-                onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
-                onUpdateModels={runOrReportError}
-                onSaveModelField={saveField}
-              />
-            ) : (
-              <McpTab
-                settings={settings}
-                onSaveLimits={(maxRoundsPerTurn, totalTimeoutSecs) =>
-                  saveField(() => updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }))
-                }
-                onAddServer={(name, endpoint) =>
-                  // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
-                  applyAdded(
-                    () => addMcpServer(name, endpoint),
-                    ({ settings: next, server_id, tools_error }) => {
-                      if (tools_error !== null) {
-                        setToolFetchErrors((prev) => ({
-                          ...prev,
-                          [server_id]: t('common.fetch_failed', { error: isolated(tools_error) }),
-                        }))
-                      }
-                      return next
-                    },
-                  )
-                }
-                onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
-                onSetServerEnabled={(id, enabled) =>
-                  runOrReportError(() => setMcpServerEnabled(id, enabled))
-                }
-                onSetToolEnabled={(id, toolName, enabled) =>
-                  runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
-                }
-                fetchingTools={fetchingTools}
-                toolFetchErrors={toolFetchErrors}
-                onFetchTools={(id) => void fetchTools(id)}
-              />
-            )}
+            <DraftsContext value={drafts}>
+              {settings === null ? (
+                <p>{t('common.loading')}</p>
+              ) : tab === 'general' ? (
+                <GeneralTab
+                  settings={settings}
+                  onSave={(update) => saveField(() => updateGeneralSettings(update))}
+                  onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
+                />
+              ) : tab === 'memory' ? (
+                <MemoryTab />
+              ) : tab === 'providers' ? (
+                <ProvidersTab
+                  settings={settings}
+                  onAddProvider={(name, format, baseUrl, apiKey, headers) =>
+                    applyAdded(
+                      () => addProvider(name, format, baseUrl, apiKey, headers),
+                      (next) => next,
+                    )
+                  }
+                  onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
+                  onUpdateModels={runOrReportError}
+                  onSaveModelField={saveField}
+                />
+              ) : (
+                <McpTab
+                  settings={settings}
+                  onSaveLimits={(maxRoundsPerTurn, totalTimeoutSecs) =>
+                    saveField(() => updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }))
+                  }
+                  onAddServer={(name, endpoint) =>
+                    // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
+                    applyAdded(
+                      () => addMcpServer(name, endpoint),
+                      ({ settings: next, server_id, tools_error }) => {
+                        if (tools_error !== null) {
+                          setToolFetchErrors((prev) => ({
+                            ...prev,
+                            [server_id]: t('common.fetch_failed', { error: isolated(tools_error) }),
+                          }))
+                        }
+                        return next
+                      },
+                    )
+                  }
+                  onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
+                  onSetServerEnabled={(id, enabled) =>
+                    runOrReportError(() => setMcpServerEnabled(id, enabled))
+                  }
+                  onSetToolEnabled={(id, toolName, enabled) =>
+                    runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
+                  }
+                  fetchingTools={fetchingTools}
+                  toolFetchErrors={toolFetchErrors}
+                  onFetchTools={(id) => void fetchTools(id)}
+                />
+              )}
+            </DraftsContext>
           </div>
         </div>
       </div>

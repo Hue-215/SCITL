@@ -23,7 +23,7 @@ use crate::llm::{
 ///
 /// 画面に出す添付の印([`SentInput`])は、版によらず`input`の含めた行とユーザー発言の画像を読む。
 /// その2つの形を変えるときは、版を上げるだけでなく[`SentInput::read`]も古い形を読めるようにする。
-const FORM_VERSION: u32 = 6;
+const FORM_VERSION: u32 = 7;
 
 /// 保存する発言1つ。`llm::ChatMessage`の段階の形だが、`llm`の型を変えてもそのまま保存の形が
 /// 変わらないよう、別の型で持つ。画像は実体の代わりに、添付の実体のハッシュを持つ。
@@ -90,6 +90,13 @@ impl StoredMessage {
     /// 発言の列を保存する形にする。1つでも保存できなければ`None`。
     pub(super) fn all_of(messages: &[ChatMessage]) -> Option<Vec<Self>> {
         messages.iter().map(Self::of).collect()
+    }
+
+    /// 送り返す思考を外す。
+    pub(super) fn drop_replay(&mut self) {
+        if let Self::Assistant { replay, .. } = self {
+            *replay = Replay::default();
+        }
     }
 
     /// 保存した発言を読み戻す。画像の実体を読めなければ`None`。
@@ -327,7 +334,8 @@ pub(super) struct SavedTurn {
 }
 
 /// 渡したツール定義の一覧の本文。定義が変わったかを本文の指紋で見分けるため、毎回同じ形に
-/// 直列化する。
+/// 直列化する。外部ツールの引数スキーマのキーはサーバーが返した順になるので、順だけが違う本文は
+/// 中身で比べ直す(`turn_request::Head::frozen`)。
 pub(super) fn tools_body(tools: &[ToolSchema]) -> String {
     let tools: Vec<_> = tools.iter().map(tool_entry).collect();
     serde_json::to_string(&tools).expect("tool definitions serialize")
@@ -472,11 +480,13 @@ mod tests {
             .unwrap()]),
             user_message_format_note(),
         ];
+        // JSONのキーの順だけが変わったとき(`serde_json`の`preserve_order`)は版を上げない。
+        // 前の順で保存した本文も、実際に送ったものとして正しいまま並べられるため。
         assert_eq!(
             (FORM_VERSION, digest(&texts.join("\n")).as_str()),
             (
-                6,
-                "4478b80f8c967fcbc52fa5533ca663d0838a8e6c8bd29fad3e0f09281be2b719"
+                7,
+                "384fc8ba3a038002b68d63a947c76a3a626d95151aea401aae257c247d8ebef7"
             ),
             "無害化の規則か、囲みの形か、その読み方の説明が変わった。前の規則で保存した本文を\
              並べないよう、FORM_VERSIONを上げてから期待値を今の出力に更新する"
@@ -645,6 +655,35 @@ mod tests {
             serde_json::from_str::<StoredMessage>(&text).unwrap(),
             message
         );
+    }
+
+    /// 保存した発言は、引数のキーの順を変えずに読み戻す。前の版が名前順で保存したものも、
+    /// 書き直すと保存した文字列に戻るので、指紋が合ったまま並ぶ。
+    #[test]
+    fn a_stored_message_reads_back_with_its_keys_in_the_saved_order() {
+        let call = |arguments: &str| {
+            StoredMessage::of(&ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![crate::llm::ToolCallRequest {
+                    id: Some("call_1".to_string()),
+                    name: "update_task".to_string(),
+                    arguments: serde_json::from_str::<serde_json::Value>(arguments)
+                        .unwrap()
+                        .into(),
+                }],
+                replay: Replay::default(),
+            })
+            .unwrap()
+        };
+        for arguments in [
+            r#"{"title":"t","deadline":"d"}"#,
+            r#"{"deadline":"d","title":"t"}"#,
+        ] {
+            let saved = serde_json::to_string(&call(arguments)).unwrap();
+            assert!(saved.contains(arguments), "{saved}");
+            let read: StoredMessage = serde_json::from_str(&saved).unwrap();
+            assert_eq!(serde_json::to_string(&read).unwrap(), saved);
+        }
     }
 
     /// 同じものを同じ順に並べれば同じ指紋になり、何か1つ変われば変わる。

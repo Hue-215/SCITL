@@ -75,7 +75,6 @@ impl ExternalToolset {
         let mut toolset = Self::default();
         for (server, tools) in servers {
             for tool in tools {
-                // 有効化されていないツールは公開しない。
                 if !server.enabled_tools.contains(&tool.name) {
                     continue;
                 }

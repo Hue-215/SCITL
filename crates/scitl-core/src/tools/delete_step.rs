@@ -12,7 +12,7 @@ internal_tool! {
     /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
     name: "delete_step",
     run: Run::UpdateTask(execute),
-    "Delete a step of the currently open task.",
+    "Delete a step of this conversation's task.",
     json!({
         "type": "object",
         "properties": {

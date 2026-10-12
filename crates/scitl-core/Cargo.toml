@@ -27,6 +27,8 @@ base64 = { workspace = true }
 icu_normalizer = { workspace = true }
 image = { workspace = true }
 rmcp = { workspace = true }
+rustls = { workspace = true }
+futures = { workspace = true }
 zip = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -45,3 +47,6 @@ ndk-context = { workspace = true }
 tempfile = { workspace = true }
 ts-rs = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "test-util"] }
+# テストの中でTLSのサーバーを立てる(`llm/error.rs`。証明書の検証で断られた失敗の見分け)。暗号の実装は
+# reqwestが使うものと同じで、既にビルドされている
+rustls = { workspace = true, features = ["aws_lc_rs"] }

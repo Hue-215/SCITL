@@ -22,7 +22,12 @@ undelivered_attachments: Array<number>,
  * 添付のうち、押して入っているフォルダを開けるもののid(`attachments::revealable`)。
  * 開けないOS(Android)では空。
  */
-revealable_attachments: Array<number>, id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, error_kind: string | null, error_detail: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
+revealable_attachments: Array<number>, 
+/**
+ * 履歴を間引いていて、モデルへ送っている範囲がこの発言から始まるか([`sent_from`])。画面は
+ * この発言の前に、それより前は送っていないことの印を出す。
+ */
+starts_sent_history: boolean, id: number, task_id: number | null, role: Role, content: string, kind: Kind, source: string | null, error_kind: string | null, error_detail: string | null, turn_id: string | null, attempt_no: number | null, created_at: string, 
 /**
  * 発言に付いた添付。付けた順。
  */

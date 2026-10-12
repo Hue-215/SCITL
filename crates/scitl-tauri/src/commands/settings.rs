@@ -21,21 +21,30 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     state.settings.view()
 }
 
-/// 数値の欄は文字列のまま受け取る(解釈はcore。`None`は保存済みの値のまま)。欄の誤りは
+/// 数値の欄は文字列のまま受け取る(解釈はcore)。数値の欄と真偽値の欄の`None`は保存済みの値のまま。欄の誤りは
 /// `FormOutcome::Rejected`で返す。
+// 引数は「一般」タブの欄に1つずつ対応させる(欄を足すたびに増える)。構造体にまとめると、画面との
+// 取り決めを型として書き直すことになり、ほかのコマンドの引数の渡し方とも揃わなくなる。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn update_general_settings(
     state: State<'_, AppState>,
+    assistant_nickname: Option<String>,
     system_prompt: Option<String>,
     task_chat_system_prompt: Option<String>,
     task_opening_message: Option<String>,
     response_timeout_secs: Option<String>,
+    streaming: Option<bool>,
+    show_reasoning: Option<bool>,
 ) -> CommandResult<FormOutcome<SettingsView>> {
     let update = GeneralUpdate {
+        assistant_nickname,
         system_prompt,
         task_chat_system_prompt,
         task_opening_message,
         response_timeout_secs,
+        streaming,
+        show_reasoning,
     };
     with_settings(&state, move |s| {
         FormOutcome::from_result(s.update_general(update))

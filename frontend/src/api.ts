@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
+import { commandFailureText } from './i18n'
 import type {
   ApiFormat,
   BaseUrlHint,
@@ -6,6 +7,7 @@ import type {
   Capability,
   Chat,
   ChatModelsView,
+  CommandFailure,
   DataDirError,
   ExportOutcome,
   ExportTarget,
@@ -17,6 +19,7 @@ import type {
   NewMcpEndpoint,
   ReasoningEffort,
   ReceivedFiles,
+  Regeneration,
   SettingsView,
   StageOutcome,
   TaskCreation,
@@ -26,15 +29,23 @@ import type {
   TurnEvent,
 } from './types'
 
-// フロントエンドはIPCコマンドを呼ぶだけに徹する(DB・秘密情報・外部通信は持たない)。
+/** コマンドが返した失敗(`CommandFailure`。`crates/scitl-tauri/src/commands/mod.rs`)か。 */
+function isCommandFailure(e: unknown): e is CommandFailure {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    typeof (e as CommandFailure).kind === 'string' &&
+    typeof (e as CommandFailure).detail === 'string'
+  )
+}
 
 /**
- * コマンドの失敗を画面に出す文字列にする唯一の入口。今はcoreのエラー文(英語の診断文)
- * をそのまま返し、表示言語には訳していない。
+ * コマンドの失敗を画面に出す文字列にする唯一の入口。失敗の種類から表示言語の文言を引き、
+ * coreの診断文(英語)は詳細として添える(`commandFailureText`)。コマンドが返したもの以外
+ * (IPCそのものの失敗等)は、届いたものを文字列にして出す。
  */
-// TODO(#199): 表示言語に訳す。
 export function failureText(e: unknown): string {
-  return String(e)
+  return isCommandFailure(e) ? commandFailureText(e) : String(e)
 }
 export function getTaskDetail(taskId: number): Promise<TaskDetailView> {
   return invoke('get_task_detail', { taskId })
@@ -65,6 +76,7 @@ export function deleteTask(taskId: number): Promise<void> {
 
 // 送信・編集・再試行は、ターンの途中経過を`onEvent`へ届ける。経路(Channel)はコマンドの
 // 呼び出しごとに作るので、届いたイベントがどの会話のものかは呼び出し側が知っている。
+// 編集・再試行は、チャットを使えない間(モデル未選択等)は何も消さずに断る(`unavailable`)。
 // `attachments`は`stageReceivedFile`が返したトークン。
 export function sendChatMessage(
   chat: Chat,
@@ -80,8 +92,6 @@ export function sendChatMessage(
   })
 }
 
-// 添付。中身は生のバイト列で送り、名前はヘッダーに載せる(ヘッダーはASCIIしか
-// 運べないので符号化する)。パスを渡すコマンドは無い。
 export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
 }
@@ -159,7 +169,7 @@ export function editChatMessage(
   messageId: number,
   text: string,
   onEvent: (event: TurnEvent) => void,
-): Promise<void> {
+): Promise<Regeneration> {
   return invoke('edit_chat_message', { chat, messageId, text, onEvent: new Channel(onEvent) })
 }
 
@@ -167,7 +177,7 @@ export function retryChatMessage(
   chat: Chat,
   messageId: number,
   onEvent: (event: TurnEvent) => void,
-): Promise<void> {
+): Promise<Regeneration> {
   return invoke('retry_chat_message', { chat, messageId, onEvent: new Channel(onEvent) })
 }
 
@@ -217,12 +227,15 @@ export function updateLanguage(language: Language): Promise<SettingsView> {
 // プロンプトはどれも`string | null`で並ぶため、取り違えないようオブジェクト引数にする。
 // 数値の欄(`responseTimeoutSecs`等)は入力欄の文字列のまま送る。空欄は「未設定」で、Rust側の
 // 既定値に戻る。nullは保存済みの値のまま変えない(書き換えた欄だけを送る)。解釈と検証は
-// Rust側が行い、欄の誤りは`rejected`で返る。
+// Rust側が行い、欄の誤りは`rejected`で返る。真偽値の欄のnullも保存済みの値のまま。
 export function updateGeneralSettings(args: {
+  assistantNickname: string | null
   systemPrompt: string | null
   taskChatSystemPrompt: string | null
   taskOpeningMessage: string | null
   responseTimeoutSecs: string | null
+  streaming: boolean | null
+  showReasoning: boolean | null
 }): Promise<FormOutcome<SettingsView>> {
   return invoke('update_general_settings', args)
 }

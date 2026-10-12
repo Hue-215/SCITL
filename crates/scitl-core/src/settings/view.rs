@@ -112,6 +112,8 @@ pub struct McpServerView {
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct GeneralSettingsView {
+    pub assistant_nickname: Option<String>,
+    pub assistant_nickname_max_chars: usize,
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
     /// 表示言語の既定の文面(`default_task_opening_message`も同じ)。
@@ -120,6 +122,10 @@ pub struct GeneralSettingsView {
     pub default_task_opening_message: &'static str,
     pub response_timeout_secs: Option<u64>,
     pub default_response_timeout_secs: u64,
+    /// チャットの応答をストリーミングで受け取るか(未設定はオンに解決した値)。
+    pub streaming: bool,
+    /// 会話欄にモデルの思考を出すか(未設定は出すに解決した値)。
+    pub show_reasoning: bool,
     /// 未設定・知らない値なら既定の言語に解決した値。画面は「未設定」を扱わない。
     pub language: Language,
     /// 設定ファイルに書かれているが使えない表示言語の値(見えない文字を除き、切り詰めた写し)。
@@ -292,6 +298,8 @@ pub(super) fn build(
     SettingsView {
         config_error: problems.config_error.map(str::to_string),
         general: GeneralSettingsView {
+            assistant_nickname: config.general.assistant_nickname.clone(),
+            assistant_nickname_max_chars: super::input::ASSISTANT_NICKNAME_MAX_CHARS,
             system_prompt: config.general.system_prompt.clone(),
             task_chat_system_prompt: config.general.task_chat_system_prompt.clone(),
             default_task_chat_system_prompt: default_task_chat_prompt(config.general.language()),
@@ -299,6 +307,8 @@ pub(super) fn build(
             default_task_opening_message: default_opening_message(config.general.language()),
             response_timeout_secs: config.general.response_timeout_secs,
             default_response_timeout_secs: DEFAULT_RESPONSE_TIMEOUT_SECS,
+            streaming: config.general.streaming(),
+            show_reasoning: config.general.show_reasoning(),
             language: config.general.language(),
             unknown_language: config
                 .general

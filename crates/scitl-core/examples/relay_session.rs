@@ -53,14 +53,24 @@ async fn main() {
     let dialect = std::env::var("RELAY_DIALECT").unwrap_or_else(|_| "openai".to_string());
     let model = std::env::var("RELAY_MODEL").ok();
     let model = |default: &'static str| model.as_deref().unwrap_or(default);
+    // 疑似APIは`stream: true`を断るので、頼まれたときだけストリーミングで送る。
+    let streaming = std::env::var_os("RELAY_STREAMING").is_some();
     let adapter: Box<dyn LlmAdapter> = match dialect.as_str() {
-        "openai" => {
-            Box::new(OpenAiCompatAdapter::new(base_url, key, model("dummy-o"), timeout).unwrap())
-        }
-        "anthropic" => {
-            Box::new(AnthropicAdapter::new(base_url, key, model("dummy-a"), timeout).unwrap())
-        }
-        "gemini" => Box::new(GeminiAdapter::new(base_url, key, model("dummy-g"), timeout).unwrap()),
+        "openai" => Box::new(
+            OpenAiCompatAdapter::new(base_url, key, model("dummy-o"), timeout)
+                .unwrap()
+                .streaming(streaming),
+        ),
+        "anthropic" => Box::new(
+            AnthropicAdapter::new(base_url, key, model("dummy-a"), timeout)
+                .unwrap()
+                .streaming(streaming),
+        ),
+        "gemini" => Box::new(
+            GeminiAdapter::new(base_url, key, model("dummy-g"), timeout)
+                .unwrap()
+                .streaming(streaming),
+        ),
         other => panic!("unknown RELAY_DIALECT: {other}"),
     };
     let general = GeneralConfig::default();
@@ -79,7 +89,7 @@ async fn main() {
         TurnEvent::ToolExecuted { execution, .. } => {
             println!("  [tool] {}", serde_json::to_string(&execution).unwrap())
         }
-        TurnEvent::Response { .. } => {}
+        TurnEvent::Response { .. } | TurnEvent::AwaitingModel { .. } => {}
     };
     let adapter: &dyn LlmAdapter = adapter.as_ref();
     let mut capabilities = DEFAULT_CAPABILITIES;
@@ -136,9 +146,11 @@ async fn main() {
         }
         let ctx = TurnContext {
             adapter: Ok(adapter),
+            assistant_name: "sham",
             prompts: SystemPrompts {
                 base: base.as_deref().or(defaults.base),
                 task_chat: defaults.task_chat,
+                nickname: None,
             },
             opening_message: orchestration::opening_message(&general),
             capabilities,
@@ -152,9 +164,12 @@ async fn main() {
         };
         match step.as_str() {
             "@new" => {
-                let creation = create_task(db.clone(), &ctx, |task| {
-                    println!("> @new (task {})", task.id);
-                })
+                let creation = create_task(
+                    db.clone(),
+                    ctx.clone(),
+                    || async { ctx.clone() },
+                    |task| println!("> @new (task {})", task.id),
+                )
                 .await
                 .unwrap();
                 let TaskCreation::Created {

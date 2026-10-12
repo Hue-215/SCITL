@@ -1,7 +1,11 @@
 import en from '../../lang/en.json'
 import ja from '../../lang/ja.json'
-import { DEFAULT_LANGUAGE, TURN_ERROR_KEY_PREFIX } from './bindings/SharedConstants'
-import type { Language } from './types'
+import {
+  COMMAND_ERROR_KEY_PREFIX,
+  DEFAULT_LANGUAGE,
+  TURN_ERROR_KEY_PREFIX,
+} from './bindings/SharedConstants'
+import type { CommandFailure, Language } from './types'
 
 // 画面の文言を言語ファイル(lang/*.json)から引く。
 //
@@ -122,4 +126,16 @@ export function formatBytes(bytes: number): string {
 export function turnErrorText(errorKind: string | null, content: string): string {
   if (errorKind === null) return content
   return state().messages.get(`${TURN_ERROR_KEY_PREFIX}${errorKind}`) ?? content
+}
+
+/**
+ * コマンドの失敗の文。種類から表示言語の文言を引き、coreの診断文(英語)を詳細として後ろに添える。
+ * 知らない種類(別の版のcore等)は、診断文だけを出す。キーの前置きはcoreが書き出したもの。
+ */
+export function commandFailureText(failure: CommandFailure): string {
+  const message = state().messages.get(`${COMMAND_ERROR_KEY_PREFIX}${failure.kind}`)
+  if (message === undefined) return failure.detail
+  // 診断文は外部から来た文字列(プロバイダーやMCPサーバーの応答)を含みうる。並び順を変える
+  // 文字が、後ろの括弧や前置きへ波及しないよう閉じ込める。
+  return t('common.failure_with_detail', { message, detail: isolated(failure.detail) })
 }

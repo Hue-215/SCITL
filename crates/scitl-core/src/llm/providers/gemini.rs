@@ -25,12 +25,12 @@ mod stream;
 /// ([`super::validate_header_name`])。
 pub(super) const OWN_HEADERS: &[&str] = &["x-goog-api-key"];
 
-/// Gemini形式のアダプタ。
 pub struct GeminiAdapter {
     client: reqwest::Client,
     base_url: ExternalUrl,
     credentials: Credentials,
     model: String,
+    streaming: bool,
 }
 
 impl GeminiAdapter {
@@ -44,8 +44,6 @@ impl GeminiAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
-        // 届き続けている間は切らない)。
         let client = crate::net::hardened_client(
             &base_url,
             crate::net::RequestTimeout::BetweenReads(request_timeout),
@@ -55,7 +53,26 @@ impl GeminiAdapter {
             base_url,
             credentials,
             model: model.into(),
+            streaming: true,
         })
+    }
+
+    /// ストリーミングで受け取るか(`config::GeneralConfig::streaming`)。組み立てた直後はオン。
+    pub fn streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
+        self
+    }
+
+    fn request_body(
+        &self,
+        messages: &[ChatMessage],
+        tools: ToolOffer<'_>,
+        thinking_level: Option<&'static str>,
+    ) -> RequestBody<'_> {
+        RequestBody {
+            stream: self.streaming,
+            ..request_body(&self.model, messages, tools, thinking_level)
+        }
     }
 }
 
@@ -264,7 +281,8 @@ fn request_body<'a>(
             })
             .collect(),
         generation_config: (!config.is_empty()).then_some(Value::Object(config)),
-        // 無視して1つのJSONで返す中継もある(`GeminiAdapter::send`)。
+        // 設定で切ったときは`GeminiAdapter::request_body`が置き換える。頼んでも、無視して
+        // 1つのJSONで返す中継もある(`GeminiAdapter::send`)。
         stream: true,
     }
 }
@@ -443,14 +461,19 @@ fn metadata_error(status: StatusCode, body: &str, secrets: &SentSecrets) -> LlmE
     LlmError::from_status(status, body, secrets)
 }
 
+/// 送ったリクエストに含めたもの。断られた理由を本文の文面から見分けるときに、関係する指定を
+/// 送っていた場合に限る。
+#[derive(Clone, Copy, Default)]
+struct Sent {
+    /// 思考の強さ(`thinking_level`)。
+    thinking: bool,
+    /// 受け取ったまま送り返すステップ([`Replay`])。
+    replay: bool,
+}
+
 /// 非成功の状態コードとともに返った本文を種類付きにする。本文でしか分からない種類だけを
 /// ここで判定し、残りは状態コードによる共通の分類に任せる。
-fn http_error(
-    status: StatusCode,
-    body: &str,
-    secrets: &SentSecrets,
-    thinking_sent: bool,
-) -> LlmError {
+fn http_error(status: StatusCode, body: &str, secrets: &SentSecrets, sent: Sent) -> LlmError {
     let detail = || ErrorDetail::http(status, body, secrets);
     let parsed = serde_json::from_str::<Value>(body).ok();
     let error = parsed.as_ref().and_then(|v| v.get("error"));
@@ -471,8 +494,14 @@ fn http_error(
         if message.contains("token") && (message.contains("exceed") || message.contains("limit")) {
             return LlmError::ContextExceeded(detail());
         }
-        if thinking_sent && message.contains("thinking_level") {
+        if sent.thinking && message.contains("thinking_level") {
             return LlmError::ReasoningEffortValueRejected(detail());
+        }
+        // 送り返した思考の署名が通らない(`Invalid thought signature.`)。別のモデルの思考を
+        // 送り返したときに起きうる(`docs/spec/architecture/llm-adapter.md`「Gemini形式」)。
+        // 署名が欠けていることを指す文面は、思考を外しても直らないので含めない。
+        if sent.replay && message.contains("invalid") && message.contains("signature") {
+            return LlmError::ReplayRejected(detail());
         }
     }
     LlmError::from_status(status, body, secrets)
@@ -486,20 +515,26 @@ impl GeminiAdapter {
         tools: ToolOffer<'_>,
         thinking_level: Option<&'static str>,
     ) -> Result<reqwest::Response, LlmError> {
-        let body = request_body(&self.model, messages, tools, thinking_level);
+        let body = self.request_body(messages, tools, thinking_level);
+        let sent = Sent {
+            thinking: thinking_level.is_some(),
+            replay: body
+                .input
+                .iter()
+                .any(|step| matches!(step, RequestPart::Received(_))),
+        };
         let endpoint = super::endpoint(&self.base_url, INTERACTIONS).map_err(|_| {
             LlmError::InvalidRequest(ErrorDetail::internal("failed to build endpoint"))
         })?;
-        // ストリーミングを頼んでいることをヘッダーでも示す(公式SDKと同じ)。
-        let request = self
-            .client
-            .post(endpoint)
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&body);
+        let mut request = self.client.post(endpoint).json(&body);
+        if self.streaming {
+            // ストリーミングを頼んでいることをヘッダーでも示す(公式SDKと同じ)。
+            request = request.header(reqwest::header::ACCEPT, "text/event-stream");
+        }
         let response = send(request, &self.credentials, session).await?;
         let secrets = self.credentials.secrets();
         super::reject_failure(response, secrets, |status, body| {
-            http_error(status, body, secrets, thinking_level.is_some())
+            http_error(status, body, secrets, sent)
         })
         .await
     }
@@ -658,12 +693,7 @@ impl LlmAdapter for GeminiAdapter {
         tools: ToolOffer<'_>,
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Option<RequestPreview> {
-        let body = request_body(
-            &self.model,
-            messages,
-            tools,
-            thinking_level(reasoning_effort),
-        );
+        let body = self.request_body(messages, tools, thinking_level(reasoning_effort));
         let mut body = serde_json::to_value(body).expect("request body serializes to JSON");
         super::abbreviate(&mut body["input"], NESTED, ABBREVIATED);
         Some(RequestPreview { body })
@@ -835,10 +865,10 @@ mod tests {
         assert_eq!(input[3]["result"][1]["mime_type"], "image/png");
     }
 
-    /// 受け取ったステップは、キーの順も変えずにそのまま返す。
+    /// 受け取ったステップは、書き方(空白・エスケープ)も変えずにそのまま返す。
     #[test]
     fn echoes_the_replayed_steps_instead_of_rebuilding_the_assistant_message() {
-        let thought = r#"{"type":"thought","signature":"sig"}"#;
+        let thought = r#"{"type": "thought", "signature": "\u3042"}"#;
         let call = r#"{"type":"function_call","id":"call_1","name":"add_steps","arguments":{}}"#;
         let messages = [
             user("hi"),
@@ -850,7 +880,7 @@ mod tests {
         ];
         let request = request_body("gemini-test", &messages, ToolOffer::NONE, None);
         let text = serde_json::to_string(&request).unwrap();
-        assert!(text.contains(&format!(r#""type":"user_input"}},{thought},{call}]"#)));
+        assert!(text.contains(&format!(r#"}}]}},{thought},{call}]"#)));
     }
 
     /// 受け取ったまま返した呼び出しにも、続く結果に呼び出しの名前を添える。
@@ -936,7 +966,6 @@ mod tests {
             .starts_with("… ("));
     }
 
-    /// 同じ方言なら、別のモデルの思考も送り返す。
     #[test]
     fn accepts_replays_from_any_model_of_the_same_format() {
         let adapter = adapter("http://127.0.0.1:1", "");
@@ -976,7 +1005,9 @@ mod tests {
         assert!(headers.starts_with("post /v1beta/interactions "));
         assert!(headers.contains("x-goog-api-key: key-test"));
         assert!(!headers.contains("authorization"));
+        assert!(headers.contains("accept: text/event-stream"));
         assert_eq!(received[0].body["store"], false);
+        assert_eq!(received[0].body["stream"], true);
 
         assert_eq!(
             events,
@@ -1001,6 +1032,42 @@ mod tests {
         let expected: Vec<&str> = expected.steps.iter().map(|s| s.get()).collect();
         let replayed: Vec<&str> = replay.elements().iter().map(|s| s.get()).collect();
         assert_eq!(replayed, expected);
+    }
+
+    #[tokio::test]
+    async fn asks_for_one_json_reply_when_streaming_is_off() {
+        let (base_url, handle) = spawn_server(vec![(
+            200,
+            r#"{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}"#,
+        )]);
+        let adapter = adapter(&base_url, "key-test").streaming(false);
+        let messages = [user("hi")];
+        let preview = adapter
+            .request_preview(&messages, ToolOffer::NONE, None)
+            .unwrap();
+        let mut events = Vec::new();
+        adapter
+            .send(None, &messages, ToolOffer::NONE, None, &mut |e| {
+                events.push(e)
+            })
+            .await
+            .unwrap();
+        let received = handle.join().unwrap();
+
+        assert_eq!(received[0].body["stream"], false);
+        assert!(!received[0].headers.contains("text/event-stream"));
+        assert_eq!(preview.body["stream"], false);
+        assert_eq!(
+            events,
+            vec![
+                ResponseEvent::TextDelta {
+                    text: "ok".to_string()
+                },
+                ResponseEvent::Done {
+                    finish_reason: FinishReason::Stop
+                },
+            ]
+        );
     }
 
     #[tokio::test]
@@ -1085,6 +1152,38 @@ mod tests {
         assert_eq!(events.len(), 2, "本文とDoneが1回ずつ");
     }
 
+    /// 送り返した思考の署名が断られたら、呼び直さずに思考の拒否として返す(外して送り直すのは
+    /// ターンの側)。
+    #[tokio::test]
+    async fn reports_a_rejected_thought_signature_without_retrying() {
+        let (base_url, handle) = spawn_server(vec![(
+            400,
+            r#"{"error":{"code":"invalid_request","message":"Invalid thought signature."}}"#,
+        )]);
+        let messages = [
+            user("hi"),
+            ChatMessage::Assistant {
+                content: Some("hello".to_string()),
+                tool_calls: Vec::new(),
+                replay: Replay::from_json(
+                    r#"[{"type":"thought","signature":"sig"},{"type":"model_output","content":[{"type":"text","text":"hello"}]}]"#,
+                ),
+            },
+            user("again"),
+        ];
+        let result = adapter(&base_url, "")
+            .send(None, &messages, ToolOffer::NONE, None, &mut |_| {})
+            .await;
+        let received = handle.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(CoreError::Llm(LlmError::ReplayRejected(_)))
+        ));
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].body["input"][1]["signature"], "sig");
+    }
+
     #[test]
     fn classifies_errors_found_only_in_the_body() {
         let error = |code: &str, message: &str| {
@@ -1095,7 +1194,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 &error("safety", "blocked"),
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::Refused(_)
         ));
@@ -1107,7 +1206,7 @@ mod tests {
                     "The input token count exceeds the maximum number of tokens allowed."
                 ),
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::ContextExceeded(_)
         ));
@@ -1116,7 +1215,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 &error("invalid_request", "thinking_level is not supported"),
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::Http(_)
         ));
@@ -1125,9 +1224,50 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
                 &error("authentication", "bad key"),
                 &SentSecrets::default(),
-                true
+                Sent {
+                    thinking: true,
+                    replay: true
+                }
             ),
             LlmError::Auth(_)
+        ));
+        // 署名が通らないことは、送り返したステップがあったときだけ思考の拒否にする。
+        let signature = error("invalid_request", "Invalid thought signature.");
+        assert!(matches!(
+            http_error(
+                StatusCode::BAD_REQUEST,
+                &signature,
+                &SentSecrets::default(),
+                Sent {
+                    thinking: false,
+                    replay: true
+                }
+            ),
+            LlmError::ReplayRejected(_)
+        ));
+        assert!(matches!(
+            http_error(
+                StatusCode::BAD_REQUEST,
+                &signature,
+                &SentSecrets::default(),
+                Sent::default()
+            ),
+            LlmError::Http(_)
+        ));
+        assert!(matches!(
+            http_error(
+                StatusCode::BAD_REQUEST,
+                &error(
+                    "invalid_request",
+                    "Function call is missing a thought_signature."
+                ),
+                &SentSecrets::default(),
+                Sent {
+                    thinking: false,
+                    replay: true
+                }
+            ),
+            LlmError::Http(_)
         ));
     }
 
@@ -1140,7 +1280,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 body,
                 &SentSecrets::default(),
-                false
+                Sent::default()
             ),
             LlmError::Auth(_)
         ));

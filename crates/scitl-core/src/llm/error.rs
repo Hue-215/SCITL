@@ -11,7 +11,6 @@ use std::fmt;
 use reqwest::StatusCode;
 use secrecy::{ExposeSecret, SecretString};
 
-/// 詳細に載せる文字列の上限。
 const MAX_DETAIL_CHARS: usize = 512;
 /// 送信した秘密情報が現れたときの置き換え先。
 const REDACTED: &str = "[redacted]";
@@ -29,10 +28,16 @@ pub enum LlmError {
     /// 読み切れなかった(ストリーミングで読む方言では、データの届かない時間が上限を超えた)。
     #[error("timed out waiting for the response: {0}")]
     Timeout(ErrorDetail),
-    /// 接続先に届かなかった(接続の拒否・名前解決・TLS・接続確立の上限)か、応答の途中で
-    /// 接続が切れた。
+    /// 接続先に届かなかった(接続の拒否・名前解決・証明書の検証を除くTLS・接続確立の上限)か、
+    /// 応答の途中で接続が切れた。
     #[error("failed to communicate with the provider: {0}")]
     Connection(ErrorDetail),
+    /// 接続先の証明書を検証できず、接続を断った(期限切れ・発行元が不明・失効等)。Androidの検証の
+    /// 部品は、失効を確かめられなかったときも失効として返す
+    /// (`docs/spec/architecture/network-secrets.md`「証明書の失効の確認」)ので、失効しているとは
+    /// 限らない。
+    #[error("the server certificate could not be verified: {0}")]
+    Certificate(ErrorDetail),
     /// 応答は届いたが、期待した形として読めなかった。
     #[error("failed to parse the response: {0}")]
     InvalidResponse(ErrorDetail),
@@ -48,6 +53,10 @@ pub enum LlmError {
     /// 受け付ける強さが違う(`none`を持たない等)。
     #[error("the provider rejected the reasoning effort value: {0}")]
     ReasoningEffortValueRejected(ErrorDetail),
+    /// 送り返した思考([`super::Replay`])を受け付けなかった(署名が通らない等)。前のターンの
+    /// 思考を外せば受け付けられうる。
+    #[error("the provider rejected the replayed reasoning: {0}")]
+    ReplayRejected(ErrorDetail),
     #[error("authentication failed: {0}")]
     Auth(ErrorDetail),
     #[error("rate limited: {0}")]
@@ -77,9 +86,12 @@ impl LlmError {
             e.is_timeout(),
             e.is_decode(),
         );
+        let certificate = rejected_certificate(&e);
         let detail = ErrorDetail::transport(e, secrets);
         if builder {
             Self::InvalidRequest(detail)
+        } else if certificate {
+            Self::Certificate(detail)
         } else if connect {
             Self::Connection(detail)
         } else if timeout {
@@ -115,6 +127,31 @@ impl LlmError {
             _ => Self::Http(detail),
         }
     }
+}
+
+/// 失敗の原因をたどり、TLSがサーバーの証明書の検証で断ったものかを見る。文言ではなく型で
+/// 見分ける(文言で見分けると、依存の表示が変わったときに黙って漏れる)。
+///
+/// rustlsのエラーは`std::io::Error`に包まれて届く(reqwest 0.13では二重に包まれている)。
+/// `io::Error`の`source`は包んだものを返さないので、包んだものがあればそちらへ進む。
+fn rejected_certificate(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cause = Some(e);
+    while let Some(e) = cause {
+        if matches!(
+            e.downcast_ref::<rustls::Error>(),
+            Some(rustls::Error::InvalidCertificate(_))
+        ) {
+            return true;
+        }
+        cause = match e
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+        {
+            Some(inner) => Some(inner),
+            None => e.source(),
+        };
+    }
+    false
 }
 
 /// エラー発言の詳細(`messages.error_detail`)になる文字列。プロバイダーや通信経路から来た
@@ -240,6 +277,94 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    /// 原因を1つ持つだけのエラー(reqwestやhyperが原因を包む形の代わり)。
+    #[derive(Debug)]
+    struct Wrapped(Box<dyn std::error::Error + Send + Sync>);
+
+    impl std::fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapped")
+        }
+    }
+
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.0.as_ref())
+        }
+    }
+
+    /// 証明書の検証で断られたことは、原因の連鎖の奥にあっても、`io::Error`に包まれていても
+    /// 見分ける。証明書以外のTLSの失敗や、ただの通信の失敗は含めない。
+    #[test]
+    fn finds_a_rejected_certificate_in_the_causes() {
+        let revoked = || rustls::Error::InvalidCertificate(rustls::CertificateError::Revoked);
+        assert!(rejected_certificate(&revoked()));
+        assert!(rejected_certificate(&std::io::Error::other(revoked())));
+        // 実際の連鎖の形(`io::Error`が二重に包む)。
+        let twice = std::io::Error::other(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            revoked(),
+        ));
+        assert!(rejected_certificate(&Wrapped(Box::new(twice))));
+        let nested = Wrapped(Box::new(Wrapped(Box::new(std::io::Error::other(
+            rustls::Error::InvalidCertificate(rustls::CertificateError::Expired),
+        )))));
+        assert!(rejected_certificate(&nested));
+
+        assert!(!rejected_certificate(&rustls::Error::HandshakeNotComplete));
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(!rejected_certificate(&Wrapped(Box::new(refused))));
+    }
+
+    /// 実際の接続で、証明書の検証で断られた失敗を通信の失敗と見分ける。信頼されていない
+    /// 証明書を出すTLSのサーバーへ、アプリのHTTPクライアントでつなぐ。
+    ///
+    /// 見分けは、reqwestが返す失敗の原因の連鎖の形と、そこに現れるrustlsの型に頼っている。
+    /// 依存を上げて、連鎖の包み方が変わったとき・rustlsが2つの版に分かれたとき(型が別になる)・
+    /// 判定の順が崩れたときは、黙って通信の失敗に戻るので、ここで止める。
+    #[tokio::test]
+    async fn a_rejected_certificate_is_told_apart_over_a_real_connection() {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+        // テスト専用の自己署名の証明書と鍵(`CN=localhost`)。どこの認証にも使わない。期限が
+        // 切れても、信頼されていないことに変わりはなく、証明書の検証で断られる。
+        let cert =
+            CertificateDer::from_pem_slice(include_bytes!("test_certificate/cert.pem")).unwrap();
+        let key =
+            PrivateKeyDer::from_pem_slice(include_bytes!("test_certificate/key.pem")).unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let connection = rustls::ServerConnection::new(std::sync::Arc::new(config)).unwrap();
+            // ハンドシェイクを進める。クライアントが証明書を断って切るので、失敗は捨てる。
+            let _ = rustls::StreamOwned::new(connection, stream).read(&mut [0u8; 1]);
+        });
+
+        let url = format!("https://localhost:{port}/");
+        let client = crate::net::hardened_client(
+            &crate::net::ExternalUrl::parse(&url).unwrap(),
+            crate::net::RequestTimeout::None,
+        )
+        .unwrap();
+        let error = client.get(&url).send().await.unwrap_err();
+
+        let classified = LlmError::from_transport(error, &SentSecrets::default());
+        assert!(
+            matches!(classified, LlmError::Certificate(_)),
+            "{classified}"
+        );
+    }
 
     /// 1回だけ接続を受け、`delay`だけ待ってから`response`をそのまま書いて閉じる。
     fn spawn_once(response: &'static str, delay: Duration) -> String {

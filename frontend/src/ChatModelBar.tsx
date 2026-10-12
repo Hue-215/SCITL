@@ -31,7 +31,6 @@ export default function ChatModelBar({
   onDeliveries,
 }: {
   onError: (message: string) => void
-  // 選択を変えられたとき。
   onChanged: () => void
   // 添付の渡し方を読み込むたび。入力欄の添付の警告に使う。
   onDeliveries: (deliveries: AttachmentDeliveries) => void

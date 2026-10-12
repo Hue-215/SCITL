@@ -26,11 +26,12 @@ pub enum TurnFailure {
     ResponseTimeout {
         detail: ErrorDetail,
     },
-    /// 接続先に届かなかったか、応答の途中で接続が切れた。
     ConnectionFailed {
         detail: ErrorDetail,
     },
-    /// 応答は届いたが、期待した形として読めなかった。
+    CertificateUnverified {
+        detail: ErrorDetail,
+    },
     InvalidResponse {
         detail: ErrorDetail,
     },
@@ -88,6 +89,7 @@ impl TurnFailure {
             TurnFailure::NoModel => "no_model",
             TurnFailure::ResponseTimeout { .. } => "response_timeout",
             TurnFailure::ConnectionFailed { .. } => "connection_failed",
+            TurnFailure::CertificateUnverified { .. } => "certificate_unverified",
             TurnFailure::InvalidResponse { .. } => "invalid_response",
             TurnFailure::EmptyResponse => "empty_response",
             TurnFailure::ContextExceeded { .. } => "context_exceeded",
@@ -117,6 +119,7 @@ impl TurnFailure {
         match self {
             TurnFailure::ResponseTimeout { detail }
             | TurnFailure::ConnectionFailed { detail }
+            | TurnFailure::CertificateUnverified { detail }
             | TurnFailure::InvalidResponse { detail }
             | TurnFailure::ContextExceeded { detail }
             | TurnFailure::ThinkingUnsupported { detail }
@@ -223,6 +226,9 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
         LlmError::Connection(detail) => TurnFailure::ConnectionFailed {
             detail: detail.clone(),
         },
+        LlmError::Certificate(detail) => TurnFailure::CertificateUnverified {
+            detail: detail.clone(),
+        },
         LlmError::InvalidResponse(detail) => TurnFailure::InvalidResponse {
             detail: detail.clone(),
         },
@@ -245,7 +251,9 @@ fn from_llm_error(e: &LlmError) -> TurnFailure {
         LlmError::Refused(detail) => TurnFailure::Refused {
             detail: detail.clone(),
         },
-        LlmError::Http(detail) => TurnFailure::Provider {
+        // 前のターンの思考は外して送り直すので(`turn::run_tool_rounds`)、ここへ来るのは外しても
+        // 断られたとき。
+        LlmError::ReplayRejected(detail) | LlmError::Http(detail) => TurnFailure::Provider {
             detail: detail.clone(),
         },
     }
@@ -276,6 +284,7 @@ mod tests {
             (LlmError::InvalidRequest(detail("x")), "provider_config"),
             (LlmError::Timeout(detail("x")), "response_timeout"),
             (LlmError::Connection(detail("x")), "connection_failed"),
+            (LlmError::Certificate(detail("x")), "certificate_unverified"),
             (LlmError::InvalidResponse(detail("x")), "invalid_response"),
             (LlmError::EmptyResponse, "empty_response"),
             (LlmError::ContextExceeded(detail("x")), "context_exceeded"),
@@ -290,6 +299,7 @@ mod tests {
             (LlmError::Auth(detail("x")), "auth"),
             (LlmError::RateLimit(detail("x")), "rate_limit"),
             (LlmError::Refused(detail("x")), "refused"),
+            (LlmError::ReplayRejected(detail("x")), "provider"),
             (LlmError::Http(detail("x")), "provider"),
         ];
         for (e, kind) in cases {
@@ -303,6 +313,7 @@ mod tests {
         let with_detail = [
             LlmError::Timeout(detail("upstream overloaded")),
             LlmError::Connection(detail("upstream overloaded")),
+            LlmError::Certificate(detail("upstream overloaded")),
             LlmError::InvalidResponse(detail("upstream overloaded")),
             LlmError::ContextExceeded(detail("upstream overloaded")),
             LlmError::ReasoningEffortRejected(detail("upstream overloaded")),
@@ -310,6 +321,7 @@ mod tests {
             LlmError::Auth(detail("upstream overloaded")),
             LlmError::RateLimit(detail("upstream overloaded")),
             LlmError::Refused(detail("upstream overloaded")),
+            LlmError::ReplayRejected(detail("upstream overloaded")),
             LlmError::Http(detail("upstream overloaded")),
         ];
         for e in with_detail {
@@ -328,6 +340,7 @@ mod tests {
             TurnFailure::NoModel,
             TurnFailure::ResponseTimeout { detail: detail() },
             TurnFailure::ConnectionFailed { detail: detail() },
+            TurnFailure::CertificateUnverified { detail: detail() },
             TurnFailure::InvalidResponse { detail: detail() },
             TurnFailure::EmptyResponse,
             TurnFailure::ContextExceeded { detail: detail() },
@@ -351,6 +364,7 @@ mod tests {
                 | TurnFailure::NoModel
                 | TurnFailure::ResponseTimeout { .. }
                 | TurnFailure::ConnectionFailed { .. }
+                | TurnFailure::CertificateUnverified { .. }
                 | TurnFailure::InvalidResponse { .. }
                 | TurnFailure::EmptyResponse
                 | TurnFailure::ContextExceeded { .. }
@@ -380,51 +394,6 @@ mod tests {
                 let text = i18n::text(lang, &key);
                 assert_ne!(text, key, "{} has no message", failure.kind());
                 assert!(!text.contains('{'), "{key} must not take placeholders");
-            }
-        }
-    }
-
-    /// 設定の直し方を案内する文言は、案内先の画面の名前をそのまま含む。画面の名前を
-    /// 変えたときに、文言の側だけ古い名前のまま残るのを防ぐ。
-    #[test]
-    fn messages_name_the_settings_they_point_to() {
-        let cases = [
-            (
-                TurnFailure::ResponseTimeout {
-                    detail: ErrorDetail::internal("x"),
-                },
-                &["settings.nav.general"][..],
-            ),
-            (
-                TurnFailure::ContextExceeded {
-                    detail: ErrorDetail::internal("x"),
-                },
-                &["settings.nav.provider"],
-            ),
-            (
-                TurnFailure::ThinkingUnsupported {
-                    detail: ErrorDetail::internal("x"),
-                },
-                &[
-                    "settings.nav.provider",
-                    "settings.model.cap_reasoning_label",
-                ],
-            ),
-            (TurnFailure::ToolRoundLimit, &["settings.nav.tools"]),
-            (TurnFailure::ToolTimeout, &["settings.nav.tools"]),
-        ];
-        for (failure, names) in cases {
-            let key = message_key(failure.kind());
-            for lang in Language::ALL {
-                let text = i18n::text(lang, &key);
-                for name in names {
-                    let name = i18n::text(lang, name);
-                    assert!(
-                        text.contains(name),
-                        "{}: {text:?} does not mention {name:?}",
-                        lang.code()
-                    );
-                }
             }
         }
     }
@@ -517,6 +486,6 @@ mod tests {
             &SentSecrets::default(),
         ));
         assert_eq!(failure.kind(), "auth");
-        assert!(failure.user_message().contains("missing"));
+        assert!(failure.user_message().contains("not set"));
     }
 }

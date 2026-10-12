@@ -28,6 +28,8 @@ use secrecy::SecretString;
 
 use crate::config::{self, Config, SecretRef};
 use crate::db::messages::Chat;
+use crate::db::tasks::Task;
+use crate::db::SharedConnection;
 use crate::error::{CoreError, Result};
 use crate::i18n::Language;
 use crate::in_flight::InFlightSet;
@@ -36,7 +38,8 @@ use crate::llm::{DetectedCatalog, LlmAdapter, ModelCapabilities};
 use crate::mcp::ToolCatalog;
 use crate::orchestration::{
     self, default_opening_message, default_task_chat_prompt, stored_prompt, McpAccess,
-    SystemPrompts, ToolLimits, TurnContext, TurnEvents, TurnFailure, TurnFinished,
+    SystemPrompts, TaskCreation, ToolLimits, TurnContext, TurnEvents, TurnFailure, TurnFinished,
+    TurnSource,
 };
 use crate::secrets;
 
@@ -50,6 +53,8 @@ pub use view::{AvailableModel, ChatModelsView, SettingsView};
 /// 設定画面「一般」タブの入力(表示言語を除く)。プロンプトは`Option<String>`が並ぶので、
 /// 位置引数にせず名前で渡す。
 pub struct GeneralUpdate {
+    /// 空欄(空白だけを含む)と`None`は未設定。
+    pub assistant_nickname: Option<String>,
     pub system_prompt: Option<String>,
     pub task_chat_system_prompt: Option<String>,
     pub task_opening_message: Option<String>,
@@ -57,6 +62,10 @@ pub struct GeneralUpdate {
     /// `None`は保存済みの値のまま変えない(プロンプトだけを保存するときに、書き換えていない
     /// 欄を検証し直さない)。
     pub response_timeout_secs: Option<String>,
+    /// `None`は保存済みの値のまま変えない。
+    pub streaming: Option<bool>,
+    /// `None`は保存済みの値のまま変えない。
+    pub show_reasoning: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -94,7 +103,6 @@ impl AdapterState {
     }
 }
 
-/// 組み立ての結果を状態に直す。
 fn adapter_state(built: Result<providers::ActiveAdapter>) -> AdapterState {
     match built {
         Ok(providers::ActiveAdapter::Ready(adapter)) => AdapterState::Ready(adapter),
@@ -130,6 +138,11 @@ impl Snapshot {
                 Ok(adapter) => Ok(adapter.as_ref() as &dyn LlmAdapter),
                 Err(failure) => Err(failure.clone()),
             },
+            assistant_name: self.config.general.assistant_name(
+                self.config
+                    .active_provider()
+                    .map_or("", |provider| provider.name.as_str()),
+            ),
             prompts: SystemPrompts::from_config(&self.config.general),
             opening_message: orchestration::opening_message(&self.config.general),
             capabilities: self.capabilities,
@@ -235,6 +248,32 @@ impl Settings {
         self.snapshot()
     }
 
+    /// チャットを使えるかの判定に使う[`Self::snapshot`]。鍵を読めていなければ読み直すが、
+    /// 能力は問い合わせない(応答しない推論サーバーでも待たない)。ターンの開始には
+    /// [`Self::snapshot_for_turn`]を使う。
+    async fn snapshot_for_check(&self) -> Snapshot {
+        self.reload_unavailable_key().await;
+        self.snapshot()
+    }
+
+    /// 新規タスクを作り、続けて聞き取りを始める([`orchestration::create_task`])。使えるかは
+    /// 鍵だけ確かめた写しで判定し、能力を問い合わせた写しはタスクを作ってから取る(応答しない
+    /// 推論サーバーで、タスクが出るのを待たせないため)。`source`は写しにターンの材料を添える。
+    pub async fn create_task<S: TurnSource>(
+        &self,
+        db: SharedConnection,
+        source: impl Fn(Snapshot) -> S,
+        on_created: impl FnOnce(&Task) + Send,
+    ) -> Result<TaskCreation> {
+        orchestration::create_task(
+            db,
+            source(self.snapshot_for_check().await),
+            || async { source(self.snapshot_for_turn().await) },
+            on_created,
+        )
+        .await
+    }
+
     /// 鍵を読めずにいたら、資格情報ストアから読み直してアダプタを組み立て直す。GUIは
     /// 起動したまま使い続けるので、ここで読み直さないと、設定を変えるまで直らない。
     /// Androidでは保存先の初期化が設定の読み込みより後になりうるので、GUIが初期化の後にも呼ぶ。
@@ -310,8 +349,20 @@ impl Settings {
                 )
             })
             .transpose()?;
+        let assistant_nickname = update
+            .assistant_nickname
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| {
+                input::name(
+                    &n,
+                    "assistant nickname",
+                    input::ASSISTANT_NICKNAME_MAX_CHARS,
+                )
+            })
+            .transpose()?;
         let mut draft = self.edit();
         let general = &mut draft.config.general;
+        general.assistant_nickname = assistant_nickname;
         general.system_prompt = stored_prompt(update.system_prompt, None);
         let language = general.language();
         general.task_chat_system_prompt = stored_prompt(
@@ -324,6 +375,13 @@ impl Settings {
         );
         if let Some(secs) = response_timeout_secs {
             general.response_timeout_secs = secs;
+        }
+        if let Some(streaming) = update.streaming {
+            // 既定(オン)と同じ値は未設定として保存する。
+            general.streaming = (!streaming).then_some(false);
+        }
+        if let Some(show) = update.show_reasoning {
+            general.show_reasoning = (!show).then_some(false);
         }
         draft.commit()
     }

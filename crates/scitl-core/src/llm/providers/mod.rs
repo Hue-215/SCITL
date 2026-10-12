@@ -31,7 +31,6 @@ pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
 /// [`build_active_adapter`]の結果。
 pub enum ActiveAdapter {
     Ready(SharedAdapter),
-    /// アクティブなプロバイダーが無い。
     NoProvider,
     /// 鍵を登録したプロバイダーなのに、資格情報ストアから鍵を読めなかった。理由(画面に
     /// 出してよい文)を持つ。資格情報ストアのロック解除後などに読み直せるよう、呼び出し元は
@@ -134,7 +133,7 @@ async fn read_success_json_with<T: DeserializeOwned>(
 
 /// 応答の欄が`null`でも、欄が無いときと同じ既定値にする(`#[serde(default, deserialize_with =
 /// "super::null_as_default")]`)。`#[serde(default)]`だけでは、無い欄は受けても`null`は型の誤りに
-/// なる。空の欄を省かずに`null`で返す互換サーバーがある(Issue #458)。
+/// なる。空の欄を省かずに`null`で返す互換サーバーがある。
 fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -212,8 +211,8 @@ fn read_elements(
 }
 
 /// ストリーミングで差分から組み立て直した要素を、送り返す要素([`crate::llm::Replay`])にする。
-/// `Value`から書き出すので、キーの順は受け取った順ではなく名前順になる(方言ごとに、キーの順を
-/// 見ないことを確かめてある。`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
+/// `Value`から書き出すので、キーの順は受け取った順ではなく組み立てた順になる(方言ごとに、キーの
+/// 順を見ないことを確かめてある。`docs/spec/architecture/transcript.md`「送った形のまま積む」)。
 fn assembled_element(value: &serde_json::Value) -> Box<RawValue> {
     serde_json::value::to_raw_value(value).expect("a JSON value serializes")
 }
@@ -289,6 +288,7 @@ fn object_arguments(arguments: &crate::llm::ToolArguments) -> serde_json::Value 
 pub struct AdapterInputs<'a> {
     provider: Option<ProviderInputs<'a>>,
     timeout: Duration,
+    streaming: bool,
 }
 
 #[derive(PartialEq)]
@@ -311,6 +311,7 @@ impl<'a> AdapterInputs<'a> {
                 model: p.resolved_model().unwrap_or_default(),
             }),
             timeout: config.general.response_timeout(),
+            streaming: config.general.streaming(),
         }
     }
 }
@@ -322,7 +323,11 @@ impl<'a> AdapterInputs<'a> {
 /// [`ActiveAdapter::KeyUnavailable`]を返す(起動や、鍵と無関係な設定の変更を止めないため)。
 /// 読めなかった値の代わりに、その値を抜いて送ることはしない。
 pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError> {
-    let AdapterInputs { provider, timeout } = AdapterInputs::of(config);
+    let AdapterInputs {
+        provider,
+        timeout,
+        streaming,
+    } = AdapterInputs::of(config);
     let Some(provider) = provider else {
         return Ok(ActiveAdapter::NoProvider);
     };
@@ -338,24 +343,33 @@ pub fn build_active_adapter(config: &Config) -> Result<ActiveAdapter, CoreError>
 
     // 方言を足したらここがコンパイルエラーになり、黙ってOpenAI互換で組み立てることはない。
     let adapter: SharedAdapter = match provider.api_format {
-        ApiFormat::OpenAiCompat => Arc::new(OpenAiCompatAdapter::new(
-            provider.base_url.to_string(),
-            credentials,
-            provider.model,
-            timeout,
-        )?),
-        ApiFormat::Anthropic => Arc::new(AnthropicAdapter::new(
-            provider.base_url.to_string(),
-            credentials,
-            provider.model,
-            timeout,
-        )?),
-        ApiFormat::Gemini => Arc::new(GeminiAdapter::new(
-            provider.base_url.to_string(),
-            credentials,
-            provider.model,
-            timeout,
-        )?),
+        ApiFormat::OpenAiCompat => Arc::new(
+            OpenAiCompatAdapter::new(
+                provider.base_url.to_string(),
+                credentials,
+                provider.model,
+                timeout,
+            )?
+            .streaming(streaming),
+        ),
+        ApiFormat::Anthropic => Arc::new(
+            AnthropicAdapter::new(
+                provider.base_url.to_string(),
+                credentials,
+                provider.model,
+                timeout,
+            )?
+            .streaming(streaming),
+        ),
+        ApiFormat::Gemini => Arc::new(
+            GeminiAdapter::new(
+                provider.base_url.to_string(),
+                credentials,
+                provider.model,
+                timeout,
+            )?
+            .streaming(streaming),
+        ),
     };
     Ok(ActiveAdapter::Ready(adapter))
 }
@@ -368,13 +382,31 @@ pub fn can_detect_capabilities(provider: &ProviderConfig) -> bool {
     }
 }
 
+/// 能力の問い合わせの結果([`detect_capabilities`])。
+#[derive(Debug, Default)]
+pub struct Detection {
+    /// 答えたモデルの能力。サーバーが知らないモデルは含めない。
+    pub found: HashMap<String, DetectedCapabilities>,
+    /// サーバーは知っているが、今は答えられないモデル(llama.cppのルーターで読み込まれていない
+    /// 等)。次の機会に問い合わせ直す。
+    pub pending: Vec<String>,
+}
+
+impl From<HashMap<String, DetectedCapabilities>> for Detection {
+    fn from(found: HashMap<String, DetectedCapabilities>) -> Self {
+        Self {
+            found,
+            pending: Vec::new(),
+        }
+    }
+}
+
 /// `models`の能力を推論サーバーに問い合わせる。`Ok(None)`は能力を問い合わせられない
-/// サーバー、`Err`はサーバーに繋がらないか、今は答えられない。サーバーが知らないモデルは
-/// 結果に含めない。
+/// サーバー、`Err`はサーバーに繋がらないか、今は答えられない。
 pub async fn detect_capabilities(
     provider: &ProviderConfig,
     models: &[String],
-) -> Result<Option<HashMap<String, DetectedCapabilities>>, CoreError> {
+) -> Result<Option<Detection>, CoreError> {
     if !can_detect_capabilities(provider) {
         return Ok(None);
     }
@@ -385,10 +417,10 @@ pub async fn detect_capabilities(
         }
         ApiFormat::Anthropic => anthropic::detect(&provider.base_url, &credentials, models)
             .await
-            .map(Some),
+            .map(|found| Some(found.into())),
         ApiFormat::Gemini => gemini::detect(&provider.base_url, &credentials, models)
             .await
-            .map(Some),
+            .map(|found| Some(found.into())),
     }
 }
 
@@ -495,7 +527,7 @@ async fn reject_failure(
     })
 }
 
-/// エラー応答の本文として読む量の上限。分類と詳細(`ErrorDetail`は512文字まで)には先頭だけで
+/// エラー応答の本文として読む量の上限。分類と詳細(`ErrorDetail`が切り詰める)には先頭だけで
 /// 足りる。ストリーミングで読む方言では待つ時間の上限が無通信の間隔だけなので、流し続ける
 /// 本文を読み切ろうとしない。
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;

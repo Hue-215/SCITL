@@ -13,7 +13,6 @@ pub const SERVICE_CLASS: &str = "GeneratingService";
 pub const EXTRA_TITLE: &str = "title";
 pub const EXTRA_CHANNEL: &str = "channel";
 
-/// 通知の文面。
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 struct Notice {
     title: &'static str,
@@ -81,7 +80,6 @@ mod android {
         })
     }
 
-    /// サービスを名前で指すIntent。
     fn service_intent<'local>(
         env: &mut Env<'local>,
         context: &JObject,

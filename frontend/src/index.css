@@ -453,19 +453,41 @@ option {
   gap: var(--space-1);
 }
 
-/* 引き出すボタン(狭い窓)・名前・︙のメニューを1行に並べる。名前は残りの幅で折り返し、ボタンは
-   名前が何行になっても上端に留める。︙のメニューの一覧の位置と幅の基準(MenuButton.tsx)。 */
+/* 引き出すボタン(狭い窓)・名前(タスクでは名前・締切と進捗・説明の列)・︙のメニューを1行に並べる。
+   名前は残りの幅で折り返し、ボタンは名前が何行になっても上端に留める。 */
 .chat-header-row {
-  position: relative;
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
 }
 
-/* 1行の名前は隣のボタンの高さの中で縦の中央に置き、折り返したら下へ伸ばす。 */
-.chat-header-row h1 {
+/* ︙のメニューの一覧の位置の基準(MenuButton.tsx)は︙自身にする。行を基準にすると、行の高さに
+   締切と進捗・開いた説明が入るので、一覧が︙から離れて開く。一覧は︙の右端に揃えて左へ広げる。
+   項目は短い固定の文言だけなので、幅の上限(基準の幅。ここでは︙の幅)は外す。 */
+.chat-header-row > .menu {
+  position: relative;
+}
+
+.chat-header-row > .menu > .dropdown-popup {
+  max-width: none;
+}
+
+/* 残りの幅は、総合チャットでは名前が、タスクでは名前・締切と進捗・説明の列が占める。 */
+.chat-header-row > h1,
+.chat-header-main {
   flex: 1;
   min-width: 0;
+}
+
+.chat-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* 1行の名前は隣のボタンの高さの中で縦の中央に置き、折り返したら下へ伸ばす。 */
+.chat-header-row > h1,
+.chat-header-main > h1 {
   min-height: var(--control-size-md);
   display: flex;
   align-items: center;
@@ -486,21 +508,19 @@ option {
   width: 100%;
 }
 
-/* 締切と工程の進捗を右端に置き、説明があれば左端に開け閉めするボタンを置く。 */
+/* 締切と工程の進捗を名前の真下の左端に置き、説明があればその後ろに開け閉めするボタンを続ける。 */
 .chat-header-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
+  column-gap: var(--space-1);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-/* 押せる範囲(平らなボタンの内側の余白と、描かない枠線の幅)は左へはみ出させ、印の左端を見出しの
-   列の左端(会話欄の思考・ツール呼び出しの行の印と同じ位置)に揃える。 */
+/* 締切と進捗の文に続けて置く。間隔はボタンの内側の余白が作る。 */
 .chat-header-description-toggle {
   flex-shrink: 0;
-  margin-inline: calc(-1 * (var(--space-2) + var(--border-width))) auto;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
@@ -893,8 +913,8 @@ details[open] > summary > .disclosure-mark,
   /* 端の吹き出しの影(--shadow-lift)を切らさないための余白。影はスクロールで見せる範囲に
      含まれないため、余白が無いと一番下まで送っても最後の発言の影が欠けて見える。
      左右は吹き出しのマージンが同じ役を担う(左右にpaddingを置かない理由は
-     ui.md「スクロール領域」)。 */
-  padding-block: var(--space-2);
+     ui.md「スクロール領域」)。上は見出しの帯の影の分も空ける(--pinned-shadow-reach)。 */
+  padding-block: calc(var(--space-2) + var(--pinned-shadow-reach)) var(--space-2);
 }
 
 .entry {
@@ -930,6 +950,16 @@ details[open] > summary > .disclosure-mark,
   );
 }
 
+/* モデルへ送っている範囲の始まりの印。吹き出しではないので、幅いっぱいに置いて中央に寄せる。 */
+.chat-log > .history-start {
+  align-self: stretch;
+  margin-right: var(--bubble-margin-near);
+  max-width: none;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .chat-log > .entry-user {
   align-self: flex-end;
   margin-left: var(--bubble-margin-far);
@@ -953,11 +983,24 @@ details[open] > summary > .disclosure-mark,
   color: var(--color-text);
 }
 
-/* 操作の記録の行と送信待ち行は、どちらも「本文ではない補助的な発言」として同じ見た目。 */
-.entry-tool,
-.entry-pending {
+/* 操作の記録の行は「本文ではない補助的な発言」の見た目。 */
+.entry-tool {
   font-style: italic;
   color: var(--color-text-secondary);
+}
+
+/* 応答を待っている間の「入力中」(ChatLog.tsxのTypingIndicator)。操作の記録の行と同じ補助的な
+   見た目にする。文言の無い間も1行分の高さを保ち(行は生成中ずっと置く)、長いプロバイダー名は
+   1行に収めて省略する。左右の余白はmainの直接の子として持つ。 */
+.typing-indicator {
+  min-height: calc(var(--font-size-sm) * var(--line-height-normal));
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  font-style: italic;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .entry-error {
@@ -965,7 +1008,8 @@ details[open] > summary > .disclosure-mark,
   color: var(--color-on-danger-container);
 }
 
-.entry-stopped {
+.entry-stopped,
+.entry-truncated {
   margin: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
@@ -1166,10 +1210,12 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-2);
 }
 
+/* URLのような区切りの無い長い文字列も、箱の幅を越えずに折り返す。 */
 .thinking-item {
   margin: 0;
   font-style: italic;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ツール呼び出し1件の1行。枠を持たず、名前と引数の要約を等幅で並べる。行内の間隔はmarginで持つ。 */
@@ -1293,8 +1339,9 @@ details[open] > summary > .disclosure-mark,
   min-height: 0;
   /* 左右は空けない。ログ・サイドバーと同じ理由で、スクロールバーを窓の端に出す。
      上は会話欄(.chat-log)と同じく、見出しの帯の下の余白と合わせて見出しと本文の間を作る。
-     端の部品のフォーカスの光を切らさない幅(--focus-glow-spread)も兼ねる。 */
-  padding: var(--space-2) 0 var(--pane-padding);
+     端の部品のフォーカスの光を切らさない幅(--focus-glow-spread)も兼ねる。見出しの帯の影の分
+     (--pinned-shadow-reach)も会話欄と同じく足す。 */
+  padding: calc(var(--space-2) + var(--pinned-shadow-reach)) 0 var(--pane-padding);
   overflow-y: auto;
 }
 
@@ -1794,9 +1841,8 @@ button.danger {
   background: rgb(0 0 0 / 0.5);
 }
 
-/* ダイアログの共通枠。タスク削除・プロバイダー削除・外部ツールサーバー削除の確認のほか、
-   リンク確認・画像プレビュー・テキスト添付の全文表示でも共通で使う。ウィンドウ全体を覆う
-   都合、内容領域の幅基準ではなくoverlay自身の幅(100%)を基準にする。 */
+/* ダイアログの共通枠(Dialog.tsx)。ウィンドウ全体を覆う都合、内容領域の幅基準ではなく
+   overlay自身の幅(100%)を基準にする。 */
 .dialog-overlay {
   position: fixed;
   /* 見出しの帯(.pane-top)と同じ順位にしておき、bodyの末尾に置く(Dialog.tsx)ダイアログを

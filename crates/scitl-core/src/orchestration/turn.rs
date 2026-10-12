@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -15,8 +16,8 @@ use crate::db::{in_transaction, with_conn, SharedConnection};
 use crate::error::{CoreError, Result};
 use crate::in_flight::{InFlight, InFlightSet, StopSignal};
 use crate::llm::{
-    AdapterIdentity, ChatMessage, InlineImage, LlmAdapter, PromptText, ResponseEvent, SessionId,
-    ToolArguments, ToolCallRequest,
+    AdapterIdentity, ChatMessage, FinishReason, InlineImage, LlmAdapter, LlmError, PromptText,
+    ResponseEvent, SessionId, ToolArguments, ToolCallRequest,
 };
 use crate::mcp::McpSessions;
 use crate::orchestration::history;
@@ -26,7 +27,7 @@ use crate::orchestration::transcript::SavedTurn;
 use crate::orchestration::turn_end;
 use crate::orchestration::turn_error::{self, TurnFailure};
 use crate::orchestration::turn_request::TurnRequest;
-use crate::orchestration::{TurnContext, TurnEvent, TurnEvents};
+use crate::orchestration::{TurnContext, TurnEvent, TurnEvents, TurnSource};
 use crate::tools::{self, external::ExternalToolset, ToolOutput};
 
 /// 送信する発言。本文と、送信前に預けた添付のトークン(`attachments::Attachments::stage`)。
@@ -128,26 +129,46 @@ pub enum TaskCreation {
     Unavailable { error_kind: &'static str },
 }
 
+/// 返信を消してから生成し直す操作([`edit_user_message`]・[`retry_reply`])の結果。
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Regeneration {
+    /// 置き換えて応答を生成した。生成の失敗はエラー発言として保存される。
+    Generated,
+    /// チャットを使えないので何も消さなかった(生成に進めないのに消すと、元の返信がエラー発言に
+    /// 置き換わるだけになるため)。`error_kind`はエラー発言と同じ種別コードで、画面は同じ文言を出す。
+    Unavailable { error_kind: &'static str },
+}
+
 /// 新規タスクを作り、続けて聞き取りを始める(`open_task_chat`)。チャットを使えない
 /// (モデル未選択等)ならタスクを作らずに理由を返す(作っても聞き取りが失敗し、エラー発言だけの
 /// タスクが残るため)。
 ///
-/// `on_created`は作った直後、聞き取りの前に呼ぶ(画面が作ったタスクの会話を開く)。聞き取りが
-/// 失敗してもタスクは残し、理由を結果に添える。モデルの呼び出しの失敗はエラー発言として
-/// 保存されるので、ここには来ない([`run_turn`]と同じ)。`Err`は作る前の失敗だけ。
-pub async fn create_task(
+/// 設定の写しは2段階で取る。使えるかは`checked`(鍵だけ確かめた軽い写し。
+/// `settings::Settings::snapshot_for_check`)で判定してタスクを作り、聞き取りは`for_turn`が返す
+/// 写し(モデルの能力を問い合わせたもの。`settings::Settings::snapshot_for_turn`)で始める。
+/// 応答しない推論サーバーへの問い合わせを、タスクが画面に出る前に待たないため。2つの間に設定が
+/// 変わって使えなくなれば、聞き取りがエラー発言で終わる。
+///
+/// `on_created`は作った直後、能力の問い合わせと聞き取りの前に呼ぶ(画面が作ったタスクの会話を
+/// 開く)。聞き取りが失敗してもタスクは残し、理由を結果に添える。モデルの呼び出しの失敗は
+/// エラー発言として保存されるので、ここには来ない([`run_turn`]と同じ)。`Err`は作る前の失敗だけ。
+pub async fn create_task<S: TurnSource, F: Future<Output = S>>(
     db: SharedConnection,
-    ctx: &TurnContext<'_>,
+    checked: S,
+    for_turn: impl FnOnce() -> F,
     on_created: impl FnOnce(&Task) + Send,
 ) -> Result<TaskCreation> {
-    if let Err(failure) = ready_adapter(ctx) {
+    if let Err(failure) = ready_adapter(&checked.turn_context()) {
         return Ok(TaskCreation::Unavailable {
             error_kind: failure.kind(),
         });
     }
     let task = with_conn(db.clone(), tasks::create_task).await?;
     on_created(&task);
-    let opening_error = open_task_chat(db, ctx, task.id)
+    let source = for_turn().await;
+    let opening_error = open_task_chat(db, &source.turn_context(), task.id)
         .await
         .err()
         .map(|e| e.to_string());
@@ -234,14 +255,21 @@ async fn generate_new_turn(
 ///
 /// 対象の発言に答えたターンより後ろのターンのツール実行記録も論理削除する。答えたターン自身の
 /// 記録は、置き換える前の試行で実行したこととして新しいターンに伝える。
+///
+/// チャットを使えない(モデル未選択等)なら何も消さずに断る([`Regeneration::Unavailable`])。
 pub async fn edit_user_message(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     chat: Chat,
     message_id: i64,
     new_text: String,
-) -> Result<()> {
+) -> Result<Regeneration> {
     let generating = begin_generating(ctx.generating, chat)?;
+    if let Err(failure) = ready_adapter(ctx) {
+        return Ok(Regeneration::Unavailable {
+            error_kind: failure.kind(),
+        });
+    }
     with_conn(db.clone(), move |conn| {
         // 挿入だけが失敗すると、会話がその位置から消えたまま置き換わらない。
         in_transaction(conn, |conn| {
@@ -258,7 +286,8 @@ pub async fn edit_user_message(
     })
     .await?;
 
-    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await
+    generate_turn_response(db, ctx, Attempt::first(chat), &generating).await?;
+    Ok(Regeneration::Generated)
 }
 
 /// ターンの返信(アシスタント発言またはエラー発言)の再試行。対象の発言以降(自身を含む)の
@@ -269,13 +298,20 @@ pub async fn edit_user_message(
 /// ターンのユーザー発言だけが削除されていることがあるので、返信以降を消した残りが応答すべき
 /// 発言で終わらなければ断る(`history::awaits_reply`)。新規送信と編集は必ずユーザー発言を
 /// 用意してから生成するので、この確認は再試行にだけ要る。
+///
+/// チャットを使えない(モデル未選択等)なら何も消さずに断る([`Regeneration::Unavailable`])。
 pub async fn retry_reply(
     db: SharedConnection,
     ctx: &TurnContext<'_>,
     chat: Chat,
     message_id: i64,
-) -> Result<()> {
+) -> Result<Regeneration> {
     let generating = begin_generating(ctx.generating, chat)?;
+    if let Err(failure) = ready_adapter(ctx) {
+        return Ok(Regeneration::Unavailable {
+            error_kind: failure.kind(),
+        });
+    }
     let attempt = with_conn(db.clone(), move |conn| {
         in_transaction(conn, |conn| {
             let target = find_in_chat(conn, chat, message_id)?;
@@ -306,7 +342,8 @@ pub async fn retry_reply(
     })
     .await?;
 
-    generate_turn_response(db, ctx, attempt, &generating).await
+    generate_turn_response(db, ctx, attempt, &generating).await?;
+    Ok(Regeneration::Generated)
 }
 
 /// 発言と、それより後ろの通常発言をまとめて論理削除する(編集・再試行と同じく、その地点から
@@ -443,6 +480,8 @@ async fn respond(
         Ok(adapter) => adapter,
         Err(failure) => return fail_turn(db, attempt, failure, &ReplyParts::default()).await,
     };
+    // 外部ツールの接続と履歴の組み立ての間も、応答を待っていることを出す。
+    awaiting_model(ctx);
 
     let mut sessions = McpSessions::new();
     let result =
@@ -480,6 +519,13 @@ async fn report_finished(db: SharedConnection, ctx: &TurnContext<'_>, attempt: &
             crate::diagnostics::report(format_args!("could not report that the turn finished: {e}"))
         }
     }
+}
+
+/// モデルの応答を待ち始めたことを知らせる([`TurnEvent::AwaitingModel`])。
+fn awaiting_model(ctx: &TurnContext<'_>) {
+    (ctx.events)(TurnEvent::AwaitingModel {
+        name: ctx.assistant_name.to_string(),
+    });
 }
 
 /// 呼び出しに使えるアダプタ。使えなければ、ターンを終えるエラー発言の分類。
@@ -602,12 +648,16 @@ impl ReplyParts {
         }
     }
 
+    /// ラウンドの応答が、出力の長さの上限で途中で切れたことを積む。
+    fn push_truncated(&mut self, round: u32) {
+        self.0.push(ReplyPart::Truncated { round });
+    }
+
     /// 実行して記録を書いたツールを積む。`record`は実行記録の行のid。
     fn push_tool(&mut self, round: u32, record: i64) {
         self.0.push(ReplyPart::Tool { round, record });
     }
 
-    /// モデルが本文を1つでも書いたか。
     fn has_text(&self) -> bool {
         self.0.iter().any(|p| matches!(p, ReplyPart::Text { .. }))
     }
@@ -724,7 +774,7 @@ async fn run_tool_rounds(
             Ok((history::load(conn, chat)?, session_id(conn, chat)?))
         })
         .await?;
-        let request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
+        let mut request = TurnRequest::prepare(ctx, adapter, chat, stored, external).await?;
         // 同一ターン内のツール呼び出しの往復。そのままモデルに返し、通常発言の行としては書かない
         // (実行記録が同じ結果を持っており、次ターン以降はそこから組み立てる)。
         let mut round_trip: Vec<ChatMessage> = Vec::new();
@@ -734,41 +784,56 @@ async fn run_tool_rounds(
         let tool_rounds = request.tool_rounds(ctx);
         for round in 1..=tool_rounds + 1 {
             let final_call = round > tool_rounds;
-            let (messages_to_send, offered) = request.round(&round_trip, final_call);
+            // 最初のラウンドの分は、ターンの始めに知らせてある(`respond`)。
+            if round > 1 {
+                awaiting_model(ctx);
+            }
+            let (messages_to_send, events, replay) = loop {
+                let (messages_to_send, offered) = request.round(&round_trip, final_call);
 
-            // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
-            let mut events = Vec::new();
-            let notify = ctx.events;
-            let sent = stop
-                .unless_requested(adapter.send(
-                    session.as_ref(),
-                    &messages_to_send,
-                    offered,
-                    ctx.reasoning_effort,
-                    &mut |event| {
-                        notify(TurnEvent::Response {
-                            event: event.clone(),
-                        });
-                        events.push(event);
-                    },
-                ))
-                .await;
-            let replay = match sent {
-                Some(Ok(replay)) => replay,
-                Some(Err(e)) => {
-                    return fail_turn(db, attempt, turn_error::classify(&e), reply_parts).await
+                // 受け取った順に画面へ流しつつ、解釈はラウンドを受け取り終えてから行う。
+                let mut events = Vec::new();
+                let notify = ctx.events;
+                let sent = stop
+                    .unless_requested(adapter.send(
+                        session.as_ref(),
+                        &messages_to_send,
+                        offered,
+                        ctx.reasoning_effort,
+                        &mut |event| {
+                            notify(TurnEvent::Response {
+                                event: event.clone(),
+                            });
+                            events.push(event);
+                        },
+                    ))
+                    .await;
+                match sent {
+                    Some(Ok(replay)) => break (messages_to_send, events, replay),
+                    // 最初のラウンドで送り返した思考を断られたら、前のターンの思考を外して送り
+                    // 直す。後のラウンドでは前に送った部分を書き換えることになるので、外さない。
+                    // 断る応答はイベントを渡す前に返るので、画面に二重に出ない。
+                    Some(Err(CoreError::Llm(LlmError::ReplayRejected(_))))
+                        if round == 1 && request.drop_replays() => {}
+                    Some(Err(e)) => {
+                        return fail_turn(db, attempt, turn_error::classify(&e), reply_parts).await
+                    }
+                    None => return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await,
                 }
-                None => return fail_turn(db, attempt, TurnFailure::Stopped, reply_parts).await,
             };
 
             let RoundResponse {
                 text,
                 reasoning,
                 tool_calls,
+                truncated,
             } = RoundResponse::collect(&events);
             // 受け取り終えたラウンドの中身。このあとどの経路で終わっても、返信かエラー発言に残る。
             let round_no = u32::try_from(round).expect("tool rounds are few");
             reply_parts.push_round(round_no, reasoning.as_deref(), &text);
+            if truncated {
+                reply_parts.push_truncated(round_no);
+            }
 
             if tool_calls.is_empty() {
                 // 送った形の保存には、最後の応答も思考の生ブロックごと並べる(次のターンで送り返す)。
@@ -880,6 +945,8 @@ struct RoundResponse {
     /// 要る方言の分は、アダプタが返す`replay`に入っている。無ければ`None`。
     reasoning: Option<String>,
     tool_calls: Vec<ToolCallRequest>,
+    /// 出力の長さの上限で途中で切れたか(終了理由`Length`)。
+    truncated: bool,
 }
 
 impl RoundResponse {
@@ -887,6 +954,7 @@ impl RoundResponse {
         let mut text = String::new();
         let mut reasoning = String::new();
         let mut tool_calls = Vec::new();
+        let mut truncated = false;
         for event in events {
             match event {
                 ResponseEvent::TextDelta { text: delta } => text.push_str(delta),
@@ -902,13 +970,16 @@ impl RoundResponse {
                         arguments: arguments.clone(),
                     });
                 }
-                ResponseEvent::Done { .. } => {}
+                ResponseEvent::Done { finish_reason } => {
+                    truncated = *finish_reason == FinishReason::Length;
+                }
             }
         }
         Self {
             text,
             reasoning: (!reasoning.is_empty()).then_some(reasoning),
             tool_calls,
+            truncated,
         }
     }
 }

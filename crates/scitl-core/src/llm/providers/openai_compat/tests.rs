@@ -179,7 +179,7 @@ async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
     )));
 }
 
-/// 空の欄を省かずに`null`で返すサーバー(Issue #458)。
+/// 空の欄を省かずに`null`で返すサーバー。
 #[tokio::test]
 async fn null_fields_in_a_completion_read_as_absent() {
     let (base_url, handle) = spawn_capturing(
@@ -1382,4 +1382,44 @@ async fn an_empty_finish_reason_does_not_end_the_stream() {
     .await;
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(events, vec![text("a"), text("b"), done(FinishReason::Stop)]);
+}
+
+#[tokio::test]
+async fn asks_for_one_json_reply_when_streaming_is_off() {
+    let (base_url, handle) =
+        super::super::test_server::spawn_server(vec![(200, MINIMAL_COMPLETION)]);
+    let adapter = OpenAiCompatAdapter::new(
+        format!("{base_url}/v1"),
+        Credentials::key_only(SecretString::from("")),
+        "model",
+        TEST_TIMEOUT,
+    )
+    .unwrap()
+    .streaming(false);
+    let messages = [];
+    let preview = adapter
+        .request_preview(&messages, ToolOffer::NONE, None)
+        .unwrap();
+    let mut events = Vec::new();
+    adapter
+        .send(None, &messages, ToolOffer::NONE, None, &mut |e| {
+            events.push(e)
+        })
+        .await
+        .unwrap();
+    let received = handle.join().unwrap();
+
+    assert_eq!(received[0].body["stream"], false);
+    assert_eq!(preview.body["stream"], false);
+    assert_eq!(
+        events,
+        vec![
+            ResponseEvent::TextDelta {
+                text: "ok".to_string()
+            },
+            ResponseEvent::Done {
+                finish_reason: FinishReason::Stop
+            },
+        ]
+    );
 }

@@ -25,7 +25,6 @@ pub(super) struct Entry<'a> {
     pub attachments: Vec<AttachmentLink>,
 }
 
-/// 書き出した添付を指すリンク。
 pub(super) struct AttachmentLink {
     pub name: String,
     pub kind: AttachmentKind,
@@ -153,14 +152,27 @@ fn push_entry(out: &mut String, entry: &Entry) {
 fn push_parts(out: &mut String, parts: &[ResolvedPart]) {
     for part in parts {
         match part {
-            ResolvedPart::Reasoning { .. } => {}
-            ResolvedPart::Text { text, .. } => {
+            // 思考は出さないが、思考の途中で切れたことは画面と同じく出す。
+            ResolvedPart::Reasoning { truncated, .. } => {
+                if *truncated {
+                    out.push_str("The reply reached the length limit.\n\n");
+                }
+            }
+            ResolvedPart::Text {
+                text, truncated, ..
+            } => {
                 out.push_str(&fenced("markdown", text));
                 out.push('\n');
+                if *truncated {
+                    out.push_str("The reply above reached the length limit.\n\n");
+                }
             }
             ResolvedPart::Tool { record, .. } => {
                 let _ = writeln!(out, "Tool execution ({}):\n", record.created_at);
                 push_record(out, record);
+            }
+            ResolvedPart::Truncated { .. } => {
+                out.push_str("The reply reached the length limit.\n\n");
             }
         }
     }
@@ -400,10 +412,12 @@ mod tests {
                         ResolvedPart::Reasoning {
                             round: 1,
                             text: "secret thoughts",
+                            truncated: false,
                         },
                         ResolvedPart::Text {
                             round: 1,
                             text: "前置き",
+                            truncated: false,
                         },
                         ResolvedPart::Tool {
                             round: 1,
@@ -412,7 +426,9 @@ mod tests {
                         ResolvedPart::Text {
                             round: 2,
                             text: "done",
+                            truncated: true,
                         },
+                        ResolvedPart::Truncated { round: 3 },
                     ],
                     attachments: Vec::new(),
                 },
@@ -431,6 +447,8 @@ mod tests {
             "```markdown\n前置き\n```\n",
             "Tool execution (2026-09-28T12:00:00Z):",
             "```markdown\ndone\n```\n",
+            "The reply above reached the length limit.\n",
+            "The reply reached the length limit.\n",
         ]
         .iter()
         .map(|h| {
@@ -439,7 +457,11 @@ mod tests {
         })
         .collect();
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{out}");
-        assert!(out.contains("```json\n{\n  \"arguments\": {},"), "{out}");
+        // 記録は保存した順のまま整形する。
+        assert!(
+            out.contains("```json\n{\n  \"tool\": \"update_task\",\n  \"arguments\": {},"),
+            "{out}"
+        );
         assert!(!out.contains("secret thoughts"));
         assert!(!out.contains("provider body"));
     }
@@ -453,6 +475,7 @@ mod tests {
             parts: vec![ResolvedPart::Text {
                 round: 1,
                 text: "工程を足します",
+                truncated: false,
             }],
             attachments: Vec::new(),
         }]);

@@ -86,7 +86,8 @@ RELAY_KEY=dummy cli provider add --name sham --api-format open_ai_compat \
 # 出力の providers[].id がプロバイダーのID(以下 <P>)
 cli model add <P> dummy-o
 cli model select <P> dummy-o
-cli settings general --response-timeout-secs 900   # 既定の120秒ではLLM役が間に合わないことがある
+# 既定の120秒ではLLM役が間に合わないことがある。Sham_llmは`stream: true`を400で断るので、ストリーミングを切る
+cli settings general --response-timeout-secs 900 --no-streaming
 ```
 
 `settings general`と`settings tools`は、**指定しなかった項目を既定値に戻す**。値を残したい項目は毎回渡す。
@@ -137,6 +138,7 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
   タスク操作(`rename`等)は成功しても何も出さない
 - 生成するコマンドは**1行に1つのJSON**を出す。`type`で見分ける
   - `task_created`: 作られたタスク(`task create`のみ、最初の行)
+  - `awaiting_model`: モデルの応答を待ち始めた(ターンの始めと、2回目以降のラウンドの前)。`name`はアシスタントの名前(ニックネーム、無ければプロバイダーの名前)
   - `response`: モデルの応答の途中経過。`event.type`が`reasoning_delta`・`text_delta`・`tool_call`・`done`
   - `tool_executed`: アプリがツールを実行した結果
   - `last_message`: 最後の行。会話の最後の発言。返信(アシスタント発言・エラー発言)の中身は`parts`に起きた順で
@@ -154,7 +156,7 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
 ( cli task create > create.jsonl 2>&1; echo "exit=$?" >> create.jsonl ) &
 ```
 
-2. `next` → 挨拶への応答を`reply`(`text`と`thinking`) → `create.jsonl`の`last_message`を確かめる
+2. `next` → 開始の発言への応答を`reply`(`text`と`thinking`) → `create.jsonl`の`last_message`を確かめる
 
 ```sh
 # 3. 発言を送る(バックグラウンド)
@@ -248,6 +250,8 @@ cargo run -p scitl-core --example relay_session -- \
 
 - 方言は環境変数`RELAY_DIALECT`(`openai`(既定)・`anthropic`・`gemini`)で選ぶ。BASE_URLは1節の表の
   とおりで、Anthropic形式とGemini形式は`/v1`を付けない。この2つは思考の強さ「中」で呼ぶ
+- ストリーミングは頼まない(Sham_llmは`stream: true`を400で断る)。本物のサーバーでストリーミングを
+  確かめるときは、環境変数`RELAY_STREAMING=1`を付ける
 - STEPは次のとおり。途中経過(本文・思考・ツールの実行)は標準出力に出る
   - `@new`: タスクを作って聞き取りを始める
   - `@task <id>`: 既にあるタスクの会話へ移る
@@ -272,6 +276,7 @@ cargo run -p scitl-core --example relay_session -- \
    (`docs/spec/architecture/concurrency.md`「多重起動の防止」)
 2. 設定の「APIプロバイダー」で、1節の表の方言・URL・モデルで登録する
 3. 設定「一般」の応答のタイムアウト(既定120秒)を延ばす。LLM役が考え込むと超える
+4. 設定「一般」の「高度な設定」で、ストリーミングを切る(Sham_llmは`stream: true`を400で断る)
 
 能力の自動検出には疑似APIが答える(答える値はSham_llmの文書を参照)。検出結果はアプリの起動中、
 モデルごとに覚えられる。

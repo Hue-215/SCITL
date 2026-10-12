@@ -17,7 +17,7 @@ pub use capabilities::{
 pub use error::{ErrorDetail, LlmError, SentSecrets};
 pub use prompt::{
     user_message_format_note, AttachmentNote, OperationNote, PromptText, SentAt,
-    DISCARDED_ATTEMPT_SOURCE,
+    DISCARDED_ATTEMPT_SOURCE, OPERATIONS_TAG,
 };
 pub use session::SessionId;
 pub use token_estimate::{estimate_message, estimate_tools};
@@ -34,9 +34,8 @@ pub enum ResponseEvent {
     TextDelta {
         text: String,
     },
-    /// モデルの思考(reasoning)の断片。表示・`messages.reasoning`への保存専用の
-    /// イベントであり、`ChatMessage`には対応する構成要素が無い。次のAPI呼び出しの入力に
-    /// 混ざり込む経路が型として存在しないようにするための意図的な非対称設計。
+    /// モデルの思考(reasoning)の断片。表示と保存(`ReplyPart::Reasoning`)専用で、`ChatMessage`には
+    /// 対応する構成要素を置かない(次のAPI呼び出しの入力に混ざる経路を型として作らない)。
     ReasoningDelta {
         text: String,
     },
@@ -112,8 +111,8 @@ impl ChatMessage {
 /// (`orchestration::transcript`)には直列化して載せるが、中核は形を読まずにそのまま持つ。
 ///
 /// 応答の要素を、JSONの文字列のまま並びごと持つ。ストリーミングしない応答では受け取った生の
-/// 文字列のまま持つ(`serde_json::Value`に読み直すとオブジェクトのキーの順が変わり、受け取った
-/// ままではなくなる)。ストリーミングでは、アダプタが差分から組み立て直した要素を書き出したもの。
+/// 文字列のまま持つ(`serde_json::Value`に読み直すと空白・エスケープ・数値の書き方が変わり、
+/// 受け取ったままではなくなる)。ストリーミングでは、アダプタが差分から組み立て直した要素を書き出したもの。
 /// 空なら送り返すものは無い。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]

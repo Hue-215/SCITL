@@ -35,26 +35,29 @@ impl NumberField {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputRejection {
-    /// 数値の欄が1以上の整数でない。
-    NotPositiveInteger { field: NumberField },
-    /// 数値の欄が上限を超える。
+    NotPositiveInteger {
+        field: NumberField,
+    },
     NumberTooLarge {
         field: NumberField,
         #[cfg_attr(test, ts(type = "number"))]
         max: u64,
     },
-    /// MCPサーバーの識別子が空。
     McpServerNameRequired,
     /// MCPサーバーの識別子に使えない文字・並びがあるか、長すぎる
     /// (`config::validate_mcp_server_name`)。
-    McpServerNameInvalid { max_chars: usize },
-    /// 同じ識別子のMCPサーバーが登録済み。
-    McpServerNameTaken { name: String },
-    /// MCPサーバーのURLが空。
+    McpServerNameInvalid {
+        max_chars: usize,
+    },
+    McpServerNameTaken {
+        name: String,
+    },
     UrlRequired,
     /// ヘッダーの欄の`line_no`行目(1から数える)が`NAME=VALUE`の形でないか、名前がHTTPの
     /// ヘッダー名として読めない(`NAME: VALUE`と書いた等)。値は秘密情報なので、行の中身は返さない。
-    HeaderLineInvalid { line_no: usize },
+    HeaderLineInvalid {
+        line_no: usize,
+    },
 }
 
 impl fmt::Display for InputRejection {
@@ -105,7 +108,6 @@ pub(crate) fn rejected(reasons: Vec<InputRejection>) -> CoreError {
     CoreError::Rejected(Rejections(reasons))
 }
 
-/// 理由が1つでもあれば断る。
 pub(crate) fn refuse_if_any(reasons: Vec<InputRejection>) -> Result<()> {
     if reasons.is_empty() {
         Ok(())

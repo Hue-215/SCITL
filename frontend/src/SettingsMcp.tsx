@@ -1,4 +1,3 @@
-// 設定画面の「ツール」タブ。
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'

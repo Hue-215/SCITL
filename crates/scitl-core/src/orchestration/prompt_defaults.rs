@@ -10,7 +10,6 @@ use crate::orchestration::SystemPrompts;
 const TASK_CHAT_PROMPT_KEY: &str = "task_chat.system_prompt";
 const OPENING_MESSAGE_KEY: &str = "task_chat.opening_message";
 
-/// タスクチャット用プロンプトの既定の文面。
 pub fn default_task_chat_prompt(language: Language) -> &'static str {
     i18n::text(language, TASK_CHAT_PROMPT_KEY)
 }
@@ -30,6 +29,7 @@ impl<'a> SystemPrompts<'a> {
                 general.task_chat_system_prompt.as_deref(),
                 default_task_chat_prompt(general.language()),
             )),
+            nickname: general.assistant_nickname(),
         }
     }
 }
@@ -63,6 +63,20 @@ fn is_blank(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 空白だけのニックネームは、画面の表示名と同じく、モデルにも伝えない。
+    #[test]
+    fn a_blank_nickname_is_not_told_to_the_model() {
+        let general = |nickname: &str| GeneralConfig {
+            assistant_nickname: Some(nickname.to_string()),
+            ..GeneralConfig::default()
+        };
+        assert_eq!(SystemPrompts::from_config(&general("  ")).nickname, None);
+        assert_eq!(
+            SystemPrompts::from_config(&general("Hal")).nickname,
+            Some("Hal")
+        );
+    }
 
     #[test]
     fn unset_or_empty_settings_fall_back_to_the_defaults_of_the_display_language() {

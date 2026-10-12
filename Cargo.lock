@@ -3856,7 +3856,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "scitl-core",
@@ -3869,7 +3869,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "android-native-keyring-store",
  "async-trait",
@@ -3877,6 +3877,7 @@ dependencies = [
  "chrono",
  "dbus-secret-service-keyring-store",
  "dirs",
+ "futures",
  "getrandom 0.3.4",
  "icu_normalizer",
  "image",
@@ -3888,6 +3889,7 @@ dependencies = [
  "reqwest",
  "rmcp",
  "rusqlite",
+ "rustls",
  "rustls-platform-verifier",
  "secrecy",
  "serde",
@@ -3906,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-debug-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "scitl-cli",
@@ -3921,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "scitl-tauri"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "scitl-core",
  "secrecy",
@@ -4063,6 +4065,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap 2.14.2",
  "itoa",
  "memchr",
  "serde",

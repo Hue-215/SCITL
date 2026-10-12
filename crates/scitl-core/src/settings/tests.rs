@@ -606,11 +606,107 @@ fn mcp_endpoint_refuses_repeated_or_malformed_secret_names() {
 
 fn general_update(system_prompt: Option<&str>, response_timeout_secs: &str) -> GeneralUpdate {
     GeneralUpdate {
+        assistant_nickname: None,
         system_prompt: system_prompt.map(str::to_string),
         task_chat_system_prompt: None,
         task_opening_message: None,
         response_timeout_secs: Some(response_timeout_secs.to_string()),
+        streaming: None,
+        show_reasoning: None,
     }
+}
+
+#[test]
+fn the_nickname_is_trimmed_checked_and_blank_is_unset() {
+    let (settings, _, _dir) = temp_settings();
+    let with = |nickname: &str| GeneralUpdate {
+        assistant_nickname: Some(nickname.to_string()),
+        ..general_update(None, "")
+    };
+
+    let view = settings.update_general(with("  Hal  ")).unwrap();
+    assert_eq!(view.general.assistant_nickname.as_deref(), Some("Hal"));
+    let snapshot = settings.snapshot();
+    assert_eq!(snapshot.config.general.assistant_name("Provider"), "Hal");
+
+    let too_long = "a".repeat(input::ASSISTANT_NICKNAME_MAX_CHARS + 1);
+    assert!(settings.update_general(with(&too_long)).is_err());
+    assert!(settings.update_general(with("Hal\u{200B}")).is_err());
+    assert_eq!(
+        settings.view().general.assistant_nickname.as_deref(),
+        Some("Hal")
+    );
+
+    let view = settings.update_general(with(" ")).unwrap();
+    assert_eq!(view.general.assistant_nickname, None);
+    let snapshot = settings.snapshot();
+    assert_eq!(
+        snapshot.config.general.assistant_name("Provider"),
+        "Provider"
+    );
+}
+
+#[test]
+fn reasoning_is_shown_until_hidden_and_shown_is_saved_as_unset() {
+    let (settings, _, _dir) = temp_settings();
+    assert!(settings.view().general.show_reasoning);
+
+    let hide = GeneralUpdate {
+        show_reasoning: Some(false),
+        ..general_update(None, "")
+    };
+    assert!(
+        !settings
+            .update_general(hide)
+            .unwrap()
+            .general
+            .show_reasoning
+    );
+    assert_eq!(
+        settings.snapshot().config.general.show_reasoning,
+        Some(false)
+    );
+
+    // ほかの欄だけの保存では変わらない。
+    let view = settings.update_general(general_update(None, "")).unwrap();
+    assert!(!view.general.show_reasoning);
+
+    let show = GeneralUpdate {
+        show_reasoning: Some(true),
+        ..general_update(None, "")
+    };
+    assert!(
+        settings
+            .update_general(show)
+            .unwrap()
+            .general
+            .show_reasoning
+    );
+    assert_eq!(settings.snapshot().config.general.show_reasoning, None);
+}
+
+#[test]
+fn streaming_is_on_until_turned_off_and_on_is_saved_as_unset() {
+    let (settings, _, _dir) = temp_settings();
+    assert!(settings.view().general.streaming);
+
+    let off = GeneralUpdate {
+        streaming: Some(false),
+        ..general_update(None, "")
+    };
+    assert!(!settings.update_general(off).unwrap().general.streaming);
+    assert_eq!(settings.snapshot().config.general.streaming, Some(false));
+
+    // ほかの欄だけの保存では変わらない。
+    let view = settings.update_general(general_update(None, "")).unwrap();
+    assert!(!view.general.streaming);
+
+    let on = GeneralUpdate {
+        streaming: Some(true),
+        ..general_update(None, "")
+    };
+    assert!(settings.update_general(on).unwrap().general.streaming);
+    assert_eq!(settings.snapshot().config.general.streaming, None);
 }
 
 #[test]
@@ -940,6 +1036,15 @@ fn adapter_is_rebuilt_only_when_its_inputs_change() {
         .set_model_context_length(&id, "m1", "4096")
         .unwrap();
     assert!(Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
+
+    // ストリーミングの切り替えは、次のターンから効くように組み立て直す。
+    let off = GeneralUpdate {
+        streaming: Some(false),
+        response_timeout_secs: None,
+        ..general_update(None, "")
+    };
+    settings.update_general(off).unwrap();
+    assert!(!Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
 }
 
 #[test]
@@ -1029,4 +1134,66 @@ fn detected_capabilities_are_the_layer_below_manual_settings() {
     // モデルを消したら結果も捨てる。
     settings.remove_model(&id, "m").unwrap();
     assert!(settings.detected.get(&id, "m").is_none());
+}
+
+/// 接続ごとに`bodies`を順に1つずつ返す(状態は200)サーバー。返り値は`http://127.0.0.1:{port}`。
+fn serve_in_order(bodies: Vec<&'static str>) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for body in bodies {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// 今は答えられないモデル(llama.cppのルーターで読み込まれていない)は覚えず、次の機会に問い
+/// 合わせ直す。答えたモデルは覚える。
+#[tokio::test]
+async fn models_that_cannot_answer_now_are_asked_again_later() {
+    let (settings, _path, _dir) = temp_settings();
+    let base_url = serve_in_order(vec![
+        r#"{"role":"router","default_generation_settings":{"params":null,"n_ctx":0}}"#,
+        r#"{"data":[{"id":"loaded","status":{"value":"loaded"}},{"id":"unloaded","status":{"value":"unloaded"}}]}"#,
+        r#"{"default_generation_settings":{"n_ctx":65536}}"#,
+    ]);
+    let id = settings
+        .add_provider(
+            NewProvider {
+                name: "router".to_string(),
+                api_format: ApiFormat::OpenAiCompat,
+                base_url: format!("{base_url}/v1"),
+                api_key: None,
+                headers: HeaderInput::default(),
+            },
+            |_| true,
+        )
+        .unwrap()
+        .providers[0]
+        .id
+        .clone();
+    settings
+        .register_models(&id, &["loaded", "unloaded"])
+        .unwrap();
+
+    settings.detect_model_capabilities(&id).await.unwrap();
+
+    assert_eq!(
+        settings
+            .detected
+            .get(&id, "loaded")
+            .and_then(|d| d.context_length),
+        Some(65_536)
+    );
+    assert!(settings.detected.get(&id, "unloaded").is_none());
 }

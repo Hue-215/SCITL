@@ -4,7 +4,7 @@ use tauri::State;
 use scitl_core::db::messages::Chat;
 use scitl_core::orchestration::{
     self, delete_message, edit_user_message, retry_reply, run_turn, stop_response, MessageView,
-    TurnEvent, UserInput,
+    Regeneration, TurnEvent, UserInput,
 };
 
 use super::{with_db, CommandResult};
@@ -48,7 +48,7 @@ pub async fn edit_chat_message(
     message_id: i64,
     text: String,
     on_event: Channel<TurnEvent>,
-) -> CommandResult<()> {
+) -> CommandResult<Regeneration> {
     let snapshot = state.settings.snapshot_for_turn().await;
     let events = forward(&on_event);
     Ok(edit_user_message(
@@ -68,7 +68,7 @@ pub async fn retry_chat_message(
     chat: Chat,
     message_id: i64,
     on_event: Channel<TurnEvent>,
-) -> CommandResult<()> {
+) -> CommandResult<Regeneration> {
     let snapshot = state.settings.snapshot_for_turn().await;
     let events = forward(&on_event);
     Ok(retry_reply(

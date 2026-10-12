@@ -11,16 +11,16 @@ use scitl_core::error::CoreError;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{
-    AdapterIdentity, ChatMessage, FinishReason, LlmAdapter, LlmError, PromptText, Readiness,
-    Replay, RequestPreview, ResponseEvent, SentAt, SentSecrets, SessionId, ToolArguments,
-    ToolOffer, DEFAULT_CAPABILITIES,
+    AdapterIdentity, ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText,
+    Readiness, Replay, RequestPreview, ResponseEvent, SentAt, SentSecrets, SessionId,
+    ToolArguments, ToolOffer, DEFAULT_CAPABILITIES,
 };
 use scitl_core::mcp::ToolCatalog;
 use scitl_core::orchestration::{
     create_task, delete_message, discard_events, discard_finished, edit_user_message,
     generate_reply, lacks_reply, preview_request, retry_reply, run_turn, stop_response,
-    FinishedTurn, McpAccess, PartView, PreviewOptions, SystemPrompts, TaskCreation, ToolLimits,
-    TurnContext, TurnEvent, TurnFailure, TurnOutcome, UserInput,
+    FinishedTurn, McpAccess, PartView, PreviewOptions, Regeneration, SystemPrompts, TaskCreation,
+    ToolLimits, TurnContext, TurnEvent, TurnFailure, TurnOutcome, UserInput,
 };
 use serde_json::json;
 
@@ -85,7 +85,7 @@ fn roles_of(stored: &serde_json::Value) -> Vec<String> {
 
 /// ツールの上限に達したことを伝える一節か。
 fn mentions_round_limit(message: &ChatMessage) -> bool {
-    matches!(message, ChatMessage::User { text, .. } if text.as_str().contains("tool call limit"))
+    matches!(message, ChatMessage::User { text, .. } if text.as_str().contains("Tool calls are no longer available"))
 }
 
 fn tool_names(tools: ToolOffer<'_>) -> Vec<String> {
@@ -401,7 +401,7 @@ fn calls_a_failing_tool(call: ResponseEvent) -> ScriptedAdapter {
     .repeating_last()
 }
 
-/// 1回の応答に2つのツール呼び出しを載せる(取りこぼしの回帰検知)。
+/// 1回の応答に2つのツール呼び出しを載せる。
 fn calls_two_tools() -> ScriptedAdapter {
     let second = ResponseEvent::ToolCall {
         id: Some("call_2".to_string()),
@@ -461,9 +461,15 @@ fn reasons_around_a_tool_call() -> ScriptedAdapter {
 /// 聞き取りを始めるときの発言(`TurnContext::opening_message`)。
 const OPENING: &str = "新しいタスクを追加したい";
 
-fn opening_message() -> ChatMessage {
-    // 実際に送られた発言ではないので、送信日時を付けない。
-    ChatMessage::user(PromptText::user_message(OPENING, None))
+/// 補われる開始の発言。送信日時はタスクの作成日時。
+fn opening_message(db: &Mutex<Connection>, task_id: i64) -> ChatMessage {
+    let created_at = db::tasks::get_task(&db.lock().unwrap(), task_id)
+        .unwrap()
+        .created_at;
+    ChatMessage::user(PromptText::user_message(
+        OPENING,
+        SentAt::local(&created_at).as_ref(),
+    ))
 }
 
 /// プロバイダー未選択・既定のプロンプト・外部ツール無し・既定の上限の文脈。
@@ -472,6 +478,7 @@ fn opening_message() -> ChatMessage {
 fn context_without_provider() -> TurnContext<'static> {
     TurnContext {
         adapter: Err(TurnFailure::NoProvider),
+        assistant_name: "Test",
         prompts: SystemPrompts::default(),
         opening_message: OPENING,
         capabilities: DEFAULT_CAPABILITIES,
@@ -748,7 +755,7 @@ async fn run_turn_can_be_stopped_while_waiting_for_an_mcp_server() {
     let (turn, ()) = tokio::join!(turn, stop);
     turn.unwrap();
 
-    // 接続のタイムアウト(30秒)を待たずに終わる。
+    // 接続のタイムアウトを待たずに終わる。
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
     let messages = db::messages::list_for_chat(&db.lock().unwrap(), chat).unwrap();
     stopped_reply(&messages);
@@ -796,8 +803,92 @@ async fn run_turn_executes_tool_then_persists_final_reply() {
     assert!(reply_of(&messages).contains("更新しました"));
 }
 
+/// 出力の長さの上限で切れた応答は、そのまま返信として残し、切れたことを中身の印に持つ。
+/// 次のターンでは、切れた本文だけをモデルに送り返す(印を本文に混ぜない)。
+#[tokio::test]
+async fn a_reply_cut_off_at_the_length_limit_is_kept_with_a_mark() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedAdapter::new(vec![
+        vec![
+            ResponseEvent::TextDelta {
+                text: "途中まで".to_string(),
+            },
+            done(FinishReason::Length),
+        ],
+        text("続き"),
+    ]);
+
+    for input in ["長く書いて", "続けて"] {
+        run_turn(
+            db.clone(),
+            &context(&adapter),
+            Chat::Task(task_id),
+            input.to_string(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    assert_eq!(
+        messages[1].parts,
+        vec![
+            ReplyPart::Text {
+                round: 1,
+                text: "途中まで".to_string(),
+            },
+            ReplyPart::Truncated { round: 1 },
+        ]
+    );
+    assert_eq!(messages[3].parts.len(), 1, "切れていない返信は印を持たない");
+    assert!(matches!(
+        &adapter.sent_histories()[1][1],
+        ChatMessage::Assistant { content: Some(c), .. } if c == "途中まで"
+    ));
+}
+
+/// 本文を書く前に長さの上限に達したら、空応答の失敗になり、エラー発言の中身に思考と印が残る。
+#[tokio::test]
+async fn reaching_the_length_limit_before_any_text_is_an_empty_response() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedAdapter::new(vec![vec![
+        ResponseEvent::ReasoningDelta {
+            text: "考え中".to_string(),
+        },
+        done(FinishReason::Length),
+    ]]);
+
+    run_turn(
+        db.clone(),
+        &context(&adapter),
+        Chat::Task(task_id),
+        "長く考えて".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error = messages.last().unwrap();
+    assert_eq!(error.error_kind.as_deref(), Some("empty_response"));
+    assert_eq!(
+        error.parts,
+        vec![
+            ReplyPart::Reasoning {
+                round: 1,
+                text: "考え中".to_string(),
+            },
+            ReplyPart::Truncated { round: 1 },
+        ]
+    );
+}
+
 /// ターンの途中経過は、アダプタのイベントとツールの実行を起きた順に知らせる。
-/// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。
+/// 実行の知らせは、保存した実行記録の行と同じ値を運ぶ。モデルの応答を待ち始めたことは、
+/// ターンの始めとラウンドごとの呼び出しの前に、アシスタントの名前を添えて知らせる。
 #[tokio::test]
 async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
     let conn = db::open_in_memory().unwrap();
@@ -834,8 +925,20 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
         .collect();
     assert_eq!(
         kinds,
-        vec!["tool_call", "done", "tool_executed", "text_delta", "done"]
+        vec![
+            "awaiting_model",
+            "tool_call",
+            "done",
+            "tool_executed",
+            "awaiting_model",
+            "text_delta",
+            "done"
+        ]
     );
+    assert!(events
+        .iter()
+        .filter(|e| e["type"] == "awaiting_model")
+        .all(|e| e["name"] == "Test"));
 
     // 知らせた表示は、保存した記録を会話の一覧(返信の中身)で読んだときと同じ。
     let views =
@@ -851,7 +954,7 @@ async fn run_turn_notifies_events_in_order_with_tool_executions_as_saved() {
             _ => None,
         })
         .unwrap();
-    let executed = &events[2];
+    let executed = &events[3];
     assert_eq!(executed["id"], saved.0);
     assert_eq!(
         executed["execution"],
@@ -869,6 +972,7 @@ async fn run_turn_appends_the_tool_round_trip_without_rewriting_the_earlier_requ
     let prompts_config = SystemPrompts {
         base: Some("base prompt"),
         task_chat: Some("task chat prompt"),
+        nickname: None,
     };
     run_turn(
         db.clone(),
@@ -1611,7 +1715,6 @@ async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
     assert!(texts_of(last).is_empty());
 }
 
-/// 最初のラウンドで失敗したターンには、残す本文が無い。
 #[tokio::test]
 async fn a_turn_that_fails_at_once_keeps_no_text() {
     let conn = db::open_in_memory().unwrap();
@@ -2458,6 +2561,105 @@ async fn thinking_is_not_sent_back_to_a_provider_that_cannot_read_it() {
     );
 }
 
+/// 送り返した思考を断られたら、前のターンの思考を外して送り直す。次のターンからも外したまま
+/// 並べ(同じ失敗を繰り返さない)、外したあとに受け取った思考は送り返す。
+#[tokio::test]
+async fn thinking_rejected_by_the_provider_is_dropped_from_then_on() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let second = ScriptedAdapter {
+        script: vec![Err(replay_rejected()), Ok(text("返信2"))],
+        ..ScriptedAdapter::new(Vec::new())
+    }
+    .with_replay(THINKING_2);
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+    let thinking_1: Replay = serde_json::from_str(THINKING_1).unwrap();
+    let sent = second.sent_messages();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(replay_of(&sent[0], "返信1"), thinking_1);
+    assert_eq!(replay_of(&sent[1], "返信1"), Replay::default());
+
+    let third = ScriptedAdapter::texts(&["返信3"]);
+    turn_with(&db, &third, prompts, task_id, "3回目").await;
+    let sent = &third.sent_messages()[0];
+    assert_eq!(replay_of(sent, "返信1"), Replay::default());
+    let thinking_2: Replay = serde_json::from_str(THINKING_2).unwrap();
+    assert_eq!(replay_of(sent, "返信2"), thinking_2);
+}
+
+fn replay_rejected() -> LlmError {
+    LlmError::ReplayRejected(ErrorDetail::http(
+        reqwest::StatusCode::BAD_REQUEST,
+        "Invalid thought signature.",
+        &SentSecrets::default(),
+    ))
+}
+
+/// 思考を外して送り直しても断られたら、それ以上は送り直さずにエラー発言にする。
+#[tokio::test]
+async fn thinking_is_dropped_and_resent_only_once() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let second = ScriptedAdapter::failing(replay_rejected());
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+
+    assert_eq!(second.sent().len(), 2);
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("provider"));
+}
+
+/// 後のラウンドで断られたときは、前のラウンドで受け付けられた部分を書き換えないよう、思考を
+/// 外さずにエラー発言にする。
+#[tokio::test]
+async fn thinking_is_not_dropped_after_the_first_round() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let prompts = SystemPrompts::default();
+    let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
+    turn_with(&db, &first, prompts, task_id, "1回目").await;
+
+    let second = ScriptedAdapter {
+        script: vec![Ok(calls(vec![add_a_step()])), Err(replay_rejected())],
+        ..ScriptedAdapter::new(Vec::new())
+    };
+    turn_with(&db, &second, prompts, task_id, "2回目").await;
+
+    let sent = second.sent_messages();
+    assert_eq!(sent.len(), 2);
+    let thinking_1: Replay = serde_json::from_str(THINKING_1).unwrap();
+    assert_eq!(replay_of(&sent[1], "返信1"), thinking_1);
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("provider"));
+}
+
+/// 外せる思考が無ければ、送り直さずにエラー発言にする。
+#[tokio::test]
+async fn a_rejection_without_thinking_to_drop_ends_the_turn() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let adapter = ScriptedAdapter::failing(replay_rejected());
+    turn_with(&db, &adapter, SystemPrompts::default(), task_id, "1回目").await;
+
+    assert_eq!(adapter.sent().len(), 1);
+    let messages = db::messages::list_for_chat(&db.lock().unwrap(), Chat::Task(task_id)).unwrap();
+    let error_message = messages.iter().find(|m| m.role == Role::Error).unwrap();
+    assert_eq!(error_message.error_kind.as_deref(), Some("provider"));
+}
+
 /// 送った発言列に並んだツール呼び出しのIDと、ツール結果が指すID(並んだ順)。
 fn call_ids(messages: &[ChatMessage]) -> (Vec<Option<String>>, Vec<Option<String>>) {
     let calls = messages
@@ -2479,7 +2681,7 @@ fn call_ids(messages: &[ChatMessage]) -> (Vec<Option<String>>, Vec<Option<String
 }
 
 /// 保存したターンの呼び出しIDは、払い出した送り先(方言と要求URLのオリジン)にだけそのまま
-/// 送る。別の送り先へは実行記録の行idから作ったIDに置き換え、戻れば保存したIDのまま並べる(#374)。
+/// 送る。別の送り先へは実行記録の行idから作ったIDに置き換え、戻れば保存したIDのまま並べる。
 #[tokio::test]
 async fn saved_call_ids_are_sent_only_to_where_they_were_issued() {
     let conn = db::open_in_memory().unwrap();
@@ -2558,10 +2760,12 @@ async fn a_changed_system_prompt_is_told_without_changing_the_front() {
     let before = SystemPrompts {
         base: Some("BEFORE"),
         task_chat: None,
+        nickname: None,
     };
     let after = SystemPrompts {
         base: Some("AFTER"),
         task_chat: None,
+        nickname: None,
     };
     let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
     turn_with(&db, &first, before, task_id, "1回目").await;
@@ -2590,6 +2794,33 @@ async fn a_changed_system_prompt_is_told_without_changing_the_front() {
     assert_eq!(replay_of(sent, "返信2"), thinking_2);
 }
 
+/// ニックネームはシステムプロンプトに入るので、変えたらシステムプロンプトの変更と同じく通知で伝える。
+#[tokio::test]
+async fn a_changed_nickname_is_told_as_a_system_update() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let db: SharedConnection = Arc::new(Mutex::new(conn));
+    let before = SystemPrompts {
+        base: Some("BASE"),
+        task_chat: None,
+        nickname: None,
+    };
+    let after = SystemPrompts {
+        nickname: Some("Hal"),
+        ..before
+    };
+    let first = ScriptedAdapter::texts(&["返信1"]);
+    turn_with(&db, &first, before, task_id, "1回目").await;
+    let second = ScriptedAdapter::texts(&["返信2"]);
+    turn_with(&db, &second, after, task_id, "2回目").await;
+
+    let sent = &second.sent_messages()[0];
+    assert!(!system_of(sent).contains("Hal"));
+    let input = *user_texts(sent).last().unwrap();
+    assert!(input.starts_with("<scitl:system-update>"));
+    assert!(input.contains(r#"call you "Hal""#) && input.contains("2回目"));
+}
+
 /// 変更の通知は、それを置いたターンが失敗して保存されなければ、次のターンでまた置く。
 #[tokio::test]
 async fn a_system_update_is_told_again_when_the_turn_that_told_it_failed() {
@@ -2599,10 +2830,12 @@ async fn a_system_update_is_told_again_when_the_turn_that_told_it_failed() {
     let before = SystemPrompts {
         base: Some("BEFORE"),
         task_chat: None,
+        nickname: None,
     };
     let after = SystemPrompts {
         base: Some("AFTER"),
         task_chat: None,
+        nickname: None,
     };
     let first = ScriptedAdapter::texts(&["返信1"]).with_replay(THINKING_1);
     turn_with(&db, &first, before, task_id, "1回目").await;
@@ -2635,6 +2868,7 @@ async fn a_system_update_still_in_the_sequence_is_not_told_again() {
     let prompts = |base| SystemPrompts {
         base: Some(base),
         task_chat: None,
+        nickname: None,
     };
     let turn = |adapter, image: bool, base, input: UserInput| {
         let db = db.clone();
@@ -2692,14 +2926,14 @@ fn told_system(messages: &[ChatMessage]) -> &str {
 }
 
 /// 先頭を作り直したターンでも、並びに残った前の通知が今の設定と違えば、今の設定を伝える。
-/// 伝えないと、モデルは先頭より後ろにある前の通知に従う(#361)。
+/// 伝えないと、モデルは先頭より後ろにある前の通知に従う。
 #[tokio::test]
 async fn a_rebuilt_front_is_told_again_over_an_older_update_left_in_the_sequence() {
     let conn = db::open_in_memory().unwrap();
     let task_id = seed_task(&conn);
     let db: SharedConnection = Arc::new(Mutex::new(conn));
     // 見積もりは英数字以外が1文字1トークン。1回目と3回目を合わせると予算を超え、2回目と
-    // 3回目だけなら予算の半分に収まる(先頭とツール定義の分を多めに見ても)。
+    // 3回目だけなら、3回目を除いた予算の半分に2回目が収まる(先頭とツール定義の分を多めに見ても)。
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.context_length = 100_000;
     let turn = |adapter, base, text: String| {
@@ -2710,6 +2944,7 @@ async fn a_rebuilt_front_is_told_again_over_an_older_update_left_in_the_sequence
                 prompts: SystemPrompts {
                     base: Some(base),
                     task_chat: None,
+                    nickname: None,
                 },
                 ..context(adapter)
             };
@@ -2750,7 +2985,7 @@ fn assert_told_without_a_new_notice(adapter: &ScriptedAdapter, system: &str) {
 }
 
 /// ツール定義が変わって先頭を作り直したターンでも、並びに残った前の通知が今の設定と違えば、
-/// 今の設定を伝える(#361)。
+/// 今の設定を伝える。
 #[tokio::test]
 async fn a_front_rebuilt_for_new_tools_is_told_again_over_an_older_update() {
     let conn = db::open_in_memory().unwrap();
@@ -2759,6 +2994,7 @@ async fn a_front_rebuilt_for_new_tools_is_told_again_over_an_older_update() {
     let prompts = |base| SystemPrompts {
         base: Some(base),
         task_chat: None,
+        nickname: None,
     };
     let first = ScriptedAdapter::texts(&["返信1"]);
     turn_with(&db, &first, prompts("ALPHA"), task_id, "1回目").await;
@@ -2798,7 +3034,7 @@ async fn an_older_update_trimmed_away_by_the_notice_needs_no_notice() {
     let task_id = seed_task(&conn);
     let db: SharedConnection = Arc::new(Mutex::new(conn));
     // 見積もりは英数字以外が1文字1トークン。3回目は作り直した先頭(30,000)の下で、通知なしなら
-    // 2回目から予算の半分に収まり、通知(30,000)を含めると3回目だけになる(先頭の固定の文言と
+    // 2回目からが目標(3回目を除いた予算の半分)に収まり、通知(30,000)を含めると3回目だけになる(先頭の固定の文言と
     // ツール定義の分を多めに見ても)。
     let mut capabilities = DEFAULT_CAPABILITIES;
     capabilities.context_length = 100_000;
@@ -2810,6 +3046,7 @@ async fn an_older_update_trimmed_away_by_the_notice_needs_no_notice() {
                 prompts: SystemPrompts {
                     base: Some(&base),
                     task_chat: None,
+                    nickname: None,
                 },
                 ..context(adapter)
             };
@@ -2837,7 +3074,7 @@ async fn an_older_update_trimmed_away_by_the_notice_needs_no_notice() {
 }
 
 /// 先頭を固定したままでも、前の並びが変わって今の設定を伝えた通知が消え、それより前の通知が
-/// 残れば、今の設定を伝え直す(#361)。
+/// 残れば、今の設定を伝え直す。
 #[tokio::test]
 async fn a_front_matching_the_settings_is_told_again_over_an_older_update() {
     let conn = db::open_in_memory().unwrap();
@@ -2859,6 +3096,7 @@ async fn a_front_matching_the_settings_is_told_again_over_an_older_update() {
                 prompts: SystemPrompts {
                     base: Some(base),
                     task_chat: None,
+                    nickname: None,
                 },
                 ..context(adapter)
             };
@@ -2922,12 +3160,14 @@ async fn a_trimmed_turn_takes_the_new_system_prompt_instead_of_telling_it() {
     let before = SystemPrompts {
         base: Some("BEFORE"),
         task_chat: None,
+        nickname: None,
     };
     turn(&first, before, format!("1回目{padding}")).await;
     let second = ScriptedAdapter::texts(&["返信2"]);
     let after = SystemPrompts {
         base: Some("AFTER"),
         task_chat: None,
+        nickname: None,
     };
     turn(&second, after, format!("2回目{padding}")).await;
 
@@ -2938,7 +3178,8 @@ async fn a_trimmed_turn_takes_the_new_system_prompt_instead_of_telling_it() {
     assert!(!texts.iter().any(|t| t.contains("<scitl:system-update>")));
 }
 
-/// 間引きの位置はターンをまたいで保ち、予算を超えたときだけ予算の半分までまとめて動かす。
+/// 間引きの位置はターンをまたいで保ち、予算を超えたときだけ、新しい発言を除いた予算の半分まで
+/// まとめて動かす。
 /// 位置が動かないターンでは前が変わらないので、前のターンの思考も送り返す。
 #[tokio::test]
 async fn the_trimming_position_holds_across_turns() {
@@ -3847,7 +4088,6 @@ async fn a_stop_between_tool_calls_keeps_the_finished_call_and_skips_the_rest() 
     assert_eq!(db::tasks::get_task(&conn, task_id).unwrap().title, None);
 }
 
-/// 生成中でない会話には、止める指示を出しても何も起きない。
 #[test]
 fn stopping_a_chat_that_is_not_generating_does_nothing() {
     let generating = InFlightSet::new();
@@ -4209,7 +4449,7 @@ async fn after_the_last_tool_round_the_model_replies_without_tools() {
     assert!(saved_rounds[4]["user"]["text"]
         .as_str()
         .unwrap()
-        .contains("tool call limit"));
+        .contains("Tool calls are no longer available"));
 }
 
 fn roles(db: &db::SharedConnection, task_id: i64) -> Vec<&'static str> {
@@ -4256,13 +4496,22 @@ async fn sent_and_edited_text_is_saved_without_surrounding_whitespace() {
     assert_eq!(text_of(&messages[0]), "編集後\n 2行目");
 }
 
-/// タスクを作ったら、続けて聞き取りを始める。作った知らせは聞き取りより先に届く。
+/// タスクを作ったら、続けて聞き取りを始める。作った知らせは、聞き取りに使う写しを取る(モデルの
+/// 能力を問い合わせる)より先に届く。
 async fn create_task_opening(db: &SharedConnection, ctx: &TurnContext<'_>) -> i64 {
     let created = std::sync::OnceLock::new();
-    let creation = create_task(db.clone(), ctx, |task| {
-        assert!(roles(db, task.id).is_empty());
-        created.set(task.id).unwrap();
-    })
+    let creation = create_task(
+        db.clone(),
+        ctx.clone(),
+        || {
+            assert!(created.get().is_some(), "作った知らせが先に届く");
+            async { ctx.clone() }
+        },
+        |task| {
+            assert!(roles(db, task.id).is_empty());
+            created.set(task.id).unwrap();
+        },
+    )
     .await
     .unwrap();
     let TaskCreation::Created {
@@ -4297,9 +4546,10 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
 
     let histories = adapter.sent_histories();
     assert_eq!(histories[0].len(), 1);
-    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
+    let opening = opening_message(&db, task_id);
+    assert_eq!(user_text(&histories[0][0]), user_text(&opening));
     assert_eq!(histories[1].len(), 3);
-    assert_eq!(histories[1][0], opening_message());
+    assert_eq!(histories[1][0], opening);
     assert!(matches!(
         &histories[1][1],
         ChatMessage::Assistant { content: Some(c), .. } if c == "どんなタスクですか"
@@ -4314,10 +4564,126 @@ async fn creating_a_task_answers_the_opening_message_without_saving_it() {
         .unwrap();
     let input: serde_json::Value = serde_json::from_str(&saved.input).unwrap();
     assert_eq!(input["rows"], json!([]));
-    assert_eq!(
-        input["messages"][0]["user"]["text"],
-        user_text(&opening_message())
-    );
+    assert_eq!(input["messages"][0]["user"]["text"], user_text(&opening));
+}
+
+/// 聞き取りから始まった会話を最初から送っている間は、始めた時点でタスクが空だったと伝える
+/// (最初に状態を読ませない)。間引いて始まりが見えなくなったら、先頭の作り直しに合わせて通常の
+/// 注記に戻し、通知は置かない。ユーザーの発言から始まった会話は、はじめから通常の注記にする。
+#[tokio::test]
+async fn an_opening_conversation_is_told_the_task_started_blank_until_trimmed() {
+    const BLANK_NOTE: &str = "was empty when this conversation began";
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 20_000;
+    let turn = |chat, text: String| {
+        let db = db.clone();
+        async move {
+            let adapter = ScriptedAdapter::texts(&["返信"]);
+            let ctx = TurnContext {
+                capabilities,
+                ..context(&adapter)
+            };
+            run_turn(db, &ctx, chat, text).await.unwrap();
+            adapter.sent_messages().remove(0)
+        }
+    };
+
+    let opening = ScriptedAdapter::texts(&["どんなタスクですか"]);
+    let opening_ctx = TurnContext {
+        capabilities,
+        ..context(&opening)
+    };
+    let task_id = create_task_opening(&db, &opening_ctx).await;
+    let chat = Chat::Task(task_id);
+    assert!(system_of(&opening.sent_messages()[0]).contains(BLANK_NOTE));
+    let second = turn(chat, "レポート".to_string()).await;
+    assert!(system_of(&second).contains(BLANK_NOTE));
+
+    let padding = "あ".repeat(8_000);
+    let third = turn(chat, format!("3回目{padding}")).await;
+    // 間引くまでは、固定した先頭をそのまま並べる。
+    assert_eq!(system_of(&third), system_of(&second));
+    for sent in [&second, &third] {
+        assert!(!user_texts(sent)
+            .iter()
+            .any(|t| t.contains("<scitl:system-update>")));
+    }
+    let trimmed = turn(chat, format!("4回目{padding}")).await;
+    assert!(!user_texts(&trimmed).iter().any(|t| t.contains("レポート")));
+    assert!(!system_of(&trimmed).contains(BLANK_NOTE));
+    assert!(system_of(&trimmed).contains("current state is not given automatically"));
+    // 間引いたあとのターンも、作り直した先頭のまま並べる。
+    let next = turn(chat, "5回目".to_string()).await;
+    assert_eq!(system_of(&next), system_of(&trimmed));
+    for sent in [&trimmed, &next] {
+        assert!(!user_texts(sent)
+            .iter()
+            .any(|t| t.contains("<scitl:system-update>")));
+    }
+
+    let typed = seed_task(&db.lock().unwrap());
+    let first = turn(Chat::Task(typed), "最初の発言".to_string()).await;
+    assert!(!system_of(&first).contains(BLANK_NOTE));
+}
+
+/// 発言を消すと、そのターンの変更はタスクに残るが会話からは消える。「変更はすべて会話に現れる」
+/// と言えなくなるので、先頭は変えずに、通常の注記を変更の通知で1度だけ伝える。通知を含めても
+/// 間引かずに収まるよう、コンテキスト長を大きくしておく(間引くなら先頭ごと作り直す)。
+#[tokio::test]
+async fn removing_a_turn_that_changed_the_task_stops_telling_the_task_started_blank() {
+    const BLANK_NOTE: &str = "was empty when this conversation began";
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let mut capabilities = DEFAULT_CAPABILITIES;
+    capabilities.context_length = 100_000;
+    let opening = ScriptedAdapter::texts(&["返信"]);
+    let opening_ctx = TurnContext {
+        capabilities,
+        ..context(&opening)
+    };
+    let task_id = create_task_opening(&db, &opening_ctx).await;
+    let chat = Chat::Task(task_id);
+    let adder = adds_a_step();
+    let adder_ctx = TurnContext {
+        capabilities,
+        ..context(&adder)
+    };
+    run_turn(db.clone(), &adder_ctx, chat, "工程を足して".to_string())
+        .await
+        .unwrap();
+    let user = {
+        let conn = db.lock().unwrap();
+        let messages = db::messages::list_for_chat(&conn, chat).unwrap();
+        messages.iter().find(|m| m.role == Role::User).unwrap().id
+    };
+    delete_message(db.clone(), &InFlightSet::new(), chat, user)
+        .await
+        .unwrap();
+
+    let mut sent = Vec::new();
+    for text in ["次の発言", "その次の発言"] {
+        let adapter = ScriptedAdapter::texts(&["返信"]);
+        let ctx = TurnContext {
+            capabilities,
+            ..context(&adapter)
+        };
+        run_turn(db.clone(), &ctx, chat, text.to_string())
+            .await
+            .unwrap();
+        sent.push(adapter.sent_messages().remove(0));
+    }
+    assert!(system_of(&sent[0]).contains(BLANK_NOTE));
+    // 次のターンにも、前のターンに置いた通知が1つだけ並ぶ(新しく置かない)。
+    for sent in &sent {
+        let notices: Vec<_> = user_texts(sent)
+            .into_iter()
+            .filter(|t| t.contains("<scitl:system-update>"))
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("次の発言"));
+        assert!(!notices[0].contains(BLANK_NOTE));
+        assert!(notices[0].contains("current state is not given automatically"));
+    }
 }
 
 #[tokio::test]
@@ -4348,10 +4714,61 @@ async fn retrying_the_opening_reply_answers_the_opening_message_again() {
     let histories = adapter.sent_histories();
     assert_eq!(histories.len(), 1);
     assert_eq!(histories[0].len(), 1);
-    assert_eq!(user_text(&histories[0][0]), user_text(&opening_message()));
+    assert_eq!(
+        user_text(&histories[0][0]),
+        user_text(&opening_message(&db, task_id))
+    );
 }
 
-/// チャットを使えない間はタスクを作らない。
+/// 使えるかは軽い写しで判定し、聞き取りはあとで取った写しの文脈で行う。
+#[tokio::test]
+async fn the_opening_turn_uses_the_snapshot_taken_after_creating_the_task() {
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let checked = ScriptedAdapter::new(Vec::new());
+    let detected = ScriptedAdapter::texts(&["どんなタスクですか"]);
+
+    let creation = create_task(
+        db.clone(),
+        context(&checked),
+        || async { context(&detected) },
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        creation,
+        TaskCreation::Created {
+            opening_error: None,
+            ..
+        }
+    ));
+    assert!(checked.sent().is_empty());
+    assert_eq!(detected.sent().len(), 1);
+}
+
+/// 作ってから聞き取りの写しを取るまでの間に使えなくなったら、タスクは残し、聞き取りはエラー発言で
+/// 終わる。
+#[tokio::test]
+async fn a_task_stays_when_the_chat_becomes_unavailable_before_the_opening() {
+    let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
+    let checked = ScriptedAdapter::new(Vec::new());
+
+    let creation = create_task(
+        db.clone(),
+        context(&checked),
+        || async { context_without_provider() },
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    let TaskCreation::Created { task, .. } = creation else {
+        panic!("expected Created, got {creation:?}");
+    };
+    assert_eq!(roles(&db, task.id), vec!["error"]);
+}
+
 #[tokio::test]
 async fn create_task_is_refused_while_the_chat_cannot_run() {
     let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
@@ -4361,9 +4778,14 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
         (context_without_provider(), "no_provider"),
         (context(&unready), "no_model"),
     ] {
-        let creation = create_task(db.clone(), &ctx, |_| panic!("no task is created"))
-            .await
-            .unwrap();
+        let creation = create_task(
+            db.clone(),
+            ctx.clone(),
+            || async { panic!("no snapshot is taken for the turn") },
+            |_| panic!("no task is created"),
+        )
+        .await
+        .unwrap();
         match creation {
             TaskCreation::Unavailable { error_kind } => assert_eq!(error_kind, expected),
             other => panic!("expected Unavailable, got {other:?}"),
@@ -4372,6 +4794,52 @@ async fn create_task_is_refused_while_the_chat_cannot_run() {
     assert!(db::tasks::list_tasks(&db.lock().unwrap())
         .unwrap()
         .is_empty());
+}
+
+/// チャットを使えない間は、再試行・編集が何も消さずに断る(消してから生成すると、成功していた
+/// 返信がエラー発言に置き換わるだけになる)。
+#[tokio::test]
+async fn regenerating_is_refused_without_deleting_while_the_chat_cannot_run() {
+    let conn = db::open_in_memory().unwrap();
+    let task_id = seed_task(&conn);
+    let chat = Chat::Task(task_id);
+    let db = Arc::new(Mutex::new(conn));
+    run_turn(
+        db.clone(),
+        &context(&ScriptedAdapter::texts(&["応答A"])),
+        chat,
+        "質問".to_string(),
+    )
+    .await
+    .unwrap();
+    let before = db::messages::list_for_chat(&db.lock().unwrap(), chat).unwrap();
+    let user_id = before.iter().find(|m| m.role == Role::User).unwrap().id;
+    let reply_id = before
+        .iter()
+        .find(|m| m.role == Role::Assistant)
+        .unwrap()
+        .id;
+
+    let unready = ScriptedAdapter::unready(Readiness::NoModel);
+    for (ctx, expected) in [
+        (context_without_provider(), "no_provider"),
+        (context(&unready), "no_model"),
+    ] {
+        let retried = retry_reply(db.clone(), &ctx, chat, reply_id).await.unwrap();
+        let edited = edit_user_message(db.clone(), &ctx, chat, user_id, "編集".to_string())
+            .await
+            .unwrap();
+        for result in [retried, edited] {
+            match result {
+                Regeneration::Unavailable { error_kind } => assert_eq!(error_kind, expected),
+                other => panic!("expected Unavailable, got {other:?}"),
+            }
+        }
+    }
+    let after = db::messages::list_for_chat(&db.lock().unwrap(), chat).unwrap();
+    let ids =
+        |messages: &[db::messages::Message]| messages.iter().map(|m| m.id).collect::<Vec<_>>();
+    assert_eq!(ids(&after), ids(&before));
 }
 
 /// 1回目に`tool_calls`のツールをまとめて呼び(IDは`call_0`から順)、2回目に本文を返す。
@@ -4658,7 +5126,6 @@ async fn run_turn_refuses_an_empty_message_and_unknown_attachments() {
     assert_eq!(written, 0);
 }
 
-/// 編集した発言は添付を引き継ぐ。
 #[tokio::test]
 async fn edit_user_message_carries_attachments_over() {
     let conn = db::open_in_memory().unwrap();

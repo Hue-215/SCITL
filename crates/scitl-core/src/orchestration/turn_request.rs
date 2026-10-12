@@ -12,7 +12,7 @@ use crate::llm::{
 };
 use crate::orchestration::history::{self, HistoryOptions, StoredChat};
 use crate::orchestration::history_trim::trim_history;
-use crate::orchestration::system_prompt::build_system_prompt;
+use crate::orchestration::system_prompt::{build_system_prompt, ConversationStart};
 use crate::orchestration::transcript::{
     tool_entry, tools_body, tools_from_body, PrefixDigest, SavedHead, SavedTurn, StoredInput,
     StoredMessage,
@@ -21,9 +21,11 @@ use crate::orchestration::TurnContext;
 use crate::tools::{self, external::ExternalToolset};
 
 /// ツールの上限に達したあとの最後の呼び出しで、発言列の末尾に足す一節。
-/// ツールを呼べない理由を伝えないと、モデルがツールを呼ぶつもりの文を返しがちになる。
-const ROUND_LIMIT_NOTE: &str = "The tool call limit for this turn has been reached, so no more \
-     tools can be called. Reply to the user based on the tool results so far.";
+/// ツールを呼べないことを伝えないと、モデルがツールを呼ぶつもりの文を返しがちになる。どう
+/// 答えるかまで指示すると、小さいモデルが思考の中でその指示に縛られるので、呼べないことと
+/// 返事をすることだけを伝える。
+const ROUND_LIMIT_NOTE: &str =
+    "Tool calls are no longer available in this turn. Reply to the user.";
 
 /// 1ターンのうち、ラウンドによらない送信の材料。
 pub(super) struct TurnRequest {
@@ -61,6 +63,7 @@ impl TurnRequest {
         stored: StoredChat,
         external: &ExternalToolset,
     ) -> Result<Self> {
+        let since_blank = stored.shows_every_change_since_blank();
         let options = HistoryOptions {
             image_input: ctx.capabilities.image,
             opening: ctx.opening_message.to_string(),
@@ -74,17 +77,31 @@ impl TurnRequest {
         // `ExternalToolset`が済ませてある。
         let mut current_tools = tools::schemas(chat);
         current_tools.extend(external.schemas());
-        let current = Head::current(build_system_prompt(chat, &ctx.prompts), current_tools);
         let starts = history.unit_starts();
         let from = match history.front.as_ref().and_then(|f| f.history_start) {
             Some(row) => history.start_at(&starts, row),
             None => 0,
         };
+        // 聞き取りから始まった会話を最初から送っている間は、始めた時点で空だったと伝える。
+        // 間引いて始まりが見えなくなったら、作り直す先頭では通常の注記にする(`unseen`)。
+        // 変更の記録を会話から外したら、先頭は変えず、通常の注記を変更の通知で伝える。
+        let head_for = |start| {
+            Head::current(
+                build_system_prompt(chat, start, &ctx.prompts),
+                current_tools.clone(),
+            )
+        };
+        let unseen = head_for(ConversationStart::Other);
+        let current = if since_blank && from == 0 {
+            head_for(ConversationStart::BlankTaskInView)
+        } else {
+            unseen.clone()
+        };
         let frozen = history
             .head
             .take()
             .and_then(|head| Head::frozen(head, &current, external));
-        let notice = ChatMessage::user(PromptText::system_update(&current.system));
+
         // 間引きの見積もりには、送る先頭と、置くなら変更の通知も含める。
         let trim = |head: &Head, notice: Option<&ChatMessage>| {
             let system = ChatMessage::System(head.system.clone());
@@ -98,8 +115,8 @@ impl TurnRequest {
             )
         };
         // `keep_from`から並べたとき、変更の通知が要るか。モデルは並びに残った最後の通知に従い、
-        // 無ければ先頭に従うので、それが今の設定と違えば伝える。
-        let needs_notice = |head: &Head, keep_from: usize| {
+        // 無ければ先頭に従うので、それが今の設定(`current`)と違えば伝える。
+        let needs_notice = |head: &Head, current: &Head, keep_from: usize| {
             let before_input =
                 &history.messages[keep_from.min(history.input_from)..history.input_from];
             !last_update_tells(before_input, &current.system)
@@ -108,25 +125,33 @@ impl TurnRequest {
         // 通知が要るかは並べ始める位置で決まり、位置は見積もりに通知を含めるかで決まる。まず
         // 含めずに見積もり、その位置で要るなら含めて見積もり直す。見積もり直して前の通知が落ち、
         // 要らなくなったときも、見積もり直した位置を使う(多めに間引くだけで、収まりはする)。
-        let settle = |head: &Head| -> (usize, bool, bool) {
+        let settle = |head: &Head, current: &Head| -> (usize, bool, bool) {
             let plain = trim(head, None);
-            if !needs_notice(head, plain.keep_from) {
+            if !needs_notice(head, current, plain.keep_from) {
                 return (plain.keep_from, plain.trimmed, false);
             }
+            let notice = ChatMessage::user(PromptText::system_update(&current.system));
             let told = trim(head, Some(&notice));
             (
                 told.keep_from,
                 told.trimmed,
-                needs_notice(head, told.keep_from),
+                needs_notice(head, current, told.keep_from),
             )
         };
+        // 間引いて会話の始まりが見えなくなったら、`unseen`で見積もり直す。通常の注記のほうが
+        // 短く、見積もり直すと間引かずに収まることもあるが、そのときも`unseen`のままにする
+        // (常に正しい注記で、次のターンで始めた時点の注記に戻すなら通知で伝わる)。
         let rebuilt = || {
-            let (keep_from, _, notify) = settle(&current);
-            (current.clone(), keep_from, notify)
+            let (keep_from, trimmed, notify) = settle(&current, &current);
+            if !trimmed || current.system == unseen.system {
+                return (current.clone(), keep_from, notify, &current);
+            }
+            let (keep_from, _, notify) = settle(&unseen, &unseen);
+            (unseen.clone(), keep_from, notify, &unseen)
         };
-        let (front, keep_from, notify) = match frozen {
-            Some(head) => match settle(&head) {
-                (keep_from, false, notify) => (head, keep_from, notify),
+        let (front, keep_from, notify, current) = match frozen {
+            Some(head) => match settle(&head, &current) {
+                (keep_from, false, notify) => (head, keep_from, notify, &current),
                 // 間引いたら前はどのみち変わるので、今の設定で固定し直す。
                 _ => rebuilt(),
             },
@@ -169,10 +194,20 @@ impl TurnRequest {
             input_from,
             input_rows,
             history_start,
-            settings_system: current.system,
+            settings_system: current.system.clone(),
             exposed_tools: front.tools,
             tools_body: front.tools_body,
         })
+    }
+
+    /// 前のターンから並べた思考(`Replay`)をすべて外す。最初のリクエストで送り返した思考を
+    /// 送り先が断ったときに、外して送り直すため(`docs/spec/architecture/transcript.md`「思考を
+    /// 送り返す範囲」)。外したものが無ければ`false`。
+    ///
+    /// 断られたリクエストは受け付けられていないので、前に送った部分を書き換えることにはならない。
+    /// 送った形の保存の指紋は外した形で取るので、次のターンでも外したまま並ぶ(`settle_replays`)。
+    pub(super) fn drop_replays(&mut self) -> bool {
+        drop_replays(&mut self.opening)
     }
 
     /// ラウンドで送った発言列(`round`の結果)のうち、最初のリクエストの後ろに足した分。
@@ -324,6 +359,9 @@ struct OpeningSegment {
 /// 渡さない(`docs/spec/principles.md`「思考は受け取ったまま送り返す」)。途中の`Replay`
 /// だけを外すと、それより後ろの区間の指紋も合わなくなる。
 ///
+/// 今と同じ送り先が、それより前の思考をすべて外して送った区間(送り返した思考を断られて
+/// 外した。`TurnRequest::drop_replays`)は、その形の指紋で見分け、前の思考を外したまま並べる。
+/// 断られた思考をまた並べないため。
 fn settle_replays(
     opening: &mut [ChatMessage],
     segments: &[OpeningSegment],
@@ -333,16 +371,26 @@ fn settle_replays(
     let ChatMessage::System(system) = &opening[0] else {
         unreachable!("the opening starts with the system prompt");
     };
-    // 保存できない形の発言があれば、それより後ろの指紋は取れず、どの区間とも一致しない。
+    // 並べた形の指紋と、それまでの思考をすべて外した形の指紋。保存できない形の発言があれば、
+    // それより後ろの指紋は取れず、どの区間とも一致しない。
     let mut digest = Some(PrefixDigest::start(system, tools));
-    let server = adapter.identity().map(|current| current.server);
+    let mut bare = digest.clone();
+    let current = adapter.identity();
+    let server = current.as_ref().map(|current| current.server.as_str());
     let mut keep_until = 0;
-    for (i, message) in opening.iter_mut().enumerate().skip(1) {
+    for i in 1..opening.len() {
         if let Some(segment) = segments.iter().find(|s| s.start == i) {
-            let matches = digest
-                .as_ref()
-                .is_some_and(|d| d.as_str() == segment.prefix_digest);
-            let same_server = server.as_deref() == Some(segment.origin.server.as_str());
+            let saved = |d: &Option<PrefixDigest>| {
+                d.as_ref()
+                    .is_some_and(|d| d.as_str() == segment.prefix_digest)
+            };
+            let mut matches = saved(&digest);
+            if !matches && current.as_ref() == Some(&segment.origin) && saved(&bare) {
+                drop_replays(&mut opening[1..i]);
+                digest.clone_from(&bare);
+                matches = true;
+            }
+            let same_server = server == Some(segment.origin.server.as_str());
             keep_until = if matches && same_server && adapter.accepts_replay(&segment.origin) {
                 segment.end
             } else {
@@ -350,15 +398,33 @@ fn settle_replays(
             };
         }
         if i >= keep_until {
-            if let ChatMessage::Assistant { replay, .. } = message {
-                *replay = Replay::default();
-            }
+            drop_replays(&mut opening[i..=i]);
         }
-        digest = digest.and_then(|mut d| {
-            d.push(&StoredMessage::of(message)?);
-            Some(d)
-        });
+        match StoredMessage::of(&opening[i]) {
+            Some(mut message) => {
+                if let Some(d) = digest.as_mut() {
+                    d.push(&message);
+                }
+                message.drop_replay();
+                if let Some(d) = bare.as_mut() {
+                    d.push(&message);
+                }
+            }
+            None => (digest, bare) = (None, None),
+        }
     }
+}
+
+/// 発言の思考(`Replay`)を外す。外したものがあれば`true`。
+fn drop_replays(messages: &mut [ChatMessage]) -> bool {
+    let mut dropped = false;
+    for message in messages {
+        if let ChatMessage::Assistant { replay, .. } = message {
+            dropped |= *replay != Replay::default();
+            *replay = Replay::default();
+        }
+    }
+    dropped
 }
 
 #[cfg(test)]
@@ -562,6 +628,43 @@ mod tests {
         assert_eq!(kept(&messages), [true, false]);
     }
 
+    /// 今と同じ送り先が前の思考をすべて外して送った区間(送り返した思考を断られた)があれば、
+    /// 前の思考を外したまま並べ、その区間からの思考を返す。
+    #[test]
+    fn keeps_the_thinking_dropped_after_a_rejection_out() {
+        let mut sent = opening();
+        drop_replays(&mut sent[..3]);
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            segment(3, ApiFormat::Gemini, digest_before(&sent, 3)),
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Gemini),
+        );
+        assert_eq!(kept(&messages), [false, true]);
+
+        // 外して送ったのが別のモデルなら、外した理由がそのモデルに限るかもしれないので、前の
+        // 思考は返す(前が変わるので、その区間の思考は外れる)。
+        let mut other = segment(3, ApiFormat::Gemini, digest_before(&sent, 3));
+        other.origin.model = "other".to_string();
+        let segments = [
+            segment(1, ApiFormat::Gemini, digest_before(&sent, 1)),
+            other,
+        ];
+        let mut messages = opening();
+        settle_replays(
+            &mut messages,
+            &segments,
+            TOOLS,
+            &Accepting(ApiFormat::Gemini),
+        );
+        assert_eq!(kept(&messages), [true, false]);
+    }
+
     /// 保存から並べた区間の外にある思考は送らない。
     #[test]
     fn drops_thinking_outside_saved_segments() {
@@ -640,6 +743,16 @@ mod tests {
         let reordered = [down_tool(), internal.clone()];
         let kept = Head::frozen(front("then", &reordered), &current, &external).unwrap();
         assert_eq!(kept.tools_body, tools_body(&reordered));
+
+        // キーの順だけが違う本文(`preserve_order`より前の版が名前順で書いた)も、同じ定義
+        // として固定した本文を残す(前を変えない)。
+        let sorted_body =
+            r#"[{"description":"d","name":"get_task","parameters":{"type":"object"}}]"#;
+        assert_ne!(sorted_body, current.tools_body);
+        let mut sorted = front("then", &[]);
+        sorted.tools = sorted_body.to_string();
+        let kept = Head::frozen(sorted, &current, &external).unwrap();
+        assert_eq!(kept.tools_body, sorted_body);
 
         // 繋がっているのに欠けたツール(無効化)・増えたツール・読めない本文は、作り直す。
         let disabled = [internal.clone(), other];

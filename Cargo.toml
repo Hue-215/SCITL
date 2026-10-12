@@ -8,14 +8,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["raw_value"] }
+serde_json = { version = "1", features = ["raw_value", "preserve_order"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 # LLMアダプタとMCPクライアントの双方が使う唯一のHTTPクライアント。バージョンはrmcpの
 # 要求(0.13.2以上)に合わせてある。`rustls` featureはaws-lc-rs + rustls-platform-verifier
@@ -27,8 +27,13 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # 別のクレートになり、渡したことにならない。上流の版が上がったら合わせて上げる
 # (`cargo tree -i rustls-platform-verifier --target aarch64-linux-android`で確認)。`jni`は
 # `rustls-platform-verifier`の要求する版で、Tauri(tao・wry)の使う0.21と同居する。0.7.1以上が要る
-# (AndroidでCRLの配布元への平文を許す設定を、Kotlinの部品が持つ。Issue #535)
+# (AndroidでCRLの配布元への平文を許す設定を、Kotlinの部品が持つ)
 rustls-platform-verifier = "0.7.1"
+# 通信の失敗が、サーバーの証明書の検証で断られたものかを、エラーの型で見分ける
+# (`scitl-core/src/llm/error.rs`)。reqwestが使うものと同じ版が既にビルドされている。版が分かれると
+# 型が別になり、見分けられなくなる。そのときは、実際につないで確かめるテスト
+# (`llm::error::tests::a_rejected_certificate_is_told_apart_over_a_real_connection`)が落ちる
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 jni = "0.22"
 thiserror = "2"
 secrecy = { version = "0.10", features = ["serde"] }
@@ -106,6 +111,10 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
     "client",
     "transport-streamable-http-client-reqwest",
 ] }
+# rmcpに渡すHTTPクライアント(`scitl-core/src/mcp/http.rs`の`AbortableClient`)で、rmcpのトレイトが
+# 返すSSEのストリームを打ち切りの合図で終わらせる。rmcpが使うものと同じ版が既に
+# ビルドされている
+futures = { version = "0.3", default-features = false, features = ["std"] }
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"

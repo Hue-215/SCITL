@@ -7,6 +7,7 @@ import {
   editChatMessage,
   failureText,
   generateChatReply,
+  getSettings,
   getTaskDetail,
   listChatMessages,
   listTasks,
@@ -18,7 +19,7 @@ import {
   watchRequestedChats,
 } from './api'
 import ChatCompose, { type ComposedMessage } from './ChatCompose'
-import ChatLog from './ChatLog'
+import ChatLog, { TypingIndicator } from './ChatLog'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
 import { Drawer, DrawerToggle } from './Drawer'
 import { t, turnErrorText } from './i18n'
@@ -26,9 +27,16 @@ import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
 import { stoppedTurnAtEnd } from './thinking'
-import type { Chat, MessageView, Task, TaskDetailView, TaskListItem, TurnEvent } from './types'
+import type {
+  Chat,
+  MessageView,
+  Regeneration,
+  Task,
+  TaskDetailView,
+  TaskListItem,
+  TurnEvent,
+} from './types'
 import { useChatRequests } from './useChatRequests'
-import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
 import { useSwipeToOpen } from './useDrawerSwipe'
 import { useStickToBottom } from './useStickToBottom'
@@ -50,6 +58,26 @@ export default function App() {
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 会話欄に思考を出すか(設定「一般」)。設定画面を閉じるたびに読み直す。最初に読めるまでは
+  // 出さない(切っている人に、起動直後の一瞬だけ見せないため)。最初から読めなければ出し、
+  // 読み直しに失敗したら直前の値のままにする。
+  const [showReasoning, setShowReasoning] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (settingsOpen) return
+    let current = true
+    // oxlint-disable-next-line react/set-state-in-effect -- IPCで読み込む。stateはawaitの後で変える
+    void getSettings().then(
+      (view) => {
+        if (current) setShowReasoning(view.general.show_reasoning)
+      },
+      () => {
+        if (current) setShowReasoning((prev) => prev ?? true)
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [settingsOpen])
   // 編集モード。ユーザー発言のみが対象。応答待ち中は開始できない(`disableActions`参照)。
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
@@ -157,7 +185,7 @@ export default function App() {
       selectChat(taskChat(task.id))
       void requests.run(
         taskChat(task.id),
-        [{ role: 'pending', content: t('chat.pending_reply') }],
+        [{ role: 'pending' }],
         (onEvent) => {
           forward = onEvent
           // 聞き取りを始められなかった理由は、その会話の失敗として出す。
@@ -204,7 +232,7 @@ export default function App() {
       target,
       [
         { role: 'user', content: text, attachmentNames: attachments.names },
-        { role: 'pending', content: t('chat.pending_reply') },
+        { role: 'pending' },
       ],
       (onEvent) =>
         sendChatMessage(target, text, attachments.tokens, onEvent).catch((e: unknown) => {
@@ -227,6 +255,14 @@ export default function App() {
     )
   }
 
+  // 編集・再試行を、チャットを使えない(モデル未選択等)ために断られたら、その会話の失敗として
+  // 理由をエラー発言と同じ文言で出す。何も消えていないので、外した行は引き直しで戻る。
+  const refuseUnavailable = (result: Regeneration) => {
+    if (result.status === 'unavailable') {
+      throw turnErrorText(result.error_kind, result.error_kind)
+    }
+  }
+
   // 添付は新しい発言へ引き継がれるので、添付のある発言は本文を空にしても送れる。空白だけで
   // 確定させないのは入力の補助で、受け付けるかと前後の空白を削るかはRust側が決める。
   const submitEdit = async (message: MessageView) => {
@@ -234,6 +270,7 @@ export default function App() {
     const text = editDraft
     if ((text.trim() === '' && message.attachments.length === 0) || disableActions) return
     const target = chat
+    let refused = false
     setEditingId(null)
     stick()
     hideSuperseded(messageId, null)
@@ -245,11 +282,21 @@ export default function App() {
           content: text,
           attachmentNames: message.attachments.map((a) => a.original_name),
         },
-        { role: 'pending', content: t('chat.pending_reply') },
+        { role: 'pending' },
       ],
-      (onEvent) => editChatMessage(target, messageId, text, onEvent),
+      (onEvent) =>
+        editChatMessage(target, messageId, text, onEvent).then((result) => {
+          refused = result.status === 'unavailable'
+          refuseUnavailable(result)
+        }),
       settle,
     )
+    // 断られたら書き直した本文を失わないよう、編集欄をその本文で開き直す。その間に別の会話へ
+    // 移っていたら、そのままにする。
+    if (refused && selectedRef.current === chatKey(target)) {
+      setEditingId(messageId)
+      setEditDraft(text)
+    }
   }
 
   const stop = () => {
@@ -264,8 +311,8 @@ export default function App() {
     hideSuperseded(messageId, messages.find((m) => m.id === messageId)?.turn_id ?? null)
     await requests.run(
       target,
-      [{ role: 'pending', content: t('chat.pending_reply') }],
-      (onEvent) => retryChatMessage(target, messageId, onEvent),
+      [{ role: 'pending' }],
+      (onEvent) => retryChatMessage(target, messageId, onEvent).then(refuseUnavailable),
       settle,
     )
   }
@@ -278,7 +325,7 @@ export default function App() {
     setLacksReply(false)
     await requests.run(
       target,
-      [{ role: 'pending', content: t('chat.pending_reply') }],
+      [{ role: 'pending' }],
       (onEvent) => generateChatReply(target, onEvent),
       settle,
     )
@@ -326,8 +373,6 @@ export default function App() {
     setAddBlocked(null)
     setSettingsOpen(false)
   }
-  // Androidの「戻る」で、設定画面からチャットへ戻る。設定画面の中で開いたものが先に閉じる。
-  useCloseOnBack(settingsOpen, closeSettings)
 
   // 通知を押して届いた会話を開く(Android)。どの会話を開くかはRust側が決めて知らせてくる。
   // 設定画面とサイドバーは、開いていれば閉じる。通知が出るのは裏にいた間なので、一覧も引き直す。
@@ -416,6 +461,7 @@ export default function App() {
           pending={pending}
           live={live}
           failure={failure}
+          showReasoning={showReasoning ?? false}
           disableActions={disableActions}
           editing={{
             id: editingId,
@@ -431,6 +477,10 @@ export default function App() {
           onRetry={(messageId) => void retry(messageId)}
           onRemove={(messageId) => void remove(messageId)}
         />
+
+        {requests.isGenerating(chat) && (
+          <TypingIndicator name={requests.isStopping(chat) ? null : live.awaiting} />
+        )}
 
         <ChatCompose
           disabled={disableActions}

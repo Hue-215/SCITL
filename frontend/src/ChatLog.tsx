@@ -1,21 +1,23 @@
+import { Fragment } from 'react'
 import type { ReactNode, RefObject, UIEventHandler, WheelEventHandler } from 'react'
 import { MessageAttachments, PendingAttachments } from './Attachments'
 import CodeBlock from './CodeBlock'
 import { ConfirmButton } from './Dialog'
-import { formatDateTime, t, turnErrorText } from './i18n'
+import { formatDateTime, isolated, t, turnErrorText } from './i18n'
 import Markdown from './Markdown'
 import { OperationLine, ThinkingTools } from './ThinkingTools'
 import {
   buildTurnSegments,
   finalEntryOf,
   groupMessages,
+  isSegmentShown,
   type LiveTurn,
   type TurnSegment,
 } from './thinking'
 import type { MessageView, PendingEntry } from './types'
 
-// Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言と応答待ちの
-// 表示はSCITL自身の文言(とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
+// Markdownとして描画するのはユーザーとモデルが書いた本文だけ。エラー発言はSCITL自身の文言
+// (とプロバイダーが返した文字列)なので、プレーンテキストのまま出す。
 // エラー発言は、ターンの中でも外でもここで表示言語の文言に替える。`streaming`は、書いている
 // 途中の本文か。
 function EntryBody({
@@ -67,20 +69,26 @@ function EntryActions({
 }
 
 // ターンの中身の1区切り。本文は返信と同じ吹き出しで出す。`footer`は吹き出しの末尾に足すもの
-// (日時と操作)。`streaming`は、応答待ちの間の途中経過か。
+// (日時と操作)。`streaming`は、応答待ちの間の途中経過か。`showReasoning`は思考を出すか。
 function TurnSegmentView({
   segment,
+  showReasoning,
   footer = null,
   streaming = false,
 }: {
   segment: TurnSegment
+  showReasoning: boolean
   footer?: ReactNode
   streaming?: boolean
 }) {
-  if (segment.kind === 'thoughts') return <ThinkingTools items={segment.items} />
+  if (segment.kind === 'thoughts') {
+    return <ThinkingTools items={segment.items} showReasoning={showReasoning} />
+  }
+  if (segment.kind === 'truncated') return <p className="entry-truncated">{t('chat.truncated_note')}</p>
   return (
     <div className="entry entry-assistant">
       <EntryBody role="assistant" content={segment.text} streaming={streaming} />
+      {segment.truncated && <p className="entry-truncated">{t('chat.truncated_note')}</p>}
       {footer}
     </div>
   )
@@ -106,6 +114,8 @@ interface ChatLogProps {
   // 応答待ちの間に届いたターンの中身。
   live: LiveTurn
   failure: string | null
+  // 思考を出すか(設定「一般」)。
+  showReasoning: boolean
   // 応答待ちの会話では、編集・再試行・削除を不可にする。
   disableActions: boolean
   editing: EntryEditing
@@ -122,26 +132,13 @@ export default function ChatLog({
   pending,
   live,
   failure,
+  showReasoning,
   disableActions,
   editing,
   onRetry,
   onRemove,
 }: ChatLogProps) {
   const items = groupMessages(messages)
-  // 応答を生成中に答えているユーザー発言(最後のユーザー発言)。画像を渡したかがまだ決まって
-  // いないので、画像に渡していない印を出さない。送信中は答えている発言がまだ楽観表示にしか無い
-  // (保存済みの最後のユーザー発言は、前の発言)。
-  const answering =
-    pending.some((entry) => entry.role === 'pending') &&
-    !pending.some((entry) => entry.role === 'user')
-      ? messages.findLast((m) => m.role === 'user' && m.kind === 'normal')?.id
-      : undefined
-  const undeliveredOf = (message: MessageView) =>
-    message.id === answering
-      ? message.undelivered_attachments.filter(
-          (id) => message.attachments.find((a) => a.id === id)?.kind !== 'image',
-        )
-      : message.undelivered_attachments
   return (
     <ul className="chat-log" ref={logRef} onScroll={onScroll} onWheel={onWheel}>
       {items.map((item) => {
@@ -158,68 +155,80 @@ export default function ChatLog({
             )
           }
 
+          // 履歴を間引いていて、モデルへ送っている範囲がこの発言から始まるなら、その前に印を出す
+          // (どの発言からかはRust側が決める)。
+          const sentFromHere = message.starts_sent_history && (
+            <li className="history-start">{t('chat.history_start_note')}</li>
+          )
+
           // 編集・削除。`plain`項目は常にユーザー発言なので、編集はここでのみ起こりうる。
           const canEditOrDelete = message.role === 'user'
 
           if (editing.id === message.id) {
             return (
-              <li key={message.id} className={`entry entry-${message.role}`}>
-                <textarea
-                  className="entry-edit-textarea"
-                  value={editing.draft}
-                  onChange={(e) => editing.setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault()
-                      editing.submit(message)
-                    } else if (e.key === 'Escape') {
-                      editing.cancel()
-                    }
-                  }}
-                  autoFocus
-                />
-                <MessageAttachments
-                  attachments={message.attachments}
-                  undelivered={undeliveredOf(message)}
-                  revealable={message.revealable_attachments}
-                />
-                <div className="button-row entry-actions">
-                  <button type="button" onClick={editing.cancel}>
-                    {t('common.cancel')}
-                  </button>
-                  <button type="button" onClick={() => editing.submit(message)}>
-                    {t('chat.send_button')}
-                  </button>
-                </div>
-              </li>
+              <Fragment key={message.id}>
+                {sentFromHere}
+                <li className={`entry entry-${message.role}`}>
+                  <textarea
+                    className="entry-edit-textarea"
+                    value={editing.draft}
+                    onChange={(e) => editing.setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault()
+                        editing.submit(message)
+                      } else if (e.key === 'Escape') {
+                        editing.cancel()
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <MessageAttachments
+                    attachments={message.attachments}
+                    undelivered={message.undelivered_attachments}
+                    revealable={message.revealable_attachments}
+                  />
+                  <div className="button-row entry-actions">
+                    <button type="button" onClick={editing.cancel}>
+                      {t('common.cancel')}
+                    </button>
+                    <button type="button" onClick={() => editing.submit(message)}>
+                      {t('chat.send_button')}
+                    </button>
+                  </div>
+                </li>
+              </Fragment>
             )
           }
 
           return (
-            <li key={message.id} className={`entry entry-${message.role}`}>
-              {/* 添付だけの発言は本文が空になる */}
-              {message.content && (
-                <EntryBody
-                  role={message.role}
-                  content={message.content}
-                  errorKind={message.error_kind}
+            <Fragment key={message.id}>
+              {sentFromHere}
+              <li className={`entry entry-${message.role}`}>
+                {/* 添付だけの発言は本文が空になる */}
+                {message.content && (
+                  <EntryBody
+                    role={message.role}
+                    content={message.content}
+                    errorKind={message.error_kind}
+                  />
+                )}
+                <MessageAttachments
+                  attachments={message.attachments}
+                  undelivered={message.undelivered_attachments}
+                  revealable={message.revealable_attachments}
                 />
-              )}
-              <MessageAttachments
-                attachments={message.attachments}
-                undelivered={undeliveredOf(message)}
-                revealable={message.revealable_attachments}
-              />
-              <time className="entry-time">{formatDateTime(message.created_at)}</time>
-              {canEditOrDelete && (
-                <EntryActions
-                  label={t('chat.edit_button')}
-                  onAction={() => editing.start(message)}
-                  onDelete={() => onRemove(message.id)}
-                  disabled={disableActions}
-                />
-              )}
-            </li>
+                <time className="entry-time">{formatDateTime(message.created_at)}</time>
+                {canEditOrDelete && (
+                  <EntryActions
+                    label={t('chat.edit_button')}
+                    onAction={() => editing.start(message)}
+                    onDelete={() => onRemove(message.id)}
+                    disabled={disableActions}
+                  />
+                )}
+              </li>
+            </Fragment>
           )
         }
 
@@ -250,7 +259,7 @@ export default function ChatLog({
           return (
             <li key={`turn-${item.turnId}`} className="turn-group">
               {segments.map((segment, i) => (
-                <TurnSegmentView key={i} segment={segment} />
+                <TurnSegmentView key={i} segment={segment} showReasoning={showReasoning} />
               ))}
               <p className="entry-stopped">{t('chat.stopped_note')}</p>
             </li>
@@ -268,6 +277,7 @@ export default function ChatLog({
               <TurnSegmentView
                 key={i}
                 segment={segment}
+                showReasoning={showReasoning}
                 footer={footerOnText && i === segments.length - 1 ? footer : null}
               />
             ))}
@@ -296,18 +306,20 @@ export default function ChatLog({
       {pending.map((entry, i) =>
         entry.role === 'pending' ? (
           // 応答待ちの間の途中経過を、保存済みのターンと同じ形で届いた順に出す。完了したら
-          // 読み直したターンに置き換わる。本文が流れている最中は応答待ちの文言を出さない(書き
-          // 終えてツールを実行している間は出す。止める指示を出したあとは、止めていることを出す)。
-          <li key={`pending-${i}`} className="turn-group">
-            {live.segments.map((segment, j) => (
-              <TurnSegmentView key={j} segment={segment} streaming />
-            ))}
-            {(live.open !== 'text' || entry.stopping) && (
-              <div className="entry entry-pending">
-                <EntryBody role={entry.role} content={entry.content} />
-              </div>
-            )}
-          </li>
+          // 読み直したターンに置き換わる。応答を待っていることは入力欄の上に出す(`TypingIndicator`)。
+          // 思考を出さない間は、思考だけが届いた途中経過で空の塊を置かない(会話欄の間隔が1つ増える)。
+          live.segments.some((segment) => isSegmentShown(segment, showReasoning)) && (
+            <li key={`pending-${i}`} className="turn-group">
+              {live.segments.map((segment, j) => (
+                <TurnSegmentView
+                  key={j}
+                  segment={segment}
+                  showReasoning={showReasoning}
+                  streaming
+                />
+              ))}
+            </li>
+          )
         ) : (
           <li key={`pending-${i}`} className={`entry entry-${entry.role}`}>
             {entry.content && <EntryBody role={entry.role} content={entry.content} />}
@@ -322,5 +334,16 @@ export default function ChatLog({
         </li>
       )}
     </ul>
+  )
+}
+
+// モデルの応答を待っている間、入力欄の上に出す「入力中」。`name`は待っているアシスタントの
+// 名前(ニックネームかプロバイダー名)で、待っていなければ`null`(本文が流れている間・ツールの実行中・止める指示のあと)。
+// 行は生成中ずっと置き、文言だけを出し入れする(ラウンドのたびに会話欄の高さが変わらないように)。
+export function TypingIndicator({ name }: { name: string | null }) {
+  return (
+    <p className="typing-indicator" role="status">
+      {name !== null && t('chat.typing', { name: isolated(name) })}
+    </p>
   )
 }
