@@ -99,8 +99,20 @@ impl PartView {
 pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
     require_chat(conn, chat)?;
     let rows = messages::list_for_chat(conn, chat)?;
-    let mut undelivered = undelivered(conn, chat, &rows)?;
-    let sent_from = sent_from(conn, chat, &rows)?;
+    let replied = replied_attempts(&rows);
+    let has_images = rows
+        .iter()
+        .flat_map(|m| &m.attachments)
+        .any(|a| a.kind == AttachmentKind::Image);
+    let position = trim_position(conn, chat, &replied)?;
+    // 保存の入力は、2つの印のどちらかに要るときだけ、1回読む(会話を読み直すたびに呼ばれるため)。
+    let inputs = if has_images || position.is_some() {
+        shown_inputs(conn, chat, &replied)?
+    } else {
+        Vec::new()
+    };
+    let mut undelivered = undelivered(conn, chat, &rows, has_images.then_some(&inputs))?;
+    let sent_from = position.and_then(|position| sent_from(position, &inputs, &rows));
     let records = ReplyRecords::of(&rows);
     let parts: Vec<Vec<PartView>> = rows
         .iter()
@@ -125,7 +137,8 @@ pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
 }
 
 /// 履歴を間引いているとき、モデルへ送っている範囲が始まるユーザー発言の行のid
-/// (`docs/spec/architecture/transcript.md`「間引きの位置」)。会話の最初から送っていれば`None`。
+/// (`docs/spec/architecture/transcript.md`「間引きの位置」)。`position`は[`trim_position`]、
+/// `inputs`は[`shown_inputs`]。
 ///
 /// 示すのは、表示される返信のうち、保存のある最後のものを作ったときに送っていた範囲の始まり
 /// (その試行の保存に添えた位置)。次のターンでさらに間引くかは、送るときに決まるので示さない。
@@ -135,34 +148,11 @@ pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
 /// - それも無ければ、最後のユーザー発言
 ///
 /// それより前に表示する発言が無ければ、印は要らないので`None`。
-fn sent_from(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<Option<i64>> {
-    let replied: Vec<(&str, i64)> = rows
-        .iter()
-        .filter(|m| m.kind == Kind::Normal && m.role == Role::Assistant)
-        .filter_map(|m| Some((m.turn_id.as_deref()?, m.attempt_no?)))
-        .collect();
-    // 保存のある最後の返信の位置。保存の無い返信(古いデータ・保存に失敗したターン)は飛ばす。
-    let saved = transcripts::history_starts_for_chat(conn, chat)?;
-    let position = replied.iter().rev().find_map(|&(turn, attempt)| {
-        saved
-            .iter()
-            .find(|(t, a, _)| t == turn && *a == attempt)
-            .map(|(_, _, start)| *start)
-    });
-    let Some(Some(mut start)) = position else {
-        return Ok(None);
-    };
-    // 間引いているときだけ、保存の入力を読む(会話を読み直すたびに呼ばれるため)。
-    for (turn_id, attempt_no, input) in transcripts::inputs_for_chat(conn, chat)? {
-        if !replied.contains(&(turn_id.as_str(), attempt_no)) {
-            continue;
-        }
-        let sent = SentInput::read(&input).map(|sent| sent.rows);
-        if let Some(first) = sent
-            .filter(|rows| rows.contains(&start))
-            .and_then(|rows| rows.into_iter().min())
-        {
-            start = first;
+fn sent_from(position: i64, inputs: &[SentInput], rows: &[Message]) -> Option<i64> {
+    let mut start = position;
+    for sent in inputs {
+        if sent.rows.contains(&start) {
+            start = sent.rows.iter().copied().min().unwrap_or(start);
         }
     }
     let normal = || rows.iter().filter(|m| m.kind == Kind::Normal);
@@ -170,7 +160,41 @@ fn sent_from(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<Option<i
     let from = users()
         .find(|&id| id >= start)
         .or_else(|| users().next_back());
-    Ok(from.filter(|&id| normal().next().is_some_and(|m| m.id != id)))
+    from.filter(|&id| normal().next().is_some_and(|m| m.id != id))
+}
+
+/// 保存のある最後の返信を作ったときの間引きの位置(`replied`は[`replied_attempts`])。保存の無い
+/// 返信(古いデータ・保存に失敗したターン)は飛ばす。会話の最初から送っていれば`None`。
+fn trim_position(conn: &Connection, chat: Chat, replied: &[(&str, i64)]) -> Result<Option<i64>> {
+    let saved = transcripts::history_starts_for_chat(conn, chat)?;
+    Ok(replied
+        .iter()
+        .rev()
+        .find_map(|&(turn, attempt)| {
+            saved
+                .iter()
+                .find(|(t, a, _)| t == turn && *a == attempt)
+                .map(|(_, _, start)| *start)
+        })
+        .flatten())
+}
+
+/// 表示される返信のある試行(`turn_id`・`attempt_no`)。会話の順。
+fn replied_attempts(rows: &[Message]) -> Vec<(&str, i64)> {
+    rows.iter()
+        .filter(|m| m.kind == Kind::Normal && m.role == Role::Assistant)
+        .filter_map(|m| Some((m.turn_id.as_deref()?, m.attempt_no?)))
+        .collect()
+}
+
+/// 表示される返信のある試行の保存の入力。捨てた試行・削除したターンの保存は、以後モデルへ
+/// 並べないので見ない(`orchestration::history`が並べる保存と同じ範囲)。
+fn shown_inputs(conn: &Connection, chat: Chat, replied: &[(&str, i64)]) -> Result<Vec<SentInput>> {
+    Ok(transcripts::inputs_for_chat(conn, chat)?
+        .into_iter()
+        .filter(|(turn_id, attempt_no, _)| replied.contains(&(turn_id.as_str(), *attempt_no)))
+        .filter_map(|(_, _, input)| SentInput::read(&input))
+        .collect())
 }
 
 fn revealable_ids(message: &Message, can_reveal: bool) -> Vec<i64> {
@@ -191,17 +215,17 @@ fn revealable_ids(message: &Message, can_reveal: bool) -> Vec<i64> {
 ///   いるかで決める。そうした保存が無いとき、その発言に答えた返信が無く、あとの発言に答えた返信が
 ///   あれば渡していない。それ以外は分からないので含めない(答えた返信があれば送った形を保存する前の
 ///   会話。あとに返信が1つも無ければ、失敗・停止したターンか応答を生成中の発言で、再試行すれば渡る)
-fn undelivered(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<HashMap<i64, Vec<i64>>> {
-    let has_images = rows
-        .iter()
-        .flat_map(|m| &m.attachments)
-        .any(|a| a.kind == AttachmentKind::Image);
-    // 画像が無ければ保存を読まない(会話を読み直すたびに呼ばれるため)。
-    let images = if has_images {
-        Some(SentImages::load(conn, chat, rows)?)
-    } else {
-        None
-    };
+///
+/// `inputs`は[`shown_inputs`]。画像の無い会話では`None`(保存を読まない)。
+fn undelivered(
+    conn: &Connection,
+    chat: Chat,
+    rows: &[Message],
+    inputs: Option<&Vec<SentInput>>,
+) -> Result<HashMap<i64, Vec<i64>>> {
+    let images = inputs
+        .map(|inputs| SentImages::load(conn, chat, rows, inputs))
+        .transpose()?;
     let mut out: HashMap<i64, Vec<i64>> = HashMap::new();
     for message in rows.iter().filter(|m| m.role == Role::User) {
         let ids: Vec<i64> = message
@@ -235,23 +259,10 @@ struct SentImages {
 }
 
 impl SentImages {
-    fn load(conn: &Connection, chat: Chat, rows: &[Message]) -> Result<Self> {
-        // 捨てた試行・削除したターンの保存は、以後モデルへ並べないので見ない
-        // (`orchestration::history`が並べる保存と同じ範囲)。
-        let replied_attempts: HashSet<(&str, i64)> = rows
-            .iter()
-            .filter(|m| m.kind == Kind::Normal && m.role == Role::Assistant)
-            .filter_map(|m| Some((m.turn_id.as_deref()?, m.attempt_no?)))
-            .collect();
+    fn load(conn: &Connection, chat: Chat, rows: &[Message], sent: &[SentInput]) -> Result<Self> {
         let mut inputs = HashMap::new();
-        for (turn_id, attempt_no, input) in transcripts::inputs_for_chat(conn, chat)? {
-            if !replied_attempts.contains(&(turn_id.as_str(), attempt_no)) {
-                continue;
-            }
-            let Some(sent) = SentInput::read(&input) else {
-                continue;
-            };
-            for row in sent.rows {
+        for sent in sent {
+            for &row in &sent.rows {
                 inputs.insert(row, sent.images.clone());
             }
         }

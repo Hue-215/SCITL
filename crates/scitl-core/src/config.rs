@@ -177,13 +177,16 @@ impl GeneralConfig {
         self.show_reasoning.unwrap_or(true)
     }
 
-    /// 画面に出すアシスタントの名前。ニックネームが無ければ、使うプロバイダーの名前。
     /// 手で書いた空白だけの値は、未設定と同じに扱う。
-    pub fn assistant_name<'a>(&'a self, provider_name: &'a str) -> &'a str {
+    pub fn assistant_nickname(&self) -> Option<&str> {
         self.assistant_nickname
             .as_deref()
             .filter(|n| !n.trim().is_empty())
-            .unwrap_or(provider_name)
+    }
+
+    /// 画面に出すアシスタントの名前。ニックネームが無ければ、使うプロバイダーの名前。
+    pub fn assistant_name<'a>(&'a self, provider_name: &'a str) -> &'a str {
+        self.assistant_nickname().unwrap_or(provider_name)
     }
 
     pub fn language(&self) -> Language {
@@ -359,6 +362,20 @@ mod tests {
         assert!(config.general.show_reasoning());
         let config: Config = toml::from_str("[general]\nshow_reasoning = false\n").unwrap();
         assert!(!config.general.show_reasoning());
+    }
+
+    /// 空白だけのニックネームは、画面の表示名でもシステムプロンプトでも未設定と同じになる。
+    #[test]
+    fn a_blank_nickname_counts_as_unset_everywhere() {
+        let config: Config = toml::from_str("[general]\nassistant_nickname = \"  \"\n").unwrap();
+        assert_eq!(config.general.assistant_name("provider"), "provider");
+        let prompts = crate::orchestration::SystemPrompts::from_config(&config.general);
+        assert_eq!(prompts.nickname, None);
+
+        let config: Config = toml::from_str("[general]\nassistant_nickname = \"Hal\"\n").unwrap();
+        assert_eq!(config.general.assistant_name("provider"), "Hal");
+        let prompts = crate::orchestration::SystemPrompts::from_config(&config.general);
+        assert_eq!(prompts.nickname, Some("Hal"));
     }
 
     #[test]

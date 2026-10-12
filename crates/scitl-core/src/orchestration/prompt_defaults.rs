@@ -29,7 +29,7 @@ impl<'a> SystemPrompts<'a> {
                 general.task_chat_system_prompt.as_deref(),
                 default_task_chat_prompt(general.language()),
             )),
-            nickname: general.assistant_nickname.as_deref(),
+            nickname: general.assistant_nickname(),
         }
     }
 }
