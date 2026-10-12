@@ -6,13 +6,14 @@ import Dropdown from './Dropdown'
 import { currentLanguage, isolated, languageName, LANGUAGES, t } from './i18n'
 import { DisclosureMark } from './Icon'
 import { NumberField } from './settingsFields'
+import { useDraft } from './settingsInput'
 import { useAsyncAction } from './useAsyncAction'
 
 type GeneralUpdate = Parameters<typeof updateGeneralSettings>[0]
 
 interface GeneralTabProps {
   settings: SettingsView
-  // 欄の誤りは理由の文言で返る(数値の欄が欄の下に出す)。
+  // 欄の誤りは理由の文言で返る(欄の下に出す)。
   onSave: (update: GeneralUpdate) => Promise<string[]>
   onSaveLanguage: (language: Language) => void
 }
@@ -33,8 +34,8 @@ function PromptField({ label, value, onChange, onBlur }: PromptFieldProps) {
   )
 }
 
-// フォーカスを外すと自動保存。入力中は自身のstateだけを更新し、blur時にのみ親へ確定した値を
-// 渡す。
+// フォーカスを外すと自動保存。入力中は自身のstateだけを更新し、blur時(と設定画面を離れるとき。
+// `useDraft`)にのみ親へ確定した値を渡す。
 //
 // 既定の文面を持つ欄は、未設定の間は既定の文面を表示する(書き換えの起点にできるように)。
 // 空欄と既定の文面のままの値は、Rust側が未設定として保存する(`Settings::update_general`)。
@@ -50,6 +51,9 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     general.task_opening_message ?? general.default_task_opening_message,
   )
 
+  // 4つの欄の保存で断られた理由。断られうるのはニックネームだけなので、その欄の下に出す。
+  const [errors, setErrors] = useState<string[]>([])
+
   // 保存して設定が読み直されたら、入力欄を保存された値に戻す。描画の中で前回の値と比べて
   // 揃える(effectで揃えると、古い値で1回描いてから描き直す)。
   const [shown, setShown] = useState(general)
@@ -61,6 +65,7 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
       general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
     )
     setTaskOpeningMessage(general.task_opening_message ?? general.default_task_opening_message)
+    setErrors([])
   }
 
   const current = (): GeneralUpdate => ({
@@ -73,6 +78,23 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
     streaming: null,
     showReasoning: null,
   })
+
+  // 4つの欄はまとめて1つの書きかけとして扱う(保存も4つまとめて送る)。
+  const draft = JSON.stringify([nickname, systemPrompt, taskChatSystemPrompt, taskOpeningMessage])
+  const saved = JSON.stringify([
+    general.assistant_nickname ?? '',
+    general.system_prompt ?? '',
+    general.task_chat_system_prompt ?? general.default_task_chat_system_prompt,
+    general.task_opening_message ?? general.default_task_opening_message,
+  ])
+  const flush = useDraft(draft, saved, async () => {
+    const rejected = await onSave(current())
+    setErrors(rejected)
+    return rejected
+  })
+  const saveOnBlur = () => {
+    if (draft !== saved) void flush()
+  }
 
   return (
     <div className="settings-panel">
@@ -108,15 +130,21 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
           value={nickname}
           maxLength={general.assistant_nickname_max_chars}
           onChange={(e) => setNickname(e.target.value)}
-          onBlur={() => void onSave(current())}
+          onBlur={saveOnBlur}
+          aria-invalid={errors.length > 0}
         />
+        {errors.map((e) => (
+          <p key={e} className="error">
+            {e}
+          </p>
+        ))}
       </label>
 
       <PromptField
         label={t('settings.general.system_prompt_label')}
         value={systemPrompt}
         onChange={setSystemPrompt}
-        onBlur={() => void onSave(current())}
+        onBlur={saveOnBlur}
       />
 
       <NumberField
@@ -161,13 +189,13 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
             label={t('settings.general.task_chat_prompt_label')}
             value={taskChatSystemPrompt}
             onChange={setTaskChatSystemPrompt}
-            onBlur={() => void onSave(current())}
+            onBlur={saveOnBlur}
           />
           <PromptField
             label={t('settings.general.task_opening_label')}
             value={taskOpeningMessage}
             onChange={setTaskOpeningMessage}
-            onBlur={() => void onSave(current())}
+            onBlur={saveOnBlur}
           />
         </div>
       </details>
