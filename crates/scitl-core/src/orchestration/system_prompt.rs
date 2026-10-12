@@ -9,8 +9,8 @@ use crate::tools::{
 pub struct SystemPrompts<'a> {
     pub base: Option<&'a str>,
     pub task_chat: Option<&'a str>,
-    /// アシスタントのニックネーム(`config::GeneralConfig::assistant_nickname`)。どちらの会話でも
-    /// 先頭で伝える。利用者がこの名前で呼ぶことがあるため。
+    /// アシスタントのニックネーム(空白だけの値は`config::GeneralConfig::assistant_nickname`が
+    /// 除いてある)。どちらの会話でも先頭で伝える。利用者がこの名前で呼ぶことがあるため。
     pub nickname: Option<&'a str>,
 }
 
@@ -103,7 +103,7 @@ pub fn build_system_prompt(
     prompts: &SystemPrompts,
 ) -> String {
     let mut sections = Vec::new();
-    if let Some(nickname) = prompts.nickname.filter(|n| !n.trim().is_empty()) {
+    if let Some(nickname) = prompts.nickname {
         sections.push(nickname_note(nickname));
     }
     if let Some(prompt) = prompts.base.filter(|p| !p.is_empty()) {
