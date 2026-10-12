@@ -64,6 +64,20 @@ fn is_blank(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// 空白だけのニックネームは、画面の表示名と同じく、モデルにも伝えない。
+    #[test]
+    fn a_blank_nickname_is_not_told_to_the_model() {
+        let general = |nickname: &str| GeneralConfig {
+            assistant_nickname: Some(nickname.to_string()),
+            ..GeneralConfig::default()
+        };
+        assert_eq!(SystemPrompts::from_config(&general("  ")).nickname, None);
+        assert_eq!(
+            SystemPrompts::from_config(&general("Hal")).nickname,
+            Some("Hal")
+        );
+    }
+
     #[test]
     fn unset_or_empty_settings_fall_back_to_the_defaults_of_the_display_language() {
         let general = GeneralConfig {

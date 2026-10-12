@@ -9,8 +9,8 @@ use crate::tools::{
 pub struct SystemPrompts<'a> {
     pub base: Option<&'a str>,
     pub task_chat: Option<&'a str>,
-    /// アシスタントのニックネーム(`config::GeneralConfig::assistant_nickname`が未設定かを決めた
-    /// あとの値)。どちらの会話でも先頭で伝える。利用者がこの名前で呼ぶことがあるため。
+    /// アシスタントのニックネーム(空白だけの値は`config::GeneralConfig::assistant_nickname`が
+    /// 除いてある)。どちらの会話でも先頭で伝える。利用者がこの名前で呼ぶことがあるため。
     pub nickname: Option<&'a str>,
 }
 

@@ -111,7 +111,7 @@ pub fn list_chat(conn: &Connection, chat: Chat) -> Result<Vec<MessageView>> {
     } else {
         Vec::new()
     };
-    let mut undelivered = undelivered(conn, chat, &rows, has_images.then_some(&inputs))?;
+    let mut undelivered = undelivered(conn, chat, &rows, has_images.then_some(inputs.as_slice()))?;
     let sent_from = position.and_then(|position| sent_from(position, &inputs, &rows));
     let records = ReplyRecords::of(&rows);
     let parts: Vec<Vec<PartView>> = rows
@@ -221,7 +221,7 @@ fn undelivered(
     conn: &Connection,
     chat: Chat,
     rows: &[Message],
-    inputs: Option<&Vec<SentInput>>,
+    inputs: Option<&[SentInput]>,
 ) -> Result<HashMap<i64, Vec<i64>>> {
     let images = inputs
         .map(|inputs| SentImages::load(conn, chat, rows, inputs))
@@ -505,6 +505,18 @@ mod tests {
         f.reply("t6", 1);
         f.save_from("t6", 1, vec![u6], &[], Some(u6 + 100));
         assert_eq!(f.sent_from(), [u6]);
+    }
+
+    /// 画像があって間引いている会話では、同じ保存の入力から2つの印がどちらも決まる。
+    #[test]
+    fn one_saved_input_decides_both_marks() {
+        let f = Fixture::new();
+        f.reply("t0", 1);
+        let (u1, ids) = f.user(&[(AttachmentKind::Image, "h1")]);
+        f.reply("t1", 1);
+        f.save_from("t1", 1, vec![u1], &[], Some(u1));
+        assert_eq!(f.sent_from(), [u1]);
+        assert_eq!(f.undelivered(), HashMap::from([(u1, ids)]));
     }
 
     /// 位置の発言より前に表示する発言が無ければ、印は要らない。聞き取りから始まった会話のように

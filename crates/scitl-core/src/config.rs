@@ -364,18 +364,14 @@ mod tests {
         assert!(!config.general.show_reasoning());
     }
 
-    /// 空白だけのニックネームは、画面の表示名でもシステムプロンプトでも未設定と同じになる。
     #[test]
-    fn a_blank_nickname_counts_as_unset_everywhere() {
+    fn a_blank_nickname_counts_as_unset() {
         let config: Config = toml::from_str("[general]\nassistant_nickname = \"  \"\n").unwrap();
+        assert_eq!(config.general.assistant_nickname(), None);
         assert_eq!(config.general.assistant_name("provider"), "provider");
-        let prompts = crate::orchestration::SystemPrompts::from_config(&config.general);
-        assert_eq!(prompts.nickname, None);
 
         let config: Config = toml::from_str("[general]\nassistant_nickname = \"Hal\"\n").unwrap();
         assert_eq!(config.general.assistant_name("provider"), "Hal");
-        let prompts = crate::orchestration::SystemPrompts::from_config(&config.general);
-        assert_eq!(prompts.nickname, Some("Hal"));
     }
 
     #[test]
