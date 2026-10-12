@@ -67,9 +67,8 @@ pub enum ConversationStart {
 /// 空の結果が返るだけで、往復が1回増える。「始めた時点で」と過去の事実として書くのは、
 /// 何か設定されたあとも偽にならず、システムプロンプトを書き換えずに済むため。
 ///
-/// 同じ注記で、最初の発言がアプリの送ったものであることと、その返し方も伝える。どの句も、
-/// 外すと実際のモデルで症状が戻った(Issue #581。`docs/spec/architecture/prompt-shape.md`
-/// 「聞き取りの開始」)ので、縮めるときは測り直す。
+/// 同じ注記で、最初の発言がアプリの送ったものであることと、その返し方も伝える。縮めるときは
+/// 実際のモデルで測り直す(`docs/spec/architecture/prompt-shape.md`「聞き取りの開始」)。
 fn state_note(chat: Chat, start: ConversationStart) -> String {
     const RETURNS_WHOLE_TASK: &str = "Tools that change the task return the whole task.";
     match (chat, start) {
@@ -211,7 +210,7 @@ mod tests {
     fn tells_that_the_task_started_blank_only_while_the_start_is_in_view() {
         let blank = state_note(Chat::Task(1), ConversationStart::BlankTaskInView);
         let other = state_note(Chat::Task(1), ConversationStart::Other);
-        for only_in_blank in ["was empty", "from this app"] {
+        for only_in_blank in ["was empty", "from this app", "do not call"] {
             assert!(blank.contains(only_in_blank));
             assert!(!other.contains(only_in_blank));
         }

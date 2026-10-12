@@ -156,7 +156,7 @@ LLM役を自分で務めずに、サブエージェントに任せてもよい�
 ( cli task create > create.jsonl 2>&1; echo "exit=$?" >> create.jsonl ) &
 ```
 
-2. `next` → 挨拶への応答を`reply`(`text`と`thinking`) → `create.jsonl`の`last_message`を確かめる
+2. `next` → 開始の発言への応答を`reply`(`text`と`thinking`) → `create.jsonl`の`last_message`を確かめる
 
 ```sh
 # 3. 発言を送る(バックグラウンド)
