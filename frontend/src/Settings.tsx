@@ -47,9 +47,9 @@ export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // 自動保存の欄の書きかけ(`useDraft`)と、その保存でコマンド自体が失敗したか。
+  // 自動保存の欄の書きかけ(`useDraft`)と、その保存でコマンド自体が失敗した回数。
   const [drafts] = useState<Drafts>(() => ({ entries: new Set(), closed: false }))
-  const saveFailed = useRef(false)
+  const saveFailures = useRef(0)
   // 狭い窓で畳む左のメニュー。タブを選んだら閉じる。
   const drawer = useDrawer()
   const swipeToOpen = useSwipeToOpen(drawer)
@@ -96,36 +96,47 @@ export default function Settings({ onClose }: SettingsProps) {
         setError(null)
       }
     } catch (e) {
-      saveFailed.current = true
+      saveFailures.current++
       setError(failureText(e))
     }
     return []
   }
 
-  // 自動保存の欄の書きかけをすべて保存する。残らず保存できたかを返す。
+  // 自動保存の欄の書きかけをすべて保存する。`rejected`は欄の誤りで断られたもの、`failed`は
+  // コマンド自体が失敗したものがある。
   const flushDrafts = useCallback(async () => {
-    saveFailed.current = false
+    const failuresBefore = saveFailures.current
     let rejected = false
     for (const flush of [...drafts.entries]) {
-      if ((await flush()).length > 0) rejected = true
+      try {
+        if ((await flush()).length > 0) rejected = true
+      } catch {
+        saveFailures.current++
+      }
     }
-    return !rejected && !saveFailed.current
+    if (rejected) return 'rejected'
+    return saveFailures.current === failuresBefore ? 'saved' : 'failed'
   }, [drafts])
 
   // 設定画面を閉じる(「←」とAndroidの「戻る」)。書きかけを保存してから閉じ、保存できなければ
   // 留まる(断られた理由は欄の下に、コマンドの失敗は上のエラー欄に出ている)。閉じたあと会話側が
-  // 設定を読み直すので、保存を待ってから閉じる。
+  // 設定を読み直すので、保存を待ってから閉じる。コマンドの失敗は欄を直しても解けないので、
+  // 続けてもう一度閉じようとしたら、書きかけを捨てて閉じる(閉じられなくならないように)。
   const leaving = useRef(false)
+  const failedToLeave = useRef(false)
   const leave = async () => {
     if (leaving.current) return
     leaving.current = true
     try {
-      if (await flushDrafts()) {
+      const outcome = await flushDrafts()
+      if (outcome === 'saved' || (outcome === 'failed' && failedToLeave.current)) {
         drafts.closed = true
         onClose()
-      } else {
-        drawer.close()
+        return
       }
+      failedToLeave.current = outcome === 'failed'
+      // 狭い窓では「←」が引き出した左のカラムにあり、開いたままだと理由が隠れる。
+      drawer.close()
     } finally {
       leaving.current = false
     }
