@@ -63,15 +63,22 @@ pub enum ConversationStart {
 /// タスクの状態の読み方。状態はリクエストに添えないので、伝えないと、会話の始まりや
 /// 間引きで古い結果が落ちたあとに、モデルがタスクの中身を知らないまま答える。
 ///
-/// 聞き取りから始まった会話では、始めた時点で空だったことを伝え、最初に読ませない。読んでも
+/// 聞き取りから始まった会話では、始めた時点で空だったことを伝え、読ませない。読んでも
 /// 空の結果が返るだけで、往復が1回増える。「始めた時点で」と過去の事実として書くのは、
 /// 何か設定されたあとも偽にならず、システムプロンプトを書き換えずに済むため。
+///
+/// 同じ注記で、最初の発言がアプリの送ったものであることと、その返し方も伝える。縮めるときは
+/// 実際のモデルで測り直す(`docs/spec/architecture/prompt-shape.md`「聞き取りの開始」)。
 fn state_note(chat: Chat, start: ConversationStart) -> String {
     const RETURNS_WHOLE_TASK: &str = "Tools that change the task return the whole task.";
     match (chat, start) {
         (Chat::Task(_), ConversationStart::BlankTaskInView) => format!(
-            "This task was empty when this conversation began, and every change since then \
-             appears in this conversation. {RETURNS_WHOLE_TASK}"
+            "This conversation starts with a message from this app, not the user: read \
+             memories, then just ask what the user wants to do, with no greeting or \
+             self-introduction. This task was empty when this conversation began, and every \
+             change since then appears in this conversation, so do not call {}. \
+             {RETURNS_WHOLE_TASK}",
+            get_current_task_detail::NAME
         ),
         (Chat::Task(_), ConversationStart::Other) => format!(
             "The task's current state is not given automatically; read it with {} when \
@@ -202,8 +209,11 @@ mod tests {
     #[test]
     fn tells_that_the_task_started_blank_only_while_the_start_is_in_view() {
         let blank = state_note(Chat::Task(1), ConversationStart::BlankTaskInView);
-        assert!(blank.contains("was empty"));
-        assert!(!state_note(Chat::Task(1), ConversationStart::Other).contains("was empty"));
+        let other = state_note(Chat::Task(1), ConversationStart::Other);
+        for only_in_blank in ["was empty", "from this app", "do not call"] {
+            assert!(blank.contains(only_in_blank));
+            assert!(!other.contains(only_in_blank));
+        }
         assert_eq!(
             state_note(Chat::General, ConversationStart::BlankTaskInView),
             state_note(Chat::General, ConversationStart::Other)
