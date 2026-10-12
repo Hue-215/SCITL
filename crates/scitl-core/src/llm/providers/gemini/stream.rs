@@ -517,7 +517,6 @@ mod tests {
         );
     }
 
-    /// 長さの上限で引数の途中で切れた呼び出しは、打ち切りが原因と分かる失敗にする。
     #[tokio::test]
     async fn a_tool_call_cut_off_by_the_output_limit_says_so() {
         let (result, _, _) = send_streamed(&[

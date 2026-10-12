@@ -41,8 +41,7 @@ internal_tool! {
                 "type": "array",
                 "items": { "type": "string", "enum": CLEARABLE },
                 "uniqueItems": true,
-                // 省略・nullは「変えない」。値を消すのはこの引数だけにする(nullを消去の
-                // 意味にすると、型に緩いモデルが変えないつもりの項目を消してしまう)。
+                // 省略・nullは「変えない」。値を消すのはこの引数だけにする(`FieldChange`)。
                 "description": "Fields to remove. A field cannot be set and removed in the same call."
             }
         },

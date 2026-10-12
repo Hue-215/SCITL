@@ -10,7 +10,6 @@ use crate::orchestration::SystemPrompts;
 const TASK_CHAT_PROMPT_KEY: &str = "task_chat.system_prompt";
 const OPENING_MESSAGE_KEY: &str = "task_chat.opening_message";
 
-/// タスクチャット用プロンプトの既定の文面。
 pub fn default_task_chat_prompt(language: Language) -> &'static str {
     i18n::text(language, TASK_CHAT_PROMPT_KEY)
 }

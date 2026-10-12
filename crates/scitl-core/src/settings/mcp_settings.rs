@@ -268,7 +268,6 @@ fn store_endpoint_secrets(endpoint: CheckedEndpoint) -> Result<McpEndpoint> {
     })
 }
 
-/// 1件が失敗しても残りは試す。
 fn delete_secret_refs(refs: &[SecretRef]) {
     super::delete_secret_refs(refs, SECRET_WHAT);
 }

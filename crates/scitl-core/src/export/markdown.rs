@@ -25,7 +25,6 @@ pub(super) struct Entry<'a> {
     pub attachments: Vec<AttachmentLink>,
 }
 
-/// 書き出した添付を指すリンク。
 pub(super) struct AttachmentLink {
     pub name: String,
     pub kind: AttachmentKind,

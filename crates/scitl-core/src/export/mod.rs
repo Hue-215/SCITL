@@ -59,7 +59,6 @@ impl ExportTarget {
     };
 }
 
-/// 書き出しの操作の結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -76,7 +75,6 @@ pub enum ExportOutcome {
     LeftIncomplete { reason: String },
 }
 
-/// 書き出しの結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ExportSummary {

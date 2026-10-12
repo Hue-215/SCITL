@@ -179,7 +179,7 @@ async fn malformed_tool_arguments_are_passed_up_instead_of_failing_the_send() {
     )));
 }
 
-/// 空の欄を省かずに`null`で返すサーバー(Issue #458)。
+/// 空の欄を省かずに`null`で返すサーバー。
 #[tokio::test]
 async fn null_fields_in_a_completion_read_as_absent() {
     let (base_url, handle) = spawn_capturing(

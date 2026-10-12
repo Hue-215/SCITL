@@ -401,7 +401,7 @@ fn calls_a_failing_tool(call: ResponseEvent) -> ScriptedAdapter {
     .repeating_last()
 }
 
-/// 1回の応答に2つのツール呼び出しを載せる(取りこぼしの回帰検知)。
+/// 1回の応答に2つのツール呼び出しを載せる。
 fn calls_two_tools() -> ScriptedAdapter {
     let second = ResponseEvent::ToolCall {
         id: Some("call_2".to_string()),
@@ -755,7 +755,7 @@ async fn run_turn_can_be_stopped_while_waiting_for_an_mcp_server() {
     let (turn, ()) = tokio::join!(turn, stop);
     turn.unwrap();
 
-    // 接続のタイムアウト(30秒)を待たずに終わる。
+    // 接続のタイムアウトを待たずに終わる。
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
     let messages = db::messages::list_for_chat(&db.lock().unwrap(), chat).unwrap();
     stopped_reply(&messages);
@@ -1715,7 +1715,6 @@ async fn text_of_a_round_that_failed_while_streaming_is_not_kept() {
     assert!(texts_of(last).is_empty());
 }
 
-/// 最初のラウンドで失敗したターンには、残す本文が無い。
 #[tokio::test]
 async fn a_turn_that_fails_at_once_keeps_no_text() {
     let conn = db::open_in_memory().unwrap();
@@ -2682,7 +2681,7 @@ fn call_ids(messages: &[ChatMessage]) -> (Vec<Option<String>>, Vec<Option<String
 }
 
 /// 保存したターンの呼び出しIDは、払い出した送り先(方言と要求URLのオリジン)にだけそのまま
-/// 送る。別の送り先へは実行記録の行idから作ったIDに置き換え、戻れば保存したIDのまま並べる(#374)。
+/// 送る。別の送り先へは実行記録の行idから作ったIDに置き換え、戻れば保存したIDのまま並べる。
 #[tokio::test]
 async fn saved_call_ids_are_sent_only_to_where_they_were_issued() {
     let conn = db::open_in_memory().unwrap();
@@ -2927,7 +2926,7 @@ fn told_system(messages: &[ChatMessage]) -> &str {
 }
 
 /// 先頭を作り直したターンでも、並びに残った前の通知が今の設定と違えば、今の設定を伝える。
-/// 伝えないと、モデルは先頭より後ろにある前の通知に従う(#361)。
+/// 伝えないと、モデルは先頭より後ろにある前の通知に従う。
 #[tokio::test]
 async fn a_rebuilt_front_is_told_again_over_an_older_update_left_in_the_sequence() {
     let conn = db::open_in_memory().unwrap();
@@ -2986,7 +2985,7 @@ fn assert_told_without_a_new_notice(adapter: &ScriptedAdapter, system: &str) {
 }
 
 /// ツール定義が変わって先頭を作り直したターンでも、並びに残った前の通知が今の設定と違えば、
-/// 今の設定を伝える(#361)。
+/// 今の設定を伝える。
 #[tokio::test]
 async fn a_front_rebuilt_for_new_tools_is_told_again_over_an_older_update() {
     let conn = db::open_in_memory().unwrap();
@@ -3075,7 +3074,7 @@ async fn an_older_update_trimmed_away_by_the_notice_needs_no_notice() {
 }
 
 /// 先頭を固定したままでも、前の並びが変わって今の設定を伝えた通知が消え、それより前の通知が
-/// 残れば、今の設定を伝え直す(#361)。
+/// 残れば、今の設定を伝え直す。
 #[tokio::test]
 async fn a_front_matching_the_settings_is_told_again_over_an_older_update() {
     let conn = db::open_in_memory().unwrap();
@@ -4089,7 +4088,6 @@ async fn a_stop_between_tool_calls_keeps_the_finished_call_and_skips_the_rest() 
     assert_eq!(db::tasks::get_task(&conn, task_id).unwrap().title, None);
 }
 
-/// 生成中でない会話には、止める指示を出しても何も起きない。
 #[test]
 fn stopping_a_chat_that_is_not_generating_does_nothing() {
     let generating = InFlightSet::new();
@@ -4771,7 +4769,6 @@ async fn a_task_stays_when_the_chat_becomes_unavailable_before_the_opening() {
     assert_eq!(roles(&db, task.id), vec!["error"]);
 }
 
-/// チャットを使えない間はタスクを作らない。
 #[tokio::test]
 async fn create_task_is_refused_while_the_chat_cannot_run() {
     let db = Arc::new(Mutex::new(db::open_in_memory().unwrap()));
@@ -5129,7 +5126,6 @@ async fn run_turn_refuses_an_empty_message_and_unknown_attachments() {
     assert_eq!(written, 0);
 }
 
-/// 編集した発言は添付を引き継ぐ。
 #[tokio::test]
 async fn edit_user_message_carries_attachments_over() {
     let conn = db::open_in_memory().unwrap();

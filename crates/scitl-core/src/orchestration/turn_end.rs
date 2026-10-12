@@ -9,7 +9,6 @@ use crate::db::tasks;
 use crate::error::Result;
 use crate::orchestration::turn_error::STOPPED_KIND;
 
-/// 終わった応答生成。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinishedTurn {
     pub chat: Chat,

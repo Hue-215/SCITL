@@ -18,7 +18,6 @@ type RoleSet = Record<string, { light: Role; dark: Role }>
 // 危険色ロール: シードに依存しない固定色相を使うため、彩度は係数ではなく
 // パーセント値そのものを持つ(Roleの saturationFactor とは単位が異なる)。
 type DangerRole = {
-  /** 彩度(%)そのもの。RoleのsaturationFactorと違い、シード彩度には掛けない。 */
   saturation: number
   lightness: number
 }
@@ -37,9 +36,7 @@ const ROLES = {
   surface: { light: { saturationFactor: 0.1, lightness: 94 }, dark: { saturationFactor: 0.14, lightness: 14 } },
   surfaceAlt: { light: { saturationFactor: 0.12, lightness: 90 }, dark: { saturationFactor: 0.16, lightness: 21 } },
   border: { light: { saturationFactor: 0.14, lightness: 82 }, dark: { saturationFactor: 0.16, lightness: 32 } },
-  // 文字ロールは無彩色に固定する(saturationFactor: 0)。文字に色味が乗ると読みにくく、
-  // シード次第で読みやすさが変わってしまうため。明暗の反転(ライトで黒・ダークで白)は
-  // 明度側で保つ。エラーの赤だけはDANGER_ROLES側で別に持つ。
+  // 文字ロールは無彩色に固定し(ファイル冒頭)、明暗の反転(ライトで黒・ダークで白)は明度側で保つ。
   text: { light: { saturationFactor: 0, lightness: 15 }, dark: { saturationFactor: 0, lightness: 94 } },
   textSecondary: {
     light: { saturationFactor: 0, lightness: 42 },

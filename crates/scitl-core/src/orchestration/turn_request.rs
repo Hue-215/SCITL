@@ -744,7 +744,7 @@ mod tests {
         let kept = Head::frozen(front("then", &reordered), &current, &external).unwrap();
         assert_eq!(kept.tools_body, tools_body(&reordered));
 
-        // キーの順だけが違う本文(`preserve_order`より前の版が名前順で書いた。Issue #446)も、同じ定義
+        // キーの順だけが違う本文(`preserve_order`より前の版が名前順で書いた)も、同じ定義
         // として固定した本文を残す(前を変えない)。
         let sorted_body =
             r#"[{"description":"d","name":"get_task","parameters":{"type":"object"}}]"#;

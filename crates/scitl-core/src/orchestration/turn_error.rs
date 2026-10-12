@@ -26,15 +26,12 @@ pub enum TurnFailure {
     ResponseTimeout {
         detail: ErrorDetail,
     },
-    /// 接続先に届かなかったか、応答の途中で接続が切れた。
     ConnectionFailed {
         detail: ErrorDetail,
     },
-    /// 接続先の証明書を検証できず、接続を断った。
     CertificateUnverified {
         detail: ErrorDetail,
     },
-    /// 応答は届いたが、期待した形として読めなかった。
     InvalidResponse {
         detail: ErrorDetail,
     },

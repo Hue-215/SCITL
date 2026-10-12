@@ -658,7 +658,6 @@ impl ReplyParts {
         self.0.push(ReplyPart::Tool { round, record });
     }
 
-    /// モデルが本文を1つでも書いたか。
     fn has_text(&self) -> bool {
         self.0.iter().any(|p| matches!(p, ReplyPart::Text { .. }))
     }

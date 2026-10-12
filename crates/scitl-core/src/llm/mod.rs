@@ -34,9 +34,8 @@ pub enum ResponseEvent {
     TextDelta {
         text: String,
     },
-    /// モデルの思考(reasoning)の断片。表示・`messages.reasoning`への保存専用の
-    /// イベントであり、`ChatMessage`には対応する構成要素が無い。次のAPI呼び出しの入力に
-    /// 混ざり込む経路が型として存在しないようにするための意図的な非対称設計。
+    /// モデルの思考(reasoning)の断片。表示と保存(`ReplyPart::Reasoning`)専用で、`ChatMessage`には
+    /// 対応する構成要素を置かない(次のAPI呼び出しの入力に混ざる経路を型として作らない)。
     ReasoningDelta {
         text: String,
     },

@@ -25,7 +25,6 @@ mod stream;
 /// ([`super::validate_header_name`])。
 pub(super) const OWN_HEADERS: &[&str] = &["x-goog-api-key"];
 
-/// Gemini形式のアダプタ。
 pub struct GeminiAdapter {
     client: reqwest::Client,
     base_url: ExternalUrl,
@@ -45,9 +44,6 @@ impl GeminiAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
-        // 届き続けている間は切らない)。ストリーミングしないときは、生成が終わるまで何も届かない
-        // ので、同じ上限が実質、生成の完了を待つ時間の上限になる。
         let client = crate::net::hardened_client(
             &base_url,
             crate::net::RequestTimeout::BetweenReads(request_timeout),
@@ -970,7 +966,6 @@ mod tests {
             .starts_with("… ("));
     }
 
-    /// 同じ方言なら、別のモデルの思考も送り返す。
     #[test]
     fn accepts_replays_from_any_model_of_the_same_format() {
         let adapter = adapter("http://127.0.0.1:1", "");

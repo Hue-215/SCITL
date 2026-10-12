@@ -43,7 +43,6 @@ pub async fn rename_task(
     .await
 }
 
-/// アーカイブ・アーカイブ解除。
 pub async fn set_task_archived(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,

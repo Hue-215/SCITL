@@ -24,7 +24,6 @@ impl Language {
     /// 未設定のときの表示言語で、他の言語に文言が無いときの引き先。すべてのキーを持つ正本。
     pub const DEFAULT: Language = Language::Ja;
 
-    /// `code`の言語。知らないコードは`None`。
     pub fn from_code(code: &str) -> Option<Self> {
         Self::ALL
             .into_iter()

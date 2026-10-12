@@ -38,9 +38,6 @@ impl OpenAiCompatAdapter {
         request_timeout: Duration,
     ) -> Result<Self, CoreError> {
         let base_url = super::parse_base_url(&base_url.into())?;
-        // ストリーミングで読むので、全体ではなくデータの届かない時間を測る(長い応答でも、
-        // 届き続けている間は切らない)。ストリーミングしないときは、生成が終わるまで何も届かない
-        // ので、同じ上限が実質、生成の完了を待つ時間の上限になる。
         let client = crate::net::hardened_client(
             &base_url,
             crate::net::RequestTimeout::BetweenReads(request_timeout),
@@ -725,7 +722,6 @@ fn too_many_tool_calls() -> LlmError {
     ))
 }
 
-/// 組み立て中のツール呼び出し。
 struct PartialToolCall {
     index: Option<u64>,
     id: Option<String>,
@@ -735,7 +731,6 @@ struct PartialToolCall {
     arguments: Option<String>,
 }
 
-/// 断片から組み立てるツール呼び出しの並び。
 #[derive(Default)]
 struct ToolCallAssembler(Vec<PartialToolCall>);
 

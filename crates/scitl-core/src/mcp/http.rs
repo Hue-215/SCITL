@@ -82,7 +82,7 @@ pub(super) async fn connect(
 }
 
 /// 送り手([`Connection`]か、接続の途中の[`connect`])が捨てられたら、待っている要求とSSEの
-/// ストリームを打ち切るHTTPクライアント(Issue #400)。セッションの後始末(`DELETE`)だけは
+/// ストリームを打ち切るHTTPクライアント。セッションの後始末(`DELETE`)だけは
 /// 打ち切らない。
 ///
 /// rmcp(3.4.0)は、接続の最初の`initialize`のPOSTを、自分の打ち切りの合図と並べずに待つ。この

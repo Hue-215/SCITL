@@ -50,11 +50,10 @@ const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 /// ために、毎ターン待たないため。すぐ失敗するもの(接続の拒否・オフライン等)はターンを待たせない
 /// ので数えない(数え直しもしない。回線やサーバーが戻れば次のターンで使える)。設定画面でサーバーを
 /// 有効にし直すか、ツール一覧の取得に成功すると数え直す。
-/// 今は固定値で、数値の設定から変えられるようにする余地を残してここに置く。
 pub const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// 失敗までにこれ以上かかったら、待たされた末の失敗として[`MAX_CONSECUTIVE_FAILURES`]に数える。
 /// 失敗の種類ではなく時間で見るのは、待たされ方が経路によって違うため(こちらのタイムアウトの
-/// ほか、HTTPクライアントの接続のタイムアウト(`net`、10秒)や名前解決のタイムアウト)。拒否された
+/// ほか、HTTPクライアントの接続のタイムアウト(`net`)や名前解決のタイムアウト)。拒否された
 /// SYNを送り直すOS(約2秒)は、すぐ失敗する側に入る。秘密情報の読み出し(承認を待ちうる)は測らない。
 const SLOW_FAILURE: Duration = Duration::from_secs(5);
 /// 切断の上限。ここに上限が無いと、graceful shutdownに応じないサーバーが1台あるだけで、
@@ -697,9 +696,7 @@ mod tests {
         assert!(!catalog.record_failure("s"));
     }
 
-    /// 接続の途中で待つのをやめたら、サーバーとのTCPの接続も閉じる(Issue #400)。rmcpは最初の
-    /// `initialize`の要求を自分の打ち切りの合図と並べずに待つので、以前は応答しないサーバーとの
-    /// 接続とヘッダーの値が、サーバーが閉じるまで残っていた。
+    /// 接続の途中で待つのをやめたら、サーバーとのTCPの接続も閉じる(`http::AbortableClient`)。
     #[tokio::test]
     async fn giving_up_while_connecting_closes_the_connection() {
         use std::io::Read;
@@ -956,7 +953,6 @@ mod tests {
         tools.into_iter().map(|t| t.name).collect()
     }
 
-    /// 次のページのカーソルを辿り、すべてのページのツールを集める。
     #[tokio::test]
     async fn tools_on_later_pages_are_listed() {
         let names = listed_names(|cursor| match cursor {

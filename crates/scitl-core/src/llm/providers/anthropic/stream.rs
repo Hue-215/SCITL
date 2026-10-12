@@ -376,7 +376,6 @@ mod tests {
         );
     }
 
-    /// 引数の断片が無い呼び出しは、空のオブジェクトの引数にする。
     #[tokio::test]
     async fn a_tool_use_without_input_fragments_has_an_empty_object() {
         let (result, events, _) = send_streamed(&[
@@ -515,7 +514,6 @@ mod tests {
         assert_eq!(events.len(), 2, "{events:?}");
     }
 
-    /// データの届かない時間が応答タイムアウトを超えたら、タイムアウトにする。
     #[tokio::test]
     async fn a_silent_stream_times_out() {
         let mut pieces = now(&[
@@ -559,7 +557,6 @@ mod tests {
         );
     }
 
-    /// 長さの上限で引数の途中で切れた呼び出しは、打ち切りが原因と分かる失敗にする。
     #[tokio::test]
     async fn a_tool_call_cut_off_by_the_output_limit_says_so() {
         let (result, _, _) = send_streamed(&[

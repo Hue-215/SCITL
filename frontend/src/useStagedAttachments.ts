@@ -41,7 +41,6 @@ export interface StagedAttachments {
    * 知らせる(超えた分を1件ずつチップにすると、連続して貼り付けたときに入力欄を押し上げるため)。
    */
   overLimit: number | null
-  /** `overLimit`のダイアログを閉じる。 */
   dismissOverLimit: () => void
 }
 

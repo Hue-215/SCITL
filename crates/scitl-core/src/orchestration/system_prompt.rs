@@ -183,7 +183,6 @@ mod tests {
         assert!(prompt.contains("task chat prompt"));
     }
 
-    /// 状態は添えないので、読み方を伝える。
     #[test]
     fn tells_how_to_read_the_state() {
         for chat in [Chat::Task(1), Chat::General] {
