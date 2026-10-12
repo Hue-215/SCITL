@@ -37,7 +37,6 @@ import type {
   TurnEvent,
 } from './types'
 import { useChatRequests } from './useChatRequests'
-import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
 import { useSwipeToOpen } from './useDrawerSwipe'
 import { useStickToBottom } from './useStickToBottom'
@@ -374,8 +373,6 @@ export default function App() {
     setAddBlocked(null)
     setSettingsOpen(false)
   }
-  // Androidの「戻る」で、設定画面からチャットへ戻る。設定画面の中で開いたものが先に閉じる。
-  useCloseOnBack(settingsOpen, closeSettings)
 
   // 通知を押して届いた会話を開く(Android)。どの会話を開くかはRust側が決めて知らせてくる。
   // 設定画面とサイドバーは、開いていれば閉じる。通知が出るのは裏にいた間なので、一覧も引き直す。
