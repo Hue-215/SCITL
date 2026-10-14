@@ -1786,25 +1786,46 @@ mod tests {
             )
             .unwrap()
         };
-        let first = user("先");
-        let record = insert_message(
+        let operation = || {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role: Role::Tool,
+                    content: "{}",
+                    kind: Kind::ToolExecution,
+                    origin: Origin::Operation(OperationSource::Ui),
+                    error_kind: None,
+                    error_detail: None,
+                    parts: None,
+                },
+            )
+            .unwrap()
+        };
+        // 聞き取りの開始で始まる会話。
+        let opening = insert_message(
             &conn,
             NewMessage {
                 chat,
-                role: Role::Tool,
-                content: "{}",
-                kind: Kind::ToolExecution,
-                origin: Origin::Operation(OperationSource::Ui),
+                role: Role::Assistant,
+                content: "",
+                kind: Kind::Normal,
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
                 error_kind: None,
                 error_detail: None,
-                parts: None,
+                parts: Some(&[]),
             },
         )
         .unwrap();
-        let second = user("後");
+        let first_record = operation();
+        let answer = user("答え");
+        let second_record = operation();
         conn.execute(
             "UPDATE messages SET created_at = '2000-01-01T00:00:00Z' WHERE id IN (?1, ?2)",
-            [record, second],
+            [answer, second_record],
         )
         .unwrap();
 
@@ -1813,20 +1834,18 @@ mod tests {
             .iter()
             .map(|m| m.id)
             .collect();
-        assert_eq!(ids, vec![first, record, second]);
+        assert_eq!(ids, vec![opening, first_record, answer, second_record]);
         let records: Vec<i64> = list_tool_records_for_chat(&conn, chat)
             .unwrap()
             .iter()
             .map(|m| m.id)
             .collect();
-        assert_eq!(records, vec![record]);
-        assert_eq!(opener(&conn, task_id).unwrap(), Some(Opener::User));
+        assert_eq!(records, vec![first_record, second_record]);
+        assert_eq!(opener(&conn, task_id).unwrap(), Some(Opener::Reply));
     }
 
     /// 表示する試行は、消えていない通常発言を持つ試行。返信の無いまま終わった試行の番号が
-    /// 大きくても(ほかの端末から取り込んだ再試行の記録)、生きている返信のある試行を出す。
-    /// 1台の中で返信の無い試行が残るのは、作り直しの途中か、途中で終わった作り直しで、どちらも
-    /// 前の試行の返信は消えているので、ターンごと外れる(今までと同じ)。
+    /// 大きくても、生きている返信のある試行を出す。返信が消えれば、ターンごと外れる。
     #[test]
     fn the_shown_attempt_is_the_one_with_a_surviving_reply() {
         let conn = db::open_in_memory().unwrap();
