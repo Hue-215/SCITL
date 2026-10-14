@@ -5,6 +5,7 @@ members = [
     "crates/scitl-tauri",
     "crates/scitl-cli",
     "crates/scitl-debug-cli",
+    "crates/scitl-sync",
 ]
 
 [workspace.package]
@@ -115,6 +116,19 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
 # 返すSSEのストリームを打ち切りの合図で終わらせる。rmcpが使うものと同じ版が既に
 # ビルドされている
 futures = { version = "0.3", default-features = false, features = ["std"] }
+
+# 同期の接続(`scitl-sync`。docs/sync/index.md 3節)。TLSと暗号の実装は、reqwestが使うものと同じ版と
+# featureが既にビルドされている。`aws-lc-rs`は、待ち受けのたびに使い捨ての鍵を作るのと、数字で
+# 互いを確かめたあとの確認(HKDF・HMAC)に使う。証明書は作らず、公開鍵をそのまま渡す(RFC 7250)
+tokio-rustls = { version = "0.26.5", default-features = false, features = ["aws_lc_rs"] }
+aws-lc-rs = { version = "1.18.1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
+# 数字から鍵を合わせる(PAKE)。乱数は`aws-lc-rs`から渡すので`getrandom`のfeatureは切る(切らないと
+# 0.2が別に入る)。新しく入るのは`spake2`・`curve25519-dalek`・`rand_core`(0.6。0.9と同居する)
+spake2 = { version = "0.4", default-features = false }
+rand_core = "0.6"
+# 待ち受ける側が出すアドレスの候補(インターフェースのアドレス)を列挙する。`libc`・`windows-sys`は
+# 既にある版
+if-addrs = "0.15"
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"
