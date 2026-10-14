@@ -27,9 +27,10 @@ pub fn parse_peer_address(input: &str) -> Result<SocketAddr, SyncError> {
     Ok(addr)
 }
 
-/// 全角の英数字・記号(U+FF01〜U+FF5E)を半角に。ほかの文字はそのまま。
+/// 全角の英数字・記号(U+FF01〜U+FF5E)を半角に、句点を`.`に。ほかの文字はそのまま。
 fn to_halfwidth(c: char) -> char {
     match c {
+        '\u{3002}' => '.',
         '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
         _ => c,
     }
@@ -69,7 +70,7 @@ mod tests {
     #[test]
     fn fullwidth_input_is_read_as_halfwidth() {
         assert_eq!(
-            parse_peer_address(" １９２．１６８．１．５：５０１２３ ").unwrap(),
+            parse_peer_address(" １９２．１６８。１．５：５０１２３ ").unwrap(),
             "192.168.1.5:50123".parse().unwrap()
         );
     }

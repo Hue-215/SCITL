@@ -29,11 +29,14 @@ const MAX_PENDING: usize = 8;
 pub struct Limits {
     /// 待ち受けを始めてから、相手が来ないまま閉じるまで。
     pub listen_window: Duration,
-    /// 1つの接続で、TCPの接続のあと相手を確かめ終えるまで。
+    /// 相手を確かめ終えるまでの段ごとの上限。つなぐ側は、TCPの接続から確かめ終えるまでを
+    /// これに収める。待ち受ける側は、受け付けてから最初の値を受け取るまでと、そこから
+    /// 確かめ終えるまでに、それぞれ掛ける。
     pub handshake: Duration,
     /// つなぐ側が、1つの候補へのTCPの接続を待つ時間。
     pub connect: Duration,
-    /// 相手を確かめたあとの無通信の上限。段階3で、利用者が競合を選ぶ時間を見込む。
+    /// 相手を確かめたあと、1メッセージを読み終える(書き終える)までの上限。待つ間に相手が
+    /// 何も送らない時間を含むので、段階3で、利用者が競合を選ぶ時間を見込む。
     pub idle: Duration,
     /// 相手を確かめたあとの1メッセージの上限。
     pub max_message: usize,
@@ -120,21 +123,35 @@ impl Listener {
         &self.code
     }
 
-    /// 相手を1台だけ受け入れる。PAKEの自分の値を返す前の接続(TLSに失敗した、何も送らない等)は
-    /// 並べて扱い、最初に値を送ってきた1本を相手にする。返したあとは成功以外すべて待ち受けを
-    /// 終える。確かめ終えたら待ち受けを閉じるので、2台目は接続を断られる。
+    /// 相手を1台だけ受け入れる。長さの正しいPAKEの値を送ってくる前の接続(TLSに失敗した、
+    /// 何も送らない等)は並べて扱い、最初に値を送ってきた1本を相手にする。その1本を選んだ時点で
+    /// この待ち受けの1回を使ったものとし、待ち受けを閉じる(2台目は接続を断られる)。そのあとは
+    /// 成功以外すべて待ち受けを終える。
     pub async fn accept(self, local: LocalVersions) -> Result<Session, SyncError> {
         let window = Instant::now() + self.limits.listen_window;
+        let mut listeners = self.listeners;
         let mut pending = JoinSet::new();
-        let (stream, peer_msg, peer) = loop {
-            let accepts = self.listeners.iter().map(|l| Box::pin(l.accept()));
+        let mut failed = None;
+        let (stream, peer_msg, peer) = 'accepting: loop {
+            if let Some(index) = failed.take() {
+                // 記述子の不足などで受けられなかった。空回りしないよう少し待ち、失敗したものを
+                // 後ろへ回して、ほかの受け付けを先に見る。
+                listeners[index..].rotate_left(1);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let accepts = listeners.iter().map(|l| Box::pin(l.accept()));
             tokio::select! {
-                (accepted, _, _) = select_all(accepts) => {
+                (accepted, index, _) = select_all(accepts) => {
                     let Ok((tcp, peer)) = accepted else {
-                        // 記述子の不足などで受けられなかった。空回りしないよう少し待つ。
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        failed = Some(index);
                         continue;
                     };
+                    // 終わったが回収していない分を、上限に数えない。
+                    while let Some(joined) = pending.try_join_next() {
+                        if let Some(chosen) = first_message(joined) {
+                            break 'accepting chosen;
+                        }
+                    }
                     if !is_allowed_ip(peer.ip()) || pending.len() >= MAX_PENDING {
                         continue;
                     }
@@ -146,15 +163,15 @@ impl Listener {
                     });
                 }
                 Some(joined) = pending.join_next(), if !pending.is_empty() => {
-                    if let Ok((Ok(Ok((stream, msg))), peer)) = joined {
-                        break (stream, msg, peer);
+                    if let Some(chosen) = first_message(joined) {
+                        break chosen;
                     }
                 }
                 () = tokio::time::sleep_until(window) => return Err(SyncError::WindowExpired),
             }
         };
         drop(pending);
-        drop(self.listeners);
+        drop(listeners);
         let mut stream = TlsStream::from(stream);
         let deadline = Instant::now() + self.limits.handshake;
         timeout_at(
@@ -173,11 +190,24 @@ impl Listener {
     }
 }
 
+type ServerStream = tokio_rustls::server::TlsStream<TcpStream>;
+type Received = Result<Result<(ServerStream, Vec<u8>), SyncError>, tokio::time::error::Elapsed>;
+
+fn first_message(
+    joined: Result<(Received, SocketAddr), tokio::task::JoinError>,
+) -> Option<(ServerStream, Vec<u8>, SocketAddr)> {
+    match joined {
+        Ok((Ok(Ok((stream, msg))), peer)) => Some((stream, msg, peer)),
+        _ => None,
+    }
+}
+
 async fn receive_first_message(
     acceptor: TlsAcceptor,
     tcp: TcpStream,
     limit: Duration,
-) -> Result<(tokio_rustls::server::TlsStream<TcpStream>, Vec<u8>), SyncError> {
+) -> Result<(ServerStream, Vec<u8>), SyncError> {
+    let _ = tcp.set_nodelay(true);
     let mut stream = acceptor.accept(tcp).await?;
     if stream.get_ref().1.alpn_protocol() != Some(tls::ALPN) {
         return Err(SyncError::Malformed("ALPN".to_string()));
@@ -189,7 +219,6 @@ async fn receive_first_message(
     Ok((stream, msg))
 }
 
-/// ここで自分のPAKEの値を返した時点で、この待ち受けの1回を使ったものとする。
 async fn confirm_as_listener(
     stream: &mut TlsStream<TcpStream>,
     peer_msg: &[u8],
@@ -251,6 +280,7 @@ async fn open_tls(
     let tcp = timeout(limits.connect, TcpStream::connect(addr))
         .await
         .map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut))??;
+    let _ = tcp.set_nodelay(true);
     let stream = timeout_at(
         deadline,
         connector.connect(ServerName::IpAddress(addr.ip().into()), tcp),

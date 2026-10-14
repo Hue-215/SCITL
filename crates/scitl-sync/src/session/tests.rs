@@ -189,6 +189,24 @@ async fn the_next_candidate_is_tried_only_when_connecting_failed() {
 }
 
 #[tokio::test]
+async fn a_mismatch_after_sending_the_pake_message_does_not_move_on_to_the_next_candidate() {
+    let (wrong_addr, wrong_code, wrong) = listen().await;
+    let (right_addr, right_code, right) = listen().await;
+    assert_ne!(wrong_code, right_code, "{wrong_code:?}");
+
+    let result = connect(&[wrong_addr, right_addr], &right_code, LOCAL, limits()).await;
+    assert!(matches!(result, Err(SyncError::CodeMismatch)), "{result:?}");
+    assert!(matches!(wrong.await.unwrap(), Err(SyncError::CodeMismatch)));
+
+    // 2つ目の待ち受けには何も来ておらず、まだ1回を残している。
+    assert!(!right.is_finished());
+    assert!(connect(&[right_addr], &right_code, LOCAL, limits())
+        .await
+        .is_ok());
+    assert!(right.await.unwrap().is_ok());
+}
+
+#[tokio::test]
 async fn listening_ends_when_no_peer_comes() {
     let listener = Listener::bind(
         &[LOOPBACK],

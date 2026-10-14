@@ -8,6 +8,7 @@ use crate::SyncError;
 /// 1回の待ち受けにつき10^-6。
 const DIGITS: usize = 6;
 
+/// 使い捨てで短命なので、捨てるときにメモリを消去しない(`spake2`の状態も、合言葉を消去せずに持つ)。
 #[derive(Clone, PartialEq, Eq)]
 pub struct PairingCode(String);
 
@@ -26,11 +27,12 @@ impl PairingCode {
         }
     }
 
-    /// 利用者が打った数字を読む。空白・ハイフンは無視し、全角の数字は半角に揃える。
+    /// 利用者が打った数字を読む。空白・ハイフン・長音(日本語の入力で`-`を打つと出る)は無視し、
+    /// 全角の数字は半角に揃える。
     pub fn parse(input: &str) -> Result<Self, SyncError> {
         let digits: String = input
             .chars()
-            .filter(|c| !c.is_whitespace() && !matches!(c, '-' | '\u{FF0D}'))
+            .filter(|c| !c.is_whitespace() && !matches!(c, '-' | '\u{FF0D}' | '\u{30FC}'))
             .map(|c| match c {
                 '\u{FF10}'..='\u{FF19}' => char::from(b'0' + (c as u32 - 0xFF10) as u8),
                 _ => c,
@@ -71,6 +73,7 @@ mod tests {
     #[test]
     fn typed_codes_are_normalized() {
         assert_eq!(PairingCode::parse(" 012-345 ").unwrap().as_str(), "012345");
+        assert_eq!(PairingCode::parse("012ー345").unwrap().as_str(), "012345");
         assert_eq!(
             PairingCode::parse("０１２ ３４５").unwrap().as_str(),
             "012345"

@@ -17,7 +17,9 @@ use rustls::{ClientConfig, DigitallySignedStruct, ServerConfig, SignatureScheme}
 
 use crate::SyncError;
 
-/// ALPNで名乗るプロトコル名。別のプロトコルの相手と取り違えない。
+/// ALPNで名乗るプロトコル名。別のプロトコルの相手と取り違えない。版は相手を確かめたあとに
+/// 伝え合う([`crate::PROTOCOL_VERSION`])ので、ここを変えるのは、確かめるまでのやり取りの形を
+/// 変えたときだけ(変えると、古い相手とは版の違いを伝えられず、つながらないとだけ出る)。
 pub(crate) const ALPN: &[u8] = b"scitl-sync/1";
 
 /// TLS 1.3のexporterのラベル(RFC 8446 7.5)。数字で鍵を合わせるときに混ぜる値を取る。

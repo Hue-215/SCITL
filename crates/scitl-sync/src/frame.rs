@@ -46,9 +46,12 @@ pub(crate) async fn write<S: AsyncWrite + Unpin>(
         len: body.len(),
         max: u32::MAX as usize,
     })?;
+    // 長さと中身を1回で書く(TLSのレコードを2つに分けない)。
+    let mut framed = Vec::with_capacity(4 + body.len());
+    framed.extend_from_slice(&len.to_be_bytes());
+    framed.extend_from_slice(body);
     tokio::time::timeout(timeout, async {
-        stream.write_all(&len.to_be_bytes()).await?;
-        stream.write_all(body).await?;
+        stream.write_all(&framed).await?;
         stream.flush().await
     })
     .await
