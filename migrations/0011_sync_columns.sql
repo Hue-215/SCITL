@@ -130,6 +130,43 @@ BEGIN
     SELECT RAISE(ABORT, 'uid does not change once set');
 END;
 
+-- `sync_seq`は、トリガーが振る値(今のカウンター)以外に書き換えない。書き換えるとUPDATEのトリガーが
+-- 動かず(下記)、印もカウンターも進まないまま、カウンターより大きい番号が残りうる。
+CREATE TRIGGER tasks_seq_from_counter
+BEFORE UPDATE OF sync_seq ON tasks
+WHEN NEW.sync_seq IS NOT (SELECT counter FROM sync_state WHERE id = 1)
+BEGIN
+    SELECT RAISE(ABORT, 'sync_seq is assigned only by the triggers');
+END;
+
+CREATE TRIGGER task_steps_seq_from_counter
+BEFORE UPDATE OF sync_seq ON task_steps
+WHEN NEW.sync_seq IS NOT (SELECT counter FROM sync_state WHERE id = 1)
+BEGIN
+    SELECT RAISE(ABORT, 'sync_seq is assigned only by the triggers');
+END;
+
+CREATE TRIGGER memories_seq_from_counter
+BEFORE UPDATE OF sync_seq ON memories
+WHEN NEW.sync_seq IS NOT (SELECT counter FROM sync_state WHERE id = 1)
+BEGIN
+    SELECT RAISE(ABORT, 'sync_seq is assigned only by the triggers');
+END;
+
+CREATE TRIGGER messages_seq_from_counter
+BEFORE UPDATE OF sync_seq ON messages
+WHEN NEW.sync_seq IS NOT (SELECT counter FROM sync_state WHERE id = 1)
+BEGIN
+    SELECT RAISE(ABORT, 'sync_seq is assigned only by the triggers');
+END;
+
+CREATE TRIGGER attachments_seq_from_counter
+BEFORE UPDATE OF sync_seq ON attachments
+WHEN NEW.sync_seq IS NOT (SELECT counter FROM sync_state WHERE id = 1)
+BEGIN
+    SELECT RAISE(ABORT, 'sync_seq is assigned only by the triggers');
+END;
+
 -- INSERTでは、指定の無い`uid`を振り、`sync_seq`を振り、印を付ける。UPDATEでは`sync_seq`を振り直し、
 -- 比べる欄(docs/sync/index.md 8節の表)の値が実際に変わったときだけ印を付ける(付いている印は
 -- そのまま)。どちらも取り込みにも掛かる。印を外すのは同期の層の書き込みだけ。

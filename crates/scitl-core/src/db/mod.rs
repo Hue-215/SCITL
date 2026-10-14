@@ -696,6 +696,7 @@ mod tests {
         for (table, id) in rows {
             assert_eq!(sync_columns(&conn, table, id), (1, false, "{}".to_string()));
         }
+        assert_eq!(sync_seq_of(&conn, "attachments", attachment), 1);
         assert_eq!(counter(&conn), 1);
         let device_id: String = conn
             .query_row("SELECT device_id FROM sync_state", [], |r| r.get(0))
@@ -717,26 +718,81 @@ mod tests {
         assert_eq!(prev_uid(general), None);
     }
 
-    /// どのテーブルへの書き込みも、DBに1つのカウンターを進めて番号を取る。
+    /// どのテーブルへの書き込みも、DBに1つのカウンターを1つ進めて番号を取る。トリガー自身の
+    /// 書き込みでトリガーが再び動くことはない。番号はトリガーしか書けない。
     #[test]
     fn every_write_takes_the_next_number_from_one_counter() {
         let conn = open_in_memory().unwrap();
-        let task_id = tasks::create_task(&conn).unwrap().id;
-        let created = sync_columns(&conn, "tasks", task_id).0;
-        let steps = task_steps::add_steps(&conn, task_id, &["買い出し".to_string()]).unwrap();
-        let step = sync_columns(&conn, "task_steps", steps[0].id).0;
-        conn.execute(
-            "UPDATE tasks SET updated_at = '2030-01-01T00:00:00Z' WHERE id = ?1",
-            [task_id],
-        )
-        .unwrap();
-        let updated = sync_columns(&conn, "tasks", task_id).0;
-
-        assert!(
-            created < step && step < updated,
-            "{created} {step} {updated}"
+        let at = "2026-01-01T00:00:00Z";
+        let mut last = counter(&conn);
+        let mut write = |table: &str, sql: &str, params: &[&dyn rusqlite::ToSql]| -> i64 {
+            conn.execute(sql, params).unwrap();
+            let id = if sql.starts_with("INSERT") {
+                conn.last_insert_rowid()
+            } else {
+                1
+            };
+            let now = counter(&conn);
+            assert_eq!(now, last + 1, "{sql}");
+            assert_eq!(sync_seq_of(&conn, table, id), now, "{sql}");
+            last = now;
+            id
+        };
+        write(
+            "tasks",
+            "INSERT INTO tasks (created_at, updated_at) VALUES (?1, ?1)",
+            &[&at],
         );
-        assert_eq!(updated, counter(&conn));
+        write(
+            "task_steps",
+            "INSERT INTO task_steps (task_id, description, order_index, created_at)
+             VALUES (1, '買い出し', 0, ?1)",
+            &[&at],
+        );
+        write(
+            "memories",
+            "INSERT INTO memories (content, created_at, updated_at) VALUES ('朝型', ?1, ?1)",
+            &[&at],
+        );
+        write(
+            "messages",
+            "INSERT INTO messages (task_id, role, content, kind, created_at)
+             VALUES (1, 'user', '本文', 'normal', ?1)",
+            &[&at],
+        );
+        write(
+            "attachments",
+            "INSERT INTO attachments (message_id, original_name, mime_type, kind, size_bytes,
+                                      content_text, created_at)
+             VALUES (1, 'a.txt', 'text/plain', 'text', 1, 'a', ?1)",
+            &[&at],
+        );
+        write("tasks", "UPDATE tasks SET updated_at = ?1", &[&at]);
+        write("task_steps", "UPDATE task_steps SET order_index = 1", &[]);
+        write("memories", "UPDATE memories SET updated_at = ?1", &[&at]);
+        write("messages", "UPDATE messages SET content = '直した'", &[]);
+        write(
+            "attachments",
+            "UPDATE attachments SET original_name = 'b.txt'",
+            &[],
+        );
+
+        for table in ["tasks", "task_steps", "memories", "messages", "attachments"] {
+            let skipped = conn.execute(
+                &format!("UPDATE {table} SET sync_seq = sync_seq + 1000"),
+                [],
+            );
+            assert!(skipped.is_err(), "{table}: {skipped:?}");
+        }
+    }
+
+    fn sync_seq_of(conn: &Connection, table: &str, id: i64) -> i64 {
+        conn.query_row(
+            &format!("SELECT sync_seq FROM {table} WHERE id = ?1"),
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
     }
 
     /// 印は、行を作ったときと、比べる欄の値が実際に変わったときにだけ付く。日時だけの変更・
@@ -903,6 +959,28 @@ mod tests {
                 [task_id],
             );
             assert!(changed.is_err(), "{value}: {changed:?}");
+        }
+        task_steps::add_steps(&conn, task_id, &["買い出し".to_string()]).unwrap();
+        memories::add(&conn, &["朝型".to_string()]).unwrap();
+        conn.execute(
+            "INSERT INTO messages (task_id, role, content, kind, created_at)
+             VALUES (?1, 'user', '本文', 'normal', '2026-01-01T00:00:00Z')",
+            [task_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO attachments (message_id, original_name, mime_type, kind, size_bytes,
+                                      content_text, created_at)
+             VALUES (?1, 'a.txt', 'text/plain', 'text', 1, 'a', '2026-01-01T00:00:00Z')",
+            [conn.last_insert_rowid()],
+        )
+        .unwrap();
+        for table in ["task_steps", "memories", "messages", "attachments"] {
+            let changed = conn.execute(
+                &format!("UPDATE {table} SET uid = 'fedcba9876543210fedcba9876543210'"),
+                [],
+            );
+            assert!(changed.is_err(), "{table}: {changed:?}");
         }
         let malformed = conn.execute(
             "INSERT INTO tasks (uid, created_at, updated_at)

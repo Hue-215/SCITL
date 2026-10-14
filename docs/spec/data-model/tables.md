@@ -127,7 +127,10 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 | sync_changed | 同上 | INTEGER | NOT NULL、既定0。`0`/`1`。同期のあとに変えた印。トリガーが、INSERTと、比べる欄(`../../sync/index.md` 8節)の値が変わったUPDATEで付ける。外すのは同期の層だけ |
 
 - 印の判定は、状態を表す日時(`archived_at`・`deleted_at`・`done_at`)は有無だけ、`updated_at`は見ない
-- UPDATEのトリガーは`sync_seq`を書かない書き込みにだけ掛け、トリガー自身の書き込みで再び動かない
+- UPDATEのトリガーは`sync_seq`を書かない書き込みにだけ掛け、トリガー自身の書き込みで再び動かない。
+  `sync_seq`をトリガー以外が書くことは、別のトリガーで断る
+- 印は、比べる欄を変える文と同じ文では外れない(取り込みのあと、別の文で外す)。版だけを書く文では外せる
+- 振った`uid`と`sync_seq`はAFTERトリガーで書くので、`INSERT ... RETURNING`には出ない。挿入のあとに読み直す
 - 移行(`0011_sync_columns.sql`)の前からあった行は、`sync_seq`を1、版を空、印なしとした
   (`../../sync/index.md` 12節)
 

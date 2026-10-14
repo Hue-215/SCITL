@@ -1707,6 +1707,31 @@ mod tests {
         // 2つ目の発言の編集(消してから書く)。
         soft_delete_normal_from(&conn, chat, second).unwrap();
         let edited = insert(Role::User, Kind::Normal, Origin::User, None);
+        // 失敗した返信(エラー発言も通常発言)の再試行(消してから書く)。
+        let failed = insert_message(
+            &conn,
+            NewMessage {
+                chat,
+                role: Role::Error,
+                content: "Stopped.",
+                kind: Kind::Normal,
+                origin: turn("t2"),
+                error_kind: Some("stopped"),
+                error_detail: None,
+                parts: Some(&[]),
+            },
+        )
+        .unwrap();
+        soft_delete_normal_from(&conn, chat, failed).unwrap();
+        let retried = insert(
+            Role::Assistant,
+            Kind::Normal,
+            Origin::Turn {
+                turn_id: "t2",
+                attempt_no: 2,
+            },
+            Some(&[]),
+        );
         let general = insert_message(
             &conn,
             NewMessage {
@@ -1726,6 +1751,8 @@ mod tests {
         assert_eq!(prev_uid(reply), Some(uid(first)));
         assert_eq!(prev_uid(second), Some(uid(reply)));
         assert_eq!(prev_uid(edited), Some(uid(reply)));
+        assert_eq!(prev_uid(failed), Some(uid(edited)));
+        assert_eq!(prev_uid(retried), Some(uid(edited)));
         assert_eq!(prev_uid(record), None);
         assert_eq!(prev_uid(operation), None);
         assert_eq!(prev_uid(general), None);
