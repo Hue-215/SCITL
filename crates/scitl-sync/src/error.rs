@@ -55,7 +55,7 @@ pub enum SyncError {
     /// 受け取る側に、移送の途中でデータができた。
     #[error("this device is no longer empty")]
     NoLongerEmpty,
-    #[error("the peer stopped: {0:?}")]
+    #[error("the peer stopped: {0}")]
     PeerRefused(AbortReason),
     #[error(transparent)]
     Core(#[from] scitl_core::CoreError),

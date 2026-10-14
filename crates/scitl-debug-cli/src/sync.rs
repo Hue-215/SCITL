@@ -8,12 +8,13 @@ use std::sync::Arc;
 use clap::Subcommand;
 use serde::Serialize;
 
-use scitl_cli::terminal::{print_json, print_json_line};
+use scitl_cli::terminal::{self, print_json, print_json_line};
 use scitl_cli::Session;
 use scitl_core::attachments::AttachmentStore;
 use scitl_core::{db, paths};
 use scitl_sync::{
-    Context, Limits, Listener, LocalVersions, PairingCode, SecretStore, Side, SyncError,
+    Context, DeviceRegistry, Limits, Listener, LocalVersions, PairingCode, SecretStore, Side,
+    SyncError,
 };
 
 use crate::DebugError;
@@ -52,10 +53,11 @@ struct DeviceId {
 }
 
 pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugError> {
-    let registry = Arc::new(SecretStore);
+    let registry: Arc<dyn DeviceRegistry> = Arc::new(SecretStore);
     let ctx = Context {
         db: session.db.clone(),
         attachments: attachment_store(session)?,
+        registry: registry.clone(),
     };
     let local = LocalVersions {
         db_version: db::schema_version(),
@@ -105,6 +107,7 @@ pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugErr
 /// 数字は引数で受け取らない(プロセスの一覧に残り、待ち受けの間に同じマシンのほかの利用者が
 /// 先につなげる)。
 fn read_code() -> Result<String, DebugError> {
+    terminal::print_prompt("code shown on the other device: ");
     let mut line = String::new();
     std::io::stdin()
         .lock()

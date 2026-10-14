@@ -178,13 +178,16 @@ pub(crate) enum Message {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[serde(rename_all = "snake_case")]
 pub enum AbortReason {
     /// 運ぶ行が、本体が書く行の形に合わない。
+    #[error("some rows cannot be synced")]
     InvalidRows,
     /// 受け取る側に、途中でデータができた。
+    #[error("the receiving device is no longer empty")]
     NotEmpty,
     /// それ以外の失敗。
+    #[error("it failed")]
     Failed,
 }

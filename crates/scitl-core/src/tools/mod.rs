@@ -273,7 +273,8 @@ fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result
     }
 }
 
-/// 宣言した位置には整数があり、IDらしい欄(`id`・`*_id`の整数)はどれも宣言に入っていること。
+/// 宣言した位置には整数があり、IDらしい欄(`id`・`*_id`の整数、`*_ids`の整数の配列)はどれも
+/// 宣言に入っていること。
 /// 欄を足したのに宣言を忘れると、同期で連番のまま運ばれる。
 #[cfg(test)]
 pub(crate) fn assert_ids_declared(name: &str, value: &Value, positions: &[IdPosition]) {
@@ -316,7 +317,8 @@ mod id_check {
         }
     }
 
-    /// `id`・`*_id`という名前で整数を持つ欄の位置(配列の添字は`Each`に畳む)。
+    /// `id`・`*_id`という名前で整数を持つ欄と、`*_ids`という名前の整数の配列の位置(配列の添字は
+    /// `Each`に畳む)。
     pub(super) fn id_like_paths(value: &Value, here: &mut Vec<String>, out: &mut Vec<String>) {
         match value {
             Value::Object(map) => {
@@ -324,6 +326,12 @@ mod id_check {
                     here.push(key.clone());
                     if (key == "id" || key.ends_with("_id")) && child.is_i64() {
                         out.push(here.join("."));
+                    }
+                    let id_list = child
+                        .as_array()
+                        .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_i64));
+                    if key.ends_with("_ids") && id_list {
+                        out.push(format!("{}.*", here.join(".")));
                     }
                     id_like_paths(child, here, out);
                     here.pop();

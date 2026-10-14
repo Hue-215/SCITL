@@ -6,6 +6,7 @@ mod code;
 mod convert;
 mod device;
 mod error;
+mod files;
 mod frame;
 mod pake;
 mod session;

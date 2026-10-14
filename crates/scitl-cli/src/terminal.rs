@@ -74,6 +74,11 @@ fn print_error(error: &impl Display) {
     ));
 }
 
+/// 入力を待っていることを標準エラーへ出す(標準出力はJSONだけにする)。
+pub fn print_prompt(prompt: &str) {
+    write_stderr(prompt);
+}
+
 /// 標準エラーへ書く。書けなければ捨てる(`eprintln!`はpanicする。知らせる先も無い)。
 fn write_stderr(s: &str) {
     let _ = std::io::stderr().lock().write_all(s.as_bytes());

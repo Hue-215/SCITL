@@ -20,6 +20,21 @@ use crate::{connect, Limits, Listener, LocalVersions};
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nnot really a picture";
 
+/// 資格情報ストアの代わり。
+#[derive(Default)]
+struct Registry(Mutex<std::collections::HashSet<String>>);
+
+impl crate::DeviceRegistry for Registry {
+    fn is_registered(&self, device_id: &str) -> Result<bool, scitl_core::CoreError> {
+        Ok(self.0.lock().unwrap().contains(device_id))
+    }
+
+    fn register(&self, device_id: &str) -> Result<(), scitl_core::CoreError> {
+        self.0.lock().unwrap().insert(device_id.to_string());
+        Ok(())
+    }
+}
+
 struct Device {
     ctx: Context,
     _dir: tempfile::TempDir,
@@ -34,6 +49,7 @@ impl Device {
             ctx: Context {
                 db: Arc::new(Mutex::new(db::open_in_memory().unwrap())),
                 attachments,
+                registry: Arc::new(Registry::default()),
             },
             _dir: dir,
         }
@@ -336,8 +352,8 @@ async fn everything_is_copied_to_the_empty_device_either_way() {
         );
 
         // 連番によらない形で同じ。版も、実行記録の中のIDの指す先も揃う。
-        assert_eq!(to.transport(), from.transport());
         assert_eq!(marks(&to.conn()), 0);
+        assert_eq!(to.transport(), from.transport());
         assert!(to
             .ctx
             .attachments
@@ -529,4 +545,71 @@ fn rows_from_the_peer_are_checked_like_the_apps_own() {
     record.content = content.to_string();
     let rows = validate::check(&unreplaced).unwrap_err();
     assert!(rows[0].reason.contains("not replaced"), "{rows:?}");
+}
+
+#[tokio::test]
+async fn files_out_of_shape_are_shown_on_the_sending_side() {
+    let (a, b) = (Device::new(), Device::new());
+    populate(&a).await;
+    let image_id: i64 = a
+        .conn()
+        .query_row("SELECT id FROM attachments WHERE kind = 'image'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    a.conn()
+        .execute(
+            "UPDATE attachments SET size_bytes = 1 WHERE id = ?1",
+            [image_id],
+        )
+        .unwrap();
+    let (ra, rb) = sync(&a, &b).await;
+    let Err(SyncError::InvalidRows(rows)) = ra else {
+        panic!("{ra:?}")
+    };
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].table, rows[0].id), ("attachments", Some(image_id)));
+    assert!(
+        matches!(rb, Err(SyncError::PeerRefused(AbortReason::InvalidRows))),
+        "{rb:?}"
+    );
+}
+
+/// 戻したDB(同じ端末IDで番号が巻き戻ったもの)が、戻す前に渡した行を受け取ると、端末IDを作り直す。
+#[tokio::test]
+async fn a_rolled_back_receiver_gets_a_new_device_id() {
+    let (a, b) = (Device::new(), Device::new());
+    populate(&a).await;
+    let restored = Device::new();
+    let id = a.device_id();
+    // aの端末IDで振った版を持つ行を、bを経て空に戻したaへ写す。
+    let (ra, rb) = sync(&a, &b).await;
+    ra.unwrap();
+    rb.unwrap();
+    restored
+        .conn()
+        .execute("UPDATE sync_state SET device_id = ?1", [&id])
+        .unwrap();
+    let (ra, rb) = sync(&b, &restored).await;
+    ra.unwrap();
+    rb.unwrap();
+    assert_ne!(restored.device_id(), id);
+}
+
+#[test]
+fn links_must_point_back_into_the_same_chat() {
+    let device = Device::new();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(populate(&device));
+    let mut bad = device.transport();
+    let last = bad.messages.len() - 1;
+    let later = bad.messages[last].uid.clone();
+    let first_normal = bad
+        .messages
+        .iter_mut()
+        .find(|m| m.kind == "normal")
+        .unwrap();
+    first_normal.prev_uid = Some(later);
+    let rows = validate::check(&bad).unwrap_err();
+    assert!(rows[0].reason.contains("prev_uid"), "{rows:?}");
 }
