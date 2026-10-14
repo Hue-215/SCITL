@@ -1,0 +1,19 @@
+//! 端末間の同期(`docs/sync/index.md`)。接続・やり取り・結合・取り込みを持ち、DBへは`scitl-core`を
+//! 通して触る。待ち受けとそのための依存は`scitl-core`に入れず、ここに閉じる(1節)。
+
+mod address;
+mod code;
+mod error;
+mod frame;
+mod pake;
+mod session;
+mod tls;
+
+pub use address::{local_addresses, parse_peer_address};
+pub use code::PairingCode;
+pub use error::SyncError;
+pub use session::{connect, Limits, Listener, LocalVersions, Session};
+
+/// プロトコルの版。運ぶ形・IDの宣言・取り込む行の検証・照合の値のどれかを変えたら上げる
+/// (`docs/sync/index.md` 3節)。
+pub const PROTOCOL_VERSION: u32 = 1;

@@ -1,7 +1,7 @@
 //! 外部通信の経路(LLMプロバイダー、MCP streamable_http)に共通するURL検証と、HTTP
 //! クライアントのハードニング。どの経路もここを通る。
 
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::time::Duration;
 
 use url::Url;
@@ -45,10 +45,22 @@ pub enum HostClass {
 /// (射影アドレスへの接続ができるかはOSとソケットの設定による)。
 /// 非推奨のIPv4互換形式(`::a.b.c.d`)は射影元として扱わず`Other`のままにする。
 pub fn classify_host(url: &Url) -> HostClass {
-    let ipv4 = match url.host() {
-        Some(url::Host::Ipv4(ip)) => Some(ip),
-        Some(url::Host::Ipv6(ip)) => ip.to_ipv4_mapped(),
-        _ => None,
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => classify_ip(IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => classify_ip(IpAddr::V6(ip)),
+        Some(url::Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost") => {
+            HostClass::Loopback
+        }
+        _ => HostClass::Other,
+    }
+}
+
+/// IPアドレスのリテラルを[`classify_host`]と同じ規則で分類する。同期の宛先と接続元の判定
+/// (`scitl-sync`)もこれを使う。
+pub fn classify_ip(ip: IpAddr) -> HostClass {
+    let ipv4 = match ip {
+        IpAddr::V4(ip) => Some(ip),
+        IpAddr::V6(ip) => ip.to_ipv4_mapped(),
     };
     if let Some(ip) = ipv4 {
         return if ip.is_loopback() {
@@ -59,13 +71,10 @@ pub fn classify_host(url: &Url) -> HostClass {
             HostClass::Other
         };
     }
-    match url.host() {
-        Some(url::Host::Ipv6(ip)) if ip.is_loopback() => HostClass::Loopback,
-        Some(url::Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost") => {
-            HostClass::Loopback
-        }
-        Some(url::Host::Ipv6(ip)) if is_ipv6_metadata(ip) => HostClass::Other,
-        Some(url::Host::Ipv6(ip)) if ip.is_unique_local() => HostClass::PrivateLiteral,
+    match ip {
+        IpAddr::V6(ip) if ip.is_loopback() => HostClass::Loopback,
+        IpAddr::V6(ip) if is_ipv6_metadata(ip) => HostClass::Other,
+        IpAddr::V6(ip) if ip.is_unique_local() => HostClass::PrivateLiteral,
         _ => HostClass::Other,
     }
 }

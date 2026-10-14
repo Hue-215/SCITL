@@ -32,7 +32,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 
 ## 同期機能の仕様
 
-端末間の同期(Issue #585。段階1の列とトリガーまで実装)の仕様は、本体の仕様と分けて`../sync/index.md`に置く。この索引と
+端末間の同期(Issue #585。段階1の列とトリガーと、段階2の接続(`crates/scitl-sync`)まで実装)の仕様は、本体の仕様と分けて`../sync/index.md`に置く。この索引と
 `principles.md`は本体の仕様で、同期機能には当てはめない部分がある(同期の間だけ本体が待ち受けること、
 利用者がその場で指定した相手と通信すること)。違いは`../sync/index.md` 2節に書き、本体の原則は変えない。
 同期のために本体へ入る部分(DBの列とトリガー)を触る差分と、同期のコードを触る差分は、CLAUDE.md
@@ -107,6 +107,7 @@ SCITL/
 │   │       └── i18n.rs             # 言語ファイルを引く入口と表示言語の一覧(architecture/i18n.md)
 │   ├── scitl-cli/                  # タスクの確認・操作と会話の表示。scitl-coreのみに依存
 │   ├── scitl-debug-cli/            # scitl-cliのコマンドに、応答生成・設定・登録を足す
+│   ├── scitl-sync/                 # 端末間の同期の接続・やり取り(../sync/index.md)。DBへはscitl-coreを通す
 │   └── scitl-tauri/                # 薄いIPCシェル
 │       ├── tauri.conf.json         # CSP・devCsp・AndroidのminSdk
 │       ├── gen/android/            # Androidのプロジェクト(architecture/tech-stack.md「Androidのビルド」)
