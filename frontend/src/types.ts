@@ -54,6 +54,9 @@ export type { ToolArguments } from './bindings/ToolArguments'
 export type { ToolExecutionView } from './bindings/ToolExecutionView'
 export type { ToolSettingsView } from './bindings/ToolSettingsView'
 export type { TurnEvent } from './bindings/TurnEvent'
+export type { Counts } from './bindings/Counts'
+export type { SyncEvent } from './bindings/SyncEvent'
+export type { SyncReport } from './bindings/SyncReport'
 
 // 送信直後の楽観表示専用のプレースホルダ。確定後はlist_chat_messagesで引き直して置き換える。
 // `pending`は応答を生成するコマンドの実行中の印。文言は持たず、会話欄にはそれまでに届いた

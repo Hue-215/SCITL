@@ -10,6 +10,7 @@ use serde::Serialize;
 use scitl_core::attachments::AttachmentStore;
 use scitl_core::blocking;
 use scitl_core::db::{self, SharedConnection};
+use scitl_core::in_flight::StopSignal;
 
 use crate::files;
 use crate::transport::{AbortReason, AttachmentRow, Counts, Message, Transport};
@@ -45,13 +46,19 @@ pub enum Outcome {
 
 /// 確かめ終えた接続の上で、全部を写す。どちらが写すかは、データの有無で決まる。`device_id`は
 /// 確かめた端末ID(`device::confirm_device_id`)。
+///
+/// `stop`に止める指示が来たら[`SyncError::Cancelled`]で終える。止めるのは、受け取る側が書き始める
+/// 前まで(送る側は、行と実体を送り終えるまで)。それより後は、止めると受け取る側だけが書き終えて
+/// いることがあるので、止めずに終わりまで進め、その段に入ったことを`finishing`で知らせる。
 pub async fn copy(
     session: &mut Session,
     ctx: &Context,
     side: Side,
     device_id: &str,
+    stop: &StopSignal,
+    finishing: impl Fn() + Sync,
 ) -> Result<Outcome, SyncError> {
-    let result = run(session, ctx, side, device_id).await;
+    let result = run(session, ctx, side, device_id, stop, &finishing).await;
     if let Err(e) = &result {
         if let Some(reason) = reason_to_tell(e) {
             let _ = session.send(&Message::Abort { reason }).await;
@@ -70,6 +77,7 @@ fn reason_to_tell(e: &SyncError) -> Option<AbortReason> {
         | SyncError::Io(_)
         | SyncError::Tls(_)
         | SyncError::TimedOut
+        | SyncError::Cancelled
         | SyncError::SameDevice
         | SyncError::BothHaveData
         | SyncError::NothingToCopy => None,
@@ -82,7 +90,41 @@ async fn run(
     ctx: &Context,
     side: Side,
     device_id: &str,
+    stop: &StopSignal,
+    finishing: &(dyn Fn() + Sync),
 ) -> Result<Outcome, SyncError> {
+    let (has_data, peer_device_id, peer_has_data) =
+        cancellable(stop, intro(session, ctx, side, device_id)).await?;
+    if peer_device_id == device_id {
+        return Err(SyncError::SameDevice);
+    }
+    match (has_data, peer_has_data) {
+        (true, true) => Err(SyncError::BothHaveData),
+        (false, false) => Err(SyncError::NothingToCopy),
+        (true, false) => send_all(session, ctx, &peer_device_id, stop, finishing).await,
+        (false, true) => {
+            receive_all(session, ctx, device_id, &peer_device_id, stop, finishing).await
+        }
+    }
+}
+
+/// 止める指示が来るまで`future`を待つ。来たら落として[`SyncError::Cancelled`]。
+async fn cancellable<T>(
+    stop: &StopSignal,
+    future: impl std::future::Future<Output = Result<T, SyncError>>,
+) -> Result<T, SyncError> {
+    stop.unless_requested(future)
+        .await
+        .unwrap_or(Err(SyncError::Cancelled))
+}
+
+/// 端末IDとデータの有無を伝え合う。自分のデータの有無と、相手の端末ID・データの有無を返す。
+async fn intro(
+    session: &mut Session,
+    ctx: &Context,
+    side: Side,
+    device_id: &str,
+) -> Result<(bool, String, bool), SyncError> {
     let has_data = db::with_conn(ctx.db.clone(), db::sync::has_data).await?;
     let ours = Message::Intro {
         device_id: device_id.to_string(),
@@ -109,15 +151,7 @@ async fn run(
     if !is_device_id(&peer_device_id) {
         return Err(SyncError::Malformed("device ID".to_string()));
     }
-    if peer_device_id == device_id {
-        return Err(SyncError::SameDevice);
-    }
-    match (has_data, peer_has_data) {
-        (true, true) => Err(SyncError::BothHaveData),
-        (false, false) => Err(SyncError::NothingToCopy),
-        (true, false) => send_all(session, ctx, &peer_device_id).await,
-        (false, true) => receive_all(session, ctx, device_id, &peer_device_id).await,
-    }
+    Ok((has_data, peer_device_id, peer_has_data))
 }
 
 fn is_device_id(id: &str) -> bool {
@@ -135,7 +169,29 @@ async fn send_all(
     session: &mut Session,
     ctx: &Context,
     peer_device_id: &str,
+    stop: &StopSignal,
+    finishing: &(dyn Fn() + Sync),
 ) -> Result<Outcome, SyncError> {
+    let (sent_seq, counts) = cancellable(stop, send_rows_and_files(session, ctx)).await?;
+    finishing();
+    let peer_counter = match session.recv().await? {
+        Message::Done { counter } => counter,
+        other => return Err(unexpected(&other)),
+    };
+    let peer = peer_device_id.to_string();
+    db::with_conn(ctx.db.clone(), move |conn| {
+        db::sync::record_cursor(conn, &peer, sent_seq, peer_counter)
+    })
+    .await?;
+    Ok(Outcome::Sent(counts))
+}
+
+/// 版を振って読み、確かめてから、行と求められた実体を送る。行を読んだ時点のカウンターと、
+/// 送った数を返す。
+async fn send_rows_and_files(
+    session: &mut Session,
+    ctx: &Context,
+) -> Result<(i64, Counts), SyncError> {
     let snapshot = db::with_conn(ctx.db.clone(), db::sync::stamp_and_snapshot).await?;
     let (transport, mut invalid) = convert::to_transport(&snapshot.rows);
     let mut found = validate::check(&transport).err().unwrap_or_default();
@@ -187,18 +243,7 @@ async fn send_all(
         counts.files += 1;
     }
     session.send(&Message::FilesEnd).await?;
-
-    let peer_counter = match session.recv().await? {
-        Message::Done { counter } => counter,
-        other => return Err(unexpected(&other)),
-    };
-    let peer = peer_device_id.to_string();
-    let sent_seq = snapshot.device.counter;
-    db::with_conn(ctx.db.clone(), move |conn| {
-        db::sync::record_cursor(conn, &peer, sent_seq, peer_counter)
-    })
-    .await?;
-    Ok(Outcome::Sent(counts))
+    Ok((snapshot.device.counter, counts))
 }
 
 async fn read_file(store: &AttachmentStore, hash: &str) -> Result<Vec<u8>, SyncError> {
@@ -304,7 +349,49 @@ async fn receive_all(
     ctx: &Context,
     device_id: &str,
     peer_device_id: &str,
+    stop: &StopSignal,
+    finishing: &(dyn Fn() + Sync),
 ) -> Result<Outcome, SyncError> {
+    let (t, peer_counter, received) =
+        cancellable(stop, receive_rows_and_files(session, ctx)).await?;
+    // ここから先は止めない(書き終えたのに、止めたように見せない)。
+    if stop.is_requested() {
+        return Err(SyncError::Cancelled);
+    }
+    finishing();
+
+    // 戻したDBは、戻す前に渡した自分の番号を、届いた版の中に持つ(`docs/sync/index.md` 10節)。
+    let counter = db::with_conn(ctx.db.clone(), db::sync::device_state)
+        .await?
+        .counter;
+    if rolled_back(&t, device_id, counter) {
+        device::renew_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
+    }
+
+    let mut counts = t.counts();
+    counts.files = received;
+    let peer = peer_device_id.to_string();
+    let counter = db::with_conn(ctx.db.clone(), move |conn| {
+        db::sync::import(conn, |importer| {
+            if importer.has_data()? {
+                return Ok(None);
+            }
+            convert::import(importer, &t)?;
+            importer.finish(&peer, peer_counter).map(Some)
+        })
+    })
+    .await?
+    .ok_or(SyncError::NoLongerEmpty)?;
+    session.send(&Message::Done { counter }).await?;
+    Ok(Outcome::Received(counts))
+}
+
+/// 行を受け取って確かめ、無い実体を求めて受け取り、確かめて置く。行と、写す側のカウンターと、
+/// 受け取った実体の数を返す。
+async fn receive_rows_and_files(
+    session: &mut Session,
+    ctx: &Context,
+) -> Result<(Transport, i64, usize), SyncError> {
     let mut t = Transport::default();
     let mut received_bytes = 0;
     let peer_counter = loop {
@@ -354,31 +441,7 @@ async fn receive_all(
         })
         .await?;
     let received = receive_files(session, ctx, &by_file, needed).await?;
-
-    // 戻したDBは、戻す前に渡した自分の番号を、届いた版の中に持つ(`docs/sync/index.md` 10節)。
-    let counter = db::with_conn(ctx.db.clone(), db::sync::device_state)
-        .await?
-        .counter;
-    if rolled_back(&t, device_id, counter) {
-        device::renew_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
-    }
-
-    let mut counts = t.counts();
-    counts.files = received;
-    let peer = peer_device_id.to_string();
-    let counter = db::with_conn(ctx.db.clone(), move |conn| {
-        db::sync::import(conn, |importer| {
-            if importer.has_data()? {
-                return Ok(None);
-            }
-            convert::import(importer, &t)?;
-            importer.finish(&peer, peer_counter).map(Some)
-        })
-    })
-    .await?
-    .ok_or(SyncError::NoLongerEmpty)?;
-    session.send(&Message::Done { counter }).await?;
-    Ok(Outcome::Received(counts))
+    Ok((t, peer_counter, received))
 }
 
 /// 届いた版に、自分の端末IDで自分のカウンターより大きい番号があるか。

@@ -59,6 +59,49 @@ pub enum SyncError {
     PeerRefused(AbortReason),
     #[error(transparent)]
     Core(#[from] scitl_core::CoreError),
+    /// 数字の形が違う(6桁でない)。
+    #[error("the pairing code must be 6 digits")]
+    InvalidCode,
+    /// 応答を生成中の会話があるか、別の同期の最中。
+    #[error("a response is being generated or another sync is running")]
+    Busy,
+    /// 止める指示で止めた。
+    #[error("stopped")]
+    Cancelled,
+}
+
+impl SyncError {
+    /// 画面が文言を引く種類(`settings.sync.error.{種類}`)。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::AddressNotAllowed(_) => "invalid_address",
+            Self::InvalidCode => "invalid_code",
+            Self::NoLocalAddress => "no_local_address",
+            Self::Bind(_) => "listen_failed",
+            Self::Connect(_) => "connect_failed",
+            Self::Io(_)
+            | Self::Tls(_)
+            | Self::PeerClosed
+            | Self::Malformed(_)
+            | Self::FrameTooLarge { .. } => "connection_failed",
+            Self::TimedOut => "timed_out",
+            Self::WindowExpired => "no_peer",
+            Self::CodeMismatch => "code_mismatch",
+            Self::ProtocolMismatch { .. } | Self::DbVersionMismatch { .. } => "version_mismatch",
+            Self::DeviceCheck(_) => "device_check",
+            Self::SameDevice => "same_device",
+            Self::BothHaveData => "both_have_data",
+            Self::NothingToCopy => "nothing_to_copy",
+            Self::InvalidRows(_) => "invalid_rows",
+            Self::NoLongerEmpty => "no_longer_empty",
+            Self::PeerRefused(AbortReason::InvalidRows) => "peer_invalid_rows",
+            Self::PeerRefused(AbortReason::NotEmpty) => "peer_not_empty",
+            Self::PeerRefused(AbortReason::Failed) => "peer_failed",
+            Self::Busy => "busy",
+            Self::Cancelled => "cancelled",
+            Self::Core(_) => "internal",
+        }
+    }
 }
 
 /// 同期できない行。`id`は送る側の端末の中の連番(受け取る側では分からない)。

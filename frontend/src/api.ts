@@ -24,6 +24,8 @@ import type {
   StageOutcome,
   TaskCreation,
   TaskDetailView,
+  SyncEvent,
+  SyncReport,
   TaskListItem,
   TaskOpeningEvent,
   TurnEvent,
@@ -387,4 +389,22 @@ export function updateMemory(memoryId: number, content: string): Promise<void> {
 
 export function deleteMemory(memoryId: number): Promise<void> {
   return invoke('delete_memory', { memoryId })
+}
+
+// 端末間の同期。始める前にRust側がネイティブのダイアログで確かめ、途中経過を`onEvent`へ届ける。
+// 失敗・取りやめも結果(`SyncReport`)で返る。アドレスと数字は打ったまま渡す(読むのはRust側)。
+export function syncListen(onEvent: (event: SyncEvent) => void): Promise<SyncReport> {
+  return invoke('sync_listen', { onEvent: new Channel(onEvent) })
+}
+
+export function syncConnect(
+  address: string,
+  code: string,
+  onEvent: (event: SyncEvent) => void,
+): Promise<SyncReport> {
+  return invoke('sync_connect', { address, code, onEvent: new Channel(onEvent) })
+}
+
+export function cancelSync(): Promise<void> {
+  return invoke('cancel_sync')
 }
