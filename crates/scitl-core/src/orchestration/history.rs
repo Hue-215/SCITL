@@ -522,14 +522,14 @@ fn reissue_call_ids(messages: &mut [ChatMessage], records: &[i64]) -> Option<()>
 }
 
 /// 表示される行と捨てた試行の記録を、行の並び(`db::messages::list_rows_for_chat`と同じ
-/// `created_at`・`id`の順)に合わせる。`bool`は表示される行か。
+/// `id`の順)に合わせる。`bool`は表示される行か。
 fn in_order<'a>(shown: &'a [Message], discarded: &'a [Message]) -> Vec<(&'a Message, bool)> {
     let mut rows: Vec<_> = shown
         .iter()
         .map(|m| (m, true))
         .chain(discarded.iter().map(|m| (m, false)))
         .collect();
-    rows.sort_by(|(a, _), (b, _)| (&a.created_at, a.id).cmp(&(&b.created_at, b.id)));
+    rows.sort_by_key(|(m, _)| m.id);
     rows
 }
 

@@ -152,7 +152,7 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 
 ## 3. 索引
 
-- `messages(task_id, created_at)` — 会話単位の発言取得(支配的クエリ)
+- `messages(task_id, id)` — 会話単位の発言取得(支配的クエリ)。会話は`id`の順に並べる(`messages.md`「ターン境界」)
 - `messages(turn_id, attempt_no)` — ターン単位のグルーピング
 - `task_steps(task_id, order_index)`
 - `attachments(message_id)`

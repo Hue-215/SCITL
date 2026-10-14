@@ -344,7 +344,7 @@ fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, 
     let mut messages = conn.prepare_cached(
         "SELECT content FROM messages
          WHERE task_id = ?1 AND role = 'user' AND kind = 'normal' AND deleted_at IS NULL
-         ORDER BY created_at ASC, id ASC",
+         ORDER BY id ASC",
     )?;
     let mut labels = HashMap::new();
     for task_id in task_ids {
