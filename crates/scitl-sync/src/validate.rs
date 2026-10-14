@@ -237,7 +237,9 @@ fn uids<'a>(
     let mut seen = HashSet::new();
     for uid in rows {
         if !is_hex(uid, 32) {
-            fail(table, uid, "malformed uid".to_string());
+            // 相手から届いた値なので、長さを切って示す。
+            let shown: String = uid.chars().take(32).collect();
+            fail(table, &shown, "malformed uid".to_string());
         } else if !seen.insert(uid) {
             fail(table, uid, "duplicate uid".to_string());
         }

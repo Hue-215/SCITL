@@ -65,6 +65,9 @@ pub enum SyncError {
     /// 応答を生成中の会話があるか、別の同期の最中。
     #[error("a response is being generated or another sync is running")]
     Busy,
+    /// 止める指示で止めた。
+    #[error("stopped")]
+    Cancelled,
 }
 
 impl SyncError {
@@ -95,6 +98,7 @@ impl SyncError {
             Self::PeerRefused(AbortReason::NotEmpty) => "peer_not_empty",
             Self::PeerRefused(AbortReason::Failed) => "peer_failed",
             Self::Busy => "busy",
+            Self::Cancelled => "cancelled",
             Self::Core(_) => "internal",
         }
     }

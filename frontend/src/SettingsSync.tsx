@@ -32,7 +32,8 @@ function spacedCode(code: string): string {
 export function SyncTab() {
   const [running, setRunning] = useState<Running | null>(null)
   const [listening, setListening] = useState<{ addresses: string[]; code: string } | null>(null)
-  const [copying, setCopying] = useState(false)
+  // 写している段(`copying`)と、受け取る側が書き始めて止められない段(`finishing`)。
+  const [copying, setCopying] = useState<'copying' | 'finishing' | null>(null)
   const [report, setReport] = useState<SyncReport | null>(null)
   const [address, setAddress] = useState('')
   const [code, setCode] = useState('')
@@ -47,12 +48,14 @@ export function SyncTab() {
     [],
   )
 
+  // 途中経過と結果は別の経路で届くので、結果のあとに届いた途中経過は捨てる。
   const onEvent = (event: SyncEvent) => {
+    if (!runningRef.current) return
     if (event.type === 'listening') {
       setListening({ addresses: event.addresses, code: event.code })
     } else {
       setListening(null)
-      setCopying(true)
+      setCopying(event.type)
     }
   }
 
@@ -66,7 +69,7 @@ export function SyncTab() {
       runningRef.current = false
       setRunning(null)
       setListening(null)
-      setCopying(false)
+      setCopying(null)
     }
   }
 
@@ -112,7 +115,11 @@ export function SyncTab() {
         )}
         <div className="button-row">
           {running === 'listen' ? (
-            <button type="button" onClick={() => void cancelSync()}>
+            <button
+              type="button"
+              disabled={copying === 'finishing'}
+              onClick={() => void cancelSync()}
+            >
               {t('settings.sync.stop')}
             </button>
           ) : (
@@ -158,7 +165,11 @@ export function SyncTab() {
         </label>
         <div className="button-row">
           {running === 'connect' ? (
-            <button type="button" onClick={() => void cancelSync()}>
+            <button
+              type="button"
+              disabled={copying === 'finishing'}
+              onClick={() => void cancelSync()}
+            >
               {t('settings.sync.stop')}
             </button>
           ) : (

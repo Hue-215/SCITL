@@ -63,7 +63,8 @@ pub fn local_addresses() -> Result<Vec<IpAddr>, SyncError> {
 }
 
 /// コンテナ(Docker・Podman・LXC)・仮想マシン(libvirt・VMware・VirtualBox)が作るインターフェースの
-/// 名前の前置き(Linux)。VPNは同じ網のほかの端末へ届くので外さない。
+/// 名前の前置き(Linuxだけ。Windowsは利用者が名前を変えられるので見分けない)。VPNは同じ網のほかの
+/// 端末へ届くので外さない。
 const VIRTUAL_INTERFACES: &[&str] = &[
     "docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "lxcbr", "lxdbr", "podman", "cni",
 ];

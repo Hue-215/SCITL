@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use scitl_core::db::messages::Chat;
 use scitl_core::i18n::{self, Language};
-use scitl_core::in_flight::InFlightSet;
+use scitl_core::in_flight::{InFlightSet, StopSignal};
 use scitl_core::{blocking, db, text};
 
 use crate::transport::Counts;
@@ -26,8 +26,8 @@ pub struct SyncDialog {
     pub cancel_label: String,
 }
 
-/// 画面へ知らせる途中経過。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// 画面へ知らせる途中経過。数字を含むので`Debug`を持たない(ログに出さない)。
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyncEvent {
@@ -38,6 +38,8 @@ pub enum SyncEvent {
     },
     /// 相手を確かめ終え、写し始めた。
     Copying,
+    /// 受け取る側が書き始める段に入った。ここからは止められない。
+    Finishing,
 }
 
 /// 同期の結果。失敗は種類([`SyncError::kind`])と、英語の診断文。
@@ -64,6 +66,7 @@ impl From<Result<Outcome, SyncError>> for SyncReport {
         match result {
             Ok(Outcome::Sent(counts)) => Self::Sent { counts },
             Ok(Outcome::Received(counts)) => Self::Received { counts },
+            Err(SyncError::Cancelled) => Self::Cancelled,
             Err(e) => Self::Failed {
                 kind: e.kind().to_string(),
                 detail: e.to_string(),
@@ -85,7 +88,7 @@ pub struct Request<'a> {
 pub async fn listen(
     request: Request<'_>,
     confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
-    events: impl Fn(SyncEvent),
+    events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
     let dialog = SyncDialog {
         title: i18n::text(request.lang, "sync_dialog.listen_title").to_string(),
@@ -100,20 +103,32 @@ pub async fn listen(
         confirm_label: i18n::text(request.lang, "sync_dialog.listen_confirm").to_string(),
         cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
     };
-    run(request, dialog, confirm, |ctx| async move {
-        let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
-        let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
-        events(SyncEvent::Listening {
-            addresses: listener
-                .addresses()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            code: listener.code().as_str().to_string(),
-        });
-        let mut session = listener.accept(local_versions()).await?;
+    run(request, dialog, confirm, |ctx, stop| async move {
+        let (device_id, mut session) = cancellable(&stop, async {
+            let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
+            let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
+            events(SyncEvent::Listening {
+                addresses: listener
+                    .addresses()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                code: listener.code().as_str().to_string(),
+            });
+            Ok((device_id, listener.accept(local_versions()).await?))
+        })
+        .await?;
         events(SyncEvent::Copying);
-        let outcome = copy(&mut session, ctx, Side::Listener, &device_id).await;
+        let finishing = || events(SyncEvent::Finishing);
+        let outcome = copy(
+            &mut session,
+            ctx,
+            Side::Listener,
+            &device_id,
+            &stop,
+            finishing,
+        )
+        .await;
         session.close().await;
         outcome
     })
@@ -126,7 +141,7 @@ pub async fn connect_to(
     address: &str,
     code: &str,
     confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
-    events: impl Fn(SyncEvent),
+    events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
     let parsed = parse_peer_address(address).and_then(|a| Ok((a, PairingCode::parse(code)?)));
     let (address, code): (SocketAddr, PairingCode) = match parsed {
@@ -146,11 +161,24 @@ pub async fn connect_to(
         confirm_label: i18n::text(request.lang, "sync_dialog.connect_confirm").to_string(),
         cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
     };
-    run(request, dialog, confirm, |ctx| async move {
-        let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
-        let mut session = connect(&[address], &code, local_versions(), Limits::default()).await?;
+    run(request, dialog, confirm, |ctx, stop| async move {
+        let (device_id, mut session) = cancellable(&stop, async {
+            let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
+            let session = connect(&[address], &code, local_versions(), Limits::default()).await?;
+            Ok((device_id, session))
+        })
+        .await?;
         events(SyncEvent::Copying);
-        let outcome = copy(&mut session, ctx, Side::Connector, &device_id).await;
+        let finishing = || events(SyncEvent::Finishing);
+        let outcome = copy(
+            &mut session,
+            ctx,
+            Side::Connector,
+            &device_id,
+            &stop,
+            finishing,
+        )
+        .await;
         session.close().await;
         outcome
     })
@@ -168,8 +196,17 @@ fn local_versions() -> LocalVersions {
     }
 }
 
-/// 全体を押さえ、確かめてから`sync`を走らせる。止める指示が来たら、そこで落とす(書き込みは
-/// どれも1つのトランザクションなので、半端には残らない。`docs/sync/index.md` 4節「途中で切れたとき」)。
+async fn cancellable<T>(
+    stop: &StopSignal,
+    future: impl std::future::Future<Output = Result<T, SyncError>>,
+) -> Result<T, SyncError> {
+    stop.unless_requested(future)
+        .await
+        .unwrap_or(Err(SyncError::Cancelled))
+}
+
+/// 全体を押さえ、確かめてから`sync`を走らせる。`sync`には止める指示を渡す。止められるのは、受け取る
+/// 側が書き始める前まで(`copy`)。
 async fn run<'c, F, Fut>(
     request: Request<'c>,
     dialog: SyncDialog,
@@ -177,7 +214,7 @@ async fn run<'c, F, Fut>(
     sync: F,
 ) -> SyncReport
 where
-    F: FnOnce(&'c Context) -> Fut,
+    F: FnOnce(&'c Context, StopSignal) -> Fut,
     Fut: std::future::Future<Output = Result<Outcome, SyncError>>,
 {
     let Some(all) = request.generating.try_begin_all() else {
@@ -188,10 +225,10 @@ where
         Ok(false) => return SyncReport::Cancelled,
         Err(e) => return Err(SyncError::Core(e)).into(),
     }
-    match all.stop_signal().unless_requested(sync(request.ctx)).await {
-        Some(result) => result.into(),
-        None => SyncReport::Cancelled,
+    if all.stop_signal().is_requested() {
+        return SyncReport::Cancelled;
     }
+    sync(request.ctx, all.stop_signal().clone()).await.into()
 }
 
 #[cfg(test)]
@@ -255,6 +292,7 @@ mod tests {
             SyncError::Core(CoreError::Cancelled),
             SyncError::InvalidCode,
             SyncError::Busy,
+            SyncError::Cancelled,
         ];
         for e in &all {
             match e {
@@ -281,7 +319,8 @@ mod tests {
                 | SyncError::PeerRefused(_)
                 | SyncError::Core(_)
                 | SyncError::InvalidCode
-                | SyncError::Busy => {}
+                | SyncError::Busy
+                | SyncError::Cancelled => {}
             }
         }
         all
@@ -289,7 +328,11 @@ mod tests {
 
     #[test]
     fn every_failure_has_a_message_in_every_language() {
-        for e in every_error() {
+        // 止めたことは失敗ではなく、取りやめとして返す。
+        for e in every_error()
+            .into_iter()
+            .filter(|e| !matches!(e, SyncError::Cancelled))
+        {
             let key = format!("settings.sync.error.{}", e.kind());
             for lang in Language::ALL {
                 assert_ne!(i18n::text(lang, &key), key, "{key} in {lang:?}");

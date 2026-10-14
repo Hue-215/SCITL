@@ -121,6 +121,10 @@ pub fn run() {
             // 送って失わないようにする(渡し直されるまで引き取らない)。
             if _payload.event() == PageLoadEvent::Started {
                 commands::requested_chat::forget_watcher(_webview.app_handle());
+                // 前の画面が始めた同期は、新しい画面からは見えず止められないので止める。
+                if let Some(state) = _webview.app_handle().try_state::<AppState>() {
+                    scitl_sync::cancel(&state.generating);
+                }
             }
         })
         // 窓に落としたファイルのパスは、OSのドロップからここへ直接届く(WebViewを通らない)。

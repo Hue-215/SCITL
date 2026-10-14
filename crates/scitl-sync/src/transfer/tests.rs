@@ -307,13 +307,34 @@ async fn sync(
     let addr = bound.addresses()[0];
     let code = bound.code().clone();
     let (a_id, b_id) = (listener.device_id(), connector.device_id());
+    let (a_set, b_set) = (InFlightSet::<()>::new(), InFlightSet::<()>::new());
+    let (a_stop, b_stop) = (
+        a_set.try_begin_all().unwrap(),
+        b_set.try_begin_all().unwrap(),
+    );
     let a = async {
         let mut session = bound.accept(local).await?;
-        copy(&mut session, &listener.ctx, Side::Listener, &a_id).await
+        copy(
+            &mut session,
+            &listener.ctx,
+            Side::Listener,
+            &a_id,
+            a_stop.stop_signal(),
+            || {},
+        )
+        .await
     };
     let b = async {
         let mut session = connect(&[addr], &code, local, limits()).await?;
-        copy(&mut session, &connector.ctx, Side::Connector, &b_id).await
+        copy(
+            &mut session,
+            &connector.ctx,
+            Side::Connector,
+            &b_id,
+            b_stop.stop_signal(),
+            || {},
+        )
+        .await
     };
     tokio::join!(a, b)
 }
@@ -612,4 +633,55 @@ fn links_must_point_back_into_the_same_chat() {
     first_normal.prev_uid = Some(later);
     let rows = validate::check(&bad).unwrap_err();
     assert!(rows[0].reason.contains("prev_uid"), "{rows:?}");
+}
+
+#[tokio::test]
+async fn a_stop_request_before_writing_ends_as_cancelled() {
+    let (a, b) = (Device::new(), Device::new());
+    populate(&a).await;
+    let local = LocalVersions {
+        db_version: db::schema_version(),
+    };
+    let bound = Listener::bind(&[IpAddr::V4(Ipv4Addr::LOCALHOST)], limits())
+        .await
+        .unwrap();
+    let (addr, code) = (bound.addresses()[0], bound.code().clone());
+    let (a_id, b_id) = (a.device_id(), b.device_id());
+    let (a_set, b_set) = (InFlightSet::<()>::new(), InFlightSet::<()>::new());
+    let (a_stop, b_stop) = (
+        a_set.try_begin_all().unwrap(),
+        b_set.try_begin_all().unwrap(),
+    );
+    // 受け取る側(b)は、始める前に止める指示を受けている。
+    b_set.request_stop_all();
+    let sender = async {
+        let mut session = bound.accept(local).await?;
+        copy(
+            &mut session,
+            &a.ctx,
+            Side::Listener,
+            &a_id,
+            a_stop.stop_signal(),
+            || {},
+        )
+        .await
+    };
+    let receiver = async {
+        let mut session = connect(&[addr], &code, local, limits()).await?;
+        let result = copy(
+            &mut session,
+            &b.ctx,
+            Side::Connector,
+            &b_id,
+            b_stop.stop_signal(),
+            || {},
+        )
+        .await;
+        drop(session);
+        result
+    };
+    let (ra, rb) = tokio::join!(sender, receiver);
+    assert!(matches!(rb, Err(SyncError::Cancelled)), "{rb:?}");
+    assert!(ra.is_err(), "{ra:?}");
+    assert!(!db::sync::has_data(&b.conn()).unwrap());
 }
