@@ -18,44 +18,115 @@ fn marked_rows_get_this_devices_number_and_lose_the_mark() {
     db::memories::add(&conn, &["朝型".to_string()]).unwrap();
     assert_eq!(versions(&conn, "tasks"), [("{}".to_string(), 1)]);
 
-    let snapshot = stamp_and_snapshot(&conn).unwrap();
-    let device = &snapshot.device.device_id;
+    let rows = transaction(&conn, |tx| {
+        tx.stamp()?;
+        tx.rows(Filter::All)
+    })
+    .unwrap();
+    let device = device_state(&conn).unwrap().device_id;
     for table in VERSIONED.iter().filter(|t| **t != "messages") {
         let rows = versions(&conn, table);
         assert_eq!(rows.len(), 1, "{table}");
         let (version, changed) = &rows[0];
         let version: serde_json::Value = serde_json::from_str(version).unwrap();
-        assert!(version[device].as_i64().unwrap() > 1, "{table}");
+        assert!(version[&device].as_i64().unwrap() > 1, "{table}");
         assert_eq!(*changed, 0, "{table}");
     }
-    assert_eq!(
-        snapshot.rows.tasks[0].version,
-        versions(&conn, "tasks")[0].0
-    );
-    assert_eq!(snapshot.device, device_state(&conn).unwrap());
+    assert_eq!(rows.tasks[0].version, versions(&conn, "tasks")[0].0);
 
     // 印の無い行の版は変えない。
     let before = versions(&conn, "tasks");
-    stamp_and_snapshot(&conn).unwrap();
+    transaction(&conn, |tx| tx.stamp()).unwrap();
     assert_eq!(versions(&conn, "tasks"), before);
 }
 
 #[test]
-fn the_snapshot_includes_deleted_rows() {
+fn rows_can_be_read_by_change_by_uid_or_by_unit() {
     let conn = db::open_in_memory().unwrap();
-    let task_id = db::tasks::create_task(&conn).unwrap().id;
-    db::tasks::delete_task(&conn, task_id).unwrap();
-    let rows = stamp_and_snapshot(&conn).unwrap().rows;
-    assert_eq!(rows.tasks.len(), 1);
-    assert!(rows.tasks[0].deleted_at.is_some());
+    let first = db::tasks::create_task(&conn).unwrap().id;
+    db::task_steps::add_steps(&conn, first, &["買い出し".to_string()]).unwrap();
+    let since = device_state(&conn).unwrap().counter;
+    let second = db::tasks::create_task(&conn).unwrap().id;
+    db::tasks::delete_task(&conn, second).unwrap();
+    db::memories::add(&conn, &["朝型".to_string()]).unwrap();
+
+    let changed = transaction(&conn, |tx| tx.rows(Filter::Since(since))).unwrap();
+    assert_eq!(changed.tasks.len(), 1);
+    assert_eq!(changed.tasks[0].id, second);
+    assert!(changed.tasks[0].deleted_at.is_some());
+    assert!(changed.steps.is_empty());
+    assert_eq!(changed.memories.len(), 1);
+
+    let all = transaction(&conn, |tx| tx.rows(Filter::All)).unwrap();
+    let uid = all.tasks[0].uid.clone();
+    let by_uid = transaction(&conn, |tx| {
+        tx.rows(Filter::Uids(std::slice::from_ref(&uid)))
+    })
+    .unwrap();
+    assert_eq!(by_uid.tasks, all.tasks[..1]);
+    assert!(by_uid.steps.is_empty());
+
+    let unit = transaction(&conn, |tx| {
+        tx.rows(Filter::Units {
+            tasks: std::slice::from_ref(&uid),
+            general: false,
+        })
+    })
+    .unwrap();
+    assert_eq!(unit.tasks, all.tasks[..1]);
+    assert_eq!(unit.steps, all.steps);
+    assert!(unit.memories.is_empty());
 }
 
 #[test]
-fn data_is_any_task_message_or_memory() {
+fn the_attempt_key_is_the_first_row_of_the_attempt() {
+    use db::messages::{insert_message, Chat, Kind, NewMessage, Origin, Role};
     let conn = db::open_in_memory().unwrap();
-    assert!(!has_data(&conn).unwrap());
+    let write = |attempt_no| {
+        insert_message(
+            &conn,
+            NewMessage {
+                chat: Chat::General,
+                role: Role::Tool,
+                content: r#"{"tool":"get_memories","arguments":{},"result":{"memories":[]}}"#,
+                kind: Kind::ToolExecution,
+                origin: Origin::Turn {
+                    turn_id: "t1",
+                    attempt_no,
+                },
+                error_kind: None,
+                error_detail: None,
+                parts: None,
+            },
+        )
+        .unwrap()
+    };
+    write(1);
+    write(1);
+    write(2);
+    let rows = transaction(&conn, |tx| tx.rows(Filter::All))
+        .unwrap()
+        .messages;
+    assert_eq!(rows[1].attempt_key.as_ref(), Some(&rows[0].uid));
+    assert_eq!(rows[2].attempt_key.as_ref(), Some(&rows[2].uid));
+}
+
+#[test]
+fn the_highest_number_seen_of_a_device_comes_from_the_versions() {
+    let conn = db::open_in_memory().unwrap();
+    let peer = "a".repeat(32);
     db::memories::add(&conn, &["朝型".to_string()]).unwrap();
-    assert!(has_data(&conn).unwrap());
+    conn.execute(
+        "UPDATE memories SET sync_version = json_object(?1, 7)",
+        [&peer],
+    )
+    .unwrap();
+    transaction(&conn, |tx| {
+        assert_eq!(tx.seen_of(&peer)?, 7);
+        assert_eq!(tx.seen_of(&"b".repeat(32))?, 0);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -68,42 +139,76 @@ fn the_device_id_can_be_renewed() {
 }
 
 #[test]
-fn imported_rows_keep_their_uid_and_version_and_lose_the_mark() {
+fn written_rows_keep_their_uid_and_version_and_lose_the_mark() {
     let source = db::open_in_memory().unwrap();
     db::memories::add(&source, &["朝型".to_string()]).unwrap();
-    let rows = stamp_and_snapshot(&source).unwrap().rows;
-
-    let target = db::open_in_memory().unwrap();
-    let counter = import(&target, |importer| {
-        assert!(!importer.has_data()?);
-        importer.insert_memory(&rows.memories[0])?;
-        importer.finish(&"a".repeat(32), 42)
+    let rows = transaction(&source, |tx| {
+        tx.stamp()?;
+        tx.rows(Filter::All)
     })
     .unwrap();
 
-    let copied = stamp_and_snapshot(&target).unwrap().rows;
+    let target = db::open_in_memory().unwrap();
+    let peer = "a".repeat(32);
+    let cursor = Cursor {
+        sent_seq: 3,
+        received_seq: 42,
+    };
+    transaction(&target, |tx| {
+        tx.insert_memory(&rows.memories[0])?;
+        tx.clear_changed()?;
+        tx.record_cursor(&peer, cursor)
+    })
+    .unwrap();
+
+    let copied = transaction(&target, |tx| tx.rows(Filter::All)).unwrap();
     assert_eq!(copied.memories[0].uid, rows.memories[0].uid);
     assert_eq!(copied.memories[0].version, rows.memories[0].version);
     assert_eq!(versions(&target, "memories")[0].1, 0);
+    assert_eq!(super::cursor(&target, &peer).unwrap(), cursor);
     assert_eq!(
-        cursor(&target, &"a".repeat(32)).unwrap(),
-        Some((counter, 42))
+        super::cursor(&target, &"b".repeat(32)).unwrap(),
+        Cursor::default()
     );
 }
 
 #[test]
-fn a_failed_import_leaves_nothing() {
+fn updates_change_only_the_columns_that_change_after_writing() {
+    let conn = db::open_in_memory().unwrap();
+    db::memories::add(&conn, &["朝型".to_string()]).unwrap();
+    let mut row = transaction(&conn, |tx| tx.rows(Filter::All))
+        .unwrap()
+        .memories[0]
+        .clone();
+    row.content = "夜型".to_string();
+    row.created_at = "2000-01-01T00:00:00Z".to_string();
+    row.version = r#"{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":3}"#.to_string();
+    transaction(&conn, |tx| tx.update_memory(&row)).unwrap();
+    let written = transaction(&conn, |tx| tx.rows(Filter::All))
+        .unwrap()
+        .memories[0]
+        .clone();
+    assert_eq!(written.content, "夜型");
+    assert_eq!(written.version, row.version);
+    assert_ne!(written.created_at, row.created_at);
+}
+
+#[test]
+fn a_failed_transaction_leaves_nothing() {
     let source = db::open_in_memory().unwrap();
     db::memories::add(&source, &["朝型".to_string()]).unwrap();
-    let rows = stamp_and_snapshot(&source).unwrap().rows;
+    let rows = transaction(&source, |tx| tx.rows(Filter::All)).unwrap();
 
     let target = db::open_in_memory().unwrap();
-    let result: Result<()> = import(&target, |importer| {
-        importer.insert_memory(&rows.memories[0])?;
+    let result: Result<()> = transaction(&target, |tx| {
+        tx.insert_memory(&rows.memories[0])?;
         Err(crate::CoreError::Internal("stop".to_string()))
     });
     assert!(result.is_err());
-    assert!(!has_data(&target).unwrap());
+    assert!(transaction(&target, |tx| tx.rows(Filter::All))
+        .unwrap()
+        .memories
+        .is_empty());
 }
 
 #[test]

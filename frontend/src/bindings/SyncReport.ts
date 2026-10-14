@@ -4,4 +4,12 @@ import type { Counts } from "./Counts";
 /**
  * 同期の結果。失敗は種類([`SyncError::kind`])と、英語の診断文。
  */
-export type SyncReport = { "status": "sent", counts: Counts, } | { "status": "received", counts: Counts, } | { "status": "cancelled" } | { "status": "failed", kind: string, detail: string, };
+export type SyncReport = { "status": "synced", 
+/**
+ * この端末で書いた行の数。
+ */
+changed: Counts, 
+/**
+ * 選んだ競合の数。
+ */
+conflicts: number, } | { "status": "cancelled" } | { "status": "failed", kind: string, detail: string, };

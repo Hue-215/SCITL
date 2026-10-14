@@ -76,6 +76,7 @@ export function stoppedTurnAtEnd(messages: MessageView[]): number | null {
 export function operationSourceLabel(source: string | null): MessageKey {
   if (source === 'ui') return 'chat.source_ui'
   if (source === 'cli') return 'chat.source_cli'
+  if (source === 'sync') return 'chat.source_sync'
   if (source === 'mcp' || source?.startsWith('mcp:')) return 'chat.source_mcp'
   return 'chat.source_unknown'
 }

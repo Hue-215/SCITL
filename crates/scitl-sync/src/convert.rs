@@ -1,28 +1,31 @@
 //! 行の変換(`docs/sync/index.md` 6節)。送るときに端末の中の連番を`uid`へ、受け取るときに自分の
 //! 連番へ置き換える。置き換えるのは外部キー、返信の中身が指す実行記録、実行記録と操作の記録の
 //! `content`に載るID。置き換えはここに閉じ、ほかのコードは連番だけを見る。
+//!
+//! 運ぶのは差分なので、行が指す先は運ぶ行の中にも、受け取る側に既にある行の中にもありうる。
+//! どちらも`uid`で引く。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
 use scitl_core::db::messages::ReplyPart;
-use scitl_core::db::sync::{self as db_sync, Importer};
+use scitl_core::db::sync::{self as db_sync, Tx};
 use scitl_core::error::Result as CoreResult;
 use scitl_core::orchestration::{is_failed, record_ids, RecordIds};
 use scitl_core::tools::{IdPosition, IdTable, Segment};
 use scitl_core::CoreError;
 
-use crate::transport::{self, Part, Transport, Version, UID_MARKER};
+use crate::transport::{self, Counts, Part, Transport, Version, UID_MARKER};
 use crate::InvalidRow;
 
 /// 表ごとの連番 → `uid`(送る側)、または`uid` → 連番(受け取る側)。
-struct Ids<K, V> {
-    tasks: HashMap<K, V>,
-    steps: HashMap<K, V>,
-    memories: HashMap<K, V>,
-    messages: HashMap<K, V>,
-    attachments: HashMap<K, V>,
+pub(crate) struct Ids<K, V> {
+    pub tasks: HashMap<K, V>,
+    pub steps: HashMap<K, V>,
+    pub memories: HashMap<K, V>,
+    pub messages: HashMap<K, V>,
+    pub attachments: HashMap<K, V>,
 }
 
 impl<K, V> Default for Ids<K, V> {
@@ -48,29 +51,39 @@ impl<K: std::hash::Hash + Eq, V> Ids<K, V> {
     }
 }
 
-/// 送る写しを作る。置き換えられない行(宣言した位置のIDを引けない成功の記録、読めない版など)は
-/// すべて集めて返し、写しには元の値のまま入れる(続く検証で、ほかの外れた行もまとめて示すため)。
-pub(crate) fn to_transport(rows: &db_sync::Rows) -> (Transport, Vec<InvalidRow>) {
-    let ids: Ids<i64, String> = Ids {
-        tasks: rows.tasks.iter().map(|r| (r.id, r.uid.clone())).collect(),
-        steps: rows.steps.iter().map(|r| (r.id, r.uid.clone())).collect(),
-        memories: rows
-            .memories
-            .iter()
-            .map(|r| (r.id, r.uid.clone()))
-            .collect(),
-        messages: rows
-            .messages
-            .iter()
-            .map(|r| (r.id, r.uid.clone()))
-            .collect(),
-        attachments: rows
-            .attachments
-            .iter()
-            .map(|r| (r.id, r.uid.clone()))
-            .collect(),
-    };
+impl Ids<i64, String> {
+    pub(crate) fn from_uids(uids: &db_sync::Uids) -> Self {
+        let map = |pairs: &[(i64, String)]| pairs.iter().cloned().collect();
+        Self {
+            tasks: map(&uids.tasks),
+            steps: map(&uids.steps),
+            memories: map(&uids.memories),
+            messages: map(&uids.messages),
+            attachments: map(&uids.attachments),
+        }
+    }
+}
 
+impl Ids<String, i64> {
+    fn from_uids(uids: &db_sync::Uids) -> Self {
+        let map = |pairs: &[(i64, String)]| pairs.iter().map(|(i, u)| (u.clone(), *i)).collect();
+        Self {
+            tasks: map(&uids.tasks),
+            steps: map(&uids.steps),
+            memories: map(&uids.memories),
+            messages: map(&uids.messages),
+            attachments: map(&uids.attachments),
+        }
+    }
+}
+
+/// 運ぶ写しを作る。`ids`はこの端末のすべての行の連番 → `uid`。置き換えられない行(宣言した
+/// 位置のIDを引けない成功の記録、読めない版など)はすべて集めて返し、写しには元の値のまま
+/// 入れる(続く検証で、ほかの外れた行もまとめて示すため)。
+pub(crate) fn to_transport(
+    rows: &db_sync::Rows,
+    ids: &Ids<i64, String>,
+) -> (Transport, Vec<InvalidRow>) {
     let mut invalid = Vec::new();
     // 外部キーは制約があるので、引けないのは壊れたDBだけ(検証で、指す先が無い行として示す)。
     let lookup = |map: &HashMap<i64, String>, id: i64| map.get(&id).cloned().unwrap_or_default();
@@ -132,7 +145,7 @@ pub(crate) fn to_transport(rows: &db_sync::Rows) -> (Transport, Vec<InvalidRow>)
             })
         });
         let content = if r.kind == "tool_execution" {
-            record_to_transport(&r.content, &ids).unwrap_or_else(|e| {
+            record_to_transport(&r.content, ids).unwrap_or_else(|e| {
                 reasons.push(e);
                 r.content.clone()
             })
@@ -157,7 +170,7 @@ pub(crate) fn to_transport(rows: &db_sync::Rows) -> (Transport, Vec<InvalidRow>)
             error_detail: r.error_detail.clone(),
             parts,
             turn_id: r.turn_id.clone(),
-            attempt_no: r.attempt_no,
+            attempt: r.attempt_key.clone(),
             deleted_at: r.deleted_at.clone(),
             created_at: r.created_at.clone(),
             prev_uid: r.prev_uid.clone(),
@@ -178,6 +191,16 @@ pub(crate) fn to_transport(rows: &db_sync::Rows) -> (Transport, Vec<InvalidRow>)
         });
     }
     (out, invalid)
+}
+
+/// 自分の行を運ぶ形で読む。置き換えられない行は、検証で外れた行と同じく扱う。
+pub(crate) fn read(
+    tx: &Tx<'_>,
+    filter: db_sync::Filter<'_>,
+) -> CoreResult<(Transport, Vec<InvalidRow>)> {
+    let rows = tx.rows(filter)?;
+    let ids = Ids::<i64, String>::from_uids(&tx.uids()?);
+    Ok(to_transport(&rows, &ids))
 }
 
 fn fail(invalid: &mut Vec<InvalidRow>, table: &'static str, id: i64, uid: &str, reason: String) {
@@ -299,14 +322,50 @@ pub(crate) fn marker_uid(value: &Value) -> Option<&str> {
     map.get(UID_MARKER)?.as_str()
 }
 
-/// 受け取った行を書く。行は検証済み(`validate::check`)なので、引けない`uid`は起きない。
-/// 発言は先に仮の`content`・`parts`で書き、指す先(実行記録・添付)をすべて書いてから直す。
-pub(crate) fn import(importer: &Importer<'_>, t: &Transport) -> CoreResult<()> {
-    let missing = |what: &str, uid: &str| CoreError::Internal(format!("unresolved {what} {uid}"));
-    let mut ids: Ids<String, i64> = Ids::default();
+/// 受け取った行を書く。行は検証済み(`validate::check`)なので、引けない`uid`は失敗にする
+/// (起きないはずの不整合)。発言は先に仮の`content`・`parts`で書き、指す先(実行記録・添付)を
+/// すべて書いてから[`Writer::finish`]で直す。
+///
+/// 試行の番号は振り直す(`docs/sync/index.md` 9節)。試行の最初の行が既にあれば、その行の番号に
+/// 合わせ、無ければ空いた番号を取る。
+pub(crate) struct Writer<'t, 'c> {
+    tx: &'t Tx<'c>,
+    ids: Ids<String, i64>,
+    /// 発言の`uid` → この端末での試行の番号(既にある行と、書いた行)。
+    attempt_nos: HashMap<String, i64>,
+    /// 試行(最初の行の`uid`) → この回に振った番号。
+    attempts: HashMap<String, i64>,
+    pending: Vec<(i64, transport::MessageRow)>,
+    counts: Counts,
+    touched_tasks: HashSet<String>,
+}
 
-    for r in &t.tasks {
-        let id = importer.insert_task(&db_sync::TaskRow {
+impl<'t, 'c> Writer<'t, 'c> {
+    pub(crate) fn new(tx: &'t Tx<'c>) -> CoreResult<Self> {
+        let attempt_nos = tx
+            .message_refs()?
+            .into_iter()
+            .filter_map(|m| Some((m.uid, m.attempt_no?)))
+            .collect();
+        Ok(Self {
+            tx,
+            ids: Ids::<String, i64>::from_uids(&tx.uids()?),
+            attempt_nos,
+            attempts: HashMap::new(),
+            pending: Vec::new(),
+            counts: Counts::default(),
+            touched_tasks: HashSet::new(),
+        })
+    }
+
+    fn id(map: &HashMap<String, i64>, what: &str, uid: &str) -> CoreResult<i64> {
+        map.get(uid)
+            .copied()
+            .ok_or_else(|| CoreError::Internal(format!("unresolved {what} {uid}")))
+    }
+
+    pub(crate) fn task(&mut self, r: &transport::TaskRow) -> CoreResult<()> {
+        let mut row = db_sync::TaskRow {
             id: 0,
             uid: r.uid.clone(),
             title: r.title.clone(),
@@ -317,29 +376,50 @@ pub(crate) fn import(importer: &Importer<'_>, t: &Transport) -> CoreResult<()> {
             created_at: r.created_at.clone(),
             updated_at: r.updated_at.clone(),
             version: version_json(&r.version),
-        })?;
-        ids.tasks.insert(r.uid.clone(), id);
+        };
+        match self.ids.tasks.get(&r.uid) {
+            Some(&id) => {
+                row.id = id;
+                self.tx.update_task(&row)?;
+            }
+            None => {
+                let id = self.tx.insert_task(&row)?;
+                self.ids.tasks.insert(r.uid.clone(), id);
+            }
+        }
+        self.touched_tasks.insert(r.uid.clone());
+        Ok(())
     }
-    for r in &t.steps {
-        let task_id = *ids
-            .tasks
-            .get(&r.task)
-            .ok_or_else(|| missing("task", &r.task))?;
-        let id = importer.insert_step(&db_sync::StepRow {
+
+    pub(crate) fn step(&mut self, r: &transport::StepRow) -> CoreResult<()> {
+        let mut row = db_sync::StepRow {
             id: 0,
             uid: r.uid.clone(),
-            task_id,
+            task_id: Self::id(&self.ids.tasks, "task", &r.task)?,
             description: r.description.clone(),
             done_at: r.done_at.clone(),
             deleted_at: r.deleted_at.clone(),
             order_index: r.order_index,
             created_at: r.created_at.clone(),
             version: version_json(&r.version),
-        })?;
-        ids.steps.insert(r.uid.clone(), id);
+        };
+        match self.ids.steps.get(&r.uid) {
+            Some(&id) => {
+                row.id = id;
+                self.tx.update_step(&row)?;
+            }
+            None => {
+                let id = self.tx.insert_step(&row)?;
+                self.ids.steps.insert(r.uid.clone(), id);
+            }
+        }
+        self.counts.steps += 1;
+        self.touched_tasks.insert(r.task.clone());
+        Ok(())
     }
-    for r in &t.memories {
-        let id = importer.insert_memory(&db_sync::MemoryRow {
+
+    pub(crate) fn memory(&mut self, r: &transport::MemoryRow) -> CoreResult<()> {
+        let mut row = db_sync::MemoryRow {
             id: 0,
             uid: r.uid.clone(),
             content: r.content.clone(),
@@ -347,23 +427,43 @@ pub(crate) fn import(importer: &Importer<'_>, t: &Transport) -> CoreResult<()> {
             updated_at: r.updated_at.clone(),
             deleted_at: r.deleted_at.clone(),
             version: version_json(&r.version),
-        })?;
-        ids.memories.insert(r.uid.clone(), id);
+        };
+        match self.ids.memories.get(&r.uid) {
+            Some(&id) => {
+                row.id = id;
+                self.tx.update_memory(&row)?;
+            }
+            None => {
+                let id = self.tx.insert_memory(&row)?;
+                self.ids.memories.insert(r.uid.clone(), id);
+            }
+        }
+        self.counts.memories += 1;
+        Ok(())
     }
-    let mut pending = Vec::new();
-    for r in &t.messages {
+
+    /// 既にある発言は、`deleted_at`と版だけを書き直す(ほかの列は書いたあと変わらない)。
+    pub(crate) fn message(&mut self, r: &transport::MessageRow) -> CoreResult<()> {
+        self.counts.messages += 1;
+        if let Some(&id) = self.ids.messages.get(&r.uid) {
+            return self.tx.update_message(&db_sync::MessageRow {
+                id,
+                deleted_at: r.deleted_at.clone(),
+                version: version_json(&r.version),
+                ..placeholder_message()
+            });
+        }
         let task_id = r
             .task
             .as_ref()
-            .map(|uid| {
-                ids.tasks
-                    .get(uid)
-                    .copied()
-                    .ok_or_else(|| missing("task", uid))
-            })
+            .map(|uid| Self::id(&self.ids.tasks, "task", uid))
             .transpose()?;
+        let attempt_no = match (&r.turn_id, &r.attempt) {
+            (Some(turn_id), Some(attempt)) => Some(self.attempt_no(turn_id, attempt)?),
+            _ => None,
+        };
         let is_record = r.kind == "tool_execution";
-        let id = importer.insert_message(&db_sync::MessageRow {
+        let id = self.tx.insert_message(&db_sync::MessageRow {
             id: 0,
             uid: r.uid.clone(),
             task_id,
@@ -379,23 +479,42 @@ pub(crate) fn import(importer: &Importer<'_>, t: &Transport) -> CoreResult<()> {
             error_detail: r.error_detail.clone(),
             parts: r.parts.as_ref().map(|_| "[]".to_string()),
             turn_id: r.turn_id.clone(),
-            attempt_no: r.attempt_no,
+            attempt_no,
+            attempt_key: None,
             deleted_at: r.deleted_at.clone(),
             created_at: r.created_at.clone(),
             prev_uid: r.prev_uid.clone(),
             version: version_json(&r.version),
         })?;
-        ids.messages.insert(r.uid.clone(), id);
-        if is_record || r.parts.is_some() {
-            pending.push((id, r));
+        self.ids.messages.insert(r.uid.clone(), id);
+        if let Some(n) = attempt_no {
+            self.attempt_nos.insert(r.uid.clone(), n);
         }
+        if is_record || r.parts.is_some() {
+            self.pending.push((id, r.clone()));
+        }
+        Ok(())
     }
-    for r in &t.attachments {
-        let message_id = *ids
-            .messages
-            .get(&r.message)
-            .ok_or_else(|| missing("message", &r.message))?;
-        let id = importer.insert_attachment(&db_sync::AttachmentRow {
+
+    fn attempt_no(&mut self, turn_id: &str, attempt: &str) -> CoreResult<i64> {
+        if let Some(&n) = self.attempts.get(attempt) {
+            return Ok(n);
+        }
+        let n = match self.attempt_nos.get(attempt) {
+            Some(&n) => n,
+            None => self.tx.next_attempt_no(turn_id)?,
+        };
+        self.attempts.insert(attempt.to_string(), n);
+        Ok(n)
+    }
+
+    /// 添付は書いたあと変わらないので、無いものだけを書く。
+    pub(crate) fn attachment(&mut self, r: &transport::AttachmentRow) -> CoreResult<()> {
+        if self.ids.attachments.contains_key(&r.uid) {
+            return Ok(());
+        }
+        let message_id = Self::id(&self.ids.messages, "message", &r.message)?;
+        let id = self.tx.insert_attachment(&db_sync::AttachmentRow {
             id: 0,
             uid: r.uid.clone(),
             message_id,
@@ -407,26 +526,75 @@ pub(crate) fn import(importer: &Importer<'_>, t: &Transport) -> CoreResult<()> {
             file_hash: r.file_hash.clone(),
             created_at: r.created_at.clone(),
         })?;
-        ids.attachments.insert(r.uid.clone(), id);
+        self.ids.attachments.insert(r.uid.clone(), id);
+        self.counts.attachments += 1;
+        Ok(())
     }
-    for (id, r) in pending {
-        let content = if r.kind == "tool_execution" {
-            record_from_transport(&r.content, &ids).map_err(CoreError::Internal)?
-        } else {
-            r.content.clone()
-        };
-        let parts = r
-            .parts
-            .as_ref()
-            .map(|parts| parts_from_transport(parts, &ids.messages))
-            .transpose()
-            .map_err(CoreError::Internal)?;
-        importer.set_message_body(id, &content, parts.as_deref())?;
+
+    /// 結合後のタスクの全体の記録を、その会話の末尾に置く。同じ`uid`の記録が既にあれば
+    /// (別の2台が同じ結合をした)置かない。
+    pub(crate) fn task_state_record(
+        &mut self,
+        task: &str,
+        uid: &str,
+        created_at: &str,
+    ) -> CoreResult<()> {
+        if self.ids.messages.contains_key(uid) {
+            return Ok(());
+        }
+        let task_id = Self::id(&self.ids.tasks, "task", task)?;
+        let id = self.tx.insert_task_state_record(task_id, uid, created_at)?;
+        self.ids.messages.insert(uid.to_string(), id);
+        self.counts.messages += 1;
+        Ok(())
     }
-    Ok(())
+
+    /// 仮の値で書いた発言の`content`・`parts`を直し、書いた数を返す。
+    pub(crate) fn finish(self) -> CoreResult<Counts> {
+        for (id, r) in &self.pending {
+            let content = if r.kind == "tool_execution" {
+                record_from_transport(&r.content, &self.ids).map_err(CoreError::Internal)?
+            } else {
+                r.content.clone()
+            };
+            let parts = r
+                .parts
+                .as_ref()
+                .map(|parts| parts_from_transport(parts, &self.ids.messages))
+                .transpose()
+                .map_err(CoreError::Internal)?;
+            self.tx.set_message_body(*id, &content, parts.as_deref())?;
+        }
+        Ok(Counts {
+            tasks: self.touched_tasks.len(),
+            ..self.counts
+        })
+    }
 }
 
-fn version_json(version: &Version) -> String {
+fn placeholder_message() -> db_sync::MessageRow {
+    db_sync::MessageRow {
+        id: 0,
+        uid: String::new(),
+        task_id: None,
+        role: String::new(),
+        content: String::new(),
+        kind: String::new(),
+        source: None,
+        error_kind: None,
+        error_detail: None,
+        parts: None,
+        turn_id: None,
+        attempt_no: None,
+        attempt_key: None,
+        deleted_at: None,
+        created_at: String::new(),
+        prev_uid: None,
+        version: String::new(),
+    }
+}
+
+pub(crate) fn version_json(version: &Version) -> String {
     serde_json::to_string(version).expect("a version serializes")
 }
 

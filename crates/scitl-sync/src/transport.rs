@@ -47,6 +47,9 @@ pub(crate) struct MemoryRow {
 }
 
 /// `content`は、実行記録ならIDを[`UID_MARKER`]の形に置き換えたJSONの文字列。
+///
+/// 試行の番号は端末の中の値なので運ばず、試行の最初の行の`uid`(`attempt`)で試行を指す。
+/// 受け取る側が自分の番号を振り直す(`docs/sync/index.md` 9節「試行の番号」)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MessageRow {
@@ -60,7 +63,7 @@ pub(crate) struct MessageRow {
     pub error_detail: Option<String>,
     pub parts: Option<Vec<Part>>,
     pub turn_id: Option<String>,
-    pub attempt_no: Option<i64>,
+    pub attempt: Option<String>,
     pub deleted_at: Option<String>,
     pub created_at: String,
     pub prev_uid: Option<String>,
@@ -94,7 +97,7 @@ pub(crate) struct AttachmentRow {
 /// 実行記録の中でIDを置き換えた値の形(`{"$uid": "<uid>"}`)。置き換えなかった数と見分ける。
 pub(crate) const UID_MARKER: &str = "$uid";
 
-/// 運ぶ行のすべて。各表とも送り側の`id`の順(会話の並びはこの順で書く)。
+/// 運ぶ行。各表とも送り側の`id`の順(会話の並びはこの順で書く)。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Transport {
     pub tasks: Vec<TaskRow>,
@@ -104,40 +107,49 @@ pub(crate) struct Transport {
     pub attachments: Vec<AttachmentRow>,
 }
 
-/// 写した行の数。
+/// この端末で書いた(足した・変えた)行の数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Counts {
+    /// タスクの行か工程を書いたタスクの数。
     pub tasks: usize,
     pub steps: usize,
     pub memories: usize,
     pub messages: usize,
     pub attachments: usize,
-    /// 運んだ添付の実体(画像・その他)の数。受け取る側に既にあったものは数えない。
+    /// 受け取った添付の実体(画像・その他)の数。既にあったものは数えない。
     pub files: usize,
 }
 
 impl Transport {
-    pub(crate) fn counts(&self) -> Counts {
-        Counts {
-            tasks: self.tasks.len(),
-            steps: self.steps.len(),
-            memories: self.memories.len(),
-            messages: self.messages.len(),
-            attachments: self.attachments.len(),
-            files: 0,
-        }
+    /// すべての行の`uid`(表を問わない)。
+    pub(crate) fn uids(&self) -> Vec<String> {
+        self.tasks
+            .iter()
+            .map(|r| r.uid.clone())
+            .chain(self.steps.iter().map(|r| r.uid.clone()))
+            .chain(self.memories.iter().map(|r| r.uid.clone()))
+            .chain(self.messages.iter().map(|r| r.uid.clone()))
+            .chain(self.attachments.iter().map(|r| r.uid.clone()))
+            .collect()
     }
 }
 
-/// 相手を確かめたあとのメッセージ。
+/// 相手を確かめたあとのメッセージ。流れは`docs/sync/index.md` 4節(つなぐ側がB、待ち受ける側がA)。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Message {
-    /// 端末IDと、写すデータがあるか。相手を確かめる前には出さない。
+    /// 端末ID。相手を確かめる前には出さない。
     Intro {
         device_id: String,
-        has_data: bool,
+    },
+    /// カーソルの突き合わせに要るもの(7節)。`cursor`は自分が相手について持つカーソル、
+    /// `seen_of_you`は自分が知る相手の番号の最大(カーソルと版から)。
+    State {
+        counter: i64,
+        sent_seq: i64,
+        received_seq: i64,
+        seen_of_you: i64,
     },
     Tasks {
         rows: Vec<TaskRow>,
@@ -154,11 +166,15 @@ pub(crate) enum Message {
     Attachments {
         rows: Vec<AttachmentRow>,
     },
-    /// 行の終わり。`counter`は写す側が行を読んだ時点のカウンター(受け取る側のカーソルに書く)。
-    RowsEnd {
-        counter: i64,
+    /// Bの差分の終わり。
+    RowsEnd,
+    /// AがBに、単位の行をすべて求める(両方が変えた単位。8節)。
+    NeedUnits {
+        tasks: Vec<String>,
+        general: bool,
     },
-    /// 受け取る側に無い添付の実体。
+    UnitsEnd,
+    /// 相手に求める添付の実体。
     NeedFiles {
         hashes: Vec<String>,
     },
@@ -169,9 +185,18 @@ pub(crate) enum Message {
         last: bool,
     },
     FilesEnd,
-    /// 取り込みを終えた。`counter`は受け取った側の、書き終えた時点のカウンター。
+    /// Aが、競合を利用者に選ばせている。
+    Choosing,
+    /// Aの結果の終わり。`counter`はAが書き終えた時点のカウンター、`digest`は照合の値。
+    Merged {
+        counter: i64,
+        digest: String,
+        device_id: String,
+    },
+    /// Bが書き終えた。`counter`はBが書き終えた時点のカウンター。
     Done {
         counter: i64,
+        device_id: String,
     },
     /// やめる理由を相手に伝える。
     Abort {
@@ -185,9 +210,15 @@ pub enum AbortReason {
     /// 運ぶ行が、本体が書く行の形に合わない。
     #[error("some rows cannot be synced")]
     InvalidRows,
-    /// 受け取る側に、途中でデータができた。
-    #[error("the receiving device is no longer empty")]
-    NotEmpty,
+    /// 同期の途中で、相手のデータが別の書き込みで変わった。
+    #[error("its data changed during the sync")]
+    Changed,
+    /// 書き終えた結果が、相手の結果と一致しない。
+    #[error("the results did not match")]
+    Mismatch,
+    /// 利用者がやめた。
+    #[error("the user stopped the sync")]
+    Cancelled,
     /// それ以外の失敗。
     #[error("it failed")]
     Failed,

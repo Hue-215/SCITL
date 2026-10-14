@@ -16,7 +16,9 @@ use crate::error::Result;
 use crate::in_flight::InFlightSet;
 use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn::begin_generating;
-use crate::tools::{update_task, IdPosition, IdPositions, IdTable, Segment, NO_IDS};
+use crate::tools::{
+    get_current_task_detail, update_task, IdPosition, IdPositions, IdTable, Segment, NO_IDS,
+};
 
 /// 削除の記録に載せる操作名。モデルには公開しないツールだが、記録の語彙は他の操作と同じく
 /// ツール名に揃える。
@@ -112,6 +114,19 @@ async fn update(
         })
     })
     .await
+}
+
+/// 同期が置く、結合後のタスクの全体の記録の`content`(`docs/sync/index.md` 8節)。モデルが状態を
+/// 読むツールの呼び出しと同じ形にし、形式の説明(`llm::user_message_format_note`)を変えずに済ませる。
+pub(crate) fn task_state_record(conn: &Connection, task_id: i64) -> Result<String> {
+    let result = get_current_task_detail::task_detail(conn, task_id)?;
+    Ok(serde_json::to_string(&ToolExecutionRecord {
+        tool: get_current_task_detail::NAME.to_string(),
+        arguments: json!({}),
+        result,
+        call_id: None,
+    })
+    .expect("a record of JSON values serializes"))
 }
 
 fn record(

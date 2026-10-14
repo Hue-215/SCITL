@@ -100,7 +100,7 @@ export default function App() {
       return summaries
     } catch (e) {
       setError(failureText(e))
-      return []
+      return null
     }
   }, [])
 
@@ -368,10 +368,21 @@ export default function App() {
   // 表示のとき。設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
   useLayoutEffect(follow, [follow, messages, pending.length, live, failure, settingsOpen])
 
+  // 設定画面では同期で一覧と会話が変わりうるので、閉じたら引き直す。表示中のタスクが同期で
+  // 消えていれば、総合チャットへ戻る。
   const closeSettings = () => {
     stick()
     setAddBlocked(null)
     setSettingsOpen(false)
+    const shown = chat
+    void loadTasks().then((summaries) => {
+      if (selectedRef.current !== chatKey(shown)) return
+      if (shown.kind === 'task' && summaries && !summaries.some((t) => t.id === shown.task_id)) {
+        selectChat(GENERAL_CHAT)
+      } else {
+        void loadChat(shown)
+      }
+    })
   }
 
   // 通知を押して届いた会話を開く(Android)。どの会話を開くかはRust側が決めて知らせてくる。

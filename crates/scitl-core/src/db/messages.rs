@@ -84,16 +84,19 @@ pub enum Origin<'a> {
     Operation(OperationSource),
 }
 
-/// 応答生成以外の経路の印(`messages.source`)。
+/// 応答生成以外の経路の印(`messages.source`)。`Sync`は同期が置く、結合後のタスクの全体の記録
+/// (`docs/sync/index.md` 8節)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationSource {
     Ui,
     Cli,
+    Sync,
 }
 
 text_column_enum!(OperationSource {
     Ui => "ui",
     Cli => "cli",
+    Sync => "sync",
 });
 
 pub struct NewMessage<'a> {
