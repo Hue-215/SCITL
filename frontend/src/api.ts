@@ -24,6 +24,7 @@ import type {
   StageOutcome,
   TaskCreation,
   TaskDetailView,
+  ConflictChoice,
   SyncEvent,
   SyncReport,
   TaskListItem,
@@ -407,4 +408,9 @@ export function syncConnect(
 
 export function cancelSync(): Promise<void> {
   return invoke('cancel_sync')
+}
+
+// 見せている競合の、選んだ側を渡す。すべての競合に1つずつ選んでいなければ受け取られず`false`。
+export function resolveSyncConflicts(choices: ConflictChoice[]): Promise<boolean> {
+  return invoke('resolve_sync_conflicts', { choices })
 }

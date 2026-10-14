@@ -1,9 +1,13 @@
-//! 画面から始める同期(`docs/sync/index.md` 11節)。画面は始めることと「やめる」を伝え、途中経過を
-//! 受け取るだけで、待ち受け・接続・移送の順序はここが持つ。始める前に、ネイティブのダイアログで
-//! 利用者に確かめる(同期を始めるコマンドは、乗っ取られた画面も呼べるため)。
+//! 画面から始める同期(`docs/sync/index.md` 11節)。画面は始めることと「やめる」、競合ごとに選んだ側を
+//! 伝え、途中経過を受け取るだけで、待ち受け・接続・結合の順序はここが持つ。始める前に、ネイティブの
+//! ダイアログで利用者に確かめる(同期を始めるコマンドは、乗っ取られた画面も呼べるため)。
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::Mutex;
 
+use futures::channel::oneshot;
+use futures::future::BoxFuture;
 use serde::Serialize;
 
 use scitl_core::db::messages::Chat;
@@ -11,10 +15,12 @@ use scitl_core::i18n::{self, Language};
 use scitl_core::in_flight::{InFlightSet, StopSignal};
 use scitl_core::{blocking, db, text};
 
+use crate::conflict::{ConflictChoice, ConflictView};
+use crate::transfer::{Resolver, Stage};
 use crate::transport::Counts;
 use crate::{
-    confirm_device_id, connect, copy, local_addresses, parse_peer_address, Context, Limits,
-    Listener, LocalVersions, Outcome, PairingCode, Side, SyncError,
+    confirm_device_id, connect, local_addresses, parse_peer_address, sync, Context, Limits,
+    Listener, LocalVersions, Outcome, PairingCode, Session, Side, SyncError,
 };
 
 /// 始める前の確認のダイアログに出す文面(表示言語)。
@@ -36,9 +42,13 @@ pub enum SyncEvent {
         addresses: Vec<String>,
         code: String,
     },
-    /// 相手を確かめ終え、写し始めた。
-    Copying,
-    /// 受け取る側が書き始める段に入った。ここからは止められない。
+    /// 相手を確かめ終え、同期を始めた。
+    Syncing,
+    /// 待ち受ける側が、利用者に競合を選ばせている(つなぐ側で知らせる)。
+    PeerChoosing,
+    /// 競合。単位ごとにどちらを取るかを[`answer`]で返す。
+    Conflicts { conflicts: Vec<ConflictView> },
+    /// 書き始める段に入った。ここからは止められない。
     Finishing,
 }
 
@@ -47,11 +57,11 @@ pub enum SyncEvent {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SyncReport {
-    Sent {
-        counts: Counts,
-    },
-    Received {
-        counts: Counts,
+    Synced {
+        /// この端末で書いた行の数。
+        changed: Counts,
+        /// 選んだ競合の数。
+        conflicts: usize,
     },
     /// 確認のダイアログで取りやめたか、「やめる」で止めた。
     Cancelled,
@@ -64,8 +74,7 @@ pub enum SyncReport {
 impl From<Result<Outcome, SyncError>> for SyncReport {
     fn from(result: Result<Outcome, SyncError>) -> Self {
         match result {
-            Ok(Outcome::Sent(counts)) => Self::Sent { counts },
-            Ok(Outcome::Received(counts)) => Self::Received { counts },
+            Ok(Outcome { changed, conflicts }) => Self::Synced { changed, conflicts },
             Err(SyncError::Cancelled) => Self::Cancelled,
             Err(e) => Self::Failed {
                 kind: e.kind().to_string(),
@@ -81,10 +90,55 @@ pub struct Request<'a> {
     /// 応答を生成中の会話。同期の間は全体を押さえ、送信・編集・タスクの操作を受け付けない
     /// (4節)。生成中の会話があれば始めない。
     pub generating: &'a InFlightSet<Chat>,
+    pub answers: &'a ConflictAnswers,
     pub lang: Language,
 }
 
-/// 待ち受けて、つないできた相手と全部を写す。
+/// 画面が選んだ側を待つ受け口。同期1回につき、競合を見せている間だけ埋まる。
+#[derive(Default)]
+pub struct ConflictAnswers(Mutex<Option<Waiting>>);
+
+struct Waiting {
+    ids: HashSet<String>,
+    reply: oneshot::Sender<Vec<ConflictChoice>>,
+}
+
+/// 見せている競合の、選んだ側を渡す。見せている競合のすべてにちょうど1つずつ選んでいなければ、
+/// 受け取らずに`false`を返す(待ち続ける)。
+pub fn answer(answers: &ConflictAnswers, choices: Vec<ConflictChoice>) -> bool {
+    let mut slot = answers.0.lock().expect("answers mutex poisoned");
+    let chosen: HashSet<&str> = choices.iter().map(|c| c.id.as_str()).collect();
+    let complete = slot.as_ref().is_some_and(|w| {
+        chosen.len() == choices.len()
+            && chosen.len() == w.ids.len()
+            && w.ids.iter().all(|id| chosen.contains(id.as_str()))
+    });
+    if !complete {
+        return false;
+    }
+    let waiting = slot.take().expect("checked above");
+    waiting.reply.send(choices).is_ok()
+}
+
+/// 競合を画面に見せ、選んだ側を待つ。
+struct Ask<'a, E> {
+    answers: &'a ConflictAnswers,
+    events: &'a E,
+}
+
+impl<E: Fn(SyncEvent) + Sync> Resolver for Ask<'_, E> {
+    fn choose(&self, conflicts: Vec<ConflictView>) -> BoxFuture<'_, Option<Vec<ConflictChoice>>> {
+        let (reply, chosen) = oneshot::channel();
+        *self.answers.0.lock().expect("answers mutex poisoned") = Some(Waiting {
+            ids: conflicts.iter().map(|c| c.id.clone()).collect(),
+            reply,
+        });
+        (self.events)(SyncEvent::Conflicts { conflicts });
+        Box::pin(async move { chosen.await.ok() })
+    }
+}
+
+/// 待ち受けて、つないできた相手と同期する。
 pub async fn listen(
     request: Request<'_>,
     confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
@@ -103,8 +157,9 @@ pub async fn listen(
         confirm_label: i18n::text(request.lang, "sync_dialog.listen_confirm").to_string(),
         cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
     };
+    let answers = request.answers;
     run(request, dialog, confirm, |ctx, stop| async move {
-        let (device_id, mut session) = cancellable(&stop, async {
+        let (device_id, session) = cancellable(&stop, async {
             let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
             let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
             events(SyncEvent::Listening {
@@ -118,24 +173,21 @@ pub async fn listen(
             Ok((device_id, listener.accept(local_versions()).await?))
         })
         .await?;
-        events(SyncEvent::Copying);
-        let finishing = || events(SyncEvent::Finishing);
-        let outcome = copy(
-            &mut session,
+        sync_over(
+            session,
             ctx,
             Side::Listener,
             &device_id,
             &stop,
-            finishing,
+            answers,
+            &events,
         )
-        .await;
-        session.close().await;
-        outcome
+        .await
     })
     .await
 }
 
-/// 待ち受けている相手へつなぎ、全部を写す。`address`と`code`は利用者が打ったまま受け取る。
+/// 待ち受けている相手へつなぎ、同期する。`address`と`code`は利用者が打ったまま受け取る。
 pub async fn connect_to(
     request: Request<'_>,
     address: &str,
@@ -161,28 +213,50 @@ pub async fn connect_to(
         confirm_label: i18n::text(request.lang, "sync_dialog.connect_confirm").to_string(),
         cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
     };
+    let answers = request.answers;
     run(request, dialog, confirm, |ctx, stop| async move {
-        let (device_id, mut session) = cancellable(&stop, async {
+        let (device_id, session) = cancellable(&stop, async {
             let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
             let session = connect(&[address], &code, local_versions(), Limits::default()).await?;
             Ok((device_id, session))
         })
         .await?;
-        events(SyncEvent::Copying);
-        let finishing = || events(SyncEvent::Finishing);
-        let outcome = copy(
-            &mut session,
+        sync_over(
+            session,
             ctx,
             Side::Connector,
             &device_id,
             &stop,
-            finishing,
+            answers,
+            &events,
         )
-        .await;
-        session.close().await;
-        outcome
+        .await
     })
     .await
+}
+
+async fn sync_over(
+    mut session: Session,
+    ctx: &Context,
+    side: Side,
+    device_id: &str,
+    stop: &StopSignal,
+    answers: &ConflictAnswers,
+    events: &(impl Fn(SyncEvent) + Sync),
+) -> Result<Outcome, SyncError> {
+    events(SyncEvent::Syncing);
+    let stage = |stage| {
+        events(match stage {
+            Stage::PeerChoosing => SyncEvent::PeerChoosing,
+            Stage::Finishing => SyncEvent::Finishing,
+        })
+    };
+    let ask = Ask { answers, events };
+    let outcome = sync(&mut session, ctx, side, device_id, stop, stage, &ask).await;
+    // 止めたあとに届いた選択を受け取らない。
+    answers.0.lock().expect("answers mutex poisoned").take();
+    session.close().await;
+    outcome
 }
 
 /// 進んでいる同期に止める指示を出す。同期していなければ`false`。
@@ -205,8 +279,8 @@ async fn cancellable<T>(
         .unwrap_or(Err(SyncError::Cancelled))
 }
 
-/// 全体を押さえ、確かめてから`sync`を走らせる。`sync`には止める指示を渡す。止められるのは、受け取る
-/// 側が書き始める前まで(`copy`)。
+/// 全体を押さえ、確かめてから`sync`を走らせる。`sync`には止める指示を渡す。止められるのは、
+/// 自分が書き始める前まで(`transfer::sync`)。
 async fn run<'c, F, Fut>(
     request: Request<'c>,
     dialog: SyncDialog,
@@ -282,12 +356,13 @@ mod tests {
             SyncError::DbVersionMismatch { ours: 1, theirs: 2 },
             SyncError::DeviceCheck(CoreError::Cancelled),
             SyncError::SameDevice,
-            SyncError::BothHaveData,
-            SyncError::NothingToCopy,
             SyncError::InvalidRows(Vec::new()),
-            SyncError::NoLongerEmpty,
+            SyncError::Changed,
+            SyncError::Mismatch,
             SyncError::PeerRefused(AbortReason::InvalidRows),
-            SyncError::PeerRefused(AbortReason::NotEmpty),
+            SyncError::PeerRefused(AbortReason::Changed),
+            SyncError::PeerRefused(AbortReason::Mismatch),
+            SyncError::PeerRefused(AbortReason::Cancelled),
             SyncError::PeerRefused(AbortReason::Failed),
             SyncError::Core(CoreError::Cancelled),
             SyncError::InvalidCode,
@@ -312,10 +387,9 @@ mod tests {
                 | SyncError::DbVersionMismatch { .. }
                 | SyncError::DeviceCheck(_)
                 | SyncError::SameDevice
-                | SyncError::BothHaveData
-                | SyncError::NothingToCopy
                 | SyncError::InvalidRows(_)
-                | SyncError::NoLongerEmpty
+                | SyncError::Changed
+                | SyncError::Mismatch
                 | SyncError::PeerRefused(_)
                 | SyncError::Core(_)
                 | SyncError::InvalidCode
@@ -356,6 +430,7 @@ mod tests {
             let request = Request {
                 ctx: &ctx,
                 generating: &generating,
+                answers: &ConflictAnswers::default(),
                 lang: Language::DEFAULT,
             };
             let report = connect_to(request, address, code, no_dialog, |_| {}).await;
@@ -375,6 +450,7 @@ mod tests {
         let request = Request {
             ctx: &ctx,
             generating: &generating,
+            answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, no_dialog, |_| {}).await;
@@ -393,6 +469,7 @@ mod tests {
         let request = Request {
             ctx: &ctx,
             generating: &generating,
+            answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, |_| false, |e| events.lock().unwrap().push(e)).await;

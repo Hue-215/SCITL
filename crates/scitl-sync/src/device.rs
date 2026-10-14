@@ -2,6 +2,10 @@
 //! 端末IDの項目がこのマシンの資格情報ストアにあるかを見て、無ければ写されたDBとみなし、
 //! 端末IDを作り直す。初めて同期するDBも項目が無いので作り直すが、それまでの版とカーソルは
 //! そのまま使えるので困らない。
+//!
+//! 項目を読めないときも、作り直した項目を書ければ作り直して続ける(Androidで保存先の鍵が失われ、
+//! 古い項目だけが読めなくなった場合)。作り直しは要らなかったときも害が無く、要るときに
+//! しないと写したDBを見逃す。書けもしなければ、確かめられないので始めない。
 
 use std::sync::Arc;
 
@@ -29,8 +33,7 @@ impl DeviceRegistry for SecretStore {
     }
 }
 
-/// 確かめた端末IDを返す。資格情報ストアを読めなければ、確かめられないので作り直しもせずに
-/// 失敗にする(同期を始めない)。
+/// 確かめた端末IDを返す。
 pub async fn confirm_device_id(
     db: SharedConnection,
     registry: Arc<dyn DeviceRegistry>,
@@ -40,27 +43,31 @@ pub async fn confirm_device_id(
         .device_id;
     let id = current.clone();
     let check = registry.clone();
-    let registered = blocking::run(move || check.is_registered(&id))
-        .await
-        .map_err(SyncError::DeviceCheck)?;
-    if registered {
-        Ok(current)
-    } else {
-        renew_device_id(db, registry).await
+    match blocking::run(move || check.is_registered(&id)).await {
+        Ok(true) => Ok(current),
+        Ok(false) => renew_device_id(db, registry).await,
+        Err(unreadable) => renew_device_id(db, registry)
+            .await
+            .map_err(|_| SyncError::DeviceCheck(unreadable)),
     }
 }
 
-/// 端末IDを作り直し、項目を作る。項目を作れずに終わっても、次に同期を始めるときにもう一度
-/// 作り直すだけなので困らない。
+/// 端末IDを作り直し、項目を作る。項目を書けなければ元の端末IDに戻す(書けないまま作り直すと、
+/// 同期のたびに作り直すことになる)。
 pub async fn renew_device_id(
     db: SharedConnection,
     registry: Arc<dyn DeviceRegistry>,
 ) -> Result<String, SyncError> {
-    let renewed = db::with_conn(db, db::sync::renew_device_id).await?;
+    let (before, renewed) = db::with_conn(db.clone(), |conn| {
+        let before = db::sync::device_state(conn)?.device_id;
+        Ok((before, db::sync::renew_device_id(conn)?))
+    })
+    .await?;
     let id = renewed.clone();
-    blocking::run(move || registry.register(&id))
-        .await
-        .map_err(SyncError::DeviceCheck)?;
+    if let Err(e) = blocking::run(move || registry.register(&id)).await {
+        db::with_conn(db, move |conn| db::sync::set_device_id(conn, &before)).await?;
+        return Err(SyncError::DeviceCheck(e));
+    }
     Ok(renewed)
 }
 
@@ -71,22 +78,26 @@ mod tests {
 
     use super::*;
 
-    /// 資格情報ストアの代わり。`broken`なら読めない。
+    /// 資格情報ストアの代わり。`unreadable`なら読めず、`locked`なら書けもしない。
     #[derive(Default)]
     struct Registry {
         items: Mutex<HashSet<String>>,
-        broken: bool,
+        unreadable: bool,
+        locked: bool,
     }
 
     impl DeviceRegistry for Registry {
         fn is_registered(&self, device_id: &str) -> Result<bool, CoreError> {
-            if self.broken {
+            if self.unreadable || self.locked {
                 return Err(CoreError::Secrets("locked".to_string()));
             }
             Ok(self.items.lock().unwrap().contains(device_id))
         }
 
         fn register(&self, device_id: &str) -> Result<(), CoreError> {
+            if self.locked {
+                return Err(CoreError::Secrets("locked".to_string()));
+            }
             self.items.lock().unwrap().insert(device_id.to_string());
             Ok(())
         }
@@ -130,12 +141,28 @@ mod tests {
         assert_eq!(confirm_device_id(db, registry).await.unwrap(), renewed);
     }
 
+    /// 古い項目だけが読めない(Androidで保存先の鍵が失われた)ときは、作り直して続ける。
     #[tokio::test]
-    async fn an_unreadable_store_stops_without_renewing() {
+    async fn an_unreadable_item_is_replaced_when_a_new_one_can_be_written() {
         let db = database();
         let before = device_id(&db);
         let registry = Arc::new(Registry {
-            broken: true,
+            unreadable: true,
+            ..Default::default()
+        });
+        let renewed = confirm_device_id(db.clone(), registry.clone())
+            .await
+            .unwrap();
+        assert_ne!(renewed, before);
+        assert!(registry.items.lock().unwrap().contains(&renewed));
+    }
+
+    #[tokio::test]
+    async fn a_locked_store_stops_without_renewing() {
+        let db = database();
+        let before = device_id(&db);
+        let registry = Arc::new(Registry {
+            locked: true,
             ..Default::default()
         });
         assert!(matches!(

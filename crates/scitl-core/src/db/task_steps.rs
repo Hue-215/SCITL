@@ -19,12 +19,13 @@ pub struct TaskStep {
 /// [`row_to_step`]の並び。
 const STEP_COLUMNS: &str = "id, task_id, description, done_at, order_index, created_at";
 
-/// 削除済み(deleted_at)を除く工程を`order_index`順で返す。
+/// 削除済み(deleted_at)を除く工程を`order_index`順で返す。同じ`order_index`は`uid`の順
+/// (2台で足した工程は重なる。`docs/sync/index.md` 6節)。
 pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<TaskStep>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {STEP_COLUMNS} FROM task_steps
          WHERE task_id = ?1 AND deleted_at IS NULL
-         ORDER BY order_index ASC"
+         ORDER BY order_index ASC, uid ASC"
     ))?;
     let rows = stmt
         .query_map([task_id], row_to_step)?

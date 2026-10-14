@@ -1,7 +1,8 @@
 //! 同期の層(`scitl-sync`)がDBに触る入口(`docs/sync/index.md`)。行は端末の中の連番のまま読み書き
-//! する。運ぶ写しの連番を`uid`へ置き換えるのは同期の層で、ここは知らない(6節)。
+//! する。運ぶ写しの連番を`uid`へ置き換えるのは同期の層で、ここは知らない(6節)。どの行を書くかを
+//! 決める規則も同期の層が持ち、ここは言われた行を書くだけ。
 
-use rusqlite::{Connection, Row};
+use rusqlite::{Connection, OptionalExtension, Row};
 
 use super::in_transaction;
 use crate::error::Result;
@@ -36,44 +37,48 @@ pub fn renew_device_id(conn: &Connection) -> Result<String> {
     )?)
 }
 
-/// タスク・発言・メモリが1行でもあるか(削除した行も数える)。添付は発言に付くので見ない。
-pub fn has_data(conn: &Connection) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM tasks)
-             OR EXISTS (SELECT 1 FROM messages)
-             OR EXISTS (SELECT 1 FROM memories)",
-        [],
-        |row| row.get(0),
-    )?)
-}
-
-/// 相手ごとのカーソルを書く(`sync_cursors`)。`sent_seq`は相手へ渡した位置(自分の番号)、
-/// `received_seq`は相手から受け取った位置(相手の番号)。
-pub fn record_cursor(
-    conn: &Connection,
-    peer_device_id: &str,
-    sent_seq: i64,
-    received_seq: i64,
-) -> Result<()> {
+/// 端末IDを渡した値にする(作り直した端末IDの項目を資格情報ストアに書けなかったときに、元へ戻す)。
+pub fn set_device_id(conn: &Connection, device_id: &str) -> Result<()> {
     conn.execute(
-        "INSERT INTO sync_cursors (peer_device_id, sent_seq, received_seq) VALUES (?1, ?2, ?3)
-         ON CONFLICT (peer_device_id) DO UPDATE
-         SET sent_seq = excluded.sent_seq, received_seq = excluded.received_seq",
-        rusqlite::params![peer_device_id, sent_seq, received_seq],
+        "UPDATE sync_state SET device_id = ?1 WHERE id = 1",
+        [device_id],
     )?;
     Ok(())
 }
 
-/// 相手ごとのカーソル。無ければ`None`。
-pub fn cursor(conn: &Connection, peer_device_id: &str) -> Result<Option<(i64, i64)>> {
-    use rusqlite::OptionalExtension;
+/// 相手ごとのカーソル(`sync_cursors`)。`sent_seq`は相手へ渡した位置(自分の番号)、
+/// `received_seq`は相手から受け取った位置(相手の番号)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Cursor {
+    pub sent_seq: i64,
+    pub received_seq: i64,
+}
+
+pub fn record_cursor(conn: &Connection, peer_device_id: &str, cursor: Cursor) -> Result<()> {
+    conn.execute(
+        "INSERT INTO sync_cursors (peer_device_id, sent_seq, received_seq) VALUES (?1, ?2, ?3)
+         ON CONFLICT (peer_device_id) DO UPDATE
+         SET sent_seq = excluded.sent_seq, received_seq = excluded.received_seq",
+        rusqlite::params![peer_device_id, cursor.sent_seq, cursor.received_seq],
+    )?;
+    Ok(())
+}
+
+/// 相手ごとのカーソル。初めての相手は0から(全部を送る)。
+pub fn cursor(conn: &Connection, peer_device_id: &str) -> Result<Cursor> {
     Ok(conn
         .query_row(
             "SELECT sent_seq, received_seq FROM sync_cursors WHERE peer_device_id = ?1",
             [peer_device_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok(Cursor {
+                    sent_seq: row.get(0)?,
+                    received_seq: row.get(1)?,
+                })
+            },
         )
-        .optional()?)
+        .optional()?
+        .unwrap_or_default())
 }
 
 /// 行の写し。`id`と外部キーは端末の中の連番、`version`は版のJSONの文字列。
@@ -130,6 +135,9 @@ pub struct MessageRow {
     pub parts: Option<String>,
     pub turn_id: Option<String>,
     pub attempt_no: Option<i64>,
+    /// 試行(`turn_id`と`attempt_no`の組)の最初の行の`uid`。試行の番号は端末の中の値なので
+    /// (`docs/sync/index.md` 9節)、端末を跨いで試行を指すのに使う。書くときは見ない。
+    pub attempt_key: Option<String>,
     pub deleted_at: Option<String>,
     pub created_at: String,
     pub prev_uid: Option<String>,
@@ -150,7 +158,7 @@ pub struct AttachmentRow {
     pub created_at: String,
 }
 
-/// 同期する行のすべて。各表とも`id`の順。
+/// 同期する行。各表とも`id`の順。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rows {
     pub tasks: Vec<TaskRow>,
@@ -160,35 +168,96 @@ pub struct Rows {
     pub attachments: Vec<AttachmentRow>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    pub device: DeviceState,
-    pub rows: Rows,
+/// 読む行の範囲。
+#[derive(Debug, Clone, Copy)]
+pub enum Filter<'a> {
+    All,
+    /// `sync_seq`がこれより大きい行(前回相手へ渡した位置より後に変わった行。7節)。
+    Since(i64),
+    /// `uid`がこれらの行(表を問わない)。
+    Uids(&'a [String]),
+    /// タスク(行・工程・会話と、その発言の添付)と、総合チャット(`general`)のすべての行。
+    Units {
+        tasks: &'a [String],
+        general: bool,
+    },
+}
+
+/// 各表の、連番と`uid`の組のすべて。運ぶ写しの中のIDを置き換えるのに使う。
+#[derive(Debug, Clone, Default)]
+pub struct Uids {
+    pub tasks: Vec<(i64, String)>,
+    pub steps: Vec<(i64, String)>,
+    pub memories: Vec<(i64, String)>,
+    pub messages: Vec<(i64, String)>,
+    pub attachments: Vec<(i64, String)>,
+}
+
+/// 発言が指す先を確かめるのに要る、発言の行の一部。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRef {
+    pub uid: String,
+    pub task_id: Option<i64>,
+    pub role: String,
+    pub kind: String,
+    pub turn_id: Option<String>,
+    pub attempt_no: Option<i64>,
 }
 
 /// 版を持つ表。版と印の付け方は同じ。
 const VERSIONED: &[&str] = &["tasks", "task_steps", "memories", "messages"];
 
-/// 印のある行に、この端末の分の版を振って印を外し(`docs/sync/index.md` 8節)、そのうえで全部の
-/// 行を読む。印を残したまま写すと、写した側だけがあとでその印に版を振り、受け取った側で変えた
-/// 行と並んで競合になる(12節)。振ることと読むことを1つのトランザクションにし、振ったあとに
-/// 別プロセスが変えた行を、振る前の状態で読まない。
-///
-/// 振る番号は、カウンターを進めて取った値で、この回の行すべてに同じ値を使う。
-pub fn stamp_and_snapshot(conn: &Connection) -> Result<Snapshot> {
-    in_transaction(conn, |conn| {
-        let device_id: String = conn.query_row(
-            "UPDATE sync_state SET counter = counter + 1 WHERE id = 1 RETURNING device_id",
-            [],
-            |row| row.get(0),
-        )?;
-        let number: i64 =
-            conn.query_row("SELECT counter FROM sync_state WHERE id = 1", [], |row| {
-                row.get(0)
-            })?;
-        let path = format!("$.\"{device_id}\"");
+/// 同期の層の読み書き。[`transaction`]の中でだけ作る。
+pub struct Tx<'c> {
+    conn: &'c Connection,
+}
+
+/// 1つのトランザクションで読み書きする。`f`が失敗すれば何も残さない。通信と利用者の選択を
+/// 跨がないこと(`docs/sync/index.md` 4節)は呼び出し側が守る。
+pub fn transaction<T>(conn: &Connection, f: impl FnOnce(&Tx<'_>) -> Result<T>) -> Result<T> {
+    in_transaction(conn, |conn| f(&Tx { conn }))
+}
+
+impl Tx<'_> {
+    pub fn device_state(&self) -> Result<DeviceState> {
+        device_state(self.conn)
+    }
+
+    pub fn renew_device_id(&self) -> Result<String> {
+        renew_device_id(self.conn)
+    }
+
+    pub fn cursor(&self, peer_device_id: &str) -> Result<Cursor> {
+        cursor(self.conn, peer_device_id)
+    }
+
+    pub fn record_cursor(&self, peer_device_id: &str, cursor: Cursor) -> Result<()> {
+        record_cursor(self.conn, peer_device_id, cursor)
+    }
+
+    /// 版の中の、端末`device_id`の番号の最大(無ければ0)。相手の番号の巻き戻りを見るのに使う
+    /// (`docs/sync/index.md` 10節)。
+    pub fn seen_of(&self, device_id: &str) -> Result<i64> {
+        let path = version_path(device_id);
+        let mut seen = 0;
         for table in VERSIONED {
-            conn.execute(
+            let max: Option<i64> = self.conn.query_row(
+                &format!("SELECT MAX(json_extract(sync_version, ?1)) FROM {table}"),
+                [&path],
+                |row| row.get(0),
+            )?;
+            seen = seen.max(max.unwrap_or(0));
+        }
+        Ok(seen)
+    }
+
+    /// 印のある行に、この端末の分の版を振って印を外す(`docs/sync/index.md` 8節)。振る番号は
+    /// カウンターを進めて取った値で、この回の行すべてに同じ値を使う。
+    pub fn stamp(&self) -> Result<()> {
+        let number = self.next_number()?;
+        let path = version_path(&self.device_state()?.device_id);
+        for table in VERSIONED {
+            self.conn.execute(
                 &format!(
                     "UPDATE {table} SET sync_version = json_set(sync_version, ?1, ?2), sync_changed = 0
                      WHERE sync_changed = 1"
@@ -196,58 +265,62 @@ pub fn stamp_and_snapshot(conn: &Connection) -> Result<Snapshot> {
                 rusqlite::params![path, number],
             )?;
         }
-        Ok(Snapshot {
-            device: device_state(conn)?,
-            rows: read_rows(conn)?,
-        })
-    })
-}
+        Ok(())
+    }
 
-fn read_rows(conn: &Connection) -> Result<Rows> {
-    Ok(Rows {
-        tasks: select(
-            conn,
-            "SELECT id, uid, title, description, deadline, archived_at, deleted_at, created_at,
-                    updated_at, sync_version
-             FROM tasks ORDER BY id",
+    /// カウンターを進めて取った番号。同期の層が版に振る(同じ番号を2度使わない)。
+    pub fn next_number(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "UPDATE sync_state SET counter = counter + 1 WHERE id = 1 RETURNING counter",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn rows(&self, filter: Filter<'_>) -> Result<Rows> {
+        read_rows(self.conn, filter)
+    }
+
+    pub fn uids(&self) -> Result<Uids> {
+        let pairs = |table: &str| {
+            select(
+                self.conn,
+                &format!("SELECT id, uid FROM {table} ORDER BY id"),
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        };
+        Ok(Uids {
+            tasks: pairs("tasks")?,
+            steps: pairs("task_steps")?,
+            memories: pairs("memories")?,
+            messages: pairs("messages")?,
+            attachments: pairs("attachments")?,
+        })
+    }
+
+    pub fn message_refs(&self) -> Result<Vec<MessageRef>> {
+        select(
+            self.conn,
+            "SELECT uid, task_id, role, kind, turn_id, attempt_no FROM messages ORDER BY id",
             |row| {
-                Ok(TaskRow {
-                    id: row.get(0)?,
-                    uid: row.get(1)?,
-                    title: row.get(2)?,
-                    description: row.get(3)?,
-                    deadline: row.get(4)?,
-                    archived_at: row.get(5)?,
-                    deleted_at: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
-                    version: row.get(9)?,
+                Ok(MessageRef {
+                    uid: row.get(0)?,
+                    task_id: row.get(1)?,
+                    role: row.get(2)?,
+                    kind: row.get(3)?,
+                    turn_id: row.get(4)?,
+                    attempt_no: row.get(5)?,
                 })
             },
-        )?,
-        steps: select(
-            conn,
-            "SELECT id, uid, task_id, description, done_at, deleted_at, order_index, created_at,
-                    sync_version
-             FROM task_steps ORDER BY id",
-            |row| {
-                Ok(StepRow {
-                    id: row.get(0)?,
-                    uid: row.get(1)?,
-                    task_id: row.get(2)?,
-                    description: row.get(3)?,
-                    done_at: row.get(4)?,
-                    deleted_at: row.get(5)?,
-                    order_index: row.get(6)?,
-                    created_at: row.get(7)?,
-                    version: row.get(8)?,
-                })
-            },
-        )?,
-        memories: select(
-            conn,
+        )
+    }
+
+    /// 消えていないメモリのすべて(`id`の順)。同じ本文を畳むのに使う(`docs/sync/index.md` 8節)。
+    pub fn alive_memories(&self) -> Result<Vec<MemoryRow>> {
+        select(
+            self.conn,
             "SELECT id, uid, content, created_at, updated_at, deleted_at, sync_version
-             FROM memories ORDER BY id",
+             FROM memories WHERE deleted_at IS NULL ORDER BY id",
             |row| {
                 Ok(MemoryRow {
                     id: row.get(0)?,
@@ -259,86 +332,12 @@ fn read_rows(conn: &Connection) -> Result<Rows> {
                     version: row.get(6)?,
                 })
             },
-        )?,
-        messages: select(
-            conn,
-            "SELECT id, uid, task_id, role, content, kind, source, error_kind, error_detail, parts,
-                    turn_id, attempt_no, deleted_at, created_at, prev_uid, sync_version
-             FROM messages ORDER BY id",
-            |row| {
-                Ok(MessageRow {
-                    id: row.get(0)?,
-                    uid: row.get(1)?,
-                    task_id: row.get(2)?,
-                    role: row.get(3)?,
-                    content: row.get(4)?,
-                    kind: row.get(5)?,
-                    source: row.get(6)?,
-                    error_kind: row.get(7)?,
-                    error_detail: row.get(8)?,
-                    parts: row.get(9)?,
-                    turn_id: row.get(10)?,
-                    attempt_no: row.get(11)?,
-                    deleted_at: row.get(12)?,
-                    created_at: row.get(13)?,
-                    prev_uid: row.get(14)?,
-                    version: row.get(15)?,
-                })
-            },
-        )?,
-        attachments: select(
-            conn,
-            "SELECT id, uid, message_id, original_name, mime_type, kind, size_bytes, content_text,
-                    file_hash, created_at
-             FROM attachments ORDER BY id",
-            |row| {
-                Ok(AttachmentRow {
-                    id: row.get(0)?,
-                    uid: row.get(1)?,
-                    message_id: row.get(2)?,
-                    original_name: row.get(3)?,
-                    mime_type: row.get(4)?,
-                    kind: row.get(5)?,
-                    size_bytes: row.get(6)?,
-                    content_text: row.get(7)?,
-                    file_hash: row.get(8)?,
-                    created_at: row.get(9)?,
-                })
-            },
-        )?,
-    })
-}
-
-fn select<T>(
-    conn: &Connection,
-    sql: &str,
-    map: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
-) -> Result<Vec<T>> {
-    let mut stmt = conn.prepare(sql)?;
-    let rows = stmt
-        .query_map([], map)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-/// 受け取った行を書く。[`import`]の中でだけ作る。行の`id`は見ずに振り直し、外部キーは
-/// 呼び出し側がこの端末の連番に置き換えて渡す。`uid`・版・`prev_uid`は渡した値をそのまま書く。
-pub struct Importer<'c> {
-    conn: &'c Connection,
-}
-
-/// 1つのトランザクションで取り込む。`f`が失敗すれば何も残さない。
-pub fn import<T>(conn: &Connection, f: impl FnOnce(&Importer<'_>) -> Result<T>) -> Result<T> {
-    in_transaction(conn, |conn| f(&Importer { conn }))
-}
-
-impl Importer<'_> {
-    pub fn has_data(&self) -> Result<bool> {
-        has_data(self.conn)
+        )
     }
 
-    pub fn device_state(&self) -> Result<DeviceState> {
-        device_state(self.conn)
+    /// 試行の番号を新しく取る。消えた行も含めた最大の続き(`db::messages::next_attempt_no`と同じ)。
+    pub fn next_attempt_no(&self, turn_id: &str) -> Result<i64> {
+        super::messages::next_attempt_no(self.conn, turn_id)
     }
 
     pub fn insert_task(&self, row: &TaskRow) -> Result<i64> {
@@ -396,6 +395,7 @@ impl Importer<'_> {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// `attempt_key`は見ない(番号は`attempt_no`で渡す)。
     pub fn insert_message(&self, row: &MessageRow) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO messages (uid, task_id, role, content, kind, source, error_kind,
@@ -453,20 +453,316 @@ impl Importer<'_> {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// 取り込みの終わり。空のDBへ写したあとに呼ぶ(印はどれも取り込んだ行のもの)。取り込んだ行の
-    /// 印を外し(`docs/sync/index.md` 1節)、相手のカーソルを書く。相手へ渡した位置は、書き終えた
-    /// 時点のカウンター(相手は、取り込んだ行をすべて持っている)で、それを返す。
-    pub fn finish(&self, peer_device_id: &str, received_seq: i64) -> Result<i64> {
+    /// 書いたあと変わりうる列と版を書き直す(`id`で指す)。ほかの列は見ない。
+    pub fn update_task(&self, row: &TaskRow) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET title = ?1, description = ?2, deadline = ?3, archived_at = ?4,
+                              deleted_at = ?5, updated_at = ?6, sync_version = ?7
+             WHERE id = ?8",
+            rusqlite::params![
+                row.title,
+                row.description,
+                row.deadline,
+                row.archived_at,
+                row.deleted_at,
+                row.updated_at,
+                row.version,
+                row.id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_step(&self, row: &StepRow) -> Result<()> {
+        self.conn.execute(
+            "UPDATE task_steps SET description = ?1, done_at = ?2, deleted_at = ?3,
+                                   sync_version = ?4
+             WHERE id = ?5",
+            rusqlite::params![
+                row.description,
+                row.done_at,
+                row.deleted_at,
+                row.version,
+                row.id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_memory(&self, row: &MemoryRow) -> Result<()> {
+        self.conn.execute(
+            "UPDATE memories SET content = ?1, deleted_at = ?2, updated_at = ?3, sync_version = ?4
+             WHERE id = ?5",
+            rusqlite::params![
+                row.content,
+                row.deleted_at,
+                row.updated_at,
+                row.version,
+                row.id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_message(&self, row: &MessageRow) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET deleted_at = ?1, sync_version = ?2 WHERE id = ?3",
+            rusqlite::params![row.deleted_at, row.version, row.id],
+        )?;
+        Ok(())
+    }
+
+    /// 結合後のタスクの全体を、操作の記録としてその会話の末尾に置く(`docs/sync/index.md` 8節)。
+    /// `uid`と`created_at`は呼び出し側が決める(別の2台が同じ結合をしても同じ行になるように)。
+    pub fn insert_task_state_record(
+        &self,
+        task_id: i64,
+        uid: &str,
+        created_at: &str,
+    ) -> Result<i64> {
+        let content = crate::orchestration::operations::task_state_record(self.conn, task_id)?;
+        self.insert_message(&MessageRow {
+            id: 0,
+            uid: uid.to_string(),
+            task_id: Some(task_id),
+            role: "tool".to_string(),
+            content,
+            kind: "tool_execution".to_string(),
+            source: Some("sync".to_string()),
+            error_kind: None,
+            error_detail: None,
+            parts: None,
+            turn_id: None,
+            attempt_no: None,
+            attempt_key: None,
+            deleted_at: None,
+            created_at: created_at.to_string(),
+            prev_uid: None,
+            version: "{}".to_string(),
+        })
+    }
+
+    /// 印をすべて外す。同期の層の書き込み(取り込み・版を振った書き込み)のあとに、同じ
+    /// トランザクションで呼ぶ(`docs/sync/index.md` 1節)。
+    pub fn clear_changed(&self) -> Result<()> {
         for table in VERSIONED {
             self.conn.execute(
                 &format!("UPDATE {table} SET sync_changed = 0 WHERE sync_changed = 1"),
                 [],
             )?;
         }
-        let counter = device_state(self.conn)?.counter;
-        record_cursor(self.conn, peer_device_id, counter, received_seq)?;
-        Ok(counter)
+        Ok(())
     }
+}
+
+fn version_path(device_id: &str) -> String {
+    format!("$.\"{device_id}\"")
+}
+
+/// `filter`の各表の条件(`?1`に`uid`の一覧のJSON、`?2`に番号か総合チャットの有無が入る)。
+struct Where {
+    tasks: &'static str,
+    steps: &'static str,
+    memories: &'static str,
+    messages: &'static str,
+    attachments: &'static str,
+}
+
+const ALL: Where = Where {
+    tasks: "1",
+    steps: "1",
+    memories: "1",
+    messages: "1",
+    attachments: "1",
+};
+
+const SINCE: Where = Where {
+    tasks: "sync_seq > ?2",
+    steps: "sync_seq > ?2",
+    memories: "sync_seq > ?2",
+    messages: "sync_seq > ?2",
+    attachments: "sync_seq > ?2",
+};
+
+const UIDS: Where = Where {
+    tasks: "uid IN (SELECT value FROM json_each(?1))",
+    steps: "uid IN (SELECT value FROM json_each(?1))",
+    memories: "uid IN (SELECT value FROM json_each(?1))",
+    messages: "uid IN (SELECT value FROM json_each(?1))",
+    attachments: "uid IN (SELECT value FROM json_each(?1))",
+};
+
+const UNITS: Where = Where {
+    tasks: "uid IN (SELECT value FROM json_each(?1))",
+    steps: "task_id IN (SELECT id FROM tasks WHERE uid IN (SELECT value FROM json_each(?1)))",
+    memories: "0",
+    messages: "(task_id IN (SELECT id FROM tasks WHERE uid IN (SELECT value FROM json_each(?1)))
+                OR (?2 AND task_id IS NULL))",
+    attachments: "message_id IN (
+                    SELECT id FROM messages
+                    WHERE task_id IN (SELECT id FROM tasks WHERE uid IN (SELECT value FROM json_each(?1)))
+                       OR (?2 AND task_id IS NULL))",
+};
+
+/// どの条件の文にも`?1`と`?2`を渡す(条件が使わない値も、使ったことにする末尾の式を足す)。
+fn read_rows(conn: &Connection, filter: Filter<'_>) -> Result<Rows> {
+    let (clauses, uids, number): (&Where, &[String], i64) = match filter {
+        Filter::All => (&ALL, &[], 0),
+        Filter::Since(seq) => (&SINCE, &[], seq),
+        Filter::Uids(uids) => (&UIDS, uids, 0),
+        Filter::Units { tasks, general } => (&UNITS, tasks, i64::from(general)),
+    };
+    let uids = serde_json::to_string(uids).expect("uids serialize");
+    let params = rusqlite::params![uids, number];
+    Ok(Rows {
+        tasks: select_with(
+            conn,
+            &format!(
+                "SELECT id, uid, title, description, deadline, archived_at, deleted_at, created_at,
+                        updated_at, sync_version
+                 FROM tasks WHERE {} AND (?1 IS NOT NULL OR ?2 IS NOT NULL) ORDER BY id",
+                clauses.tasks
+            ),
+            params,
+            |row| {
+                Ok(TaskRow {
+                    id: row.get(0)?,
+                    uid: row.get(1)?,
+                    title: row.get(2)?,
+                    description: row.get(3)?,
+                    deadline: row.get(4)?,
+                    archived_at: row.get(5)?,
+                    deleted_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    version: row.get(9)?,
+                })
+            },
+        )?,
+        steps: select_with(
+            conn,
+            &format!(
+                "SELECT id, uid, task_id, description, done_at, deleted_at, order_index, created_at,
+                        sync_version
+                 FROM task_steps WHERE {} AND (?1 IS NOT NULL OR ?2 IS NOT NULL) ORDER BY id",
+                clauses.steps
+            ),
+            params,
+            |row| {
+                Ok(StepRow {
+                    id: row.get(0)?,
+                    uid: row.get(1)?,
+                    task_id: row.get(2)?,
+                    description: row.get(3)?,
+                    done_at: row.get(4)?,
+                    deleted_at: row.get(5)?,
+                    order_index: row.get(6)?,
+                    created_at: row.get(7)?,
+                    version: row.get(8)?,
+                })
+            },
+        )?,
+        memories: select_with(
+            conn,
+            &format!(
+                "SELECT id, uid, content, created_at, updated_at, deleted_at, sync_version
+                 FROM memories WHERE {} AND (?1 IS NOT NULL OR ?2 IS NOT NULL) ORDER BY id",
+                clauses.memories
+            ),
+            params,
+            |row| {
+                Ok(MemoryRow {
+                    id: row.get(0)?,
+                    uid: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                    deleted_at: row.get(5)?,
+                    version: row.get(6)?,
+                })
+            },
+        )?,
+        messages: select_with(
+            conn,
+            &format!(
+                "SELECT id, uid, task_id, role, content, kind, source, error_kind, error_detail, parts,
+                        turn_id, attempt_no,
+                        (SELECT f.uid FROM messages f
+                         WHERE f.turn_id = messages.turn_id AND f.attempt_no = messages.attempt_no
+                         ORDER BY f.id LIMIT 1),
+                        deleted_at, created_at, prev_uid, sync_version
+                 FROM messages WHERE {} AND (?1 IS NOT NULL OR ?2 IS NOT NULL) ORDER BY id",
+                clauses.messages
+            ),
+            params,
+            |row| {
+                Ok(MessageRow {
+                    id: row.get(0)?,
+                    uid: row.get(1)?,
+                    task_id: row.get(2)?,
+                    role: row.get(3)?,
+                    content: row.get(4)?,
+                    kind: row.get(5)?,
+                    source: row.get(6)?,
+                    error_kind: row.get(7)?,
+                    error_detail: row.get(8)?,
+                    parts: row.get(9)?,
+                    turn_id: row.get(10)?,
+                    attempt_no: row.get(11)?,
+                    attempt_key: row.get(12)?,
+                    deleted_at: row.get(13)?,
+                    created_at: row.get(14)?,
+                    prev_uid: row.get(15)?,
+                    version: row.get(16)?,
+                })
+            },
+        )?,
+        attachments: select_with(
+            conn,
+            &format!(
+                "SELECT id, uid, message_id, original_name, mime_type, kind, size_bytes, content_text,
+                        file_hash, created_at
+                 FROM attachments WHERE {} AND (?1 IS NOT NULL OR ?2 IS NOT NULL) ORDER BY id",
+                clauses.attachments
+            ),
+            params,
+            |row| {
+                Ok(AttachmentRow {
+                    id: row.get(0)?,
+                    uid: row.get(1)?,
+                    message_id: row.get(2)?,
+                    original_name: row.get(3)?,
+                    mime_type: row.get(4)?,
+                    kind: row.get(5)?,
+                    size_bytes: row.get(6)?,
+                    content_text: row.get(7)?,
+                    file_hash: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            },
+        )?,
+    })
+}
+
+fn select<T>(
+    conn: &Connection,
+    sql: &str,
+    map: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
+) -> Result<Vec<T>> {
+    select_with(conn, sql, [], map)
+}
+
+fn select_with<T>(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+    map: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
+) -> Result<Vec<T>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(params, map)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 /// 取り込む行が、本体が書く行と同じ形かを確かめる規則(`docs/sync/index.md` 5節)。保存の前の

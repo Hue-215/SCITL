@@ -63,7 +63,7 @@ enum Command {
     /// Show and change the memories shared across all conversations.
     #[command(subcommand)]
     Memory(MemoryCommand),
-    /// Copy all data to or from another device over the local network.
+    /// Sync data with another device over the local network.
     #[command(subcommand)]
     Sync(sync::SyncCommand),
 }

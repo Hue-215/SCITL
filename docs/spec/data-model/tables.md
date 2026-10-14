@@ -51,7 +51,7 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 | description | TEXT | NOT NULL。前後の空白を落として保存し、空は書かない。長さと件数の上限は`../tools.md` 2節 |
 | done_at | TEXT | ISO8601。NULL=未完了 |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
-| order_index | INTEGER | NOT NULL |
+| order_index | INTEGER | NOT NULL。並びはこの順、同じなら`uid`の順(2台で足した工程は重なる。`../../sync/index.md` 6節) |
 | created_at | TEXT | ISO8601。NOT NULL |
 
 サブタスクという独立した概念は作らない(`../principles.md` 2節)。

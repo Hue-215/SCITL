@@ -39,22 +39,22 @@ pub enum SyncError {
     ProtocolMismatch { ours: u32, theirs: u32 },
     #[error("database version mismatch: ours {ours}, theirs {theirs}")]
     DbVersionMismatch { ours: u32, theirs: u32 },
-    /// 資格情報ストアで端末IDを確かめられない(読めない)。確かめずには始めない。
+    /// 資格情報ストアで端末IDを確かめられない(読めず、作り直した項目も書けない)。確かめずには
+    /// 始めない。
     #[error("could not check this device's ID in the secret store: {0}")]
     DeviceCheck(scitl_core::CoreError),
     /// 同じ端末IDの2台(写したDBどうし)。
     #[error("the peer has the same device ID (one database is a copy of the other)")]
     SameDevice,
-    #[error("both devices have data; copying needs one of them to be empty")]
-    BothHaveData,
-    #[error("neither device has data to copy")]
-    NothingToCopy,
     /// 運ぶ行が、本体が書く行の形に合わない。
     #[error("{}", InvalidRows(.0))]
     InvalidRows(Vec<InvalidRow>),
-    /// 受け取る側に、移送の途中でデータができた。
-    #[error("this device is no longer empty")]
-    NoLongerEmpty,
+    /// 同期の途中で、この端末のデータが別の書き込み(別のプロセス等)で変わった。
+    #[error("this device's data changed during the sync")]
+    Changed,
+    /// 書き終えた結果が、相手の結果と一致しない。
+    #[error("the result does not match the other device's")]
+    Mismatch,
     #[error("the peer stopped: {0}")]
     PeerRefused(AbortReason),
     #[error(transparent)]
@@ -90,12 +90,13 @@ impl SyncError {
             Self::ProtocolMismatch { .. } | Self::DbVersionMismatch { .. } => "version_mismatch",
             Self::DeviceCheck(_) => "device_check",
             Self::SameDevice => "same_device",
-            Self::BothHaveData => "both_have_data",
-            Self::NothingToCopy => "nothing_to_copy",
             Self::InvalidRows(_) => "invalid_rows",
-            Self::NoLongerEmpty => "no_longer_empty",
+            Self::Changed => "changed",
+            Self::Mismatch => "mismatch",
             Self::PeerRefused(AbortReason::InvalidRows) => "peer_invalid_rows",
-            Self::PeerRefused(AbortReason::NotEmpty) => "peer_not_empty",
+            Self::PeerRefused(AbortReason::Changed) => "peer_changed",
+            Self::PeerRefused(AbortReason::Mismatch) => "peer_mismatch",
+            Self::PeerRefused(AbortReason::Cancelled) => "peer_cancelled",
             Self::PeerRefused(AbortReason::Failed) => "peer_failed",
             Self::Busy => "busy",
             Self::Cancelled => "cancelled",

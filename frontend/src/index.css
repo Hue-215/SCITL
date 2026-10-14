@@ -1708,6 +1708,80 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-5);
 }
 
+/* 同期の競合(SettingsSync.tsx)。単位ごとの枠と、両側の選択肢は.provider-cardと同じく枠線だけで
+   塗らない。選んだ側は枠の色で示す(選択状態はラジオボタン自身も持つ)。両側は幅が足りれば横に並べ、
+   狭い窓では縦に積む。 */
+.sync-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.sync-conflict legend {
+  padding: 0 var(--space-1);
+  font-weight: var(--font-weight-strong);
+}
+
+.sync-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-3);
+}
+
+.sync-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  cursor: pointer;
+}
+
+.sync-side.selected {
+  border-color: var(--color-primary);
+}
+
+.sync-side-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--font-weight-strong);
+}
+
+.sync-side-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.sync-side-title {
+  font-weight: var(--font-weight-strong);
+  overflow-wrap: anywhere;
+}
+
+.sync-side-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sync-side-steps {
+  padding-left: var(--space-5);
+  list-style: disc;
+}
+
+.sync-step-done {
+  color: var(--color-text-secondary);
+  text-decoration: line-through;
+}
+
 /* 主ボタン(タスクを追加・送信)。アクセント色そのものでは影が塗りに溶けるため、専用の塗りに
    する(ui.md「塗りと奥行き」)。 */
 button.primary {

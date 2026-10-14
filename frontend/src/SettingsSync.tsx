@@ -1,19 +1,19 @@
 // 設定画面の「同期」タブ。この端末で待ち受けるか、待ち受けている端末につなぐかを選び、途中経過と
-// 結果を出す。待ち受け・接続・写す順序と、始める前の確認はRust側が持つ(`scitl_sync::listen`)。
+// 結果を出す。競合が出たら(待ち受ける側)両側の中身を並べ、単位ごとに残す側を選ばせる。
+// 待ち受け・接続・結合の順序と、始める前の確認はRust側が持つ(`scitl_sync::listen`)。
 import { useEffect, useId, useRef, useState } from 'react'
-import { cancelSync, syncConnect, syncListen } from './api'
-import type { SyncEvent, SyncReport } from './types'
+import { cancelSync, resolveSyncConflicts, syncConnect, syncListen } from './api'
+import type { ChosenSide, ConflictSide, ConflictView, SyncEvent, SyncReport } from './types'
 import { isolated, type MessageKey, t } from './i18n'
 
 type Running = 'listen' | 'connect'
+type Stage = 'syncing' | 'peer_choosing' | 'finishing'
 
 // 失敗の種類から文言を引き、英語の診断文を詳細として添える(コマンドの失敗と同じ形)。
 function reportText(report: SyncReport): string {
   switch (report.status) {
-    case 'sent':
-      return t('settings.sync.sent', { ...report.counts })
-    case 'received':
-      return t('settings.sync.received', { ...report.counts })
+    case 'synced':
+      return t('settings.sync.synced', { ...report.changed })
     case 'cancelled':
       return t('settings.sync.cancelled')
     case 'failed':
@@ -29,11 +29,138 @@ function spacedCode(code: string): string {
   return `${code.slice(0, 3)} ${code.slice(3)}`
 }
 
+const ROLE_LABELS: Record<string, MessageKey> = {
+  user: 'settings.sync.role_user',
+  assistant: 'settings.sync.role_assistant',
+  error: 'settings.sync.role_error',
+}
+
+function conflictTitle(conflict: ConflictView): string {
+  switch (conflict.kind) {
+    case 'task':
+      return t('settings.sync.conflict_task')
+    case 'general':
+      return t('chat.general_title')
+    case 'memory':
+      return t('settings.sync.conflict_memory')
+  }
+}
+
+// 片側の中身。相手の端末から来た中身も、普段の表示と同じく要素の中に閉じ込めて出す。
+function SideContent({ side, kind }: { side: ConflictSide; kind: ConflictView['kind'] }) {
+  const status = [
+    side.deleted ? t('settings.sync.deleted') : null,
+    side.archived ? t('settings.sync.archived') : null,
+    side.deadline ? t('task.deadline', { deadline: isolated(side.deadline) }) : null,
+  ].filter((s) => s !== null)
+  return (
+    <div className="sync-side-content">
+      {kind === 'task' && <bdi className="sync-side-title">{side.title ?? t('task.untitled')}</bdi>}
+      {kind === 'memory' && <p className="sync-side-text">{side.content}</p>}
+      {status.length > 0 && <p className="settings-hint">{status.join(' · ')}</p>}
+      {side.description && <p className="sync-side-text">{side.description}</p>}
+      {side.steps.length > 0 && (
+        <ul className="sync-side-steps">
+          {side.steps.map((step, i) => (
+            <li key={i} className={step.done ? 'sync-step-done' : undefined}>
+              {step.description}
+            </li>
+          ))}
+        </ul>
+      )}
+      {side.earlier_messages > 0 && (
+        <p className="settings-hint">
+          {t('settings.sync.earlier_messages', { count: side.earlier_messages })}
+        </p>
+      )}
+      {side.messages.map((message, i) => (
+        <div key={i} className="sync-side-message">
+          <span className="settings-hint">
+            {ROLE_LABELS[message.role] ? t(ROLE_LABELS[message.role]) : message.role}
+          </span>
+          <p className="sync-side-text">{message.text}</p>
+        </div>
+      ))}
+      {side.only_here > 0 && (
+        <p className="settings-hint">{t('settings.sync.only_here', { count: side.only_here })}</p>
+      )}
+    </div>
+  )
+}
+
+function ConflictChooser({
+  conflicts,
+  onDone,
+}: {
+  conflicts: ConflictView[]
+  onDone: (sent: ConflictView[]) => void
+}) {
+  const headingId = useId()
+  const [chosen, setChosen] = useState<Record<string, ChosenSide>>({})
+  const [sending, setSending] = useState(false)
+  const complete = conflicts.every((c) => chosen[c.id] !== undefined)
+
+  const submit = async () => {
+    setSending(true)
+    try {
+      const accepted = await resolveSyncConflicts(
+        conflicts.map((c) => ({ id: c.id, side: chosen[c.id] })),
+      )
+      if (accepted) onDone(conflicts)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <section className="settings-section settings-section-break" aria-labelledby={headingId}>
+      <h2 id={headingId}>{t('settings.sync.conflicts_heading')}</h2>
+      <p className="settings-hint">{t('settings.sync.conflicts_hint')}</p>
+      {conflicts.map((conflict) => (
+        <fieldset key={conflict.id} className="sync-conflict">
+          <legend>{conflictTitle(conflict)}</legend>
+          <div className="sync-sides">
+            {(['ours', 'theirs'] as const).map((side) => (
+              <label
+                key={side}
+                className={chosen[conflict.id] === side ? 'sync-side selected' : 'sync-side'}
+              >
+                <span className="sync-side-choice">
+                  <input
+                    type="radio"
+                    name={conflict.id}
+                    checked={chosen[conflict.id] === side}
+                    disabled={sending}
+                    onChange={() => setChosen((c) => ({ ...c, [conflict.id]: side }))}
+                  />
+                  {t(side === 'ours' ? 'settings.sync.ours' : 'settings.sync.theirs')}
+                </span>
+                <SideContent side={conflict[side]} kind={conflict.kind} />
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ))}
+      <div className="button-row">
+        <button
+          type="button"
+          className="primary"
+          disabled={!complete || sending}
+          onClick={() => void submit()}
+        >
+          {t('settings.sync.resolve')}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 export function SyncTab() {
   const [running, setRunning] = useState<Running | null>(null)
   const [listening, setListening] = useState<{ addresses: string[]; code: string } | null>(null)
-  // 写している段(`copying`)と、受け取る側が書き始めて止められない段(`finishing`)。
-  const [copying, setCopying] = useState<'copying' | 'finishing' | null>(null)
+  // 相手を確かめたあとの段。書き始めた段(`finishing`)は止められない。
+  const [stage, setStage] = useState<Stage | null>(null)
+  const [conflicts, setConflicts] = useState<ConflictView[] | null>(null)
   const [report, setReport] = useState<SyncReport | null>(null)
   const [address, setAddress] = useState('')
   const [code, setCode] = useState('')
@@ -51,11 +178,17 @@ export function SyncTab() {
   // 途中経過と結果は別の経路で届くので、結果のあとに届いた途中経過は捨てる。
   const onEvent = (event: SyncEvent) => {
     if (!runningRef.current) return
-    if (event.type === 'listening') {
-      setListening({ addresses: event.addresses, code: event.code })
-    } else {
-      setListening(null)
-      setCopying(event.type)
+    switch (event.type) {
+      case 'listening':
+        setListening({ addresses: event.addresses, code: event.code })
+        break
+      case 'conflicts':
+        setConflicts(event.conflicts)
+        break
+      default:
+        setListening(null)
+        setConflicts(null)
+        setStage(event.type)
     }
   }
 
@@ -69,7 +202,8 @@ export function SyncTab() {
       runningRef.current = false
       setRunning(null)
       setListening(null)
-      setCopying(null)
+      setStage(null)
+      setConflicts(null)
     }
   }
 
@@ -78,11 +212,25 @@ export function SyncTab() {
     void start('connect', () => syncConnect(address, code, onEvent))
   }
 
-  const status = copying
-    ? t('settings.sync.copying')
-    : running === 'connect'
-      ? t('settings.sync.connecting')
-      : null
+  const status =
+    stage === 'peer_choosing'
+      ? t('settings.sync.peer_choosing')
+      : stage !== null && conflicts === null
+        ? t('settings.sync.syncing')
+        : running === 'connect' && stage === null
+          ? t('settings.sync.connecting')
+          : null
+
+  const stopButton = (
+    // 書き始めたら止められない。確定をやり直して競合を選び直す間は、まだ書いていないので止められる。
+    <button
+      type="button"
+      disabled={stage === 'finishing' && conflicts === null}
+      onClick={() => void cancelSync()}
+    >
+      {t('settings.sync.stop')}
+    </button>
+  )
 
   return (
     <div className="settings-panel">
@@ -115,13 +263,7 @@ export function SyncTab() {
         )}
         <div className="button-row">
           {running === 'listen' ? (
-            <button
-              type="button"
-              disabled={copying === 'finishing'}
-              onClick={() => void cancelSync()}
-            >
-              {t('settings.sync.stop')}
-            </button>
+            stopButton
           ) : (
             <button
               type="button"
@@ -165,13 +307,7 @@ export function SyncTab() {
         </label>
         <div className="button-row">
           {running === 'connect' ? (
-            <button
-              type="button"
-              disabled={copying === 'finishing'}
-              onClick={() => void cancelSync()}
-            >
-              {t('settings.sync.stop')}
-            </button>
+            stopButton
           ) : (
             <button
               type="submit"
@@ -184,6 +320,13 @@ export function SyncTab() {
         </div>
       </form>
 
+      {conflicts && (
+        <ConflictChooser
+          conflicts={conflicts}
+          // 送ったあとに次の競合(確定をやり直したとき)が届いていれば、そちらを残す。
+          onDone={(sent) => setConflicts((c) => (c === sent ? null : c))}
+        />
+      )}
       {status && <p>{status}</p>}
       {report && (
         <p className={report.status === 'failed' ? 'error' : undefined}>{reportText(report)}</p>

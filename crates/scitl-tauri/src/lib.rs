@@ -37,6 +37,8 @@ pub struct AppState {
     pub requested_chat: Mutex<Option<Channel<Chat>>>,
     /// 端末間の同期が触るもの(`commands::sync`)。
     pub sync: scitl_sync::Context,
+    /// 同期の競合で、画面が選んだ側の受け口(`commands::sync::resolve_sync_conflicts`)。
+    pub sync_answers: scitl_sync::ConflictAnswers,
 }
 
 impl AppState {
@@ -200,6 +202,7 @@ pub fn run() {
             commands::sync::sync_listen,
             commands::sync::sync_connect,
             commands::sync::cancel_sync,
+            commands::sync::resolve_sync_conflicts,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -288,6 +291,7 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
         dropped: Mutex::new(None),
         requested_chat: Mutex::new(None),
         sync,
+        sync_answers: scitl_sync::ConflictAnswers::default(),
     })
 }
 

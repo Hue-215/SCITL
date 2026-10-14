@@ -3,11 +3,13 @@
 
 mod address;
 mod code;
+mod conflict;
 mod convert;
 mod device;
 mod error;
 mod files;
 mod frame;
+mod merge;
 mod pake;
 mod run;
 mod session;
@@ -18,13 +20,19 @@ mod validate;
 
 pub use address::{local_addresses, parse_peer_address};
 pub use code::PairingCode;
+pub use conflict::{
+    ChosenSide, ConflictChoice, ConflictKind, ConflictMessage, ConflictSide, ConflictStep,
+    ConflictView,
+};
 pub use device::{confirm_device_id, renew_device_id, DeviceRegistry, SecretStore};
 pub use error::{InvalidRow, SyncError};
-pub use run::{cancel, connect_to, listen, Request, SyncDialog, SyncEvent, SyncReport};
+pub use run::{
+    answer, cancel, connect_to, listen, ConflictAnswers, Request, SyncDialog, SyncEvent, SyncReport,
+};
 pub use session::{connect, Limits, Listener, LocalVersions, Session};
-pub use transfer::{copy, Context, Outcome, Side};
+pub use transfer::{sync, Context, Outcome, Resolver, Side, Stage};
 pub use transport::{AbortReason, Counts};
 
 /// プロトコルの版。運ぶ形・IDの宣言・取り込む行の検証・照合の値のどれかを変えたら上げる
 /// (`docs/sync/index.md` 3節)。
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;

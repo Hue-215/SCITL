@@ -1,7 +1,7 @@
 //! 端末間の同期(`docs/sync/index.md` 11節)。どちらの役も、始める前にRust側からネイティブの
-//! ダイアログで確かめる。途中経過は`Channel`で知らせ、結果は失敗も含めて`SyncReport`で返す。
+//! ダイアログで確かめる。途中経過と競合は`Channel`で知らせ、結果は失敗も含めて`SyncReport`で返す。
 
-use scitl_sync::{Request, SyncEvent, SyncReport};
+use scitl_sync::{ConflictChoice, Request, SyncEvent, SyncReport};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
@@ -48,10 +48,18 @@ pub fn cancel_sync(state: State<'_, AppState>) {
     scitl_sync::cancel(&state.generating);
 }
 
+/// 見せている競合の、選んだ側を渡す。見せている競合のすべてに1つずつ選んでいなければ受け取らず、
+/// `false`を返す。
+#[tauri::command]
+pub fn resolve_sync_conflicts(state: State<'_, AppState>, choices: Vec<ConflictChoice>) -> bool {
+    scitl_sync::answer(&state.sync_answers, choices)
+}
+
 fn request<'a>(state: &'a State<'_, AppState>) -> Request<'a> {
     Request {
         ctx: &state.sync,
         generating: &state.generating,
+        answers: &state.sync_answers,
         lang: state.settings.display_language(),
     }
 }
