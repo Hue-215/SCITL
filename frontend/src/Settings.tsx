@@ -23,6 +23,7 @@ import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
 import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
+import { SyncTab } from './SettingsSync'
 import { type Drafts, DraftsContext } from './settingsInput'
 import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
@@ -38,6 +39,7 @@ const TABS = [
   { id: 'memory', label: 'settings.nav.memory' },
   { id: 'providers', label: 'settings.nav.provider' },
   { id: 'mcp', label: 'settings.nav.tools' },
+  { id: 'sync', label: 'settings.nav.sync' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -256,6 +258,8 @@ export default function Settings({ onClose }: SettingsProps) {
                 />
               ) : tab === 'memory' ? (
                 <MemoryTab />
+              ) : tab === 'sync' ? (
+                <SyncTab />
               ) : tab === 'providers' ? (
                 <ProvidersTab
                   settings={settings}

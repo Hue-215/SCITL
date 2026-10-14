@@ -106,6 +106,7 @@ pub(crate) struct Transport {
 
 /// 写した行の数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Counts {
     pub tasks: usize,
     pub steps: usize,

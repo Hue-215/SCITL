@@ -7,6 +7,7 @@ pub mod memories;
 pub mod requested_chat;
 pub mod settings;
 pub mod startup;
+pub mod sync;
 pub mod tasks;
 
 use std::sync::Arc;

@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 scitl-core = { path = "../scitl-core" }
+scitl-sync = { path = "../scitl-sync" }
 tauri = { version = "2", features = [] }
 secrecy = { workspace = true }
 tauri-plugin-dialog = "2"

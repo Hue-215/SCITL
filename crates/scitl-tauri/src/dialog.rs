@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use scitl_core::link::LinkDialog;
 use scitl_core::settings::DestinationDialog;
+use scitl_sync::SyncDialog;
 use tauri::AppHandle;
 #[cfg(desktop)]
 use tauri::Manager;
@@ -68,6 +69,23 @@ fn show(
 pub fn confirm_destination(
     app: &AppHandle,
 ) -> impl FnOnce(&DestinationDialog) -> bool + Send + 'static {
+    let app = app.clone();
+    move |dialog| {
+        show(
+            &app,
+            &dialog.title,
+            &dialog.message,
+            MessageDialogKind::Warning,
+            MessageDialogButtons::OkCancelCustom(
+                dialog.confirm_label.clone(),
+                dialog.cancel_label.clone(),
+            ),
+        )
+    }
+}
+
+/// 端末間の同期を始める前の確認(`scitl_sync::listen`・`connect_to`)。承認されたときだけ真。
+pub fn confirm_sync(app: &AppHandle) -> impl FnOnce(&SyncDialog) -> bool + Send + 'static {
     let app = app.clone();
     move |dialog| {
         show(

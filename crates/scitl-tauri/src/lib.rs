@@ -35,6 +35,8 @@ pub struct AppState {
     pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
     /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
     pub requested_chat: Mutex<Option<Channel<Chat>>>,
+    /// 端末間の同期が触るもの(`commands::sync`)。
+    pub sync: scitl_sync::Context,
 }
 
 impl AppState {
@@ -191,6 +193,9 @@ pub fn run() {
             commands::memories::delete_memory,
             commands::link::open_link,
             commands::requested_chat::watch_requested_chats,
+            commands::sync::sync_listen,
+            commands::sync::sync_connect,
+            commands::sync::cancel_sync,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -259,10 +264,13 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     scitl_core::db::checkpoint_wal(&db);
 
     let settings = Settings::load(data.config());
-    let attachments = Arc::new(Attachments::new(AttachmentStore::new(
-        data.attachments(),
-        paths::revealed_attachments(cache),
-    )));
+    let store = AttachmentStore::new(data.attachments(), paths::revealed_attachments(cache));
+    let sync = scitl_sync::Context {
+        db: db.clone(),
+        attachments: store.clone(),
+        registry: Arc::new(scitl_sync::SecretStore),
+    };
+    let attachments = Arc::new(Attachments::new(store));
 
     let settings = Arc::new(settings);
     Ok(AppState {
@@ -275,6 +283,7 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
         export_staging: paths::export_staging(cache),
         dropped: Mutex::new(None),
         requested_chat: Mutex::new(None),
+        sync,
     })
 }
 

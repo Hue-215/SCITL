@@ -1,0 +1,360 @@
+//! 画面から始める同期(`docs/sync/index.md` 11節)。画面は始めることと「やめる」を伝え、途中経過を
+//! 受け取るだけで、待ち受け・接続・移送の順序はここが持つ。始める前に、ネイティブのダイアログで
+//! 利用者に確かめる(同期を始めるコマンドは、乗っ取られた画面も呼べるため)。
+
+use std::net::SocketAddr;
+
+use serde::Serialize;
+
+use scitl_core::db::messages::Chat;
+use scitl_core::i18n::{self, Language};
+use scitl_core::in_flight::InFlightSet;
+use scitl_core::{blocking, db, text};
+
+use crate::transport::Counts;
+use crate::{
+    confirm_device_id, connect, copy, local_addresses, parse_peer_address, Context, Limits,
+    Listener, LocalVersions, Outcome, PairingCode, Side, SyncError,
+};
+
+/// 始める前の確認のダイアログに出す文面(表示言語)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncDialog {
+    pub title: String,
+    pub message: String,
+    pub confirm_label: String,
+    pub cancel_label: String,
+}
+
+/// 画面へ知らせる途中経過。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SyncEvent {
+    /// 待ち受けを始めた。相手の端末で打つアドレス(候補のすべて)と数字。
+    Listening {
+        addresses: Vec<String>,
+        code: String,
+    },
+    /// 相手を確かめ終え、写し始めた。
+    Copying,
+}
+
+/// 同期の結果。失敗は種類([`SyncError::kind`])と、英語の診断文。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SyncReport {
+    Sent {
+        counts: Counts,
+    },
+    Received {
+        counts: Counts,
+    },
+    /// 確認のダイアログで取りやめたか、「やめる」で止めた。
+    Cancelled,
+    Failed {
+        kind: String,
+        detail: String,
+    },
+}
+
+impl From<Result<Outcome, SyncError>> for SyncReport {
+    fn from(result: Result<Outcome, SyncError>) -> Self {
+        match result {
+            Ok(Outcome::Sent(counts)) => Self::Sent { counts },
+            Ok(Outcome::Received(counts)) => Self::Received { counts },
+            Err(e) => Self::Failed {
+                kind: e.kind().to_string(),
+                detail: e.to_string(),
+            },
+        }
+    }
+}
+
+/// 同期を始めるのに要るもの。
+pub struct Request<'a> {
+    pub ctx: &'a Context,
+    /// 応答を生成中の会話。同期の間は全体を押さえ、送信・編集・タスクの操作を受け付けない
+    /// (4節)。生成中の会話があれば始めない。
+    pub generating: &'a InFlightSet<Chat>,
+    pub lang: Language,
+}
+
+/// 待ち受けて、つないできた相手と全部を写す。
+pub async fn listen(
+    request: Request<'_>,
+    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    events: impl Fn(SyncEvent),
+) -> SyncReport {
+    let dialog = SyncDialog {
+        title: i18n::text(request.lang, "sync_dialog.listen_title").to_string(),
+        message: i18n::format(
+            request.lang,
+            "sync_dialog.listen_message",
+            &[(
+                "minutes",
+                &(Limits::default().listen_window.as_secs() / 60).to_string(),
+            )],
+        ),
+        confirm_label: i18n::text(request.lang, "sync_dialog.listen_confirm").to_string(),
+        cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
+    };
+    run(request, dialog, confirm, |ctx| async move {
+        let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
+        let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
+        events(SyncEvent::Listening {
+            addresses: listener
+                .addresses()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            code: listener.code().as_str().to_string(),
+        });
+        let mut session = listener.accept(local_versions()).await?;
+        events(SyncEvent::Copying);
+        let outcome = copy(&mut session, ctx, Side::Listener, &device_id).await;
+        session.close().await;
+        outcome
+    })
+    .await
+}
+
+/// 待ち受けている相手へつなぎ、全部を写す。`address`と`code`は利用者が打ったまま受け取る。
+pub async fn connect_to(
+    request: Request<'_>,
+    address: &str,
+    code: &str,
+    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    events: impl Fn(SyncEvent),
+) -> SyncReport {
+    let parsed = parse_peer_address(address).and_then(|a| Ok((a, PairingCode::parse(code)?)));
+    let (address, code): (SocketAddr, PairingCode) = match parsed {
+        Ok(parsed) => parsed,
+        Err(e) => return Err(e).into(),
+    };
+    let dialog = SyncDialog {
+        title: i18n::text(request.lang, "sync_dialog.connect_title").to_string(),
+        message: i18n::format(
+            request.lang,
+            "sync_dialog.connect_message",
+            &[(
+                "address",
+                &text::reveal_invisible_line(&address.to_string()),
+            )],
+        ),
+        confirm_label: i18n::text(request.lang, "sync_dialog.connect_confirm").to_string(),
+        cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
+    };
+    run(request, dialog, confirm, |ctx| async move {
+        let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
+        let mut session = connect(&[address], &code, local_versions(), Limits::default()).await?;
+        events(SyncEvent::Copying);
+        let outcome = copy(&mut session, ctx, Side::Connector, &device_id).await;
+        session.close().await;
+        outcome
+    })
+    .await
+}
+
+/// 進んでいる同期に止める指示を出す。同期していなければ`false`。
+pub fn cancel(generating: &InFlightSet<Chat>) -> bool {
+    generating.request_stop_all()
+}
+
+fn local_versions() -> LocalVersions {
+    LocalVersions {
+        db_version: db::schema_version(),
+    }
+}
+
+/// 全体を押さえ、確かめてから`sync`を走らせる。止める指示が来たら、そこで落とす(書き込みは
+/// どれも1つのトランザクションなので、半端には残らない。`docs/sync/index.md` 4節「途中で切れたとき」)。
+async fn run<'c, F, Fut>(
+    request: Request<'c>,
+    dialog: SyncDialog,
+    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    sync: F,
+) -> SyncReport
+where
+    F: FnOnce(&'c Context) -> Fut,
+    Fut: std::future::Future<Output = Result<Outcome, SyncError>>,
+{
+    let Some(all) = request.generating.try_begin_all() else {
+        return Err(SyncError::Busy).into();
+    };
+    match blocking::run(move || Ok(confirm(&dialog))).await {
+        Ok(true) => {}
+        Ok(false) => return SyncReport::Cancelled,
+        Err(e) => return Err(SyncError::Core(e)).into(),
+    }
+    match all.stop_signal().unless_requested(sync(request.ctx)).await {
+        Some(result) => result.into(),
+        None => SyncReport::Cancelled,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use scitl_core::attachments::AttachmentStore;
+    use scitl_core::CoreError;
+
+    use super::*;
+    use crate::transport::AbortReason;
+    use crate::DeviceRegistry;
+
+    struct Registry;
+
+    impl DeviceRegistry for Registry {
+        fn is_registered(&self, _: &str) -> Result<bool, CoreError> {
+            Ok(true)
+        }
+
+        fn register(&self, _: &str) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    fn context(dir: &tempfile::TempDir) -> Context {
+        Context {
+            db: Arc::new(Mutex::new(db::open_in_memory().unwrap())),
+            attachments: AttachmentStore::new(dir.path().join("b"), dir.path().join("r")),
+            registry: Arc::new(Registry),
+        }
+    }
+
+    /// 全種類。網羅的な`match`を置き、種類を足したらここがコンパイルエラーになるようにする。
+    fn every_error() -> Vec<SyncError> {
+        let io = || std::io::Error::other("x");
+        let all = vec![
+            SyncError::AddressNotAllowed(String::new()),
+            SyncError::NoLocalAddress,
+            SyncError::Bind(io()),
+            SyncError::Connect(io()),
+            SyncError::Io(io()),
+            SyncError::Tls(rustls::Error::DecryptError),
+            SyncError::TimedOut,
+            SyncError::WindowExpired,
+            SyncError::CodeMismatch,
+            SyncError::PeerClosed,
+            SyncError::FrameTooLarge { len: 0, max: 0 },
+            SyncError::Malformed(String::new()),
+            SyncError::ProtocolMismatch { ours: 1, theirs: 2 },
+            SyncError::DbVersionMismatch { ours: 1, theirs: 2 },
+            SyncError::DeviceCheck(CoreError::Cancelled),
+            SyncError::SameDevice,
+            SyncError::BothHaveData,
+            SyncError::NothingToCopy,
+            SyncError::InvalidRows(Vec::new()),
+            SyncError::NoLongerEmpty,
+            SyncError::PeerRefused(AbortReason::InvalidRows),
+            SyncError::PeerRefused(AbortReason::NotEmpty),
+            SyncError::PeerRefused(AbortReason::Failed),
+            SyncError::Core(CoreError::Cancelled),
+            SyncError::InvalidCode,
+            SyncError::Busy,
+        ];
+        for e in &all {
+            match e {
+                SyncError::AddressNotAllowed(_)
+                | SyncError::NoLocalAddress
+                | SyncError::Bind(_)
+                | SyncError::Connect(_)
+                | SyncError::Io(_)
+                | SyncError::Tls(_)
+                | SyncError::TimedOut
+                | SyncError::WindowExpired
+                | SyncError::CodeMismatch
+                | SyncError::PeerClosed
+                | SyncError::FrameTooLarge { .. }
+                | SyncError::Malformed(_)
+                | SyncError::ProtocolMismatch { .. }
+                | SyncError::DbVersionMismatch { .. }
+                | SyncError::DeviceCheck(_)
+                | SyncError::SameDevice
+                | SyncError::BothHaveData
+                | SyncError::NothingToCopy
+                | SyncError::InvalidRows(_)
+                | SyncError::NoLongerEmpty
+                | SyncError::PeerRefused(_)
+                | SyncError::Core(_)
+                | SyncError::InvalidCode
+                | SyncError::Busy => {}
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn every_failure_has_a_message_in_every_language() {
+        for e in every_error() {
+            let key = format!("settings.sync.error.{}", e.kind());
+            for lang in Language::ALL {
+                assert_ne!(i18n::text(lang, &key), key, "{key} in {lang:?}");
+            }
+        }
+    }
+
+    fn no_dialog(_: &SyncDialog) -> bool {
+        panic!("the dialog must not be shown")
+    }
+
+    #[tokio::test]
+    async fn a_mistyped_address_or_code_is_refused_before_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        for (address, code, kind) in [
+            ("example.com:1", "123456", "invalid_address"),
+            ("192.168.1.5:50123", "12345", "invalid_code"),
+        ] {
+            let request = Request {
+                ctx: &ctx,
+                generating: &generating,
+                lang: Language::DEFAULT,
+            };
+            let report = connect_to(request, address, code, no_dialog, |_| {}).await;
+            assert!(
+                matches!(&report, SyncReport::Failed { kind: k, .. } if k == kind),
+                "{report:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn syncing_does_not_start_while_a_response_is_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let _busy = generating.try_begin(Chat::General).unwrap();
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            lang: Language::DEFAULT,
+        };
+        let report = listen(request, no_dialog, |_| {}).await;
+        assert!(
+            matches!(&report, SyncReport::Failed { kind, .. } if kind == "busy"),
+            "{report:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn declining_the_dialog_starts_nothing_and_lets_chats_run_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let events = Mutex::new(Vec::new());
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            lang: Language::DEFAULT,
+        };
+        let report = listen(request, |_| false, |e| events.lock().unwrap().push(e)).await;
+        assert_eq!(report, SyncReport::Cancelled);
+        assert!(events.lock().unwrap().is_empty());
+        assert!(generating.try_begin(Chat::General).is_some());
+    }
+}

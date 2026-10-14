@@ -39,9 +39,7 @@ impl PairingCode {
             })
             .collect();
         if digits.len() != DIGITS || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(SyncError::Malformed(
-                "pairing code must be 6 digits".to_string(),
-            ));
+            return Err(SyncError::InvalidCode);
         }
         Ok(Self(digits))
     }

@@ -37,17 +37,41 @@ fn to_halfwidth(c: char) -> char {
 }
 
 /// 待ち受ける側が出すアドレスの候補。インターフェースのアドレスのうちプライベートIPだけを、
-/// IPv4を先にして返す。ループバックは含めない(ほかの端末からは届かない)。
+/// IPv4を先にして返す。ループバックは含めない(ほかの端末からは届かない)。コンテナ・仮想マシンの
+/// 仮想インターフェース([`VIRTUAL_INTERFACES`])は、ほかの端末から届かないので外す(外すと1つも
+/// 残らなければ、外さずに返す)。
 pub fn local_addresses() -> Result<Vec<IpAddr>, SyncError> {
     let interfaces = if_addrs::get_if_addrs().map_err(SyncError::Bind)?;
-    let mut ips: Vec<IpAddr> = interfaces
+    let private: Vec<&if_addrs::Interface> = interfaces
         .iter()
-        .map(|i| i.ip())
-        .filter(|ip| matches!(classify_ip(*ip), HostClass::PrivateLiteral))
+        .filter(|i| matches!(classify_ip(i.ip()), HostClass::PrivateLiteral))
         .collect();
+    let physical: Vec<&if_addrs::Interface> = private
+        .iter()
+        .copied()
+        .filter(|i| !is_virtual(&i.name))
+        .collect();
+    let chosen = if physical.is_empty() {
+        private
+    } else {
+        physical
+    };
+    let mut ips: Vec<IpAddr> = chosen.iter().map(|i| i.ip()).collect();
     ips.sort_by_key(|ip| (ip.is_ipv6(), *ip));
     ips.dedup();
     Ok(ips)
+}
+
+/// コンテナ(Docker・Podman・LXC)・仮想マシン(libvirt・VMware・VirtualBox)が作るインターフェースの
+/// 名前の前置き(Linux)。VPNは同じ網のほかの端末へ届くので外さない。
+const VIRTUAL_INTERFACES: &[&str] = &[
+    "docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "lxcbr", "lxdbr", "podman", "cni",
+];
+
+fn is_virtual(name: &str) -> bool {
+    VIRTUAL_INTERFACES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -64,6 +88,16 @@ mod tests {
             "[::1]:80",
         ] {
             assert!(parse_peer_address(input).is_ok(), "{input}");
+        }
+    }
+
+    #[test]
+    fn container_and_vm_interfaces_are_left_out() {
+        for name in ["docker0", "br-1a2b3c", "veth12ab", "virbr0", "vboxnet0"] {
+            assert!(is_virtual(name), "{name}");
+        }
+        for name in ["wlan0", "eth0", "enp3s0", "tun0", "wg0", "Wi-Fi"] {
+            assert!(!is_virtual(name), "{name}");
         }
     }
 
