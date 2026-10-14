@@ -17,6 +17,9 @@
 | attempt_no | INTEGER | NULL可 |
 | deleted_at | TEXT | ISO8601。NULL=未削除 |
 | created_at | TEXT | ISO8601。NOT NULL |
+| prev_uid | TEXT | 通常発言(`kind='normal'`)だけが持てる。作った時点で、その会話の消えていない最後の通常発言の`uid`(無ければNULL)。`db::messages::insert_message`が付け、変えない(`../../sync/index.md` 9節)。移行の前からあった行は、会話ごとに`id`の順で、直前の消えていない通常発言を指す |
+
+同期のための列(`uid`・`sync_seq`・`sync_version`・`sync_changed`)は`tables.md`「同期のための列」。
 
 `CHECK (kind <> 'tool_execution' OR json_valid(content))` — ツール実行記録の `content` は
 構造化データ(JSON)であることを制約で保証する。

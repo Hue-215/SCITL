@@ -113,6 +113,40 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
   無いので操作の記録にしない(`../architecture/prompt-shape.md`「状態と日時の伝え方」)
 - 並べ替えの操作が無いので`order_index`は持たない。件数の上限が小さいので索引も張らない
 
+### 同期のための列(Issue #588)
+
+端末間の同期(`../../sync/index.md`)のために持つ。上の各テーブルの表には書かない。付けるのは
+`0011_sync_columns.sql`のトリガーで、編集する側のコードは触らない(`messages.prev_uid`だけは
+`db::messages::insert_message`が付ける。`messages.md`)。
+
+| カラム | 持つテーブル | 型 | 制約・備考 |
+|---|---|---|---|
+| uid | `tasks`・`task_steps`・`memories`・`messages`・`attachments` | TEXT | 小文字16進32桁。一意の索引。INSERTのトリガーが、指定が無ければ乱数で振る。一度付いたら変えない(トリガー)。列はNULL可だが、トリガーのあとにNULLの行は残らない |
+| sync_seq | 同上 | INTEGER | NOT NULL。INSERT・UPDATEのたびに、トリガーが`sync_state.counter`を進めて振る |
+| sync_version | `tasks`・`task_steps`・`memories`・`messages` | TEXT | NOT NULL、既定`'{}'`。版(端末ID → その端末での番号)のJSONオブジェクト。`messages`では`deleted_at`の版。振るのは同期の層だけ |
+| sync_changed | 同上 | INTEGER | NOT NULL、既定0。`0`/`1`。同期のあとに変えた印。トリガーが、INSERTと、比べる欄(`../../sync/index.md` 8節)の値が変わったUPDATEで付ける。外すのは同期の層だけ |
+
+- 印の判定は、状態を表す日時(`archived_at`・`deleted_at`・`done_at`)は有無だけ、`updated_at`は見ない
+- UPDATEのトリガーは`sync_seq`を書かない書き込みにだけ掛け、トリガー自身の書き込みで再び動かない
+- 移行(`0011_sync_columns.sql`)の前からあった行は、`sync_seq`を1、版を空、印なしとした
+  (`../../sync/index.md` 12節)
+
+#### sync_state(端末IDとカウンター)
+
+| カラム | 型 | 制約・備考 |
+|---|---|---|
+| id | INTEGER | PRIMARY KEY、`CHECK (id = 1)`。行は1つだけ |
+| device_id | TEXT | NOT NULL。小文字16進32桁。マイグレーションで乱数で作る |
+| counter | INTEGER | NOT NULL、1以上。`sync_seq`と版の番号はどちらもここから取る |
+
+#### sync_cursors(相手ごとのカーソル)
+
+| カラム | 型 | 制約・備考 |
+|---|---|---|
+| peer_device_id | TEXT | PRIMARY KEY。相手の端末ID |
+| sent_seq | INTEGER | NOT NULL、既定0。相手へ渡した位置(自分の`sync_seq`) |
+| received_seq | INTEGER | NOT NULL、既定0。相手から受け取った位置(相手の`sync_seq`) |
+
 ## 3. 索引
 
 - `messages(task_id, created_at)` — 会話単位の発言取得(支配的クエリ)
@@ -121,6 +155,7 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 - `attachments(message_id)`
 - `attachments(file_hash)` — 実体の重複排除の判定
 - `turn_transcripts(task_id)` — 会話ごとの送った形の取得
+- 各テーブルの`uid`(一意) — 同期で受け取った行を自分の連番へ置き換える
 
 ## 4. 接続時のPRAGMA
 
@@ -217,6 +252,8 @@ DBのロックが守るのは1回の書き込みの整合性まで。応答生�
 `CREATE TABLE` に含める。作った後に加わった不変条件は、再構築の代わりに `BEFORE INSERT`/`BEFORE UPDATE` の
 トリガーで同じ条件を表す(例: `0002_tool_execution_role.sql`)。再構築は外部キーの一時
 無効化を伴い、マイグレーションのトランザクション内では行えないため。
+後から足す列そのものの制約は、`ADD COLUMN`に書ける(既存の行にも確かめられる。例:
+`0011_sync_columns.sql`)。ただし既定値に式は置けない。
 
 ## 6. DBと設定ファイルの境界、秘密情報
 

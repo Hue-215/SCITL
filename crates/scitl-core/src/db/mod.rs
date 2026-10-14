@@ -26,6 +26,7 @@ const REPLY_PARTS_SQL: &str = include_str!("../../../../migrations/0008_reply_pa
 const MEMORIES_SQL: &str = include_str!("../../../../migrations/0009_memories.sql");
 const REPLY_PART_TRUNCATED_SQL: &str =
     include_str!("../../../../migrations/0010_reply_part_truncated.sql");
+const SYNC_COLUMNS_SQL: &str = include_str!("../../../../migrations/0011_sync_columns.sql");
 
 /// DBの列に文字列で持つ列挙。列の値との対応をここに1度だけ書き、書き込み(`ToSql`)と
 /// 読み出し(`FromSql`)を同じ対応から作る。値は列のCHECK制約と揃える。
@@ -132,6 +133,7 @@ const MIGRATIONS: &[&str] = &[
     REPLY_PARTS_SQL,
     MEMORIES_SQL,
     REPLY_PART_TRUNCATED_SQL,
+    SYNC_COLUMNS_SQL,
 ];
 
 /// 先頭から`target`個目までのマイグレーションを適用する。適用済みの版の読み取りから
@@ -580,5 +582,333 @@ mod tests {
         let result = migrate_to(&conn, MIGRATIONS.len());
 
         assert!(matches!(result, Err(CoreError::Migration(_))), "{result:?}");
+    }
+
+    fn is_uid(value: &str) -> bool {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    }
+
+    /// 行の`sync_seq`・印・版。
+    fn sync_columns(conn: &Connection, table: &str, id: i64) -> (i64, bool, String) {
+        conn.query_row(
+            &format!("SELECT sync_seq, sync_changed, sync_version FROM {table} WHERE id = ?1"),
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    fn counter(conn: &Connection) -> i64 {
+        conn.query_row("SELECT counter FROM sync_state", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// 既存の行には`uid`を振り、番号1で書いたものとし、版を空にして印を付けない
+    /// (`docs/sync/index.md` 12節)。既存の通常発言の`prev_uid`は、会話ごとに直前の消えていない
+    /// 通常発言を指す。
+    #[test]
+    fn existing_rows_get_sync_columns_without_a_mark() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        migrate_to(&conn, 10).unwrap();
+        let at = "2026-01-01T00:00:00Z";
+        let insert = |sql: &str, params: &[&dyn rusqlite::ToSql]| {
+            conn.execute(sql, params).unwrap();
+            conn.last_insert_rowid()
+        };
+        let task = insert(
+            "INSERT INTO tasks (created_at, updated_at) VALUES (?1, ?1)",
+            &[&at],
+        );
+        let step = insert(
+            "INSERT INTO task_steps (task_id, description, order_index, created_at)
+             VALUES (?1, '買い出し', 0, ?2)",
+            &[&task, &at],
+        );
+        let memory = insert(
+            "INSERT INTO memories (content, created_at, updated_at) VALUES ('朝型', ?1, ?1)",
+            &[&at],
+        );
+        let message = |task: Option<i64>, role: &str, turn: Option<&str>, deleted: bool| {
+            let (kind, content, parts) = match role {
+                "tool" => ("tool_execution", "{}", None),
+                "user" => ("normal", "本文", None),
+                _ => ("normal", "", Some("[]")),
+            };
+            insert(
+                "INSERT INTO messages (task_id, role, content, kind, parts, turn_id, attempt_no,
+                                       deleted_at, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                &[
+                    &task,
+                    &role,
+                    &content,
+                    &kind,
+                    &parts,
+                    &turn,
+                    &turn.map(|_| 1),
+                    &deleted.then_some(at),
+                    &at,
+                ],
+            )
+        };
+        let first = message(Some(task), "user", None, false);
+        let record = message(Some(task), "tool", Some("t1"), false);
+        let reply = message(Some(task), "assistant", Some("t1"), false);
+        // 編集前の発言と、それに答えた返信。
+        let edited_away = message(Some(task), "user", None, true);
+        let discarded_reply = message(Some(task), "assistant", Some("t2"), true);
+        let edited = message(Some(task), "user", None, false);
+        let general = message(None, "user", None, false);
+        let attachment = insert(
+            "INSERT INTO attachments (message_id, original_name, mime_type, kind, size_bytes,
+                                      content_text, created_at)
+             VALUES (?1, 'a.txt', 'text/plain', 'text', 1, 'a', ?2)",
+            &[&first, &at],
+        );
+
+        migrate_to(&conn, MIGRATIONS.len()).unwrap();
+
+        let uid = |table: &str, id: i64| -> String {
+            conn.query_row(
+                &format!("SELECT uid FROM {table} WHERE id = ?1"),
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let rows = [
+            ("tasks", task),
+            ("task_steps", step),
+            ("memories", memory),
+            ("messages", first),
+            ("messages", record),
+        ];
+        let mut uids: Vec<String> = rows.iter().map(|(t, id)| uid(t, *id)).collect();
+        uids.push(uid("attachments", attachment));
+        assert!(uids.iter().all(|u| is_uid(u)), "{uids:?}");
+        uids.sort();
+        uids.dedup();
+        assert_eq!(uids.len(), rows.len() + 1);
+        for (table, id) in rows {
+            assert_eq!(sync_columns(&conn, table, id), (1, false, "{}".to_string()));
+        }
+        assert_eq!(counter(&conn), 1);
+        let device_id: String = conn
+            .query_row("SELECT device_id FROM sync_state", [], |r| r.get(0))
+            .unwrap();
+        assert!(is_uid(&device_id), "{device_id}");
+
+        let prev_uid = |id: i64| -> Option<String> {
+            conn.query_row("SELECT prev_uid FROM messages WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(prev_uid(first), None);
+        assert_eq!(prev_uid(record), None);
+        assert_eq!(prev_uid(reply), Some(uid("messages", first)));
+        assert_eq!(prev_uid(edited_away), Some(uid("messages", reply)));
+        assert_eq!(prev_uid(discarded_reply), Some(uid("messages", reply)));
+        assert_eq!(prev_uid(edited), Some(uid("messages", reply)));
+        assert_eq!(prev_uid(general), None);
+    }
+
+    /// どのテーブルへの書き込みも、DBに1つのカウンターを進めて番号を取る。
+    #[test]
+    fn every_write_takes_the_next_number_from_one_counter() {
+        let conn = open_in_memory().unwrap();
+        let task_id = tasks::create_task(&conn).unwrap().id;
+        let created = sync_columns(&conn, "tasks", task_id).0;
+        let steps = task_steps::add_steps(&conn, task_id, &["買い出し".to_string()]).unwrap();
+        let step = sync_columns(&conn, "task_steps", steps[0].id).0;
+        conn.execute(
+            "UPDATE tasks SET updated_at = '2030-01-01T00:00:00Z' WHERE id = ?1",
+            [task_id],
+        )
+        .unwrap();
+        let updated = sync_columns(&conn, "tasks", task_id).0;
+
+        assert!(
+            created < step && step < updated,
+            "{created} {step} {updated}"
+        );
+        assert_eq!(updated, counter(&conn));
+    }
+
+    /// 印は、行を作ったときと、比べる欄の値が実際に変わったときにだけ付く。日時だけの変更・
+    /// 同じ値での更新・状態を表す日時の書き換えでは付かない。
+    #[test]
+    fn a_mark_is_set_only_when_a_compared_column_changes() {
+        let conn = open_in_memory().unwrap();
+        let task_id = tasks::create_task(&conn).unwrap().id;
+        let changed = |sql: &str| {
+            conn.execute("UPDATE tasks SET sync_changed = 0", [])
+                .unwrap();
+            conn.execute(sql, [task_id]).unwrap();
+            sync_columns(&conn, "tasks", task_id).1
+        };
+
+        assert!(sync_columns(&conn, "tasks", task_id).1);
+        assert!(!changed(
+            "UPDATE tasks SET updated_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+        assert!(changed("UPDATE tasks SET title = '旅行' WHERE id = ?1"));
+        assert!(!changed("UPDATE tasks SET title = '旅行' WHERE id = ?1"));
+        assert!(changed(
+            "UPDATE tasks SET description = '説明' WHERE id = ?1"
+        ));
+        assert!(changed(
+            "UPDATE tasks SET deadline = '2030-01-01' WHERE id = ?1"
+        ));
+        assert!(changed(
+            "UPDATE tasks SET archived_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+        assert!(!changed(
+            "UPDATE tasks SET archived_at = '2029-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+        assert!(changed("UPDATE tasks SET archived_at = NULL WHERE id = ?1"));
+        assert!(changed(
+            "UPDATE tasks SET deleted_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+        assert!(changed("UPDATE tasks SET deleted_at = NULL WHERE id = ?1"));
+
+        let step_id =
+            task_steps::add_steps(&conn, task_id, &["買い出し".to_string()]).unwrap()[0].id;
+        let step_changed = |sql: &str| {
+            conn.execute("UPDATE task_steps SET sync_changed = 0", [])
+                .unwrap();
+            conn.execute(sql, [step_id]).unwrap();
+            sync_columns(&conn, "task_steps", step_id).1
+        };
+        assert!(step_changed(
+            "UPDATE task_steps SET description = '献立' WHERE id = ?1"
+        ));
+        assert!(step_changed(
+            "UPDATE task_steps SET done_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+        assert!(!step_changed(
+            "UPDATE task_steps SET done_at = '2029-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+        assert!(step_changed(
+            "UPDATE task_steps SET deleted_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+
+        let memory_id = memories::add(&conn, &["朝型".to_string()]).unwrap()[0].id;
+        let memory_changed = |sql: &str| {
+            conn.execute("UPDATE memories SET sync_changed = 0", [])
+                .unwrap();
+            conn.execute(sql, [memory_id]).unwrap();
+            sync_columns(&conn, "memories", memory_id).1
+        };
+        assert!(!memory_changed(
+            "UPDATE memories SET updated_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+        assert!(memory_changed(
+            "UPDATE memories SET content = '夜型' WHERE id = ?1"
+        ));
+        assert!(memory_changed(
+            "UPDATE memories SET deleted_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+
+        let message_id = messages::insert_message(
+            &conn,
+            messages::NewMessage {
+                chat: messages::Chat::Task(task_id),
+                role: messages::Role::User,
+                content: "本文",
+                kind: messages::Kind::Normal,
+                origin: messages::Origin::User,
+                error_kind: None,
+                error_detail: None,
+                parts: None,
+            },
+        )
+        .unwrap();
+        assert!(sync_columns(&conn, "messages", message_id).1);
+        let message_changed = |sql: &str| {
+            conn.execute("UPDATE messages SET sync_changed = 0", [])
+                .unwrap();
+            conn.execute(sql, [message_id]).unwrap();
+            sync_columns(&conn, "messages", message_id).1
+        };
+        assert!(!message_changed(
+            "UPDATE messages SET content = '直した' WHERE id = ?1"
+        ));
+        assert!(message_changed(
+            "UPDATE messages SET deleted_at = '2030-01-01T00:00:00Z' WHERE id = ?1"
+        ));
+    }
+
+    /// 同期の層が版を振るときは、同じ書き込みで印を外せる。取り込みの書き込みは比べる欄を変えるので
+    /// 印が付き、そのあとの書き込みで外す。
+    #[test]
+    fn the_sync_layer_clears_the_mark_after_its_own_writes() {
+        let conn = open_in_memory().unwrap();
+        let task_id = tasks::create_task(&conn).unwrap().id;
+        let version = r#"{"0123456789abcdef0123456789abcdef":5}"#;
+
+        conn.execute(
+            "UPDATE tasks SET sync_version = ?1, sync_changed = 0 WHERE id = ?2",
+            rusqlite::params![version, task_id],
+        )
+        .unwrap();
+        assert_eq!(
+            sync_columns(&conn, "tasks", task_id),
+            (counter(&conn), false, version.to_string())
+        );
+
+        conn.execute(
+            "UPDATE tasks SET title = '取り込んだ' WHERE id = ?1",
+            [task_id],
+        )
+        .unwrap();
+        assert!(sync_columns(&conn, "tasks", task_id).1);
+        conn.execute("UPDATE tasks SET sync_changed = 0 WHERE id = ?1", [task_id])
+            .unwrap();
+        assert!(!sync_columns(&conn, "tasks", task_id).1);
+
+        let not_an_object = conn.execute(
+            "UPDATE tasks SET sync_version = '[]' WHERE id = ?1",
+            [task_id],
+        );
+        assert!(not_an_object.is_err(), "{not_an_object:?}");
+    }
+
+    /// 取り込みが指定した`uid`はそのまま使い、一度付いた`uid`は変えられない。
+    #[test]
+    fn a_given_uid_is_kept_and_never_changes() {
+        let conn = open_in_memory().unwrap();
+        let given = "0123456789abcdef0123456789abcdef";
+        conn.execute(
+            "INSERT INTO tasks (uid, created_at, updated_at)
+             VALUES (?1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [given],
+        )
+        .unwrap();
+        let task_id = conn.last_insert_rowid();
+        let uid: String = conn
+            .query_row("SELECT uid FROM tasks WHERE id = ?1", [task_id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(uid, given);
+
+        for value in ["NULL", "'fedcba9876543210fedcba9876543210'"] {
+            let changed = conn.execute(
+                &format!("UPDATE tasks SET uid = {value} WHERE id = ?1"),
+                [task_id],
+            );
+            assert!(changed.is_err(), "{value}: {changed:?}");
+        }
+        let malformed = conn.execute(
+            "INSERT INTO tasks (uid, created_at, updated_at)
+             VALUES ('0123456789ABCDEF0123456789ABCDEF', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        );
+        assert!(malformed.is_err(), "{malformed:?}");
     }
 }

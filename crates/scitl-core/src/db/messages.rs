@@ -301,10 +301,18 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     let parts = msg
         .parts
         .map(|parts| serde_json::to_string(parts).expect("reply parts serialize"));
+    // 通常発言は、その会話の消えていない最後の通常発言に続ける(`prev_uid`。同期で会話の枝を
+    // 見つけるのに使う)。読み取りと挿入を1つの文にし、間に別プロセスの書き込みを挟ませない。
     conn.execute(
         "INSERT INTO messages
-            (task_id, role, content, kind, source, error_kind, error_detail, parts, turn_id, attempt_no, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            (task_id, role, content, kind, source, error_kind, error_detail, parts, turn_id, attempt_no, created_at,
+             prev_uid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                 CASE WHEN ?4 = 'normal' THEN (
+                     SELECT uid FROM messages
+                     WHERE task_id IS ?1 AND kind = 'normal' AND deleted_at IS NULL
+                     ORDER BY id DESC LIMIT 1
+                 ) END)",
         rusqlite::params![
             msg.chat.task_id(),
             msg.role,
@@ -1646,5 +1654,92 @@ mod tests {
         assert!(serde_json::from_value::<Chat>(serde_json::json!(null)).is_err());
         assert!(serde_json::from_value::<Chat>(serde_json::json!(3)).is_err());
         assert!(serde_json::from_value::<Chat>(serde_json::json!({ "kind": "task" })).is_err());
+    }
+
+    /// 通常発言は、その会話の消えていない最後の通常発言に続ける。編集で消した発言は飛ばすので、
+    /// 消えていない通常発言は1本の列になる。実行記録と操作の記録は列に入らない。
+    #[test]
+    fn normal_messages_continue_the_last_surviving_normal_message() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let insert = |role, kind, origin, parts| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if kind == Kind::Normal { "本文" } else { "{}" },
+                    kind,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    parts,
+                },
+            )
+            .unwrap()
+        };
+        let turn = |turn_id| Origin::Turn {
+            turn_id,
+            attempt_no: 1,
+        };
+        let uid = |id: i64| -> String {
+            conn.query_row("SELECT uid FROM messages WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        let prev_uid = |id: i64| -> Option<String> {
+            conn.query_row("SELECT prev_uid FROM messages WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+
+        let first = insert(Role::User, Kind::Normal, Origin::User, None);
+        let record = insert(Role::Tool, Kind::ToolExecution, turn("t1"), None);
+        let reply = insert(Role::Assistant, Kind::Normal, turn("t1"), Some(&[]));
+        let operation = insert(
+            Role::Tool,
+            Kind::ToolExecution,
+            Origin::Operation(OperationSource::Ui),
+            None,
+        );
+        let second = insert(Role::User, Kind::Normal, Origin::User, None);
+        // 2つ目の発言の編集(消してから書く)。
+        soft_delete_normal_from(&conn, chat, second).unwrap();
+        let edited = insert(Role::User, Kind::Normal, Origin::User, None);
+        let general = insert_message(
+            &conn,
+            NewMessage {
+                chat: Chat::General,
+                role: Role::User,
+                content: "別の会話",
+                kind: Kind::Normal,
+                origin: Origin::User,
+                error_kind: None,
+                error_detail: None,
+                parts: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(prev_uid(first), None);
+        assert_eq!(prev_uid(reply), Some(uid(first)));
+        assert_eq!(prev_uid(second), Some(uid(reply)));
+        assert_eq!(prev_uid(edited), Some(uid(reply)));
+        assert_eq!(prev_uid(record), None);
+        assert_eq!(prev_uid(operation), None);
+        assert_eq!(prev_uid(general), None);
+
+        let changed = conn.execute(
+            "UPDATE messages SET prev_uid = NULL WHERE id = ?1",
+            [edited],
+        );
+        assert!(changed.is_err(), "{changed:?}");
+        let on_record = conn.execute(
+            "INSERT INTO messages (task_id, role, content, kind, turn_id, attempt_no, prev_uid, created_at)
+             VALUES (?1, 'tool', '{}', 'tool_execution', 't1', 1, ?2, '2026-01-01T00:00:00Z')",
+            rusqlite::params![task_id, uid(first)],
+        );
+        assert!(on_record.is_err(), "{on_record:?}");
     }
 }
