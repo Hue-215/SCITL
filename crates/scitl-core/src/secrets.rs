@@ -229,6 +229,36 @@ pub fn delete(key_ref: &str) -> Result<(), CoreError> {
     })
 }
 
+/// 同期の端末IDの項目の名前(`docs/sync/index.md` 10節)。1台のマシンにデータが複数あっても
+/// 取り違えないよう、端末IDを名前に含める。
+fn sync_device_key(device_id: &str) -> String {
+    format!("sync-device:{device_id}")
+}
+
+/// このマシンの資格情報ストアに、端末IDの項目があるか。無いことと読めないことを分ける
+/// (無ければ写されたDBとみなして端末IDを作り直すが、読めないときは確かめられないので同期を
+/// 始めない)。
+pub fn sync_device_registered(device_id: &str) -> Result<bool, CoreError> {
+    with_entry(&sync_device_key(device_id), |entry| {
+        match entry.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring_core::Error::NoEntry) => Ok(false),
+            Err(e) => Err(e),
+        }
+    })
+}
+
+/// 端末IDの項目を作る。値は乱数で、今は項目の有無だけを見る(あとで同じ値をDBにも持てば、
+/// 写したDBと戻したDBを、値が古いことで見分けられる)。
+pub fn register_sync_device(device_id: &str) -> Result<(), CoreError> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| CoreError::Secrets(e.to_string()))?;
+    let value: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    with_entry(&sync_device_key(device_id), |entry| {
+        entry.set_password(&value)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

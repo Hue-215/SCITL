@@ -40,7 +40,7 @@ pub(crate) const MAX_STEPS: usize = 100;
 
 /// 工程の説明の正規化。前後の空白を落とし(落とさないと重複排除が効かない)、空なら
 /// エラーにする。追加と更新で同じ規則を通す。
-fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
+pub(crate) fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(CoreError::InvalidArgument {

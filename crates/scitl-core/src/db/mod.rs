@@ -1,6 +1,7 @@
 pub mod attachments;
 pub mod memories;
 pub mod messages;
+pub mod sync;
 pub mod task_steps;
 pub mod tasks;
 pub mod transcripts;
@@ -139,6 +140,11 @@ const MIGRATIONS: &[&str] = &[
     MESSAGES_CHAT_ORDER_SQL,
 ];
 
+/// このビルドのDBの版(`user_version`)。同期の相手と版を伝え合うのに使う(`docs/sync/index.md` 3節)。
+pub fn schema_version() -> u32 {
+    MIGRATIONS.len() as u32
+}
+
 /// 先頭から`target`個目までのマイグレーションを適用する。適用済みの版の読み取りから
 /// 版の書き込みまでを1つのトランザクションに収め、GUIとCLIが同時に開いても、遅れた側は
 /// 先に適用された版を読んでから判断する。
@@ -175,7 +181,7 @@ pub fn now_iso8601() -> String {
     iso8601(chrono::Utc::now())
 }
 
-fn iso8601(at: chrono::DateTime<chrono::Utc>) -> String {
+pub(crate) fn iso8601(at: chrono::DateTime<chrono::Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 

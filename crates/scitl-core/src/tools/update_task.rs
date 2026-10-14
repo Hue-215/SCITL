@@ -8,7 +8,9 @@ use crate::error::{CoreError, Result};
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
+use super::get_current_task_detail::TASK_DETAIL;
 use super::Run;
+use super::NO_IDS;
 
 /// `clear`で消せる項目。タイトルは未設定に戻す操作を持たないので含めない。
 const CLEARABLE: &[&str] = &["deadline", "description"];
@@ -17,6 +19,7 @@ internal_tool! {
     /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
     name: "update_task",
     run: Run::UpdateTask(execute),
+    ids: super::IdPositions { arguments: NO_IDS, result: TASK_DETAIL },
     "Update this conversation's task.",
     json!({
         "type": "object",

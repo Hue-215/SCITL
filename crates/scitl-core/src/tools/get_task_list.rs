@@ -6,11 +6,13 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::Run;
+use super::{IdPosition, IdTable, Segment, NO_IDS};
 
 internal_tool! {
     /// 引数なし。文脈から決まる情報を持たないため会話によらず同一のスキーマ。
     name: "get_task_list",
     run: Run::Read(execute),
+    ids: super::IdPositions { arguments: NO_IDS, result: TASK_LIST },
     "List the tasks that are not archived.",
     json!({
         "type": "object",
@@ -18,6 +20,11 @@ internal_tool! {
         "additionalProperties": false
     }),
 }
+
+const TASK_LIST: &[IdPosition] = &[IdPosition {
+    path: &[Segment::Each, Segment::Key("id")],
+    table: IdTable::Task,
+}];
 
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
     Args::parse(arguments, schema())?;

@@ -42,7 +42,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Memory>> {
 /// 本文の正規化。描かれない文字と重ねた異体字セレクタを除き、制御文字(改行を含む)を空白に
 /// して1行に畳み、空ならエラーにする。見えない文字を保存の時点で除くのは、全会話のモデルに
 /// 渡る本文に、設定画面で見えない文字列を残さないため。追加と更新で同じ規則を通す。
-fn normalize_content(raw: &str, arg_name: &str) -> Result<String> {
+pub(crate) fn normalize_content(raw: &str, arg_name: &str) -> Result<String> {
     let content = visible_line(&drop_stacked_variation_selectors(raw));
     if content.is_empty() {
         return Err(CoreError::InvalidArgument {

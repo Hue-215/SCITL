@@ -6,12 +6,15 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
+use super::get_current_task_detail::TASK_DETAIL;
 use super::Run;
+use super::{IdPosition, IdTable, Segment};
 
 internal_tool! {
     /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
     name: "update_step",
     run: Run::UpdateTask(execute),
+    ids: super::IdPositions { arguments: STEP_ID_ARGUMENT, result: TASK_DETAIL },
     "Update a step of this conversation's task.",
     json!({
         "type": "object",
@@ -24,6 +27,12 @@ internal_tool! {
         "additionalProperties": false
     }),
 }
+
+/// 工程の削除ツールも同じ引数を持つ。
+pub(super) const STEP_ID_ARGUMENT: &[IdPosition] = &[IdPosition {
+    path: &[Segment::Key("step_id")],
+    table: IdTable::Step,
+}];
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
     let args = Args::parse(arguments, schema())?;

@@ -1,4 +1,9 @@
+use std::fmt;
 use std::io;
+
+use serde::Serialize;
+
+use crate::transport::AbortReason;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
@@ -34,4 +39,55 @@ pub enum SyncError {
     ProtocolMismatch { ours: u32, theirs: u32 },
     #[error("database version mismatch: ours {ours}, theirs {theirs}")]
     DbVersionMismatch { ours: u32, theirs: u32 },
+    /// 資格情報ストアで端末IDを確かめられない(読めない)。確かめずには始めない。
+    #[error("could not check this device's ID in the secret store: {0}")]
+    DeviceCheck(scitl_core::CoreError),
+    /// 同じ端末IDの2台(写したDBどうし)。
+    #[error("the peer has the same device ID (one database is a copy of the other)")]
+    SameDevice,
+    #[error("both devices have data; copying needs one of them to be empty")]
+    BothHaveData,
+    #[error("neither device has data to copy")]
+    NothingToCopy,
+    /// 運ぶ行が、本体が書く行の形に合わない。
+    #[error("{}", InvalidRows(.0))]
+    InvalidRows(Vec<InvalidRow>),
+    /// 受け取る側に、移送の途中でデータができた。
+    #[error("this device is no longer empty")]
+    NoLongerEmpty,
+    #[error("the peer stopped: {0:?}")]
+    PeerRefused(AbortReason),
+    #[error(transparent)]
+    Core(#[from] scitl_core::CoreError),
+}
+
+/// 同期できない行。`id`は送る側の端末の中の連番(受け取る側では分からない)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InvalidRow {
+    pub table: &'static str,
+    pub id: Option<i64>,
+    pub uid: String,
+    pub reason: String,
+}
+
+/// 示す行の数の上限。残りは数だけ出す。
+const SHOWN_ROWS: usize = 20;
+
+struct InvalidRows<'a>(&'a [InvalidRow]);
+
+impl fmt::Display for InvalidRows<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} rows cannot be synced:", self.0.len())?;
+        for row in self.0.iter().take(SHOWN_ROWS) {
+            match row.id {
+                Some(id) => write!(f, " {}#{id}", row.table)?,
+                None => write!(f, " {} {}", row.table, row.uid)?,
+            }
+            write!(f, " ({});", row.reason)?;
+        }
+        if self.0.len() > SHOWN_ROWS {
+            write!(f, " and {} more", self.0.len() - SHOWN_ROWS)?;
+        }
+        Ok(())
+    }
 }

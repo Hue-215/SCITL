@@ -208,16 +208,8 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
         if let FieldChange::Set(deadline) = &update.deadline {
             validate_deadline(deadline)?;
         }
-        // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので、
-        // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない。
         if let FieldChange::Set(description) = &update.description {
-            if description.trim().is_empty() {
-                return Err(CoreError::InvalidArgument {
-                    name: "description".to_string(),
-                    reason: "must not be empty (to remove the description, use clear)".to_string(),
-                });
-            }
-            check_max_chars("description", description, MAX_DESCRIPTION_CHARS)?;
+            check_description(description)?;
         }
 
         let now = now_iso8601();
@@ -295,7 +287,7 @@ pub(crate) fn normalize_title(raw: &str) -> Result<String> {
 /// `deadline`として書き込める形(`YYYY-MM-DD`)かを検証する。タイトルと違い、外れた値を
 /// 丸めずエラーとして返す。日時形式や自然文を受け付けると、辞書順=時系列順という前提と、
 /// タイムゾーンで締切が前後しない性質が壊れる。
-fn validate_deadline(raw: &str) -> Result<()> {
+pub(crate) fn validate_deadline(raw: &str) -> Result<()> {
     let invalid = || CoreError::InvalidArgument {
         name: "deadline".to_string(),
         reason: "expected a date in YYYY-MM-DD format".to_string(),
@@ -321,6 +313,18 @@ fn validate_deadline(raw: &str) -> Result<()> {
     chrono::NaiveDate::from_ymd_opt(year, month, day)
         .map(drop)
         .ok_or_else(invalid)
+}
+
+/// 説明として書き込めるか。空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので、
+/// 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない。
+pub(crate) fn check_description(description: &str) -> Result<()> {
+    if description.trim().is_empty() {
+        return Err(CoreError::InvalidArgument {
+            name: "description".to_string(),
+            reason: "must not be empty (to remove the description, use clear)".to_string(),
+        });
+    }
+    check_max_chars("description", description, MAX_DESCRIPTION_CHARS)
 }
 
 /// 画面でタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を

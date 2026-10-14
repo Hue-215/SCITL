@@ -3,16 +3,24 @@
 
 mod address;
 mod code;
+mod convert;
+mod device;
 mod error;
 mod frame;
 mod pake;
 mod session;
 mod tls;
+mod transfer;
+mod transport;
+mod validate;
 
 pub use address::{local_addresses, parse_peer_address};
 pub use code::PairingCode;
-pub use error::SyncError;
+pub use device::{confirm_device_id, renew_device_id, DeviceRegistry, SecretStore};
+pub use error::{InvalidRow, SyncError};
 pub use session::{connect, Limits, Listener, LocalVersions, Session};
+pub use transfer::{copy, Context, Outcome, Side};
+pub use transport::{AbortReason, Counts};
 
 /// プロトコルの版。運ぶ形・IDの宣言・取り込む行の検証・照合の値のどれかを変えたら上げる
 /// (`docs/sync/index.md` 3節)。

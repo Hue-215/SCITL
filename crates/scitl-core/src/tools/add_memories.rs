@@ -6,12 +6,15 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::get_memories::memory_list;
+use super::get_memories::MEMORY_LIST;
 use super::Run;
+use super::NO_IDS;
 
 internal_tool! {
     /// 本文は常に配列で受ける(工程の追加と同じ)。
     name: "add_memories",
     run: Run::Write(execute),
+    ids: super::IdPositions { arguments: NO_IDS, result: MEMORY_LIST },
     "Save facts about the user, one short sentence each. Do not save details of a single task, \
      secrets such as passwords or API keys, or anything the user asked you not to remember.",
     json!({

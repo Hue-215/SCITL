@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::operations;
+use crate::tools::{self, IdPositions};
+
 /// フィールドをcoreの外に開かないのは、記録を作るのがcoreの中(ターンの処理と、応答生成以外の
 /// 経路での操作)だけだから(外へは直列化した形で渡るだけ)。操作の記録は`call_id`を持たない。
 ///
@@ -21,6 +24,35 @@ pub struct ToolExecutionRecord {
     /// 使わない(`history::history_call_id`)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) call_id: Option<String>,
+}
+
+/// 記録のどこに端末の中の連番が入るか(`docs/sync/index.md` 6節)。
+#[derive(Debug)]
+pub enum RecordIds {
+    /// 内部ツールと、画面・CLIからの操作。
+    Declared(&'static IdPositions),
+    /// 外部ツール。SCITLのIDを持たない。
+    External,
+    /// 宣言の無い名前。
+    Unknown,
+}
+
+pub fn record_ids(tool: &str) -> RecordIds {
+    if let Some(ids) = tools::id_positions(tool) {
+        RecordIds::Declared(ids)
+    } else if tool == operations::DELETE_TASK {
+        RecordIds::Declared(&operations::DELETE_TASK_IDS)
+    } else if tool.contains(tools::external::SEPARATOR) {
+        RecordIds::External
+    } else {
+        RecordIds::Unknown
+    }
+}
+
+/// 記録の結果が失敗を表すか([`is_error_result`])。失敗の記録は、引数のIDが存在しない行や
+/// 型の違う値でありうる。
+pub fn is_failed(result: &Value) -> bool {
+    is_error_result(result)
 }
 
 /// ツール結果が失敗を表すか。最上位の`error`キーを作るのはSCITL自身だけ
