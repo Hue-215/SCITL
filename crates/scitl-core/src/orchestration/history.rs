@@ -522,14 +522,14 @@ fn reissue_call_ids(messages: &mut [ChatMessage], records: &[i64]) -> Option<()>
 }
 
 /// 表示される行と捨てた試行の記録を、行の並び(`db::messages::list_rows_for_chat`と同じ
-/// `created_at`・`id`の順)に合わせる。`bool`は表示される行か。
+/// `id`の順)に合わせる。`bool`は表示される行か。
 fn in_order<'a>(shown: &'a [Message], discarded: &'a [Message]) -> Vec<(&'a Message, bool)> {
     let mut rows: Vec<_> = shown
         .iter()
         .map(|m| (m, true))
         .chain(discarded.iter().map(|m| (m, false)))
         .collect();
-    rows.sort_by(|(a, _), (b, _)| (&a.created_at, a.id).cmp(&(&b.created_at, b.id)));
+    rows.sort_by_key(|(m, _)| m.id);
     rows
 }
 
@@ -2107,5 +2107,67 @@ mod tests {
         };
         assert!(!text.as_str().contains("scitl:attachments"));
         assert!(images.is_empty());
+    }
+
+    /// 表示される行と捨てた試行の記録は、`id`の順に混ぜる。`created_at`は端末の時計で決まるので
+    /// 見ない。
+    #[test]
+    fn rows_and_discarded_records_are_merged_in_id_order() {
+        let conn = db::open_in_memory().unwrap();
+        let chat = Chat::General;
+        let insert = |role, kind, origin| {
+            messages::insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if kind == Kind::Normal { "本文" } else { "{}" },
+                    kind,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    parts: None,
+                },
+            )
+            .unwrap()
+        };
+        let user = insert(Role::User, Kind::Normal, Origin::User);
+        let operation = insert(
+            Role::Tool,
+            Kind::ToolExecution,
+            Origin::Operation(OperationSource::Ui),
+        );
+        // 返信の無いまま終わった試行の記録。
+        let discarded = insert(
+            Role::Tool,
+            Kind::ToolExecution,
+            Origin::Turn {
+                turn_id: "turn-1",
+                attempt_no: 1,
+            },
+        );
+        conn.execute(
+            "UPDATE messages SET created_at = CASE id WHEN ?1 THEN '2001-01-01T00:00:00Z'
+                                                      ELSE '2000-01-01T00:00:00Z' END
+             WHERE id IN (?1, ?2)",
+            [operation, discarded],
+        )
+        .unwrap();
+        let shown = messages::list_rows_for_chat(&conn, chat).unwrap();
+        let records: Vec<Message> = messages::list_tool_records_for_chat(&conn, chat)
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.id == discarded)
+            .collect();
+
+        let order: Vec<(i64, bool)> = in_order(&shown, &records)
+            .into_iter()
+            .map(|(m, shown)| (m.id, shown))
+            .collect();
+
+        assert_eq!(
+            order,
+            vec![(user, true), (operation, true), (discarded, false)]
+        );
     }
 }

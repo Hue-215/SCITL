@@ -344,7 +344,7 @@ fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, 
     let mut messages = conn.prepare_cached(
         "SELECT content FROM messages
          WHERE task_id = ?1 AND role = 'user' AND kind = 'normal' AND deleted_at IS NULL
-         ORDER BY created_at ASC, id ASC",
+         ORDER BY id ASC",
     )?;
     let mut labels = HashMap::new();
     for task_id in task_ids {
@@ -939,6 +939,25 @@ mod tests {
                 .fallback_label
                 .as_deref(),
             Some("写真の件")
+        );
+    }
+
+    /// 呼び名は`id`の順で最初の発言から作る。`created_at`は端末の時計で決まるので見ない。
+    #[test]
+    fn fallback_comes_from_the_first_message_in_id_order() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, "最初の発言");
+        seed_user_message(&conn, id, "時計が戻ったあとの発言");
+        conn.execute(
+            "UPDATE messages SET created_at = '2000-01-01T00:00:00Z' WHERE content = '時計が戻ったあとの発言'",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
+            Some("最初の発言")
         );
     }
 

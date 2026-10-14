@@ -330,8 +330,9 @@ pub fn insert_message(conn: &Connection, msg: NewMessage) -> Result<i64> {
     Ok(conn.last_insert_rowid())
 }
 
-/// 1つの会話の発言を取得する。ターンを持つ行は`turn_id`ごとの最新試行に絞り、通常発言が
-/// 1行も残っていないターン(編集・再試行・削除で破棄されたターン)は丸ごと除く。
+/// 1つの会話の発言を、`id`の順に取得する。ターンを持つ行は、`turn_id`ごとに、消えていない
+/// 通常発言を持つ試行(複数あれば番号の大きい方)に絞る。通常発言が1行も残っていないターン
+/// (編集・再試行・削除で破棄されたターン)は丸ごと除く。
 /// 応答生成以外の経路での操作の記録は`turn_id`を持たないので、常に残る。
 /// 編集・再試行で作り直すターンの、破棄された試行のツール実行記録はDBに残すが
 /// ([`soft_delete_normal_from`])、会話に並べると直後の編集後の発言が新規送信と見分けられなく
@@ -355,21 +356,14 @@ pub(crate) fn list_rows_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<Me
            AND deleted_at IS NULL
            AND (
              turn_id IS NULL
-             OR (
-               attempt_no = (
-                 SELECT MAX(attempt_no) FROM messages m2
-                 WHERE m2.turn_id = messages.turn_id AND m2.deleted_at IS NULL
-               )
-               AND EXISTS (
-                 SELECT 1 FROM messages m3
-                 WHERE m3.turn_id = messages.turn_id
-                   AND m3.attempt_no = messages.attempt_no
-                   AND m3.kind = 'normal'
-                   AND m3.deleted_at IS NULL
-               )
+             OR attempt_no = (
+               SELECT MAX(attempt_no) FROM messages m2
+               WHERE m2.turn_id = messages.turn_id
+                 AND m2.kind = 'normal'
+                 AND m2.deleted_at IS NULL
              )
            )
-         ORDER BY created_at ASC, id ASC"
+         ORDER BY id ASC"
     ))?;
     let rows = stmt
         .query_map([chat.task_id()], message_from_row)?
@@ -387,7 +381,7 @@ pub(crate) fn list_tool_records_for_chat(conn: &Connection, chat: Chat) -> Resul
          WHERE task_id IS ?1
            AND deleted_at IS NULL
            AND kind = 'tool_execution'
-         ORDER BY created_at ASC, id ASC"
+         ORDER BY id ASC"
     ))?;
     let rows = stmt
         .query_map([chat.task_id()], message_from_row)?
@@ -599,7 +593,7 @@ pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
         .query_row(
             "SELECT role FROM messages
              WHERE task_id = ?1 AND (role = 'user' OR turn_id IS NOT NULL)
-             ORDER BY created_at ASC, id ASC
+             ORDER BY id ASC
              LIMIT 1",
             [task_id],
             |row| row.get(0),
@@ -1007,8 +1001,8 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// 複数回再試行したターンを、さらに前方の発言の編集で丸ごと破棄した場合。旧試行の行は
-    /// `MAX(attempt_no)`で、最新試行の行は「通常発言が残っていない」判定で外れる。
+    /// 複数回再試行したターンを、さらに前方の発言の編集で丸ごと破棄した場合。どの試行にも
+    /// 通常発言が残っていないので、どの試行の行も外れる。
     #[test]
     fn a_retried_turn_discarded_by_a_later_edit_disappears_from_every_attempt() {
         let conn = db::open_in_memory().unwrap();
@@ -1768,5 +1762,147 @@ mod tests {
             rusqlite::params![task_id, uid(first)],
         );
         assert!(on_record.is_err(), "{on_record:?}");
+    }
+
+    /// 会話の行は`id`の順に並ぶ。`created_at`は端末の時計で決まるので、並びに使わない。
+    #[test]
+    fn rows_of_a_chat_follow_their_ids_even_when_the_clock_went_back() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let user = |content| {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role: Role::User,
+                    content,
+                    kind: Kind::Normal,
+                    origin: Origin::User,
+                    error_kind: None,
+                    error_detail: None,
+                    parts: None,
+                },
+            )
+            .unwrap()
+        };
+        let operation = || {
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role: Role::Tool,
+                    content: "{}",
+                    kind: Kind::ToolExecution,
+                    origin: Origin::Operation(OperationSource::Ui),
+                    error_kind: None,
+                    error_detail: None,
+                    parts: None,
+                },
+            )
+            .unwrap()
+        };
+        // 聞き取りの開始で始まる会話。
+        let opening = insert_message(
+            &conn,
+            NewMessage {
+                chat,
+                role: Role::Assistant,
+                content: "",
+                kind: Kind::Normal,
+                origin: Origin::Turn {
+                    turn_id: "turn-1",
+                    attempt_no: 1,
+                },
+                error_kind: None,
+                error_detail: None,
+                parts: Some(&[]),
+            },
+        )
+        .unwrap();
+        let first_record = operation();
+        let answer = user("答え");
+        let second_record = operation();
+        conn.execute(
+            "UPDATE messages SET created_at = '2000-01-01T00:00:00Z' WHERE id IN (?1, ?2)",
+            [answer, second_record],
+        )
+        .unwrap();
+
+        let ids: Vec<i64> = list_for_chat(&conn, chat)
+            .unwrap()
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(ids, vec![opening, first_record, answer, second_record]);
+        let records: Vec<i64> = list_tool_records_for_chat(&conn, chat)
+            .unwrap()
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(records, vec![first_record, second_record]);
+        assert_eq!(opener(&conn, task_id).unwrap(), Some(Opener::Reply));
+    }
+
+    /// 表示する試行は、消えていない通常発言を持つ試行。返信の無いまま終わった試行の番号が
+    /// 大きくても、生きている返信のある試行を出す。返信が消えれば、ターンごと外れる。
+    #[test]
+    fn the_shown_attempt_is_the_one_with_a_surviving_reply() {
+        let conn = db::open_in_memory().unwrap();
+        let task_id = seed_task(&conn);
+        let chat = Chat::Task(task_id);
+        let row = |role, attempt_no| {
+            let record = role == Role::Tool;
+            insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if record { "{}" } else { "" },
+                    kind: if record {
+                        Kind::ToolExecution
+                    } else {
+                        Kind::Normal
+                    },
+                    origin: Origin::Turn {
+                        turn_id: "turn-1",
+                        attempt_no,
+                    },
+                    error_kind: None,
+                    error_detail: None,
+                    parts: (!record).then_some(&[][..]),
+                },
+            )
+            .unwrap()
+        };
+        let user = insert_message(
+            &conn,
+            NewMessage {
+                chat,
+                role: Role::User,
+                content: "質問",
+                kind: Kind::Normal,
+                origin: Origin::User,
+                error_kind: None,
+                error_detail: None,
+                parts: None,
+            },
+        )
+        .unwrap();
+        let first_record = row(Role::Tool, 1);
+        let first_reply = row(Role::Assistant, 1);
+        row(Role::Tool, 2);
+        let ids = |conn: &Connection| -> Vec<i64> {
+            list_for_chat(conn, chat)
+                .unwrap()
+                .iter()
+                .map(|m| m.id)
+                .collect()
+        };
+
+        assert_eq!(ids(&conn), vec![user, first_record, first_reply]);
+
+        soft_delete_message(&conn, first_reply).unwrap();
+        assert_eq!(ids(&conn), vec![user]);
     }
 }

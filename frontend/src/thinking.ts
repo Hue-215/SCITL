@@ -18,7 +18,7 @@ export interface PlainEntry {
 export type DisplayItem = TurnGroup | PlainEntry
 
 /**
- * `list_chat_messages`が返す発言列(created_at, id順)を、SCITL自身の応答生成に属する行
+ * `list_chat_messages`が返す発言列(id順)を、SCITL自身の応答生成に属する行
  * (`turn_id`が同じ行)ごとにまとめる。ユーザー発言・応答生成以外の経路での操作の
  * 記録は`turn_id`を持たないため常に独立した`plain`項目になる。
  *
