@@ -367,8 +367,15 @@ impl Session {
     }
 
     pub async fn recv<T: DeserializeOwned>(&mut self) -> Result<T, SyncError> {
+        Ok(self.recv_with_len().await?.0)
+    }
+
+    /// 受け取ったメッセージと、その中身の大きさ。受け取る量の合計に上限を置くのに使う。
+    pub async fn recv_with_len<T: DeserializeOwned>(&mut self) -> Result<(T, usize), SyncError> {
         let body = frame::read(&mut self.stream, self.limits.max_message, self.limits.idle).await?;
-        serde_json::from_slice(&body).map_err(|e| SyncError::Malformed(e.to_string()))
+        let message =
+            serde_json::from_slice(&body).map_err(|e| SyncError::Malformed(e.to_string()))?;
+        Ok((message, body.len()))
     }
 
     /// TLSの終わりを送って閉じる。相手が先に閉じていても失敗にしない。

@@ -1,10 +1,12 @@
 /// 内部ツール1つの、名前(`NAME`)・公開する定義(`schema`)・登録(`TOOL`)。定義は最初に
-/// 使うときに1度だけ組み立てる。`run`は実行の形([`Run`])で、あとに説明と引数スキーマを並べる。
+/// 使うときに1度だけ組み立てる。`run`は実行の形([`Run`])、`ids`は実行記録のどこに端末の中の
+/// 連番が入るか([`IdPositions`])で、あとに説明と引数スキーマを並べる。
 macro_rules! internal_tool {
     (
         $(#[$doc:meta])*
         name: $name:literal,
         run: $run:expr,
+        ids: $ids:expr,
         $description:expr,
         $parameters:expr $(,)?
     ) => {
@@ -13,6 +15,7 @@ macro_rules! internal_tool {
         pub(super) const TOOL: $crate::tools::InternalTool = $crate::tools::InternalTool {
             schema,
             run: $run,
+            ids: &$ids,
         };
 
         $(#[$doc])*
@@ -79,6 +82,49 @@ impl From<Value> for ToolOutput {
 pub(crate) struct InternalTool {
     schema: fn() -> &'static ToolSchema,
     run: Run,
+    ids: &'static IdPositions,
+}
+
+/// 実行記録の引数と結果のうち、端末の中の連番(モデルに見せたID)が入る位置。同期で、運ぶ写しの
+/// 連番を全体で一意な`uid`へ置き換えるのに使う(`docs/sync/index.md` 6節)。数字のどれがIDで、
+/// どの表のものかは中身からは分からないので、ツールごとに定義の隣で宣言する。
+#[derive(Debug)]
+pub struct IdPositions {
+    pub arguments: &'static [IdPosition],
+    pub result: &'static [IdPosition],
+}
+
+#[derive(Debug)]
+pub struct IdPosition {
+    pub path: &'static [Segment],
+    pub table: IdTable,
+}
+
+/// 位置の1段。`Key`はオブジェクトの値、`Each`は配列の要素すべて。
+#[derive(Debug, Clone, Copy)]
+pub enum Segment {
+    Key(&'static str),
+    Each,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdTable {
+    Task,
+    Step,
+    Memory,
+    Attachment,
+}
+
+/// IDを持たない引数・結果。
+pub(crate) const NO_IDS: &[IdPosition] = &[];
+
+/// その名前の内部ツールの宣言。外部ツールと知らない名前は`None`。
+pub(crate) fn id_positions(name: &str) -> Option<&'static IdPositions> {
+    [GENERAL, TASK]
+        .into_iter()
+        .flatten()
+        .find(|tool| (tool.schema)().name() == name)
+        .map(|tool| tool.ids)
 }
 
 /// 実行の形。タスクを対象にする形は、タスクチャットの一覧([`TASK`])にだけ並べる。会話によらない
@@ -227,6 +273,98 @@ fn require_step_in_task(conn: &Connection, task_id: i64, step_id: i64) -> Result
     }
 }
 
+/// 宣言した位置には整数があり、IDらしい欄(`id`・`*_id`の整数、`*_ids`の整数の配列)はどれも
+/// 宣言に入っていること。
+/// 欄を足したのに宣言を忘れると、同期で連番のまま運ばれる。
+#[cfg(test)]
+pub(crate) fn assert_ids_declared(name: &str, value: &Value, positions: &[IdPosition]) {
+    for position in positions {
+        let mut found = Vec::new();
+        id_check::values_at(value, position.path, &mut found);
+        assert!(!found.is_empty(), "{name}: nothing at {:?}", position.path);
+        assert!(
+            found.iter().all(|v| v.is_i64()),
+            "{name}: {:?}",
+            position.path
+        );
+    }
+    let mut ids = Vec::new();
+    id_check::id_like_paths(value, &mut Vec::new(), &mut ids);
+    let declared = id_check::declared_paths(positions);
+    for path in ids {
+        assert!(declared.contains(&path), "{name}: {path} is not declared");
+    }
+}
+
+#[cfg(test)]
+mod id_check {
+    use super::*;
+
+    /// 宣言の位置を辿り、末端の値を集める。途中の段が無ければ何も集めない。
+    pub(super) fn values_at<'v>(value: &'v Value, path: &[Segment], out: &mut Vec<&'v Value>) {
+        match path.split_first() {
+            None => out.push(value),
+            Some((Segment::Key(key), rest)) => {
+                if let Some(child) = value.get(key) {
+                    values_at(child, rest, out);
+                }
+            }
+            Some((Segment::Each, rest)) => {
+                for child in value.as_array().into_iter().flatten() {
+                    values_at(child, rest, out);
+                }
+            }
+        }
+    }
+
+    /// `id`・`*_id`という名前で整数を持つ欄と、`*_ids`という名前の整数の配列の位置(配列の添字は
+    /// `Each`に畳む)。
+    pub(super) fn id_like_paths(value: &Value, here: &mut Vec<String>, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    here.push(key.clone());
+                    if (key == "id" || key.ends_with("_id")) && child.is_i64() {
+                        out.push(here.join("."));
+                    }
+                    let id_list = child
+                        .as_array()
+                        .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_i64));
+                    if key.ends_with("_ids") && id_list {
+                        out.push(format!("{}.*", here.join(".")));
+                    }
+                    id_like_paths(child, here, out);
+                    here.pop();
+                }
+            }
+            Value::Array(items) => {
+                here.push("*".to_string());
+                for child in items {
+                    id_like_paths(child, here, out);
+                }
+                here.pop();
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn declared_paths(positions: &[IdPosition]) -> Vec<String> {
+        positions
+            .iter()
+            .map(|p| {
+                p.path
+                    .iter()
+                    .map(|s| match s {
+                        Segment::Key(k) => k.to_string(),
+                        Segment::Each => "*".to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +442,89 @@ mod tests {
             get_memories::NAME,
         ] {
             assert!(!has_lasting_effect(name), "{name}");
+        }
+    }
+
+    /// 同期で置き換えるIDの宣言(`docs/sync/index.md` 6節)が、実際の引数と結果に合うこと。
+    /// 宣言した位置には整数があり、IDらしい欄はどれも宣言に入っている(足した欄の宣言漏れを
+    /// 止める)。
+    #[test]
+    fn id_declarations_match_what_the_tools_record() {
+        use crate::db::attachments::{AttachmentContent, AttachmentKind, NewAttachment};
+        use crate::db::messages::{self, Kind, NewMessage, Origin, Role};
+
+        let conn = db::open_in_memory().unwrap();
+        let task_id = db::tasks::create_task(&conn).unwrap().id;
+        let step_id =
+            db::task_steps::add_steps(&conn, task_id, &["買い出し".to_string()]).unwrap()[0].id;
+        let memory_ids: Vec<i64> =
+            db::memories::add(&conn, &["朝型".to_string(), "猫が好き".to_string()])
+                .unwrap()
+                .into_iter()
+                .map(|m| m.id)
+                .collect();
+        let chat = Chat::Task(task_id);
+        let message_id = messages::insert_message(
+            &conn,
+            NewMessage {
+                chat,
+                role: Role::User,
+                content: "見て",
+                kind: Kind::Normal,
+                origin: Origin::User,
+                error_kind: None,
+                error_detail: None,
+                parts: None,
+            },
+        )
+        .unwrap();
+        let attachment_id = db::attachments::insert(
+            &conn,
+            message_id,
+            &NewAttachment {
+                original_name: "memo.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                kind: AttachmentKind::Text,
+                size_bytes: 3,
+                content: AttachmentContent::Text("abc".to_string()),
+            },
+        )
+        .unwrap();
+
+        let arguments = |name: &str| match name {
+            n if n == get_task_detail::NAME => serde_json::json!({ "task_id": task_id }),
+            n if n == update_task::NAME => serde_json::json!({ "title": "買い物" }),
+            n if n == add_steps::NAME => serde_json::json!({ "descriptions": ["調理"] }),
+            n if n == update_step::NAME => serde_json::json!({ "step_id": step_id, "done": true }),
+            n if n == read_attachment::NAME => {
+                serde_json::json!({ "attachment_id": attachment_id })
+            }
+            n if n == add_memories::NAME => serde_json::json!({ "contents": ["夜更かし"] }),
+            n if n == update_memory::NAME => {
+                serde_json::json!({ "memory_id": memory_ids[0], "content": "夜型" })
+            }
+            // 削除は最後に回す(消した行を、ほかのツールの結果に出さない)。
+            n if n == delete_step::NAME => serde_json::json!({ "step_id": step_id }),
+            n if n == delete_memory::NAME => serde_json::json!({ "memory_id": memory_ids[1] }),
+            _ => serde_json::json!({}),
+        };
+        let mut tools: Vec<(Chat, &InternalTool)> = TASK.iter().map(|t| (chat, t)).collect();
+        tools.extend(
+            GENERAL
+                .iter()
+                .filter(|g| find(chat, (g.schema)().name()).is_none())
+                .map(|g| (Chat::General, g)),
+        );
+        tools.sort_by_key(|(_, t)| {
+            [delete_step::NAME, delete_memory::NAME].contains(&(t.schema)().name())
+        });
+
+        for (chat, tool) in tools {
+            let name = (tool.schema)().name();
+            let args = arguments(name);
+            let output = execute(&conn, chat, true, name, &args).unwrap();
+            assert_ids_declared(name, &args, tool.ids.arguments);
+            assert_ids_declared(name, &output.result, tool.ids.result);
         }
     }
 

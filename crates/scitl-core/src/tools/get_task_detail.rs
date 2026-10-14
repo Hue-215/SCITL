@@ -5,13 +5,16 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
+use super::get_current_task_detail::TASK_DETAIL;
 use super::Run;
+use super::{IdPosition, IdTable, Segment};
 
 internal_tool! {
     /// 総合チャット版。総合チャットは特定のタスクに紐づかず、対象を文脈から決められないので、
     /// `task_id`をモデルに選ばせる。読み取り専用なので、取り違えても書き込みは起きない。
     name: "get_task_detail",
     run: Run::Read(execute),
+    ids: super::IdPositions { arguments: TASK_ID_ARGUMENT, result: TASK_DETAIL },
     "Get a task by its ID.",
     json!({
         "type": "object",
@@ -22,6 +25,11 @@ internal_tool! {
         "additionalProperties": false
     }),
 }
+
+const TASK_ID_ARGUMENT: &[IdPosition] = &[IdPosition {
+    path: &[Segment::Key("task_id")],
+    table: IdTable::Task,
+}];
 
 /// アーカイブ済みのタスクも引ける(一覧には出ないが、会話で名前が挙がることはある)。
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {

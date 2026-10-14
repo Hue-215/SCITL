@@ -16,11 +16,20 @@ use crate::error::Result;
 use crate::in_flight::InFlightSet;
 use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn::begin_generating;
-use crate::tools::update_task;
+use crate::tools::{update_task, IdPosition, IdPositions, IdTable, Segment, NO_IDS};
 
 /// 削除の記録に載せる操作名。モデルには公開しないツールだが、記録の語彙は他の操作と同じく
 /// ツール名に揃える。
-const DELETE_TASK: &str = "delete_task";
+pub(super) const DELETE_TASK: &str = "delete_task";
+
+/// 削除の記録のうち、IDの入る位置(内部ツールの宣言と同じ形。`tools::IdPositions`)。
+pub(super) const DELETE_TASK_IDS: IdPositions = IdPositions {
+    arguments: NO_IDS,
+    result: &[IdPosition {
+        path: &[Segment::Key("id")],
+        table: IdTable::Task,
+    }],
+};
 
 /// タイトルの変更。整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
 pub async fn rename_task(
@@ -143,6 +152,7 @@ mod tests {
     use super::*;
     use crate::db;
     use crate::error::CoreError;
+    use crate::orchestration::{record_ids, RecordIds};
 
     struct Fixture {
         db: SharedConnection,
@@ -312,6 +322,42 @@ mod tests {
         assert!(messages::list_for_chat(&conn, Chat::General)
             .unwrap()
             .is_empty());
+    }
+
+    /// 操作の記録も、同期で置き換えるIDを宣言している(`tool_record::record_ids`)。
+    #[tokio::test]
+    async fn operation_records_declare_their_ids() {
+        let f = Fixture::new();
+        crate::db::task_steps::add_steps(
+            &f.db.lock().unwrap(),
+            f.task_id,
+            &["買い出し".to_string()],
+        )
+        .unwrap();
+        rename_task(
+            f.db.clone(),
+            &f.generating,
+            OperationSource::Ui,
+            f.task_id,
+            "買い物".to_string(),
+        )
+        .await
+        .unwrap();
+        delete_task(f.db.clone(), &f.generating, OperationSource::Ui, f.task_id)
+            .await
+            .unwrap();
+        let conn = f.db.lock().unwrap();
+        let rows = messages::list_for_chat(&conn, Chat::Task(f.task_id)).unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            let content: Value = serde_json::from_str(&row.content).unwrap();
+            let tool = content["tool"].as_str().unwrap();
+            let RecordIds::Declared(ids) = record_ids(tool) else {
+                panic!("{tool} is not declared");
+            };
+            crate::tools::assert_ids_declared(tool, &content["arguments"], ids.arguments);
+            crate::tools::assert_ids_declared(tool, &content["result"], ids.result);
+        }
     }
 
     #[tokio::test]

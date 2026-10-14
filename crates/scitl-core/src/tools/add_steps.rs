@@ -6,12 +6,15 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::get_current_task_detail::task_detail;
+use super::get_current_task_detail::TASK_DETAIL;
 use super::Run;
+use super::NO_IDS;
 
 internal_tool! {
     /// タスクチャット版のスキーマ。`task_id`を引数に含めない。説明は常に配列で受ける。
     name: "add_steps",
     run: Run::UpdateTask(execute),
+    ids: super::IdPositions { arguments: NO_IDS, result: TASK_DETAIL },
     "Add steps to this conversation's task.",
     json!({
         "type": "object",
