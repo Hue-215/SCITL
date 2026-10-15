@@ -145,7 +145,7 @@ function SyncPage({
   children: ReactNode
 }) {
   return (
-    <div className="sync-screen">
+    <div className="settings-main">
       <header className="pane-top">
         <div className="settings-header">
           <h1>{title}</h1>
@@ -341,9 +341,10 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     void start('connect', () => syncConnect(address, code, onEvent))
   }
 
-  // コードが合わなかったら、同じコードではもう接続できない(発行した側が捨てている)ので、欄を空けておく。
+  // やり直すときは最初から打ち直す。どの失敗のあとにどの値が使えなくなるかは画面が持たない。
   const retry = () => {
-    if (result?.status === 'failed' && result.kind === 'code_mismatch') setCode('')
+    setAddress('')
+    setCode('')
     setResult(null)
   }
 
@@ -537,7 +538,10 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
             autoComplete="off"
             spellCheck={false}
             aria-invalid={inputError?.kind === 'invalid_address' || undefined}
-            onChange={(e) => setAddress(e.target.value)}
+            onChange={(e) => {
+              setAddress(e.target.value)
+              setInputError(null)
+            }}
           />
         </label>
         <label className="settings-field">
@@ -549,7 +553,10 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
             value={code}
             autoComplete="off"
             aria-invalid={inputError?.kind === 'invalid_code' || undefined}
-            onChange={(e) => setCode(e.target.value)}
+            onChange={(e) => {
+              setCode(e.target.value)
+              setInputError(null)
+            }}
           />
         </label>
         {inputError && (

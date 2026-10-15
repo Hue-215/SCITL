@@ -84,6 +84,24 @@ ol {
   padding: 0;
 }
 
+dl,
+dd {
+  margin: 0;
+}
+
+/* 選択肢のまとまり。枠と余白は使う側が持つ。UAのmin-inline-size: min-contentは、切れない語で
+   入れ物より広がるので外す。 */
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+legend {
+  padding: 0;
+}
+
 /* UA既定の太字(bold = 700)は、Sansが持たないウェイトを指す。 */
 b,
 strong,
@@ -1290,12 +1308,6 @@ details[open] > summary > .disclosure-mark,
   position: relative;
 }
 
-/* 同期の画面(SettingsSync.tsx)は、本文(.settings-main)と同じく残りの幅を占める。 */
-.settings > .sync-screen {
-  flex: 1;
-  min-width: 0;
-}
-
 .settings-main {
   flex: 1;
   min-width: 0;
@@ -1714,15 +1726,8 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-5);
 }
 
-/* 同期の画面(SettingsSync.tsx)。設定画面の代わりに窓全体を占め、見出しの帯・本文・下のボタンの行を
-   縦に並べる。見出しと本文は設定画面と同じ列(.settings-header・.settings-content)に置く。 */
-.sync-screen {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-
+/* 同期の画面(SettingsSync.tsx)。入れ物は設定の本文と同じ.settings-mainで、見出しの帯・本文・下の
+   ボタンの行を縦に並べる。見出しと本文は設定画面と同じ列(.settings-header・.settings-content)に置く。 */
 .sync-screen-aside {
   margin-inline-start: auto;
 }
@@ -1800,8 +1805,8 @@ details[open] > summary > .disclosure-mark,
   font-size: var(--font-size-lg);
 }
 
-/* 待ち受けの数字。打ち写す値なので、ほかの文字より大きく出す。ここでしか使わない大きさなので
-   トークン化しない。 */
+/* 待ち受けのコード。打ち写す値なので、ほかの文字より大きく出し、字間を空ける。大きさと字間は
+   ここでしか使わない値なのでトークン化しない。 */
 .sync-code {
   font-size: 2.5rem;
   line-height: var(--line-height-tight);
@@ -1820,7 +1825,6 @@ details[open] > summary > .disclosure-mark,
 }
 
 .sync-count dd {
-  margin: 0;
   text-align: end;
   font-variant-numeric: tabular-nums;
 }
@@ -1833,9 +1837,6 @@ details[open] > summary > .disclosure-mark,
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  margin: 0;
-  padding: 0;
-  border: none;
 }
 
 .sync-sides legend {
@@ -1871,13 +1872,14 @@ details[open] > summary > .disclosure-mark,
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2) var(--space-3) var(--space-3);
+  padding-block: var(--space-2) var(--space-3);
 }
 
 .sync-side-content {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  padding-inline: var(--space-3);
   min-width: 0;
 }
 
@@ -1894,6 +1896,7 @@ details[open] > summary > .disclosure-mark,
 .sync-side-steps {
   padding-left: var(--space-5);
   list-style: disc;
+  overflow-wrap: anywhere;
 }
 
 .sync-step-done {
