@@ -13,12 +13,12 @@ pub async fn sync_listen(
     state: State<'_, AppState>,
     on_event: Channel<SyncEvent>,
 ) -> Result<SyncReport, ()> {
-    Ok(
-        scitl_sync::listen(request(&state), dialog::confirm_sync(&app), |event| {
-            let _ = on_event.send(event);
-        })
-        .await,
+    Ok(scitl_sync::listen(
+        request(&state),
+        dialog::confirm_sync(&app),
+        forward(on_event),
     )
+    .await)
 }
 
 /// `address`と`code`は利用者が打ったまま渡す(読むのも確かめるのもRust側)。
@@ -35,9 +35,7 @@ pub async fn sync_connect(
         &address,
         &code,
         dialog::confirm_sync(&app),
-        |event| {
-            let _ = on_event.send(event);
-        },
+        forward(on_event),
     )
     .await)
 }
@@ -54,9 +52,7 @@ pub async fn sync_connect_scanned(
         request(&state),
         scitl_core::qr_scan::scan(),
         dialog::confirm_sync(&app),
-        |event| {
-            let _ = on_event.send(event);
-        },
+        forward(on_event),
     )
     .await)
 }
@@ -78,6 +74,13 @@ pub fn cancel_sync(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn resolve_sync_conflicts(state: State<'_, AppState>, choices: Vec<ConflictChoice>) -> bool {
     scitl_sync::answer(&state.sync_answers, choices)
+}
+
+/// 途中経過を画面へ流す。画面が閉じていて届かなくても、同期は続ける。
+fn forward(on_event: Channel<SyncEvent>) -> impl Fn(SyncEvent) + Sync {
+    move |event| {
+        let _ = on_event.send(event);
+    }
 }
 
 fn request<'a>(state: &'a State<'_, AppState>) -> Request<'a> {

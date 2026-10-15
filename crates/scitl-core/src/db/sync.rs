@@ -568,29 +568,22 @@ struct Where {
     attachments: &'static str,
 }
 
-const ALL: Where = Where {
-    tasks: "1",
-    steps: "1",
-    memories: "1",
-    messages: "1",
-    attachments: "1",
-};
+impl Where {
+    /// どの表にも同じ条件。
+    const fn every_table(clause: &'static str) -> Self {
+        Self {
+            tasks: clause,
+            steps: clause,
+            memories: clause,
+            messages: clause,
+            attachments: clause,
+        }
+    }
+}
 
-const SINCE: Where = Where {
-    tasks: "sync_seq > ?2",
-    steps: "sync_seq > ?2",
-    memories: "sync_seq > ?2",
-    messages: "sync_seq > ?2",
-    attachments: "sync_seq > ?2",
-};
-
-const UIDS: Where = Where {
-    tasks: "uid IN (SELECT value FROM json_each(?1))",
-    steps: "uid IN (SELECT value FROM json_each(?1))",
-    memories: "uid IN (SELECT value FROM json_each(?1))",
-    messages: "uid IN (SELECT value FROM json_each(?1))",
-    attachments: "uid IN (SELECT value FROM json_each(?1))",
-};
+const ALL: Where = Where::every_table("1");
+const SINCE: Where = Where::every_table("sync_seq > ?2");
+const UIDS: Where = Where::every_table("uid IN (SELECT value FROM json_each(?1))");
 
 const UNITS: Where = Where {
     tasks: "uid IN (SELECT value FROM json_each(?1))",

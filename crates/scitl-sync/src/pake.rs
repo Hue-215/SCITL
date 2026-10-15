@@ -19,6 +19,7 @@ const CONFIRM_MESSAGE: &[u8] = b"scitl-sync key confirmation";
 pub(crate) const MESSAGE_LEN: usize = 33;
 pub(crate) const CONFIRM_LEN: usize = 32;
 
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Role {
     Connector,
     Listener,

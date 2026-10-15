@@ -18,7 +18,7 @@ use scitl_core::{blocking, db, text};
 
 use crate::conflict::{ConflictChoice, ConflictView};
 use crate::invitation::{self, QrModules};
-use crate::transfer::{Resolver, Stage};
+use crate::transfer::{cancellable, Resolver, Stage};
 use crate::transport::Counts;
 use crate::{
     confirm_device_id, connect, local_addresses, parse_invitation, parse_peer_address, sync,
@@ -325,15 +325,6 @@ fn local_versions() -> LocalVersions {
     LocalVersions {
         db_version: db::schema_version(),
     }
-}
-
-async fn cancellable<T>(
-    stop: &StopSignal,
-    future: impl std::future::Future<Output = Result<T, SyncError>>,
-) -> Result<T, SyncError> {
-    stop.unless_requested(future)
-        .await
-        .unwrap_or(Err(SyncError::Cancelled))
 }
 
 /// 全体を押さえ、`target`で相手を決め(QRを読む等。止める指示が来たら捨てる)、確かめてから`sync`を

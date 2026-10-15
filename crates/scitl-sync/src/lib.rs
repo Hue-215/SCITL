@@ -38,4 +38,4 @@ pub use transport::{AbortReason, Counts};
 
 /// プロトコルの版。運ぶ形・IDの宣言・取り込む行の検証・照合の値のどれかを変えたら上げる
 /// (`docs/sync/index.md` 3節)。
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;

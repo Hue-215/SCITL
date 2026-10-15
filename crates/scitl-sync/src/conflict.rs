@@ -115,10 +115,7 @@ pub(crate) fn view(conflict: &Conflict) -> ConflictView {
 }
 
 fn alive_normal(t: &Transport) -> Vec<&MessageRow> {
-    t.messages
-        .iter()
-        .filter(|m| m.kind == "normal" && m.deleted_at.is_none())
-        .collect()
+    t.messages.iter().filter(|m| m.is_alive_normal()).collect()
 }
 
 fn side(this: &Transport, other: &Transport) -> ConflictSide {

@@ -714,6 +714,13 @@ fn rows_from_the_peer_are_checked_like_the_apps_own() {
         assert!(rows.iter().any(|r| r.table == table), "{table}: {rows:?}");
     }
 
+    // 本体が受け付けない、名前の無い添付。
+    let mut nameless = good.clone();
+    nameless.attachments[0].original_name = " ".to_string();
+    let rows = validate::check(&nameless, &nothing).unwrap_err();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].reason.contains("name"), "{rows:?}");
+
     // 置き換えていないIDの残った記録は、受け取る側で断る。
     let mut unreplaced = good.clone();
     let record = unreplaced
@@ -1291,4 +1298,50 @@ async fn memories_folded_on_two_pairs_agree() {
     let _ = rd;
     assert_same(&c, &d);
     assert_eq!(memories::list(&c.conn()).unwrap().len(), 1);
+}
+
+/// 書き終えた合図の端末IDは、名乗った端末IDか、巻き戻りで作り直した新しい端末ID。
+#[test]
+fn the_final_device_id_is_the_one_introduced() {
+    let introduced = "a".repeat(32);
+    let agreed = |peer_renews| Agreed {
+        send_from: 0,
+        peer: introduced.clone(),
+        peer_renews,
+    };
+    agreed(false).check_final_device_id(&introduced).unwrap();
+    for other in ["b".repeat(32), "x".to_string()] {
+        assert!(
+            agreed(false).check_final_device_id(&other).is_err(),
+            "{other}"
+        );
+    }
+    agreed(true).check_final_device_id(&"b".repeat(32)).unwrap();
+    for other in [introduced.clone(), "x".to_string()] {
+        assert!(
+            agreed(true).check_final_device_id(&other).is_err(),
+            "{other}"
+        );
+    }
+}
+
+/// 選んだあとに競合の中身が変われば、選び直させる。
+#[test]
+fn a_choice_is_kept_only_while_the_conflict_stays_the_same() {
+    let device = Device::new();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(populate(&device));
+    let (rows, _) =
+        db_sync::transaction(&device.conn(), |tx| convert::read(tx, Filter::All)).unwrap();
+    let conflict = Conflict {
+        unit: merge::Unit::Task(rows.tasks[0].uid.clone()),
+        ours: rows.clone(),
+        theirs: rows,
+    };
+    let chosen = Chosen::new(Pick::Theirs, &conflict);
+    assert!(chosen.is_for(&conflict));
+
+    let mut changed = conflict.clone();
+    changed.ours.steps[0].description = "別のプロセスが書いた".to_string();
+    assert!(!chosen.is_for(&changed));
 }

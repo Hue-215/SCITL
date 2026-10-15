@@ -20,9 +20,9 @@ use scitl_core::in_flight::StopSignal;
 use scitl_core::CoreError;
 
 use crate::conflict::{self, ConflictChoice, ConflictView};
-use crate::convert::{self, Writer};
+use crate::convert::{self, Ids, Snapshot, Writer};
 use crate::merge::{self, Conflict, Inputs, Pick, Units};
-use crate::transport::{AbortReason, AttachmentRow, Counts, Message, Transport};
+use crate::transport::{AbortReason, AttachmentRow, Counts, Message, MessageRow, Transport};
 use crate::validate::{self, Known};
 use crate::{device, files, DeviceRegistry, InvalidRow, Session, SyncError};
 
@@ -113,6 +113,27 @@ fn reason_to_tell(e: &SyncError) -> Option<AbortReason> {
 struct Agreed {
     /// 自分が送る行の位置(自分の番号。これより後に変わった行を送る)。
     send_from: i64,
+    /// 相手が名乗った端末ID。
+    peer: String,
+    /// 相手の番号が巻き戻っていて、相手が端末IDを作り直す(10節)。
+    peer_renews: bool,
+}
+
+impl Agreed {
+    /// 相手が書き終えたときに伝える端末ID(カーソルを書く先)を確かめる。作り直していなければ
+    /// 名乗った端末IDのまま。ほかの端末のカーソルを書かせない。
+    fn check_final_device_id(&self, device_id: &str) -> Result<(), SyncError> {
+        let expected = if self.peer_renews {
+            validate::is_hex(device_id, 32) && device_id != self.peer
+        } else {
+            device_id == self.peer
+        };
+        if expected {
+            Ok(())
+        } else {
+            Err(SyncError::Malformed("device ID".to_string()))
+        }
+    }
 }
 
 async fn run(
@@ -124,7 +145,7 @@ async fn run(
     stage: &(dyn Fn(Stage) + Sync),
     resolver: &dyn Resolver,
 ) -> Result<Outcome, SyncError> {
-    let agreed = cancellable(stop, introduce(session, ctx, side, device_id)).await?;
+    let agreed = cancellable(stop, introduce(session, ctx, device_id)).await?;
     match side {
         Side::Connector => connector(session, ctx, &agreed, stop, stage).await,
         Side::Listener => listener(session, ctx, &agreed, stop, stage, resolver).await,
@@ -132,7 +153,7 @@ async fn run(
 }
 
 /// 止める指示が来るまで`future`を待つ。来たら落として[`SyncError::Cancelled`]。
-async fn cancellable<T>(
+pub(crate) async fn cancellable<T>(
     stop: &StopSignal,
     future: impl std::future::Future<Output = Result<T, SyncError>>,
 ) -> Result<T, SyncError> {
@@ -164,36 +185,18 @@ async fn transaction<T: Send + 'static>(
     .await?
 }
 
-async fn exchange(session: &mut Session, side: Side, ours: &Message) -> Result<Message, SyncError> {
-    match side {
-        Side::Connector => {
-            session.send(ours).await?;
-            session.recv().await
-        }
-        Side::Listener => {
-            let theirs = session.recv().await?;
-            session.send(ours).await?;
-            Ok(theirs)
-        }
-    }
-}
-
 /// 端末IDとカーソルを伝え合い、送る位置を決める(7節)。どちらかの番号が巻き戻っていれば、
 /// 両方とも全部を送り直し、巻き戻った側は端末IDを作り直す(10節)。
 async fn introduce(
     session: &mut Session,
     ctx: &Context,
-    side: Side,
     device_id: &str,
 ) -> Result<Agreed, SyncError> {
-    let theirs = exchange(
-        session,
-        side,
-        &Message::Intro {
+    let theirs = session
+        .exchange(&Message::Intro {
             device_id: device_id.to_string(),
-        },
-    )
-    .await?;
+        })
+        .await?;
     let Message::Intro {
         device_id: peer_device_id,
     } = theirs
@@ -214,17 +217,14 @@ async fn introduce(
         Ok((tx.device_state()?.counter, cursor, seen))
     })
     .await?;
-    let theirs = exchange(
-        session,
-        side,
-        &Message::State {
+    let theirs = session
+        .exchange(&Message::State {
             counter,
             sent_seq: cursor.sent_seq,
             received_seq: cursor.received_seq,
             seen_of_you: seen_of_peer,
-        },
-    )
-    .await?;
+        })
+        .await?;
     let Message::State {
         counter: peer_counter,
         received_seq: peer_received,
@@ -244,7 +244,11 @@ async fn introduce(
     } else {
         cursor.sent_seq.min(peer_received).max(0)
     };
-    Ok(Agreed { send_from })
+    Ok(Agreed {
+        send_from,
+        peer: peer_device_id,
+        peer_renews: rolled_back_there,
+    })
 }
 
 /// 受け取った版に、この端末の番号として、まだ振っていない番号が無いこと。正しい相手なら、巻き戻りは
@@ -274,18 +278,24 @@ fn unexpected(message: &Message) -> SyncError {
     }
 }
 
-/// 自分の行を読んで確かめる(送る側の検証。外れた行は、その端末の連番を添えて示す)。
-fn read_own(tx: &Tx<'_>, filter: Filter<'_>) -> Result<Transport, SyncError> {
+/// 自分の行を読んで確かめる(送る側の検証。外れた行は、その端末の連番を添えて示す)。`snapshot`と
+/// `known`は同じトランザクションで読んだもの。
+fn read_own(
+    tx: &Tx<'_>,
+    filter: Filter<'_>,
+    snapshot: &Snapshot,
+    known: &Known,
+) -> Result<Transport, SyncError> {
     let rows = tx.rows(filter)?;
-    let ids = convert::Ids::<i64, String>::from_uids(&tx.uids()?);
-    let (transport, mut invalid) = convert::to_transport(&rows, &ids);
-    if let Err(found) = validate::check(&transport, &Known::load(tx)?) {
+    let (transport, mut invalid) = convert::to_transport(&rows, &snapshot.ids);
+    if let Err(found) = validate::check(&transport, known) {
         // 置き換えで外れた行は、検証でも同じ行が外れうる。1つの行は1度だけ示す。
-        for row in with_local_ids(found, &rows) {
-            if !invalid.iter().any(|r| r.uid == row.uid) {
-                invalid.push(row);
-            }
-        }
+        let shown: HashSet<String> = invalid.iter().map(|r| r.uid.clone()).collect();
+        invalid.extend(
+            with_local_ids(found, &rows)
+                .into_iter()
+                .filter(|row| !shown.contains(&row.uid)),
+        );
     }
     if invalid.is_empty() {
         Ok(transport)
@@ -326,17 +336,29 @@ async fn connector(
     let send_from = agreed.send_from;
     let (delta, counter) = transaction(ctx.db.clone(), move |tx| {
         tx.stamp()?;
+        let snapshot = Snapshot::load(tx)?;
+        let known = Known::new(&snapshot);
         Ok((
-            read_own(tx, Filter::Since(send_from))?,
+            read_own(tx, Filter::Since(send_from), &snapshot, &known)?,
             tx.device_state()?.counter,
         ))
     })
     .await?;
+    let mut checked_files = HashSet::new();
     let (merged, merged_counter, digest, peer_device_id, sent_uids) = cancellable(stop, async {
-        check_own_files(ctx, &delta.attachments).await?;
+        check_own_files(ctx, &delta.attachments, &mut checked_files).await?;
         send_rows(session, &delta).await?;
         session.send(&Message::RowsEnd).await?;
-        serve_listener(session, ctx, delta, counter, stage).await
+        serve_listener(
+            session,
+            ctx,
+            agreed,
+            delta,
+            counter,
+            stage,
+            &mut checked_files,
+        )
+        .await
     })
     .await?;
 
@@ -362,9 +384,10 @@ async fn connector(
         if tx.device_state()?.counter != counter {
             return Err(SyncError::Changed);
         }
-        let mut writer = Writer::new(tx)?;
+        let snapshot = Snapshot::load(tx)?;
+        let mut writer = Writer::new(tx, &snapshot);
         let uids = merged.uids();
-        let (local, _) = convert::read(tx, Filter::Uids(&uids))?;
+        let (local, _) = convert::read_with(tx, Filter::Uids(&uids), &snapshot.ids)?;
         apply(&mut writer, &merged, &local)?;
         let changed = writer.finish()?;
         tx.clear_changed()?;
@@ -376,7 +399,8 @@ async fn connector(
                 received_seq: merged_counter,
             },
         )?;
-        if digest_of(tx, digest_uids)? != digest {
+        let ids = Ids::<i64, String>::from_uids(&tx.uids()?);
+        if digest_of(tx, digest_uids, &ids)? != digest {
             return Err(SyncError::Mismatch);
         }
         Ok((changed, written))
@@ -441,20 +465,19 @@ fn apply(
 async fn serve_listener(
     session: &mut Session,
     ctx: &Context,
+    agreed: &Agreed,
     delta: Transport,
     counter: i64,
     stage: &(dyn Fn(Stage) + Sync),
+    checked_files: &mut HashSet<String>,
 ) -> Result<(Transport, i64, String, String, Vec<String>), SyncError> {
     let mut sent_uids = delta.uids();
     let mut sent_attachments = delta.attachments;
     let mut merged = Transport::default();
-    let mut received_bytes = 0;
+    let mut received = 0;
     loop {
         let (message, len) = session.recv_with_len().await?;
-        received_bytes += len;
-        if received_bytes > MAX_ROWS_BYTES {
-            return Err(SyncError::Malformed("too many rows".to_string()));
-        }
+        count_received(&mut received, len)?;
         match message {
             Message::NeedUnits { tasks, general } => {
                 let units = transaction(ctx.db.clone(), move |tx| {
@@ -462,16 +485,16 @@ async fn serve_listener(
                     if tx.device_state()?.counter != counter {
                         return Err(SyncError::Changed);
                     }
-                    read_own(
-                        tx,
-                        Filter::Units {
-                            tasks: &tasks,
-                            general,
-                        },
-                    )
+                    let snapshot = Snapshot::load(tx)?;
+                    let known = Known::new(&snapshot);
+                    let filter = Filter::Units {
+                        tasks: &tasks,
+                        general,
+                    };
+                    read_own(tx, filter, &snapshot, &known)
                 })
                 .await?;
-                check_own_files(ctx, &units.attachments).await?;
+                check_own_files(ctx, &units.attachments, checked_files).await?;
                 send_rows(session, &units).await?;
                 session.send(&Message::UnitsEnd).await?;
                 sent_uids.extend(units.uids());
@@ -491,9 +514,7 @@ async fn serve_listener(
                 digest,
                 device_id,
             } => {
-                if !validate::is_hex(&device_id, 32) {
-                    return Err(SyncError::Malformed("device ID".to_string()));
-                }
+                agreed.check_final_device_id(&device_id)?;
                 return Ok((merged, counter, digest, device_id, sent_uids));
             }
             other => return Err(unexpected(&other)),
@@ -521,11 +542,14 @@ async fn listener(
     stage: &(dyn Fn(Stage) + Sync),
     resolver: &dyn Resolver,
 ) -> Result<Outcome, SyncError> {
-    let delta = cancellable(stop, receive_rows(session, End::Rows)).await?;
+    // Bから受け取る行の大きさの合計(差分と、求めた単位の行)。
+    let mut received = 0;
+    let delta = cancellable(stop, receive_rows(session, End::Rows, &mut received)).await?;
     let mut fetched = Transport::default();
     let mut complete = Units::default();
-    let mut choices: HashMap<String, Pick> = HashMap::new();
+    let mut choices: HashMap<String, Chosen> = HashMap::new();
     let mut have_files: HashSet<String> = HashSet::new();
+    let mut checked_files: HashSet<String> = HashSet::new();
     let mut files_received = 0;
     let mut finishing = false;
     let send_from = agreed.send_from;
@@ -539,18 +563,17 @@ async fn listener(
             transaction(ctx.db.clone(), move |tx| {
                 tx.stamp()?;
                 let state = tx.device_state()?;
-                let changed = read_own(tx, Filter::Since(send_from))?;
-                let (mut local, _) = convert::read(tx, Filter::Uids(&uids))?;
+                let snapshot = Snapshot::load(tx)?;
+                let known = Known::new(&snapshot);
+                let changed = read_own(tx, Filter::Since(send_from), &snapshot, &known)?;
+                let (mut local, _) = convert::read_with(tx, Filter::Uids(&uids), &snapshot.ids)?;
                 let tasks: Vec<String> = complete.tasks.iter().cloned().collect();
-                let (units, _) = convert::read(
-                    tx,
-                    Filter::Units {
-                        tasks: &tasks,
-                        general: complete.general,
-                    },
-                )?;
+                let units = Filter::Units {
+                    tasks: &tasks,
+                    general: complete.general,
+                };
+                let (units, _) = convert::read_with(tx, units, &snapshot.ids)?;
                 extend_unique(&mut local, units);
-                let known = Known::load(tx)?;
                 validate::check(&incoming, &known).map_err(SyncError::InvalidRows)?;
                 check_own_numbers(&incoming, &state)?;
                 Ok(LocalView {
@@ -563,7 +586,8 @@ async fn listener(
             .await?
         };
         if !finishing {
-            cancellable(stop, check_own_files(ctx, &view.changed.attachments)).await?;
+            let rows = &view.changed.attachments;
+            cancellable(stop, check_own_files(ctx, rows, &mut checked_files)).await?;
         }
         let incoming = combine(&delta, &fetched, &complete);
         let plan = merge::plan(&Inputs {
@@ -577,17 +601,28 @@ async fn listener(
         }
         if !plan.needs.is_empty() {
             let needs = plan.needs.clone();
-            let rows = cancellable(stop, fetch_units(session, &needs)).await?;
+            let rows = cancellable(stop, fetch_units(session, &needs, &mut received)).await?;
+            if !needs.covers(&rows) {
+                return Err(SyncError::Malformed(
+                    "rows outside the requested units".to_string(),
+                ));
+            }
             extend_unique(&mut fetched, rows);
             complete.extend(&needs);
             continue;
         }
 
         // 足す添付の実体のうち、無いものをBに求める(行を書く前に置く。5節)。
+        let local_attachments: HashSet<&str> = view
+            .local
+            .attachments
+            .iter()
+            .map(|a| a.uid.as_str())
+            .collect();
         let wanted: Vec<AttachmentRow> = incoming
             .attachments
             .iter()
-            .filter(|a| !view.local.attachments.iter().any(|l| l.uid == a.uid))
+            .filter(|a| !local_attachments.contains(a.uid.as_str()))
             .filter(|a| {
                 a.file_hash
                     .as_ref()
@@ -601,11 +636,16 @@ async fn listener(
             have_files.extend(wanted.iter().filter_map(|a| a.file_hash.clone()));
         }
 
-        // 選んでいない競合を利用者に選ばせる。
+        // 選んでいない競合と、選んだあとに中身が変わった競合(確定をやり直す間に別の書き込みがあった)を、
+        // 利用者に選ばせる。
         let pending: Vec<&Conflict> = plan
             .conflicts
             .iter()
-            .filter(|c| !choices.contains_key(&c.unit.id()))
+            .filter(|c| {
+                !choices
+                    .get(&c.unit.id())
+                    .is_some_and(|chosen| chosen.is_for(c))
+            })
             .collect();
         if !pending.is_empty() {
             let views: Vec<ConflictView> = pending.iter().map(|c| conflict::view(c)).collect();
@@ -622,17 +662,21 @@ async fn listener(
                 }
             })
             .await?;
-            let chosen: HashMap<String, Pick> = chosen
+            let sides: HashMap<String, Pick> = chosen
                 .into_iter()
                 .filter(|c| ids.contains(&c.id))
                 .map(|c| (c.id, c.side.into()))
                 .collect();
-            if chosen.len() != ids.len() {
+            if sides.len() != ids.len() {
                 return Err(SyncError::Core(CoreError::Internal(
                     "not every conflict was chosen".to_string(),
                 )));
             }
-            choices.extend(chosen);
+            for conflict in pending {
+                let id = conflict.unit.id();
+                let pick = sides[&id];
+                choices.insert(id, Chosen::new(pick, conflict));
+            }
         }
 
         // 6: 確定する。版を振ってから別の書き込みがあれば、振るところからやり直す。
@@ -643,12 +687,15 @@ async fn listener(
             stage(Stage::Finishing);
             finishing = true;
         }
-        let choices = choices.clone();
+        let picks: HashMap<String, Pick> = choices
+            .iter()
+            .map(|(id, chosen)| (id.clone(), chosen.pick))
+            .collect();
         let committed = transaction(ctx.db.clone(), move |tx| {
             if tx.device_state()?.counter != view.counter {
                 return Ok(None);
             }
-            commit(tx, &plan, &choices, &view.device_id, &incoming, send_from).map(Some)
+            commit(tx, &plan, &picks, &view.device_id, &incoming, send_from).map(Some)
         })
         .await?;
         if let Some(committed) = committed {
@@ -670,8 +717,9 @@ async fn listener(
             Message::NeedFiles { hashes } => {
                 serve_files(session, ctx, &back.attachments, hashes).await?
             }
-            Message::Done { counter, device_id } if validate::is_hex(&device_id, 32) => {
-                break (counter, device_id)
+            Message::Done { counter, device_id } => {
+                agreed.check_final_device_id(&device_id)?;
+                break (counter, device_id);
             }
             other => return Err(unexpected(&other)),
         }
@@ -694,12 +742,30 @@ async fn listener(
     })
 }
 
+/// 利用者が選んだ側と、選んだときの両側の行。確定をやり直したときに中身が変わっていれば聞き直す
+/// (選んだあとに別のプロセスが書いた行を、聞かないまま選ばなかった側として消さない)。
+struct Chosen {
+    pick: Pick,
+    ours: Transport,
+    theirs: Transport,
+}
+
+impl Chosen {
+    fn new(pick: Pick, conflict: &Conflict) -> Self {
+        Self {
+            pick,
+            ours: conflict.ours.clone(),
+            theirs: conflict.theirs.clone(),
+        }
+    }
+
+    fn is_for(&self, conflict: &Conflict) -> bool {
+        self.ours == conflict.ours && self.theirs == conflict.theirs
+    }
+}
+
 /// 受け取った行。そろった単位の行は、単位ごと求めた行に置き換える(同じ行と、Bの会話の並び)。
 fn combine(delta: &Transport, fetched: &Transport, complete: &Units) -> Transport {
-    let in_complete_chat = |task: &Option<String>| match task {
-        Some(uid) => complete.tasks.contains(uid),
-        None => complete.general,
-    };
     let mut out = Transport {
         tasks: delta
             .tasks
@@ -717,7 +783,7 @@ fn combine(delta: &Transport, fetched: &Transport, complete: &Units) -> Transpor
         messages: delta
             .messages
             .iter()
-            .filter(|r| !in_complete_chat(&r.task))
+            .filter(|r| !complete.has_chat(r.task.as_deref()))
             .cloned()
             .collect(),
         attachments: delta.attachments.clone(),
@@ -764,7 +830,7 @@ fn commit(
         rows.messages.extend(resolved.messages);
         rows.attachments.extend(resolved.attachments);
     }
-    let mut writer = Writer::new(tx)?;
+    let mut writer = Writer::new(tx, &Snapshot::load(tx)?);
     for r in &rows.tasks {
         writer.task(r)?;
     }
@@ -806,60 +872,77 @@ fn commit(
     let counter = tx.device_state()?.counter;
 
     // Bへ返すのは、前回Bへ渡した位置より後に変わった行のうち、Bが送ってきたものと違う行。
-    let (written, invalid) = convert::read(tx, Filter::Since(send_from))?;
+    let snapshot = Snapshot::load(tx)?;
+    let (written, invalid) = convert::read_with(tx, Filter::Since(send_from), &snapshot.ids)?;
     if !invalid.is_empty() {
         return Err(SyncError::InvalidRows(invalid));
     }
     let back = without_echo(written, incoming);
-    validate::check(&back, &Known::load(tx)?).map_err(SyncError::InvalidRows)?;
+    validate::check(&back, &Known::new(&snapshot)).map_err(SyncError::InvalidRows)?;
     let mut uids = incoming.uids();
     uids.extend(back.uids());
-    let digest = digest_of(tx, uids)?;
+    let digest = digest_of(tx, uids, &snapshot.ids)?;
     Ok((changed, counter, back, digest))
 }
 
 /// `incoming`と同じ行を除く(試行は端末ごとに見え方が違いうるので比べない)。
 fn without_echo(mut written: Transport, incoming: &Transport) -> Transport {
-    fn keep<R: Serialize>(rows: &mut Vec<R>, incoming: &[R], uid: impl Fn(&R) -> &str) {
-        let sent: HashMap<&str, Vec<u8>> = incoming
-            .iter()
-            .map(|r| (uid(r), serde_json::to_vec(r).expect("rows serialize")))
-            .collect();
-        rows.retain(|r| sent.get(uid(r)) != Some(&serde_json::to_vec(r).expect("rows serialize")));
+    fn keep<R>(
+        rows: &mut Vec<R>,
+        incoming: &[R],
+        uid: impl Fn(&R) -> &str,
+        same: impl Fn(&R, &R) -> bool,
+    ) {
+        let sent: HashMap<&str, &R> = incoming.iter().map(|r| (uid(r), r)).collect();
+        rows.retain(|r| !sent.get(uid(r)).is_some_and(|s| same(s, r)));
     }
-    let incoming_messages: Vec<_> = incoming
-        .messages
-        .iter()
-        .map(|m| crate::transport::MessageRow {
-            attempt: None,
-            ..m.clone()
-        })
-        .collect();
-    keep(&mut written.tasks, &incoming.tasks, |r| &r.uid);
-    keep(&mut written.steps, &incoming.steps, |r| &r.uid);
-    keep(&mut written.memories, &incoming.memories, |r| &r.uid);
-    let sent: HashMap<&str, &crate::transport::MessageRow> = incoming_messages
-        .iter()
-        .map(|m| (m.uid.as_str(), m))
-        .collect();
-    written.messages.retain(|m| {
-        sent.get(m.uid.as_str()).is_none_or(|s| {
-            **s != crate::transport::MessageRow {
-                attempt: None,
-                ..m.clone()
-            }
-        })
-    });
-    keep(&mut written.attachments, &incoming.attachments, |r| &r.uid);
+    let without_attempt = |m: &MessageRow| MessageRow {
+        attempt: None,
+        ..m.clone()
+    };
+    keep(
+        &mut written.tasks,
+        &incoming.tasks,
+        |r| &r.uid,
+        PartialEq::eq,
+    );
+    keep(
+        &mut written.steps,
+        &incoming.steps,
+        |r| &r.uid,
+        PartialEq::eq,
+    );
+    keep(
+        &mut written.memories,
+        &incoming.memories,
+        |r| &r.uid,
+        PartialEq::eq,
+    );
+    keep(
+        &mut written.messages,
+        &incoming.messages,
+        |r| &r.uid,
+        |a, b| without_attempt(a) == without_attempt(b),
+    );
+    keep(
+        &mut written.attachments,
+        &incoming.attachments,
+        |r| &r.uid,
+        PartialEq::eq,
+    );
     written
 }
 
 /// 照合の値(4節)。今回やり取りした行の、確定後の状態を、運ぶ形で`uid`の順に並べたもののハッシュ。
-/// 試行は入れない。
-fn digest_of(tx: &Tx<'_>, mut uids: Vec<String>) -> Result<String, SyncError> {
+/// 試行は入れない。`ids`は書いたあとに読んだもの。
+fn digest_of(
+    tx: &Tx<'_>,
+    mut uids: Vec<String>,
+    ids: &Ids<i64, String>,
+) -> Result<String, SyncError> {
     uids.sort_unstable();
     uids.dedup();
-    let (mut t, _) = convert::read(tx, Filter::Uids(&uids))?;
+    let (mut t, _) = convert::read_with(tx, Filter::Uids(&uids), ids)?;
     t.tasks.sort_by(|a, b| a.uid.cmp(&b.uid));
     t.steps.sort_by(|a, b| a.uid.cmp(&b.uid));
     t.memories.sort_by(|a, b| a.uid.cmp(&b.uid));
@@ -884,14 +967,18 @@ fn digest_of(tx: &Tx<'_>, mut uids: Vec<String>) -> Result<String, SyncError> {
 }
 
 /// Bに単位の行を求めて受け取る。
-async fn fetch_units(session: &mut Session, units: &Units) -> Result<Transport, SyncError> {
+async fn fetch_units(
+    session: &mut Session,
+    units: &Units,
+    received: &mut usize,
+) -> Result<Transport, SyncError> {
     session
         .send(&Message::NeedUnits {
             tasks: units.tasks.iter().cloned().collect(),
             general: units.general,
         })
         .await?;
-    receive_rows(session, End::Units).await
+    receive_rows(session, End::Units, received).await
 }
 
 /// 受け取る行の終わりの印。
@@ -901,15 +988,24 @@ enum End {
     Units,
 }
 
-async fn receive_rows(session: &mut Session, end: End) -> Result<Transport, SyncError> {
+/// 受け取った行を、`received`(同期1回で受け取った行の大きさの合計)に足して確かめる。
+fn count_received(received: &mut usize, len: usize) -> Result<(), SyncError> {
+    *received += len;
+    if *received > MAX_ROWS_BYTES {
+        return Err(SyncError::Malformed("too many rows".to_string()));
+    }
+    Ok(())
+}
+
+async fn receive_rows(
+    session: &mut Session,
+    end: End,
+    received: &mut usize,
+) -> Result<Transport, SyncError> {
     let mut t = Transport::default();
-    let mut received_bytes = 0;
     loop {
         let (message, len) = session.recv_with_len().await?;
-        received_bytes += len;
-        if received_bytes > MAX_ROWS_BYTES {
-            return Err(SyncError::Malformed("too many rows".to_string()));
-        }
+        count_received(received, len)?;
         match message {
             Message::Tasks { rows } => t.tasks.extend(rows),
             Message::Steps { rows } => t.steps.extend(rows),
@@ -963,9 +1059,19 @@ async fn read_file(store: &AttachmentStore, hash: &str) -> Result<Vec<u8>, SyncE
 }
 
 /// 送る前に、行が指す自分の実体を確かめる(送る側で外れた行を示すため。`docs/sync/index.md` 5節)。
-async fn check_own_files(ctx: &Context, rows: &[AttachmentRow]) -> Result<(), SyncError> {
+/// `checked`は、この同期で確かめた添付の行の`uid`(実体を読み直さない)。
+async fn check_own_files(
+    ctx: &Context,
+    rows: &[AttachmentRow],
+    checked: &mut HashSet<String>,
+) -> Result<(), SyncError> {
+    let unchecked: Vec<AttachmentRow> = rows
+        .iter()
+        .filter(|r| !checked.contains(&r.uid))
+        .cloned()
+        .collect();
     let mut invalid = Vec::new();
-    for (hash, rows) in files::rows_by_file(rows) {
+    for (hash, rows) in files::rows_by_file(&unchecked) {
         match existing_file(ctx, hash).await? {
             Some(bytes) => invalid.extend(files::check(hash, &bytes, &rows)),
             None => invalid.extend(rows.iter().map(|r| InvalidRow {
@@ -977,6 +1083,7 @@ async fn check_own_files(ctx: &Context, rows: &[AttachmentRow]) -> Result<(), Sy
         }
     }
     if invalid.is_empty() {
+        checked.extend(unchecked.into_iter().map(|r| r.uid));
         Ok(())
     } else {
         Err(SyncError::InvalidRows(invalid))

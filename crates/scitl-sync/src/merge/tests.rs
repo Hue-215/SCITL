@@ -173,3 +173,62 @@ fn resolving_takes_the_chosen_side_and_deletes_what_only_the_other_had() {
     // Bにしか無い行は、Bの並びの順で先に来る(足すときの会話の並び)。
     assert_eq!(out.messages[1].uid, "c".repeat(32));
 }
+
+/// 求めた単位の行だけが届いたか。メモリと、一緒に届いていない発言の添付は外れる。
+#[test]
+fn only_rows_of_the_requested_units_are_covered() {
+    let task = "t".repeat(32);
+    let units = Units {
+        tasks: [task.clone()].into(),
+        general: false,
+    };
+    let mut in_task = message("m", None, v(&[]));
+    in_task.task = Some(task.clone());
+    let attachment = AttachmentRow {
+        uid: "f".repeat(32),
+        message: in_task.uid.clone(),
+        original_name: "a.txt".to_string(),
+        mime_type: "text/plain".to_string(),
+        kind: "text".to_string(),
+        size_bytes: 1,
+        content_text: Some("a".to_string()),
+        file_hash: None,
+        created_at: "2026-10-01T00:00:00Z".to_string(),
+    };
+    let rows = Transport {
+        steps: vec![step("s", v(&[]))],
+        messages: vec![in_task.clone()],
+        attachments: vec![attachment.clone()],
+        ..Transport::default()
+    };
+    assert!(units.covers(&rows));
+
+    let general_chat = Transport {
+        messages: vec![message("g", None, v(&[]))],
+        ..Transport::default()
+    };
+    let orphan_attachment = Transport {
+        attachments: vec![attachment],
+        ..Transport::default()
+    };
+    let memory = Transport {
+        memories: vec![MemoryRow {
+            uid: "y".repeat(32),
+            content: "朝型".to_string(),
+            created_at: "2026-10-01T00:00:00Z".to_string(),
+            updated_at: "2026-10-01T00:00:00Z".to_string(),
+            deleted_at: None,
+            version: v(&[]),
+        }],
+        ..Transport::default()
+    };
+    let mut other_task = step("o", v(&[]));
+    other_task.task = "u".repeat(32);
+    let other_task = Transport {
+        steps: vec![other_task],
+        ..Transport::default()
+    };
+    for outside in [general_chat, orphan_attachment, memory, other_task] {
+        assert!(!units.covers(&outside), "{outside:?}");
+    }
+}

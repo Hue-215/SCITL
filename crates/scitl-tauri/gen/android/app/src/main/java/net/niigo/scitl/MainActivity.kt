@@ -28,7 +28,8 @@ class MainActivity : TauriActivity() {
    * 画面からのカメラ・マイク等の要求を断るクライアントで包む(GuardedChromeClient)。wryは、この呼び出しと
    * 同じ処理の中で、ページを読み込み始めたあとにクライアントを付ける。そのため、メインスレッドの次の回へ
    * 回して包む(その時点では、ページはまだ読み込まれておらず、画面から権限を求められることは無い)。
-   * wryの更新で順序が変わったときに守りが黙って外れないよう、前に戻るたびにも確かめる。
+   * wryの更新で順序が変わったときに守りが黙って外れないよう、まだ付いていなければ少し待って確かめ直し、
+   * 前に戻るたびにも確かめる。
    */
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
@@ -38,18 +39,22 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
-    webView?.get()?.let(::guard)
+    webView?.get()?.let { guard(it) }
   }
 
   private var webView: WeakReference<WebView>? = null
 
-  private fun guard(webView: WebView) {
+  private fun guard(webView: WebView, retriesLeft: Int = GUARD_RETRIES) {
     val inner = webView.webChromeClient
     if (inner is GuardedChromeClient) return
     if (inner == null) {
-      // wryがまだクライアントを付けていない(順序が変わった)。包んでも上書きされるので、気付けるよう
-      // 診断に出す(次に前に戻ったときに包み直す)。
-      Log.e("SCITL", "the WebChromeClient is not set yet; camera requests from the page are not guarded")
+      // wryがまだクライアントを付けていない(順序が変わった)。包んでも上書きされるので、付くまで待つ。
+      // 待っても付かなければ、気付けるよう診断に出す(次に前に戻ったときにも包み直す)。
+      if (retriesLeft > 0) {
+        Handler(Looper.getMainLooper()).postDelayed({ guard(webView, retriesLeft - 1) }, GUARD_RETRY_MS)
+      } else {
+        Log.e("SCITL", "the WebChromeClient is not set yet; camera requests from the page are not guarded")
+      }
       return
     }
     webView.webChromeClient = GuardedChromeClient(inner)
@@ -121,6 +126,10 @@ class MainActivity : TauriActivity() {
     private const val PREFERENCES = "notifications"
     private const val KEY_ASKED = "permission_asked"
     private const val REQUEST_NOTIFICATIONS = 1
+
+    // クライアントが付くのを待つ回数と間隔(GuardedChromeClientで包むとき)。
+    private const val GUARD_RETRIES = 20
+    private const val GUARD_RETRY_MS = 100L
 
     /** アプリが画面に出ているか。出ている間に終わった応答は、通知しない(ReplyNotifier)。 */
     @Volatile

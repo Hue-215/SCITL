@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use scitl_core::net::{classify_ip, HostClass};
 
+use crate::code::DIGITS;
 use crate::{PairingCode, SyncError};
 
 const PREFIX: &str = "scitl-sync";
@@ -77,7 +78,7 @@ pub fn parse_invitation(text: &str) -> Result<Invitation, SyncError> {
         return Err(SyncError::InvalidInvitation);
     }
     let code = fields.next().ok_or(SyncError::InvalidInvitation)?;
-    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+    if code.len() != DIGITS || !code.bytes().all(|b| b.is_ascii_digit()) {
         return Err(SyncError::InvalidInvitation);
     }
     let addresses = fields
