@@ -237,7 +237,7 @@
   "settings.sync.count_tasks": "Tasks",
   "settings.sync.deleted": "Deleted",
   "settings.sync.earlier_messages": "{count} earlier messages",
-  "settings.sync.error.busy": "A conversation is waiting for a response",
+  "settings.sync.error.busy": "A conversation is generating a response",
   "settings.sync.error.camera_denied": "Camera access is not allowed",
   "settings.sync.error.changed": "This device's data was changed",
   "settings.sync.error.code_mismatch": "Authentication failed",
