@@ -84,6 +84,24 @@ ol {
   padding: 0;
 }
 
+dl,
+dd {
+  margin: 0;
+}
+
+/* 選択肢のまとまり。枠と余白は使う側が持つ。UAのmin-inline-size: min-contentは、切れない語で
+   入れ物より広がるので外す。 */
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+legend {
+  padding: 0;
+}
+
 /* UA既定の太字(bold = 700)は、Sansが持たないウェイトを指す。 */
 b,
 strong,
@@ -1708,46 +1726,132 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-5);
 }
 
-/* 同期の待ち受けのQR(SettingsSync.tsx)。画面の色によらず白地に黒で描く(読み取りに要る)。 */
+/* 同期の画面(SettingsSync.tsx)。入れ物は設定の本文と同じ.settings-mainで、見出しの帯・本文・下の
+   ボタンの行を縦に並べる。見出しと本文は設定画面と同じ列(.settings-header・.settings-content)に置く。 */
+.sync-screen-aside {
+  margin-inline-start: auto;
+}
+
+.sync-screen-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* 情報の少ない画面は、本文を上下左右の中央に寄せる(下のボタンから遠くならないように)。収まらない
+   ときは上端から並べる(中央のままだと上が切れて、スクロールしても届かない)。 */
+.sync-screen-body.centered {
+  min-height: 100%;
+  justify-content: safe center;
+  align-items: center;
+  text-align: center;
+}
+
+/* 入力の画面は、上下だけ中央に寄せる(欄は左揃えのまま)。 */
+.sync-screen-body.middle {
+  min-height: 100%;
+  justify-content: safe center;
+}
+
+/* 競合の画面は、両側の枠を高さいっぱいに分け合う。 */
+.sync-screen-body.fill {
+  height: 100%;
+}
+
+.sync-screen-footer {
+  flex-shrink: 0;
+  border-top: var(--border-width) solid var(--color-border);
+  padding-block: var(--space-3) var(--pane-padding);
+}
+
+/* 下のボタンの行は本文と同じ列に置く。主ボタンは右端、ほかは左端。 */
+.sync-screen-actions {
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+.sync-screen-actions > .primary {
+  margin-inline-start: auto;
+}
+
+.sync-connect-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.sync-code-input {
+  font-family: var(--font-family-mono);
+}
+
+/* 入力欄の下に並べるボタン(コードを発行する・QRを読み取る)。同じ幅で分け合い、1つだけ(カメラの
+   無い端末)なら行の幅いっぱいにする。 */
+.sync-alt-actions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/* 待ち受けのQR。画面の色によらず白地に黒で描く(読み取りに要る)。 */
 .sync-qr {
   display: block;
   width: min(100%, 240px);
   height: auto;
 }
 
-/* 同期の競合(SettingsSync.tsx)。単位ごとの枠と、両側の選択肢は.provider-cardと同じく枠線だけで
-   塗らない。選んだ側は枠の色で示す(選択状態はラジオボタン自身も持つ)。両側は幅が足りれば横に並べ、
-   狭い窓では縦に積む。 */
-.sync-conflict {
+.sync-addresses code {
+  font-size: var(--font-size-lg);
+}
+
+/* 待ち受けのコード。打ち写す値なので、ほかの文字より大きく出し、字間を空ける。大きさと字間は
+   ここでしか使わない値なのでトークン化しない。 */
+.sync-code {
+  font-size: 2.5rem;
+  line-height: var(--line-height-tight);
+  letter-spacing: 0.12em;
+}
+
+.sync-counts {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: var(--space-1) var(--space-5);
+  text-align: start;
+}
+
+.sync-count {
+  display: contents;
+}
+
+.sync-count dd {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 競合の両側は上下に積み、枠ごとに中身をスクロールさせる。選んだ側は枠の色で示す(選択状態は
+   ラジオボタン自身も持つ)。枠は.provider-cardと同じく枠線だけで塗らない。 */
+.sync-sides {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  min-width: 0;
-  margin: 0;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  padding: var(--space-3);
 }
 
-.sync-conflict legend {
-  padding: 0 var(--space-1);
+.sync-sides legend {
+  margin-bottom: var(--space-2);
   font-weight: var(--font-weight-strong);
 }
 
-.sync-sides {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  gap: var(--space-3);
-}
-
 .sync-side {
+  flex: 1 1 0;
+  /* 低い窓でも中身が少しは見える高さ。ここでしか使わない値なのでトークン化しない。 */
+  min-height: 8rem;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius);
-  padding: var(--space-3);
   cursor: pointer;
 }
 
@@ -1759,13 +1863,23 @@ details[open] > summary > .disclosure-mark,
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-border);
   font-weight: var(--font-weight-strong);
+}
+
+.sync-side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-block: var(--space-2) var(--space-3);
 }
 
 .sync-side-content {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  padding-inline: var(--space-3);
   min-width: 0;
 }
 
@@ -1782,6 +1896,7 @@ details[open] > summary > .disclosure-mark,
 .sync-side-steps {
   padding-left: var(--space-5);
   list-style: disc;
+  overflow-wrap: anywhere;
 }
 
 .sync-step-done {
