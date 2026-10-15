@@ -23,7 +23,7 @@ import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
 import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
-import { SyncTab } from './SettingsSync'
+import { SyncScreen, SyncTab } from './SettingsSync'
 import { type Drafts, DraftsContext } from './settingsInput'
 import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
@@ -48,6 +48,8 @@ export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 同期の画面を開いている間は、設定画面の代わりに窓全体へ出す(出るのは同期の画面の「戻る」だけ)。
+  const [syncOpen, setSyncOpen] = useState(false)
   // 自動保存の欄の書きかけ(`useDraft`)と、その保存でコマンド自体が失敗した回数。
   const [drafts] = useState<Drafts>(() => ({ entries: new Set(), closed: false }))
   const saveFailures = useRef(0)
@@ -196,6 +198,8 @@ export default function Settings({ onClose }: SettingsProps) {
 
   const tabLabel = TABS.find(({ id }) => id === tab)?.label ?? TABS[0].label
 
+  if (syncOpen) return <SyncScreen onClose={() => setSyncOpen(false)} />
+
   return (
     // 左のカラムはチャットのサイドバーと同じ形の入れ物で、設定を開いている間はサイドバーが設定の
     // メニューに切り替わったように見せる(畳み方・引き出し方もサイドバーと同じ)。
@@ -259,7 +263,7 @@ export default function Settings({ onClose }: SettingsProps) {
               ) : tab === 'memory' ? (
                 <MemoryTab />
               ) : tab === 'sync' ? (
-                <SyncTab />
+                <SyncTab onStart={() => setSyncOpen(true)} />
               ) : tab === 'providers' ? (
                 <ProvidersTab
                   settings={settings}
