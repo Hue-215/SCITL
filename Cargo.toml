@@ -139,9 +139,15 @@ tempfile = "3"
 # 正本にし、TS側に写しを手で持たない。生成は`cargo test`が行い、CIが生成物との差分を検査する
 ts-rs = "12"
 
+# 開発用のビルドのデバッグ情報は、panicのバックトレースに出る行番号までにする(依存のクレートは
+# 持たない)。cargoは依存の版が変わるたびに別の生成物を作るので、デバッグ情報の分だけ`target/`が膨らむ
+[profile.dev]
+debug = "line-tables-only"
+
 # 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
 # デコード・縮小・エンコードに関わるクレートだけは最適化する
 [profile.dev.package]
+"*" = { debug = false }
 image = { opt-level = 3 }
 zune-jpeg = { opt-level = 3 }
 png = { opt-level = 3 }
