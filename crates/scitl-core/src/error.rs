@@ -55,10 +55,10 @@ pub enum CoreError {
     Cancelled,
     #[error("MCP server error: {0}")]
     Mcp(String),
-    /// リンクを開けない(許可されていない・解釈できないURL、OS側の起動失敗)。
     /// 同期の間に、推論サーバー・MCPサーバーへ問い合わせようとした(`settings::QueryPause`)。
     #[error("not available while syncing")]
     Syncing,
+    /// リンクを開けない(許可されていない・解釈できないURL、OS側の起動失敗)。
     #[error("link error: {0}")]
     Link(String),
     /// 実行基盤側の失敗(ブロッキング処理のタスクがパニックした等)。
