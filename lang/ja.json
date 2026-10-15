@@ -276,7 +276,7 @@
   "settings.sync.progress_heading": "同期",
   "settings.sync.qr_label": "IPアドレスとコードのQR",
   "settings.sync.resolve": "選んだ内容で同期する",
-  "settings.sync.retry": "やり直す",
+  "settings.sync.retry": "再試行",
   "settings.sync.role_assistant": "アシスタント",
   "settings.sync.role_error": "エラー",
   "settings.sync.role_user": "ユーザー",

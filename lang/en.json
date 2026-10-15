@@ -276,7 +276,7 @@
   "settings.sync.progress_heading": "Sync",
   "settings.sync.qr_label": "QR code of the IP address and code",
   "settings.sync.resolve": "Sync with these choices",
-  "settings.sync.retry": "Try again",
+  "settings.sync.retry": "Retry",
   "settings.sync.role_assistant": "Assistant",
   "settings.sync.role_error": "Error",
   "settings.sync.role_user": "User",

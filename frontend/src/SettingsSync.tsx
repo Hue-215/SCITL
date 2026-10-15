@@ -164,7 +164,8 @@ function SyncPage({
   )
 }
 
-// 競合を1件ずつ選ばせ、最後の1件で選んだ側をまとめて返す。
+// 競合を1件ずつ選ばせ、最後の1件で選んだ側をまとめて返す。2件目からの「戻る」(画面とAndroid)は
+// 前の件へ戻り、同期を止めるのは1件目の「戻る」だけにする。
 function ConflictChooser({
   conflicts,
   stopButton,
@@ -179,6 +180,9 @@ function ConflictChooser({
   const [sending, setSending] = useState(false)
   const conflict = conflicts[index]
   const last = index === conflicts.length - 1
+  const previous = () => setIndex((i) => Math.max(i - 1, 0))
+  // 同期の画面の「戻る」(止める)より後に積むので、2件目からはこちらが先に受ける。
+  useCloseOnBack(index > 0 && !sending, previous)
 
   const submit = async () => {
     setSending(true)
@@ -202,7 +206,13 @@ function ConflictChooser({
       layout="fill"
       actions={
         <>
-          {stopButton}
+          {index > 0 ? (
+            <button type="button" disabled={sending} onClick={previous}>
+              {t('settings.sync.back')}
+            </button>
+          ) : (
+            stopButton
+          )}
           <button
             type="button"
             className="primary"
