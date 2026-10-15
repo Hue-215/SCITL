@@ -142,6 +142,12 @@ impl DataLayout {
     pub fn export(&self) -> PathBuf {
         self.root.join("export")
     }
+
+    /// 書き込みの途中で落ちて残った一時ファイル(`config.toml`と添付の実体のもの)を消す。
+    pub fn remove_stale_temp_files(&self) {
+        crate::files::remove_stale_temp_files(&self.root);
+        crate::files::remove_stale_temp_files(&self.attachments());
+    }
 }
 
 /// アプリのデータを置くディレクトリを作る。Unixでは持ち主だけが入れる権限(0700)にし、

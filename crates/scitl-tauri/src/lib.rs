@@ -271,6 +271,7 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     let db = Arc::new(Mutex::new(conn));
     // 前回の終了時に書き戻せなかった分(強制終了など)を、ここで本体へ書き戻す。
     scitl_core::db::checkpoint_wal(&db);
+    data.remove_stale_temp_files();
 
     let settings = Settings::load(data.config());
     let store = AttachmentStore::new(data.attachments(), paths::revealed_attachments(cache));
