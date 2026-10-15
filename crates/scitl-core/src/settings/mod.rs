@@ -17,6 +17,7 @@ mod input;
 mod mcp_settings;
 mod model_settings;
 mod provider_settings;
+mod query_pause;
 mod rejection;
 pub mod view;
 
@@ -47,6 +48,7 @@ pub use destination::DestinationDialog;
 pub use input::HeaderInput;
 pub use mcp_settings::{McpServerAdded, NewMcpEndpoint};
 pub use provider_settings::NewProvider;
+pub use query_pause::{PausedQueries, QueryPause};
 pub use rejection::{FormOutcome, InputRejection, NumberField, Rejections};
 pub use view::{AvailableModel, ChatModelsView, SettingsView};
 
@@ -179,6 +181,8 @@ pub struct Settings {
     /// [`Self::reload_unavailable_key`]を1本ずつにする(同時に始まったターンが、ロックの
     /// 解除を求める承認を重ねて出さないように)。
     reloading_key: tokio::sync::Mutex<()>,
+    /// 同期の間、推論サーバー・MCPサーバーへの問い合わせを断る([`QueryPause`])。
+    queries: QueryPause,
 }
 
 impl Settings {
@@ -215,7 +219,13 @@ impl Settings {
             detected: DetectedCatalog::new(),
             detecting: InFlightSet::new(),
             reloading_key: tokio::sync::Mutex::new(()),
+            queries: QueryPause::default(),
         }
+    }
+
+    /// 同期が押さえる、問い合わせを止める印。
+    pub fn query_pause(&self) -> &QueryPause {
+        &self.queries
     }
 
     pub fn snapshot(&self) -> Snapshot {

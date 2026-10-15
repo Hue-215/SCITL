@@ -201,6 +201,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Rejected(_) => unexpected("rejected"),
         // 通信先の登録でだけ起きる。ターンの経路には来ない。
         CoreError::Cancelled => unexpected("cancelled"),
+        // 設定からの問い合わせでだけ起きる(同期の間はターンを始めない)。ターンの経路には来ない。
+        CoreError::Syncing => unexpected("syncing"),
         // リンクを開く操作でだけ起きる。ターンの経路には来ない。
         CoreError::Link(_) => unexpected("link"),
         // エクスポートでだけ起きる。ターンの経路には来ない。

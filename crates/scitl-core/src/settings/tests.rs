@@ -1197,3 +1197,42 @@ async fn models_that_cannot_answer_now_are_asked_again_later() {
     );
     assert!(settings.detected.get(&id, "unloaded").is_none());
 }
+
+/// 同期の間は、推論サーバー・MCPサーバーへ問い合わせない。モデルの登録は済ませ、検出だけ省く。
+#[tokio::test]
+async fn servers_are_not_queried_while_syncing() {
+    let (settings, _path, _dir) = temp_settings();
+    let settings = Arc::new(settings);
+    let provider = add_local_provider(&settings, "local").providers[0]
+        .id
+        .clone();
+    let (server, _) = settings
+        .register_mcp_server("tools", http_endpoint(), |_| true)
+        .unwrap();
+
+    let paused = settings.query_pause().pause();
+    assert!(matches!(
+        settings.list_provider_models(&provider).await,
+        Err(CoreError::Syncing)
+    ));
+    assert!(matches!(
+        settings.detect_model_capabilities(&provider).await,
+        Err(CoreError::Syncing)
+    ));
+    assert!(matches!(
+        settings.fetch_mcp_tools(&server).await,
+        Err(CoreError::Syncing)
+    ));
+    let added = settings
+        .add_models(&provider, vec!["m".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(added.providers[0].models[0].name, "m");
+    drop(paused);
+
+    // 落としたら問い合わせる(サーバーは無いので、つながらずに失敗する)。
+    assert!(!matches!(
+        settings.list_provider_models(&provider).await,
+        Err(CoreError::Syncing)
+    ));
+}
