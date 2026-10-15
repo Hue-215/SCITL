@@ -47,6 +47,12 @@ impl PairingCode {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// 画面に出す形。読み上げて打ちやすいよう3桁ずつに分ける([`parse`](Self::parse)は空白を無視する)。
+    pub(crate) fn spaced(&self) -> String {
+        let (head, tail) = self.0.split_at(DIGITS / 2);
+        format!("{head} {tail}")
+    }
 }
 
 /// ログやエラーに数字が出ないよう、`Debug`では伏せる。
@@ -79,5 +85,12 @@ mod tests {
         for bad in ["12345", "1234567", "12345a", ""] {
             assert!(PairingCode::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_shown_code_reads_back_as_the_same_code() {
+        let code = PairingCode::parse("012345").unwrap();
+        assert_eq!(code.spaced(), "012 345");
+        assert_eq!(PairingCode::parse(&code.spaced()).unwrap(), code);
     }
 }

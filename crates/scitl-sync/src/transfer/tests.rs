@@ -368,6 +368,16 @@ async fn sync_with(
     resolver: &dyn Resolver,
     on_connector_stage: impl Fn(Stage) + Sync,
 ) -> (Result<Outcome, SyncError>, Result<Outcome, SyncError>) {
+    sync_with_stages(listener, connector, resolver, |_| {}, on_connector_stage).await
+}
+
+async fn sync_with_stages(
+    listener: &Device,
+    connector: &Device,
+    resolver: &dyn Resolver,
+    on_listener_stage: impl Fn(Stage) + Sync,
+    on_connector_stage: impl Fn(Stage) + Sync,
+) -> (Result<Outcome, SyncError>, Result<Outcome, SyncError>) {
     let local = LocalVersions {
         db_version: db::schema_version(),
     };
@@ -389,7 +399,7 @@ async fn sync_with(
             &listener.ctx,
             &a_id,
             a_stop.stop_signal(),
-            |_| {},
+            on_listener_stage,
             resolver,
         )
         .await;
@@ -1371,7 +1381,8 @@ impl Resolver for WriteWhileChoosing<'_> {
 }
 
 /// 選んでいる間に別のプロセスが書くと、確定をやり直す。そのとき、選んだ競合の中身が変わっていれば
-/// 選び直させ、変わっていなければ聞き直さない。
+/// 選び直させ、変わっていなければ聞き直さない。選び直したあとは、書き込みの段を知らせ直す(画面は
+/// 選んでいる間だけ止められる)。
 #[tokio::test]
 async fn a_conflict_that_changed_after_it_was_chosen_is_asked_again() {
     for (touches_the_conflict, asked) in [(true, 2), (false, 1)] {
@@ -1402,12 +1413,25 @@ async fn a_conflict_that_changed_after_it_was_chosen_is_asked_again() {
             }),
             calls: Mutex::new(0),
         };
-        let (ra, rb) = sync_with(&a, &b, &resolver, |_| {}).await;
+        let stages = Mutex::new(Vec::new());
+        let (ra, rb) = sync_with_stages(
+            &a,
+            &b,
+            &resolver,
+            |stage| stages.lock().unwrap().push(stage),
+            |_| {},
+        )
+        .await;
         assert_eq!(ra.unwrap().conflicts, 1);
         rb.unwrap();
         assert_eq!(
             *resolver.calls.lock().unwrap(),
             asked,
+            "touches_the_conflict: {touches_the_conflict}"
+        );
+        assert_eq!(
+            *stages.lock().unwrap(),
+            vec![Stage::Finishing; asked],
             "touches_the_conflict: {touches_the_conflict}"
         );
         assert_same(&a, &b);

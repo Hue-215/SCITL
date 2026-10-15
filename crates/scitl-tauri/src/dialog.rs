@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use scitl_core::link::LinkDialog;
 use scitl_core::settings::DestinationDialog;
-use scitl_sync::SyncDialog;
+use scitl_sync::{DialogAnswer, SyncDialog};
 use tauri::AppHandle;
 #[cfg(desktop)]
 use tauri::Manager;
@@ -36,8 +36,8 @@ impl Drop for Showing {
     }
 }
 
-/// ダイアログを出し、承認(1つ目のボタン)が押されたら真。ダイアログは同時に1つだけ出し、出して
-/// いる間に届いたものは出さずに`false`とする。乗っ取られた画面がコマンドを並べて呼び、ダイアログを
+/// ダイアログを出し、承認(1つ目のボタン)が押されたかを返す。ダイアログは同時に1つだけ出し、出して
+/// いる間に届いたものは出さずに`None`とする。乗っ取られた画面がコマンドを並べて呼び、ダイアログを
 /// 積み重ねたり、待つスレッドで処理を詰まらせたりするのを防ぐ。
 fn show(
     app: &AppHandle,
@@ -45,10 +45,8 @@ fn show(
     message: &str,
     kind: MessageDialogKind,
     buttons: MessageDialogButtons,
-) -> bool {
-    let Some(_showing) = Showing::begin() else {
-        return false;
-    };
+) -> Option<bool> {
+    let _showing = Showing::begin()?;
     let builder = app
         .dialog()
         .message(message_text(message))
@@ -61,7 +59,7 @@ fn show(
         Some(window) => builder.parent(&window),
         None => builder,
     };
-    builder.blocking_show()
+    Some(builder.blocking_show())
 }
 
 /// 新しい通信先の登録を確かめる受け口(`Settings::add_provider`・`add_mcp_server`)。承認された
@@ -80,24 +78,26 @@ pub fn confirm_destination(
                 dialog.confirm_label.clone(),
                 dialog.cancel_label.clone(),
             ),
-        )
+        ) == Some(true)
     }
 }
 
-/// 端末間の同期を始める前の確認(`scitl_sync::listen`・`connect_to`)。承認されたときだけ真。
-pub fn confirm_sync(app: &AppHandle) -> impl FnOnce(&SyncDialog) -> bool + Send + 'static {
+/// 端末間の同期を始める前の確認(`scitl_sync::listen`・`connect_to`)。
+pub fn confirm_sync(app: &AppHandle) -> impl FnOnce(&SyncDialog) -> DialogAnswer + Send + 'static {
     let app = app.clone();
-    move |dialog| {
-        show(
-            &app,
-            &dialog.title,
-            &dialog.message,
-            MessageDialogKind::Warning,
-            MessageDialogButtons::OkCancelCustom(
-                dialog.confirm_label.clone(),
-                dialog.cancel_label.clone(),
-            ),
-        )
+    move |dialog| match show(
+        &app,
+        &dialog.title,
+        &dialog.message,
+        MessageDialogKind::Warning,
+        MessageDialogButtons::OkCancelCustom(
+            dialog.confirm_label.clone(),
+            dialog.cancel_label.clone(),
+        ),
+    ) {
+        Some(true) => DialogAnswer::Confirmed,
+        Some(false) => DialogAnswer::Declined,
+        None => DialogAnswer::NotShown,
     }
 }
 
@@ -110,13 +110,15 @@ pub fn confirm_link(app: &AppHandle, dialog: &LinkDialog) -> bool {
         MessageDialogKind::Info
     };
     match &dialog.open_label {
-        Some(open) => show(
-            app,
-            &dialog.title,
-            &dialog.message,
-            kind,
-            MessageDialogButtons::OkCancelCustom(open.clone(), dialog.close_label.clone()),
-        ),
+        Some(open) => {
+            show(
+                app,
+                &dialog.title,
+                &dialog.message,
+                kind,
+                MessageDialogButtons::OkCancelCustom(open.clone(), dialog.close_label.clone()),
+            ) == Some(true)
+        }
         None => {
             show(
                 app,

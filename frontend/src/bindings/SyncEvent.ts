@@ -3,6 +3,7 @@ import type { ConflictView } from "./ConflictView";
 import type { QrModules } from "./QrModules";
 
 /**
- * 画面へ知らせる途中経過。数字を含むので`Debug`を持たない(ログに出さない)。
+ * 画面へ知らせる途中経過と、その時点で止められるか。画面は`stoppable`が偽の間は「戻る」を出さない。
+ * 数字を含むので`Debug`を持たない(ログに出さない)。
  */
-export type SyncEvent = { "type": "listening", addresses: Array<string>, code: string, qr: QrModules, } | { "type": "syncing" } | { "type": "peer_choosing" } | { "type": "conflicts", conflicts: Array<ConflictView>, } | { "type": "finishing" };
+export type SyncEvent = { stoppable: boolean, } & ({ "type": "listening", addresses: Array<string>, code: string, qr: QrModules, } | { "type": "syncing" } | { "type": "peer_choosing" } | { "type": "conflicts", conflicts: Array<ConflictView>, } | { "type": "finishing" });
