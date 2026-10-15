@@ -86,7 +86,7 @@
   "destination_dialog.title": "通信先の登録の確認",
   "errors.number_too_large": "{max}以下の整数で入力してください",
   "errors.positive_integer": "1以上の整数で入力してください",
-  "generating_notice.channel": "応答の生成",
+  "generating_notice.channel": "応答の生成と同期",
   "generating_notice.title": "バックグラウンドで待機中",
   "link.dialog_title": "外部サイトへ移動",
   "link.generic_warning": "SCITL外部のサイトに移動します。URLが意図したものか確認してください。",

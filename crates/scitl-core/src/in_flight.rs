@@ -43,11 +43,15 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
         }
     }
 
-    /// 長く掛かる部分([`InFlight::long_running`])に入っている処理が、無い状態から在る状態に
-    /// なったら`on_change(true)`を、在る状態から無い状態になったら`on_change(false)`を呼ぶ集合。
+    /// 長く掛かる部分([`InFlight::long_running`]・[`InFlightAll::long_running`])に入っている処理が、
+    /// 無い状態から在る状態になったら`on_change(Some(入った処理の種類))`を、在る状態から無い状態に
+    /// なったら`on_change(None)`を呼ぶ集合。対象ごとの処理と全体を押さえた処理は同時に処理中にならない
+    /// ので、在る間の種類は1つに決まる。
     /// 呼び出しは起きた順に1つずつ行う。次の出入りを待たせるので、`on_change`に待つ処理を置かない。
     /// `on_change`がpanicしても数は狂わないが、知らせた状態と食い違ったままになる。
-    pub fn watching_long_running(on_change: impl Fn(bool) + Send + Sync + 'static) -> Self {
+    pub fn watching_long_running(
+        on_change: impl Fn(Option<LongRunningKind>) + Send + Sync + 'static,
+    ) -> Self {
         Self {
             entries: Mutex::new(Entries::new()),
             long_running: LongRunningCount::new(Some(Box::new(on_change))),
@@ -138,6 +142,11 @@ impl<K: Eq + Hash + Clone> InFlightAll<'_, K> {
     pub fn stop_signal(&self) -> &StopSignal {
         &self.stop
     }
+
+    /// 全体を押さえた処理が長く掛かる部分に入ったことにする。返ったガードを落とすと出たことになる。
+    pub fn long_running(&self) -> LongRunning<'_> {
+        self.set.long_running.enter(LongRunningKind::All)
+    }
 }
 
 impl<K: Eq + Hash + Clone> Drop for InFlightAll<'_, K> {
@@ -166,7 +175,7 @@ impl<K: Eq + Hash + Clone> InFlight<'_, K> {
 
     /// この処理が長く掛かる部分に入ったことにする。返ったガードを落とすと出たことになる。
     pub fn long_running(&self) -> LongRunning<'_> {
-        self.set.long_running.enter()
+        self.set.long_running.enter(LongRunningKind::Each)
     }
 }
 
@@ -176,33 +185,44 @@ impl<K: Eq + Hash + Clone> Drop for InFlight<'_, K> {
     }
 }
 
+/// 長く掛かる部分に入っている処理の種類([`InFlightSet::watching_long_running`])。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongRunningKind {
+    /// 対象ごとの処理([`InFlight`]。応答の生成)。
+    Each,
+    /// 全体を押さえた処理([`InFlightAll`]。同期)。
+    All,
+}
+
+type OnChange = Box<dyn Fn(Option<LongRunningKind>) + Send + Sync>;
+
 /// 長く掛かる部分に入っている処理の数と、その有無が変わったことの知らせ先。
 struct LongRunningCount {
     count: Mutex<usize>,
-    on_change: Option<Box<dyn Fn(bool) + Send + Sync>>,
+    on_change: Option<OnChange>,
 }
 
 impl LongRunningCount {
-    fn new(on_change: Option<Box<dyn Fn(bool) + Send + Sync>>) -> Self {
+    fn new(on_change: Option<OnChange>) -> Self {
         Self {
             count: Mutex::new(0),
             on_change,
         }
     }
 
-    fn enter(&self) -> LongRunning<'_> {
+    fn enter(&self, kind: LongRunningKind) -> LongRunning<'_> {
         let mut count = self.lock();
         *count += 1;
         if *count == 1 {
-            self.notify(true);
+            self.notify(Some(kind));
         }
         LongRunning { count: self }
     }
 
     /// 知らせる順が出入りの順と入れ替わらないよう、数のロックを持ったまま呼ぶ。
-    fn notify(&self, any: bool) {
+    fn notify(&self, kind: Option<LongRunningKind>) {
         if let Some(on_change) = &self.on_change {
-            on_change(any);
+            on_change(kind);
         }
     }
 
@@ -224,7 +244,7 @@ impl Drop for LongRunning<'_> {
         let mut count = self.count.lock();
         *count -= 1;
         if *count == 0 {
-            self.count.notify(false);
+            self.count.notify(None);
         }
     }
 }
@@ -294,16 +314,33 @@ mod tests {
             "処理中になっただけでは知らせない"
         );
 
+        let each = Some(LongRunningKind::Each);
         let first_long = first.long_running();
         let second_long = second.long_running();
-        assert_eq!(*reported.lock().unwrap(), [true]);
+        assert_eq!(*reported.lock().unwrap(), [each]);
         drop(first_long);
-        assert_eq!(*reported.lock().unwrap(), [true], "まだ1つ残っている");
+        assert_eq!(*reported.lock().unwrap(), [each], "まだ1つ残っている");
         drop(second_long);
-        assert_eq!(*reported.lock().unwrap(), [true, false]);
+        assert_eq!(*reported.lock().unwrap(), [each, None]);
 
         let _again = first.long_running();
-        assert_eq!(*reported.lock().unwrap(), [true, false, true]);
+        assert_eq!(*reported.lock().unwrap(), [each, None, each]);
+    }
+
+    #[test]
+    fn holding_everything_reports_its_own_kind() {
+        let reported = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let set = InFlightSet::<i32>::watching_long_running({
+            let reported = reported.clone();
+            move |kind| reported.lock().unwrap().push(kind)
+        });
+        let all = set.try_begin_all().unwrap();
+        assert!(reported.lock().unwrap().is_empty());
+        drop(all.long_running());
+        assert_eq!(
+            *reported.lock().unwrap(),
+            [Some(LongRunningKind::All), None]
+        );
     }
 
     #[tokio::test]

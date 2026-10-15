@@ -8,7 +8,7 @@ use scitl_core::config::{ApiFormat, McpEndpoint, McpServerConfig, ReasoningEffor
 use scitl_core::db::messages::{Chat, Kind, ReplyPart, Role};
 use scitl_core::db::{self, SharedConnection};
 use scitl_core::error::CoreError;
-use scitl_core::in_flight::InFlightSet;
+use scitl_core::in_flight::{InFlightSet, LongRunningKind};
 use scitl_core::llm::providers::Credentials;
 use scitl_core::llm::{
     AdapterIdentity, ChatMessage, ErrorDetail, FinishReason, LlmAdapter, LlmError, PromptText,
@@ -4105,7 +4105,7 @@ async fn only_generating_a_response_counts_as_long_running() {
     let reported = Arc::new(Mutex::new(Vec::new()));
     let generating = InFlightSet::watching_long_running({
         let reported = reported.clone();
-        move |any| reported.lock().unwrap().push(any)
+        move |kind| reported.lock().unwrap().push(kind)
     });
 
     run_turn(
@@ -4119,7 +4119,10 @@ async fn only_generating_a_response_counts_as_long_running() {
     )
     .await
     .unwrap();
-    assert_eq!(*reported.lock().unwrap(), [true, false]);
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [Some(LongRunningKind::Each), None]
+    );
 
     let user_message_id = {
         let conn = db.lock().unwrap();
@@ -4129,7 +4132,10 @@ async fn only_generating_a_response_counts_as_long_running() {
     delete_message(db.clone(), &generating, chat, user_message_id)
         .await
         .unwrap();
-    assert_eq!(*reported.lock().unwrap(), [true, false]);
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [Some(LongRunningKind::Each), None]
+    );
 }
 
 /// 終わった応答生成を受け口へ知らせる。返信なら最後のラウンドの本文を、失敗なら種別を載せる。
@@ -4276,7 +4282,7 @@ async fn a_stopped_turn_is_no_longer_long_running() {
     let reported = Arc::new(Mutex::new(Vec::new()));
     let generating = InFlightSet::watching_long_running({
         let reported = reported.clone();
-        move |any| reported.lock().unwrap().push(any)
+        move |kind| reported.lock().unwrap().push(kind)
     });
     let adapter =
         StoppingAdapter::new(ScriptedAdapter::new(Vec::new()), &generating, chat, 0, true);
@@ -4295,7 +4301,10 @@ async fn a_stopped_turn_is_no_longer_long_running() {
 
     let conn = db.lock().unwrap();
     stopped_reply(&db::messages::list_for_chat(&conn, chat).unwrap());
-    assert_eq!(*reported.lock().unwrap(), [true, false]);
+    assert_eq!(
+        *reported.lock().unwrap(),
+        [Some(LongRunningKind::Each), None]
+    );
 }
 
 /// 生成中のタスクでは発言を削除できない。生成中のターンが読んだ履歴とDBの発言が食い違うため。

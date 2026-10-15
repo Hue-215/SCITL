@@ -393,6 +393,9 @@ where
     if all.stop_signal().is_requested() {
         return SyncReport::Cancelled;
     }
+    // 承認してから終えるまで(待ち受けを含む)。Androidでは、この間フォアグラウンドサービスにして、
+    // 裏へ回ったり画面が消えたりしても接続を切られないようにする。承認の直後は前に出ているので始められる。
+    let _long_running = all.long_running();
     sync(request.ctx, all.stop_signal().clone(), target)
         .await
         .into()
@@ -664,6 +667,57 @@ mod tests {
         assert_eq!(report, SyncReport::Cancelled);
         assert!(events.lock().unwrap().is_empty());
         assert!(generating.try_begin(Chat::General).is_some());
+    }
+
+    /// 長く掛かる部分(Androidではフォアグラウンドサービス)には、承認してから入り、終えたら出る。
+    /// 取りやめたときは入らない(サービスは前に出ている間にしか始められないので、承認の前には入らない)。
+    #[tokio::test]
+    async fn the_sync_runs_long_only_after_it_is_confirmed() {
+        use scitl_core::in_flight::LongRunningKind;
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        for (confirmed, expected) in [
+            (false, vec![]),
+            (true, vec![Some(LongRunningKind::All), None]),
+        ] {
+            let reported = Arc::new(Mutex::new(Vec::new()));
+            let generating = InFlightSet::watching_long_running({
+                let reported = reported.clone();
+                move |kind| reported.lock().unwrap().push(kind)
+            });
+            let request = Request {
+                ctx: &ctx,
+                generating: &generating,
+                queries: &QueryPause::default(),
+                answers: &ConflictAnswers::default(),
+                lang: Language::DEFAULT,
+            };
+            // 承認したら、つながらない宛先へつなごうとして失敗する。
+            let report = connect_to(
+                request,
+                "127.0.0.1:1",
+                "123456",
+                move |_| {
+                    if confirmed {
+                        DialogAnswer::Confirmed
+                    } else {
+                        DialogAnswer::Declined
+                    }
+                },
+                |_| {},
+            )
+            .await;
+            if confirmed {
+                assert!(matches!(report, SyncReport::Failed { .. }), "{report:?}");
+            } else {
+                assert_eq!(report, SyncReport::Cancelled);
+            }
+            assert_eq!(
+                *reported.lock().unwrap(),
+                expected,
+                "confirmed: {confirmed}"
+            );
+        }
     }
 
     /// 確かめる間(全体を押さえてから終えるまで)は、設定からの問い合わせを止める。

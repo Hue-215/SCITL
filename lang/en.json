@@ -86,7 +86,7 @@
   "destination_dialog.title": "Confirm the server to register",
   "errors.number_too_large": "Please enter an integer of {max} or less",
   "errors.positive_integer": "Please enter an integer of 1 or more",
-  "generating_notice.channel": "Response generation",
+  "generating_notice.channel": "Response generation and sync",
   "generating_notice.title": "Waiting in the background",
   "link.dialog_title": "Leave SCITL",
   "link.generic_warning": "This link leaves SCITL. Please make sure the URL is what you intended.",

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- 応答の生成中だけフォアグラウンドサービスにする(GeneratingService)。
+    <!-- 応答の生成中と同期の間だけフォアグラウンドサービスにする(GeneratingService)。
          docs/spec/architecture/concurrency.md「Androidで裏へ回ったとき」 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
