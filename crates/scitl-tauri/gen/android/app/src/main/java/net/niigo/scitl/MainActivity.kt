@@ -8,9 +8,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.webkit.WebChromeClient
+import android.util.Log
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : TauriActivity() {
@@ -24,18 +25,34 @@ class MainActivity : TauriActivity() {
   }
 
   /**
-   * 画面からのカメラ・マイク等の要求を断るクライアントで包む(GuardedChromeClient)。wryはこの呼び出しの
-   * あとでクライアントを付けるので、メインスレッドの後ろへ回して包む。画面からの権限の要求も
-   * メインスレッドへのメッセージで届くので、包む前に処理されることは無い。
+   * 画面からのカメラ・マイク等の要求を断るクライアントで包む(GuardedChromeClient)。wryは、この呼び出しと
+   * 同じ処理の中で、ページを読み込み始めたあとにクライアントを付ける。そのため、メインスレッドの次の回へ
+   * 回して包む(その時点では、ページはまだ読み込まれておらず、画面から権限を求められることは無い)。
+   * wryの更新で順序が変わったときに守りが黙って外れないよう、前に戻るたびにも確かめる。
    */
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
-    Handler(Looper.getMainLooper()).post {
-      val inner = webView.webChromeClient
-      if (inner !is GuardedChromeClient) {
-        webView.webChromeClient = GuardedChromeClient(inner ?: WebChromeClient())
-      }
+    this.webView = WeakReference(webView)
+    Handler(Looper.getMainLooper()).post { guard(webView) }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    webView?.get()?.let(::guard)
+  }
+
+  private var webView: WeakReference<WebView>? = null
+
+  private fun guard(webView: WebView) {
+    val inner = webView.webChromeClient
+    if (inner is GuardedChromeClient) return
+    if (inner == null) {
+      // wryがまだクライアントを付けていない(順序が変わった)。包んでも上書きされるので、気付けるよう
+      // 診断に出す(次に前に戻ったときに包み直す)。
+      Log.e("SCITL", "the WebChromeClient is not set yet; camera requests from the page are not guarded")
+      return
     }
+    webView.webChromeClient = GuardedChromeClient(inner)
   }
 
   override fun onNewIntent(intent: Intent) {

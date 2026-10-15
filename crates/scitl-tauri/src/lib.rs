@@ -533,7 +533,7 @@ mod tests {
         // アプリがカメラの権限を持つので、画面(WebView)からのカメラ等の要求はネイティブの側で断る。
         let activity =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
-        assert!(activity.contains("GuardedChromeClient(inner ?: WebChromeClient())"));
+        assert!(activity.contains("webView.webChromeClient = GuardedChromeClient(inner)"));
         let guarded =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/GuardedChromeClient.kt");
         assert!(guarded.contains(

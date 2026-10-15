@@ -56,7 +56,8 @@ AndroidはAndroid System WebView)。ブラウザの機能(ファイル・クリ�
   外部への通信(下の「CSP / Tauri権限設定」で止める)、DB
 - ファイル: 選ばせる・読む・書く・開くのどれも。画面からファイルのパスも中身も受け取らない
   (`attachments.md`「受け取り方」・`export.md`)
-- OSの機能: クリップボードからのファイル・画像の読み出し、OS・WebViewの種類による分岐。文字の
+- OSの機能: クリップボードからのファイル・画像の読み出し、カメラ(同期のQRの読み取り)、OS・WebViewの
+  種類による分岐。文字の
   貼り付け・コピーはWebView標準の入力欄の動きのまま使う(足しているのは、上のコードの塊のコピーだけ)
 - 入力の解釈と検証、業務の規則(上限・名前の規則・既定値)
 - 手順: 複数のコマンドを画面が順に呼んで1つの操作にしない。1つの操作は1つのコマンドにする
@@ -149,6 +150,8 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   - WebViewが元から持つ経路: 利用者が入力欄に貼り付けたときに渡る`clipboardData`(WebView2ではファイルも
     載る)と、乗っ取った側が画面に置いた`<input type="file">`で利用者が選んだファイルは、ページの
     スクリプトから読める。どちらも利用者の操作を要し、WebView自身の機能なのでRust側では止められない。
+    `<input type="file" capture>`も同じで、Androidでは利用者が押すとOSのカメラアプリが開き(アプリが
+    カメラの権限を持たなければ、OSの許可のダイアログが出る)、撮ったものをページのスクリプトが読める
     読んだ中身を外へ出すには、上の確認を経て通信先を登録させる必要がある
   - 添付の選択画面とクリップボードの画像を読むコマンド(`pick_attachments`・`paste_clipboard_image`)は、
     WebViewの制約を受けず、乗っ取られた画面からいつでも呼べる(呼べる時機は絞らない。メンテナの判断。
@@ -259,7 +262,8 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   `MainActivity`がクライアントを`GuardedChromeClient`で包み、権限の要求と位置情報の要求を常に断る。
   wryはクライアントを`onWebViewCreate`のあとで付けるので、メインスレッドの後ろへ回して包む。
   アプリがカメラの権限を許されていても、画面の`getUserMedia`がカメラ・マイクとも`NotAllowedError`で
-  断られることを、DevToolsから確かめた(2026-10)。Tauri・wryを更新したら、同じ確かめ方で見直す。
+  断られることを、DevToolsから確かめた(2026-10)。Tauri・wryを更新したら、同じ確かめ方で見直す
+  (`android-check`スキル)。包めないまま前に出ると、logcatのタグ`SCITL`に出る。
   `Permissions-Policy`のヘッダー(`app.security.headers`)では止められない。Tauri 2.11(tauri-utils 2.9.3)は
   これを`Permission-Policy`という誤った名前で送り、WebViewが解釈しない
 - **権限の設定(capabilities)**: 「戻る」の受け手の権限(上の「CSP / Tauri権限設定」)を足したあとも、

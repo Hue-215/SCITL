@@ -15,7 +15,7 @@ import android.webkit.WebView
 
 /**
  * wryのWebChromeClient(生成される`RustWebChromeClient`)を包み、画面(WebView)からのカメラ・マイク等の
- * 要求と位置情報の要求を常に断る。ほかはすべて中へ回す。
+ * 要求と位置情報の要求を常に断る。ほかは、非推奨のものを除いてすべて中へ回す。
  *
  * wryは、アプリがAndroidの権限を持っていれば画面の要求をそのまま許す。アプリはQRを読むために
  * カメラの権限を持つ(ScanActivity)ので、包まないと、乗っ取られた画面が`getUserMedia`でカメラを

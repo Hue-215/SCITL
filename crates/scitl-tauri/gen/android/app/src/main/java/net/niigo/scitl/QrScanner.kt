@@ -61,11 +61,14 @@ object QrScanner {
     outcome.also { outcome = null }
   }
 
-  /** 読み取りをやめ、画面が開いていれば閉じる(Rust側からJNIで呼ぶ)。結果が出たあとは何もしない。 */
+  /**
+   * 読み取りをやめ、画面が開いていれば閉じる(Rust側からJNIで呼ぶ)。結果が出たあとも閉じる(作り直された
+   * 側の画面が残っていることがある)。
+   */
   @JvmStatic
   fun cancel(id: Long) {
     synchronized(this) {
-      if (id != current || settled) return
+      if (id != current) return
       settled = true
     }
     closeScreen()
