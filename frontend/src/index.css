@@ -727,31 +727,13 @@ option {
   opacity: var(--drawer-progress);
 }
 
-/* 同期の画面を開いている間(Settings.tsx)は、広い窓でも左のカラムを左の外へ滑らせて畳み、同期の
-   画面に窓の幅を渡す。閉じたら滑って戻す。狭い窓のカラムは元から畳んであるので動かさない。 */
-.settings:not(.narrow) > .drawer {
-  transition:
-    transform var(--motion-duration) ease-out,
-    margin-inline-start var(--motion-duration) ease-out;
-}
-
-.settings.sync-open:not(.narrow) > .drawer {
-  margin-inline-start: calc(-1 * var(--sidebar-width));
-  visibility: hidden;
-  transition:
-    margin-inline-start var(--motion-duration) ease-out,
-    visibility 0s linear var(--motion-duration);
-}
-
 /* 動きを減らす設定では、滑らせずに切り替える。 */
 @media (prefers-reduced-motion: reduce) {
   .drawer,
   .narrow .drawer,
   .narrow .drawer.open,
   .drawer-backdrop,
-  .drawer-backdrop.open,
-  .settings:not(.narrow) > .drawer,
-  .settings.sync-open:not(.narrow) > .drawer {
+  .drawer-backdrop.open {
     transition: none;
   }
 }
@@ -1306,8 +1288,6 @@ details[open] > summary > .disclosure-mark,
   display: flex;
   height: 100%;
   position: relative;
-  /* 同期の画面を開くときに左の外へ滑らせたカラムを、窓の外に描かない。 */
-  overflow: hidden;
 }
 
 /* 同期の画面(SettingsSync.tsx)は、本文(.settings-main)と同じく残りの幅を占める。 */

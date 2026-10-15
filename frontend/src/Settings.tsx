@@ -48,8 +48,7 @@ export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // 同期の画面を開いている間は、左のカラムを畳み、本文の代わりに窓全体へ出す(出るのは同期の画面の
-  // 「戻る」だけ)。
+  // 同期の画面を開いている間は、本文の代わりに窓全体へ出す(出るのは同期の画面の「戻る」だけ)。
   const [syncOpen, setSyncOpen] = useState(false)
   // 自動保存の欄の書きかけ(`useDraft`)と、その保存でコマンド自体が失敗した回数。
   const [drafts] = useState<Drafts>(() => ({ entries: new Set(), closed: false }))
@@ -202,11 +201,9 @@ export default function Settings({ onClose }: SettingsProps) {
   return (
     // 左のカラムはチャットのサイドバーと同じ形の入れ物で、設定を開いている間はサイドバーが設定の
     // メニューに切り替わったように見せる(畳み方・引き出し方もサイドバーと同じ)。
-    <div
-      className={['settings', drawer.narrow && 'narrow', syncOpen && 'sync-open']
-        .filter(Boolean)
-        .join(' ')}
-    >
+    // 同期の画面を開いている間は、広い窓でも狭い窓と同じく左のカラムを畳む(窓を狭めたときと同じく
+    // 左の外へ滑る)。引き出すボタンは同期の画面に無いので、閉じるまで出てこない。
+    <div className={drawer.narrow || syncOpen ? 'settings narrow' : 'settings'}>
       <Drawer drawer={drawer}>
         <nav className="sidebar">
           <div className="sidebar-top-row">
