@@ -38,7 +38,8 @@
         </activity>
         <activity
             android:name=".ScanActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" />
         <service
             android:name=".GeneratingService"
             android:exported="false"

@@ -1,6 +1,6 @@
-//! 待ち受ける側が出すQR(`docs/sync/index.md` 3節)。中身は手で打つアドレス(候補のすべて)と数字で、
-//! 相手の確かめ方は打ったときと変わらない。読んだ中身は外から来た入力なので、打ったものと同じ
-//! 規則で確かめる。
+//! 待ち受ける側が出すQR(`docs/sync/index.md` 3節)。中身は手で打つアドレス(候補のうち先頭から
+//! [`MAX_ADDRESSES`]個)と数字で、相手の確かめ方は打ったときと変わらない。読んだ中身は外から来た
+//! 入力なので、出す側が書く形だけを受け付ける。
 //!
 //! 形は`scitl-sync;1;012345;192.168.1.5:50123;[fd00::1]:50123`(前置き・形の版・数字・アドレス)。
 
@@ -9,7 +9,9 @@ use std::net::SocketAddr;
 use qrcode::{Color, EcLevel, QrCode};
 use serde::Serialize;
 
-use crate::{parse_peer_address, PairingCode, SyncError};
+use scitl_core::net::{classify_ip, HostClass};
+
+use crate::{PairingCode, SyncError};
 
 const PREFIX: &str = "scitl-sync";
 /// 中身の形の版。形を変えたら上げる(古い版の読み取りは断る)。
@@ -32,11 +34,16 @@ pub struct QrModules {
     pub dark: Vec<bool>,
 }
 
+/// 候補が多いときは、先頭(IPv4が先)から読む側の上限までを入れる。打つときは画面のアドレスの
+/// どれでも打てる。
 pub(crate) fn encode(addresses: &[SocketAddr], code: &PairingCode) -> String {
     let mut text = format!("{PREFIX};{FORMAT};{}", code.as_str());
-    for addr in addresses {
-        text.push(';');
-        text.push_str(&addr.to_string());
+    for addr in addresses.iter().take(MAX_ADDRESSES) {
+        let field = format!(";{addr}");
+        if text.len() + field.len() > MAX_LEN {
+            break;
+        }
+        text.push_str(&field);
     }
     text
 }
@@ -56,8 +63,11 @@ pub(crate) fn modules(text: &str) -> QrModules {
     }
 }
 
-/// 読んだQRの中身を確かめる。SCITLの同期のQRでなければ[`SyncError::InvalidInvitation`]、宛先・数字が
-/// 規則に合わなければ、打ったときと同じ失敗にする。
+/// 読んだQRの中身を確かめる。出す側([`encode`])が書く形でなければ、どこが違っても
+/// [`SyncError::InvalidInvitation`]にする。中身を失敗の詳細に載せない(画面へ返さない)。
+///
+/// 打ったときの読みかえ(空白・全角)はせず、宛先はプライベートIPに限る(出す側はループバックを
+/// 出さない)。
 pub fn parse_invitation(text: &str) -> Result<Invitation, SyncError> {
     if text.len() > MAX_LEN {
         return Err(SyncError::InvalidInvitation);
@@ -67,20 +77,23 @@ pub fn parse_invitation(text: &str) -> Result<Invitation, SyncError> {
         return Err(SyncError::InvalidInvitation);
     }
     let code = fields.next().ok_or(SyncError::InvalidInvitation)?;
-    let addresses: Vec<&str> = fields.collect();
-    if addresses.is_empty() || addresses.len() > MAX_ADDRESSES {
-        return Err(SyncError::InvalidInvitation);
-    }
-    // 出す側は6桁の数字だけを書く。打ったときの読みかえ(空白・全角)はここでは要らないので、形が
-    // 違えば別のQRとみなす。
     if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
         return Err(SyncError::InvalidInvitation);
     }
+    let addresses = fields
+        .map(|field| {
+            field
+                .parse::<SocketAddr>()
+                .ok()
+                .filter(|a| a.port() != 0 && classify_ip(a.ip()) == HostClass::PrivateLiteral)
+                .ok_or(SyncError::InvalidInvitation)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if addresses.is_empty() || addresses.len() > MAX_ADDRESSES {
+        return Err(SyncError::InvalidInvitation);
+    }
     Ok(Invitation {
-        addresses: addresses
-            .into_iter()
-            .map(parse_peer_address)
-            .collect::<Result<_, _>>()?,
+        addresses,
         code: PairingCode::parse(code)?,
     })
 }
@@ -107,16 +120,23 @@ mod tests {
         assert_eq!(read.code, code);
     }
 
+    /// 候補がいくつあっても、出したQRは読める(多ければ上限まで入る)。
     #[test]
-    fn modules_form_a_square() {
+    fn what_is_shown_is_always_readable() {
         let code = PairingCode::parse("012345").unwrap();
-        let qr = modules(&encode(
-            &addrs(&["192.168.1.5:50123"; MAX_ADDRESSES]),
-            &code,
-        ));
-        assert_eq!(qr.dark.len(), qr.size * qr.size);
-        // 位置合わせの印(左上の角)は黒。
-        assert!(qr.dark[0]);
+        let longest: SocketAddr = "[fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"
+            .parse()
+            .unwrap();
+        for count in [1, MAX_ADDRESSES, MAX_ADDRESSES + 1, 40] {
+            let addresses = vec![longest; count];
+            let text = encode(&addresses, &code);
+            let read = parse_invitation(&text).unwrap();
+            assert_eq!(read.addresses.len(), count.min(MAX_ADDRESSES));
+            let qr = modules(&text);
+            assert_eq!(qr.dark.len(), qr.size * qr.size);
+            // 位置合わせの印(左上の角)は黒。
+            assert!(qr.dark[0]);
+        }
     }
 
     #[test]
@@ -137,22 +157,18 @@ mod tests {
                 "scitl-sync;1;012345;192.168.1.5:50123{}",
                 " ".repeat(MAX_LEN)
             ),
-        ] {
-            assert!(
-                matches!(parse_invitation(text), Err(SyncError::InvalidInvitation)),
-                "{text}"
-            );
-        }
-    }
-
-    #[test]
-    fn destinations_follow_the_typed_rules() {
-        for text in [
+            // 宛先も出す側が書く形だけを受け付ける(打ったときの読みかえはしない)。
+            "scitl-sync;1;012345; 192.168.1.5:50123",
+            "scitl-sync;1;012345;１９２.168.1.5:50123",
+            "scitl-sync;1;012345;192.168.1.5",
+            "scitl-sync;1;012345;192.168.1.5:0",
             "scitl-sync;1;012345;8.8.8.8:443",
+            "scitl-sync;1;012345;127.0.0.1:50123",
+            "scitl-sync;1;012345;[::1]:50123",
             "scitl-sync;1;012345;192.168.1.5:50123;example.com:443",
         ] {
             assert!(
-                matches!(parse_invitation(text), Err(SyncError::AddressNotAllowed(_))),
+                matches!(parse_invitation(text), Err(SyncError::InvalidInvitation)),
                 "{text}"
             );
         }

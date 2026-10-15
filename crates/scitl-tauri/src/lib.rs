@@ -518,6 +518,8 @@ mod tests {
         assert!(scanner.contains(&format!("object {SCANNER_CLASS} {{")));
         assert!(scanner.contains("fun start(context: Context): Long"));
         assert!(scanner.contains("fun poll(id: Long): String?"));
+        assert!(scanner.contains("fun cancel(id: Long)"));
+        assert!(scanner.contains("fun available(context: Context): Boolean"));
         for (name, value) in [
             ("SCANNED", SCANNED),
             ("CANCELLED", CANCELLED),
@@ -531,7 +533,7 @@ mod tests {
         // 読み取りの画面は、ほかのアプリから開けない。
         let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
         assert!(manifest
-            .contains("android:name=\".ScanActivity\"\n            android:exported=\"false\" />"));
+            .contains("android:name=\".ScanActivity\"\n            android:exported=\"false\"\n"));
     }
 
     /// 応答の生成中のサービスを、ほかのアプリから始められないこと。

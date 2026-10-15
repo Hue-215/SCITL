@@ -26,6 +26,9 @@ import java.util.concurrent.Executors
  * カメラの映像からQRを読む画面(QrScanner)。読めたら閉じ、「戻る」で取りやめる。カメラの許可は
  * ここで初めて求める。読んだ中身はそのままRust側へ渡し、確かめるのはRust側
  * (scitl_sync::parse_invitation)。
+ *
+ * 向きを変えても作り直さない(マニフェストのconfigChanges)。作り直すと、破棄した側の映像の処理が
+ * 結果を置き、前に残った新しい側の読み取りが無視される。
  */
 class ScanActivity : ComponentActivity() {
   private var id = 0L
@@ -43,9 +46,15 @@ class ScanActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     id = intent.getLongExtra(QrScanner.EXTRA_ID, 0L)
+    // 開くまでの間に取りやめられたか、次の読み取りが始まった。
+    if (!QrScanner.attach(id, this)) {
+      delivered = true
+      finish()
+      return
+    }
     preview = PreviewView(this)
     setContentView(preview)
-    // 向きを変えて作り直したときは、許可を求めている途中かもしれないので求め直さない。
+    // OSがプロセスごと作り直したときは、許可を求めている途中かもしれないので求め直さない。
     if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
       startCamera()
     } else if (savedInstanceState == null) {
@@ -54,7 +63,7 @@ class ScanActivity : ComponentActivity() {
   }
 
   override fun onDestroy() {
-    // 「戻る」等で閉じた。向きを変えて作り直すときは、まだ読み取りの途中。
+    // 「戻る」等で閉じた。
     if (isFinishing && !delivered) QrScanner.finish(id, QrScanner.CANCELLED)
     analysis.shutdown()
     super.onDestroy()
@@ -106,7 +115,7 @@ class ScanActivity : ComponentActivity() {
   }
 
   private fun deliver(result: String) {
-    if (delivered) return
+    if (delivered || isDestroyed) return
     delivered = true
     QrScanner.finish(id, result)
     finish()
