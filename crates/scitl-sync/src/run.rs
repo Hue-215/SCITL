@@ -14,6 +14,7 @@ use scitl_core::db::messages::Chat;
 use scitl_core::i18n::{self, Language};
 use scitl_core::in_flight::{InFlightSet, StopSignal};
 use scitl_core::qr_scan::ScanError;
+use scitl_core::settings::QueryPause;
 use scitl_core::{blocking, db, text};
 
 use crate::conflict::{ConflictChoice, ConflictView};
@@ -93,6 +94,9 @@ pub struct Request<'a> {
     /// 応答を生成中の会話。同期の間は全体を押さえ、送信・編集・タスクの操作を受け付けない
     /// (4節)。生成中の会話があれば始めない。
     pub generating: &'a InFlightSet<Chat>,
+    /// 設定からの推論サーバー・MCPサーバーへの問い合わせ。同期の間は止める(乗っ取られた画面に、
+    /// 数字をモデル名等に入れてLANの上へ送らせない。11節)。
+    pub queries: &'a QueryPause,
     pub answers: &'a ConflictAnswers,
     pub lang: Language,
 }
@@ -323,6 +327,7 @@ where
     let Some(all) = request.generating.try_begin_all() else {
         return Err(SyncError::Busy).into();
     };
+    let _paused = request.queries.pause();
     let target = match cancellable(all.stop_signal(), target).await {
         Ok(target) => target,
         Err(e) => return Err(e).into(),
@@ -471,6 +476,7 @@ mod tests {
             let request = Request {
                 ctx: &ctx,
                 generating: &generating,
+                queries: &QueryPause::default(),
                 answers: &ConflictAnswers::default(),
                 lang: Language::DEFAULT,
             };
@@ -491,6 +497,7 @@ mod tests {
         let request = Request {
             ctx: &ctx,
             generating: &generating,
+            queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
@@ -510,6 +517,7 @@ mod tests {
         let request = Request {
             ctx: &ctx,
             generating: &generating,
+            queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
@@ -537,6 +545,7 @@ mod tests {
         let request = Request {
             ctx: &ctx,
             generating: &generating,
+            queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
@@ -563,6 +572,7 @@ mod tests {
         let request = Request {
             ctx: &ctx,
             generating: &generating,
+            queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
@@ -585,6 +595,7 @@ mod tests {
         let request = Request {
             ctx: &ctx,
             generating: &generating,
+            queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
@@ -592,5 +603,35 @@ mod tests {
         assert_eq!(report, SyncReport::Cancelled);
         assert!(events.lock().unwrap().is_empty());
         assert!(generating.try_begin(Chat::General).is_some());
+    }
+
+    /// 確かめる間(全体を押さえてから終えるまで)は、設定からの問い合わせを止める。
+    #[tokio::test]
+    async fn queries_are_paused_while_the_sync_holds_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let queries: &'static QueryPause = Box::leak(Box::default());
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            queries,
+            answers: &ConflictAnswers::default(),
+            lang: Language::DEFAULT,
+        };
+        let paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = std::sync::Arc::clone(&paused);
+        let report = listen(
+            request,
+            move |_| {
+                seen.store(queries.is_paused(), std::sync::atomic::Ordering::SeqCst);
+                false
+            },
+            |_| {},
+        )
+        .await;
+        assert_eq!(report, SyncReport::Cancelled);
+        assert!(paused.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!queries.is_paused());
     }
 }

@@ -60,6 +60,7 @@
   "command_error.provider_config": "Invalid provider settings",
   "command_error.rejected": "The input was rejected",
   "command_error.secrets": "Failed to communicate with the credential store",
+  "command_error.syncing": "A sync is in progress",
   "command_error.task_not_found": "Task not found",
   "command_error.task_step_not_found": "Step not found",
   "command_error.unknown_argument": "Unknown argument",

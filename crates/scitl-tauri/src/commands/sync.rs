@@ -87,6 +87,7 @@ fn request<'a>(state: &'a State<'_, AppState>) -> Request<'a> {
     Request {
         ctx: &state.sync,
         generating: &state.generating,
+        queries: state.settings.query_pause(),
         answers: &state.sync_answers,
         lang: state.settings.display_language(),
     }

@@ -56,6 +56,9 @@ pub enum CoreError {
     #[error("MCP server error: {0}")]
     Mcp(String),
     /// リンクを開けない(許可されていない・解釈できないURL、OS側の起動失敗)。
+    /// 同期の間に、推論サーバー・MCPサーバーへ問い合わせようとした(`settings::QueryPause`)。
+    #[error("not available while syncing")]
+    Syncing,
     #[error("link error: {0}")]
     Link(String),
     /// 実行基盤側の失敗(ブロッキング処理のタスクがパニックした等)。
@@ -100,6 +103,7 @@ impl CoreError {
             Self::Rejected(_) => "rejected",
             Self::Cancelled => "cancelled",
             Self::Mcp(_) => "mcp",
+            Self::Syncing => "syncing",
             Self::Link(_) => "link",
             Self::Internal(_) => "internal",
         }
@@ -166,6 +170,7 @@ mod tests {
             CoreError::Rejected(crate::settings::Rejections(Vec::new())),
             CoreError::Cancelled,
             CoreError::Mcp(text()),
+            CoreError::Syncing,
             CoreError::Link(text()),
             CoreError::Internal(text()),
         ];
@@ -193,6 +198,7 @@ mod tests {
                 | CoreError::Rejected(_)
                 | CoreError::Cancelled
                 | CoreError::Mcp(_)
+                | CoreError::Syncing
                 | CoreError::Link(_)
                 | CoreError::Internal(_) => {}
             }
