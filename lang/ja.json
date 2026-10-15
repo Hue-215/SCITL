@@ -60,6 +60,7 @@
   "command_error.provider_config": "無効なプロバイダー設定です",
   "command_error.rejected": "入力が拒否されました",
   "command_error.secrets": "資格情報ストアとの通信に失敗しました",
+  "command_error.syncing": "同期中です",
   "command_error.task_not_found": "タスクが見つかりません",
   "command_error.task_step_not_found": "工程が見つかりません",
   "command_error.unknown_argument": "不明な引数です",

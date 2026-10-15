@@ -213,6 +213,7 @@ impl Settings {
     /// config.tomlには書き込まない。ロックはサーバー設定を複製するまでだけ持ち、接続の
     /// `.await`をまたがせない。
     pub async fn fetch_mcp_tools(&self, server_id: &str) -> Result<SettingsView> {
+        self.queries.check()?;
         let _in_flight = self
             .fetching
             .try_begin(server_id.to_string())

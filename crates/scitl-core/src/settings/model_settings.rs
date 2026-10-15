@@ -30,7 +30,7 @@ impl Settings {
     /// 読み直すのはターンの開始・タスクの追加と設定の変更だけ)。
     pub(super) async fn detect_active_model_once(&self) {
         let current = self.current();
-        if current.adapter.key_error().is_some() {
+        if current.adapter.key_error().is_some() || self.queries.is_paused() {
             return;
         }
         let config = current.config;
@@ -69,6 +69,7 @@ impl Settings {
     /// プロバイダーが提供するモデル名を問い合わせる。登録済みのものも含めて名前順に返し、
     /// 設定には書かない(登録は利用者が選んで[`Self::add_models`]で行う)。
     pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<AvailableModel>> {
+        self.queries.check()?;
         let provider = self.provider(provider_id)?;
         Ok(view::available_models(
             providers::list_models(&provider).await?,
@@ -80,6 +81,7 @@ impl Settings {
     /// (`providers::Detection::pending`)と、問い合わせに失敗したときは何も置き換えない
     /// (一時的な失敗で、取れていた結果を空にしない。次の機会に問い合わせ直す)。
     async fn detect(&self, provider: &ProviderConfig, models: Vec<String>) -> Result<()> {
+        self.queries.check()?;
         let providers::Detection { mut found, pending } =
             providers::detect_capabilities(provider, &models)
                 .await?
@@ -121,11 +123,12 @@ impl Settings {
         let settings = Arc::clone(self);
         let id = provider_id.to_string();
         let added = blocking::run(move || settings.register_models(&id, &models)).await?;
-        // 登録のあとに消されていたら、検出せずに登録の結果を返す。
+        // 登録のあとに消されていたら、検出せずに登録の結果を返す。同期の間も検出しない(終わった
+        // あとのターンの開始で問い合わせる)。
         let detectable = self
             .provider(provider_id)
             .is_ok_and(|p| providers::can_detect_capabilities(&p));
-        if !detectable {
+        if !detectable || self.queries.is_paused() {
             return Ok(added);
         }
         self.detect_model_capabilities(provider_id)
