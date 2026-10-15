@@ -130,12 +130,53 @@ fn the_highest_number_seen_of_a_device_comes_from_the_versions() {
 }
 
 #[test]
-fn the_device_id_can_be_renewed() {
+fn the_token_can_be_replaced_with_or_without_the_device_id() {
     let conn = db::open_in_memory().unwrap();
-    let before = device_state(&conn).unwrap();
-    let renewed = renew_device_id(&conn).unwrap();
-    assert_ne!(renewed, before.device_id);
-    assert_eq!(device_state(&conn).unwrap().device_id, renewed);
+    let first = device_token(&conn).unwrap();
+    let (before, rotated) = replace_device_token(&conn, false).unwrap();
+    assert_eq!(before, first);
+    assert_eq!(rotated.device_id, before.device_id);
+    assert_ne!(rotated.token, before.token);
+    let (before, renewed) = replace_device_token(&conn, true).unwrap();
+    assert_eq!(before, rotated);
+    assert_ne!(renewed.device_id, rotated.device_id);
+    assert_ne!(renewed.token, rotated.token);
+    assert_eq!(device_token(&conn).unwrap(), renewed);
+    assert_eq!(device_state(&conn).unwrap().device_id, renewed.device_id);
+}
+
+#[test]
+fn restoring_the_token_keeps_a_later_replacement() {
+    let conn = db::open_in_memory().unwrap();
+    let (before, replaced) = replace_device_token(&conn, true).unwrap();
+    restore_device_token(&conn, &before, &replaced).unwrap();
+    assert_eq!(device_token(&conn).unwrap(), before);
+
+    // 別プロセスが替えたあとなら戻さない。
+    let (before, replaced) = replace_device_token(&conn, true).unwrap();
+    let (_, later) = replace_device_token(&conn, false).unwrap();
+    restore_device_token(&conn, &before, &replaced).unwrap();
+    assert_eq!(device_token(&conn).unwrap(), later);
+}
+
+#[test]
+fn a_malformed_token_is_refused() {
+    let conn = db::open_in_memory().unwrap();
+    for token in [
+        "",
+        "ABCDEF0123456789ABCDEF0123456789",
+        "0123",
+        &"g".repeat(32),
+    ] {
+        assert!(
+            conn.execute("UPDATE sync_state SET device_token = ?1", [token])
+                .is_err(),
+            "{token}"
+        );
+    }
+    assert!(conn
+        .execute("UPDATE sync_state SET device_token = 12345", [])
+        .is_err());
 }
 
 #[test]

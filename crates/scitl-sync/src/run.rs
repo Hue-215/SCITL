@@ -355,11 +355,11 @@ mod tests {
     struct Registry;
 
     impl DeviceRegistry for Registry {
-        fn is_registered(&self, _: &str) -> Result<bool, CoreError> {
+        fn is_current(&self, _: &str, _: &str) -> Result<bool, CoreError> {
             Ok(true)
         }
 
-        fn register(&self, _: &str) -> Result<(), CoreError> {
+        fn register(&self, _: &str, _: &str) -> Result<(), CoreError> {
             Ok(())
         }
     }
