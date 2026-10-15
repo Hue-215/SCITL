@@ -67,7 +67,7 @@ pub(crate) fn remove_stale_temp_files(dir: &Path) {
             now.duration_since(created)
                 .is_ok_and(|age| age >= STALE_TEMP_AGE)
         });
-        if !stale {
+        if !stale || !entry.file_type().is_ok_and(|t| t.is_file()) {
             continue;
         }
         if let Err(e) = std::fs::remove_file(entry.path()) {
@@ -140,9 +140,10 @@ mod tests {
         };
         let now = SystemTime::now();
         let stale = temp_named(now - STALE_TEMP_AGE - Duration::from_secs(1));
-        let writing = temp_named(now);
         let kept = [
-            writing.clone(),
+            temp_named(now),
+            // 時計が進んでいるプロセスが書いている最中のもの。
+            temp_named(now + STALE_TEMP_AGE),
             dir.path().join("config.toml"),
             dir.path().join(".config.toml.not-a-ulid.tmp"),
             dir.path().join(format!(
@@ -153,10 +154,13 @@ mod tests {
         for path in kept.iter().chain([&stale]) {
             std::fs::write(path, b"data").unwrap();
         }
+        let stale_dir = temp_named(now - STALE_TEMP_AGE * 2);
+        std::fs::create_dir(&stale_dir).unwrap();
 
         remove_stale_temp_files(dir.path());
 
         assert!(!stale.exists());
+        assert!(stale_dir.is_dir());
         for path in &kept {
             assert!(path.exists(), "{}", path.display());
         }
