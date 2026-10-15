@@ -28,7 +28,8 @@ use crate::{device, files, DeviceRegistry, InvalidRow, Session, SyncError};
 
 /// 1つのメッセージに詰める行の量の目安(直列化した大きさ)。
 const BATCH_BYTES: usize = 4 * 1024 * 1024;
-/// 受け取る行の合計(直列化した大きさ)の上限。行は書く前にすべてメモリに載せて確かめる。
+/// 受け取る行の合計(直列化した大きさ)の上限。行は書く前にすべてメモリに載せて確かめる。待ち受ける側は、
+/// 差分で届いた行を単位の行としてもう一度受け取るが、どちらもメモリに残るので2度数える。
 const MAX_ROWS_BYTES: usize = 512 * 1024 * 1024;
 /// 添付の実体を分けて送る大きさ(base64にする前)。
 const FILE_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -71,19 +72,20 @@ pub trait Resolver: Sync {
 
 /// 確かめ終えた接続の上で同期する。`device_id`は確かめた端末ID(`device::confirm_device_id`)。
 ///
+/// 役(待ち受ける側か、つなぐ側か)は`session`の役に従う。
+///
 /// `stop`に止める指示が来たら[`SyncError::Cancelled`]で終える。止められるのは、自分が書き始める
 /// 前まで。それより後に止めると、書き終えたのに止めたように見えるので、止めずに終わりまで進め、
 /// その段に入ったことを`stage`で知らせる。
 pub async fn sync(
     session: &mut Session,
     ctx: &Context,
-    side: Side,
     device_id: &str,
     stop: &StopSignal,
     stage: impl Fn(Stage) + Sync,
     resolver: &dyn Resolver,
 ) -> Result<Outcome, SyncError> {
-    let result = run(session, ctx, side, device_id, stop, &stage, resolver).await;
+    let result = run(session, ctx, device_id, stop, &stage, resolver).await;
     if let Err(e) = &result {
         if let Some(reason) = reason_to_tell(e) {
             let _ = session.send(&Message::Abort { reason }).await;
@@ -139,14 +141,13 @@ impl Agreed {
 async fn run(
     session: &mut Session,
     ctx: &Context,
-    side: Side,
     device_id: &str,
     stop: &StopSignal,
     stage: &(dyn Fn(Stage) + Sync),
     resolver: &dyn Resolver,
 ) -> Result<Outcome, SyncError> {
     let agreed = cancellable(stop, introduce(session, ctx, device_id)).await?;
-    match side {
+    match session.side() {
         Side::Connector => connector(session, ctx, &agreed, stop, stage).await,
         Side::Listener => listener(session, ctx, &agreed, stop, stage, resolver).await,
     }
@@ -290,12 +291,12 @@ fn read_own(
     let (transport, mut invalid) = convert::to_transport(&rows, &snapshot.ids);
     if let Err(found) = validate::check(&transport, known) {
         // 置き換えで外れた行は、検証でも同じ行が外れうる。1つの行は1度だけ示す。
-        let shown: HashSet<String> = invalid.iter().map(|r| r.uid.clone()).collect();
-        invalid.extend(
-            with_local_ids(found, &rows)
-                .into_iter()
-                .filter(|row| !shown.contains(&row.uid)),
-        );
+        let mut shown: HashSet<String> = invalid.iter().map(|r| r.uid.clone()).collect();
+        for row in with_local_ids(found, &rows) {
+            if shown.insert(row.uid.clone()) {
+                invalid.push(row);
+            }
+        }
     }
     if invalid.is_empty() {
         Ok(transport)

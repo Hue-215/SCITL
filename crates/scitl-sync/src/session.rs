@@ -16,7 +16,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
 use crate::address::is_allowed_ip;
 use crate::pake::{self, Role, CONFIRM_LEN, MESSAGE_LEN};
-use crate::{frame, tls, PairingCode, SyncError, PROTOCOL_VERSION};
+use crate::{frame, tls, PairingCode, Side, SyncError, PROTOCOL_VERSION};
 
 /// 相手を確かめ終えるまでに読む1メッセージの上限。PAKEのメッセージと確認しか来ない。
 const HANDSHAKE_MAX_MESSAGE: usize = 64;
@@ -356,6 +356,14 @@ impl std::fmt::Debug for Session {
 impl Session {
     pub fn peer_address(&self) -> SocketAddr {
         self.peer
+    }
+
+    /// この接続での役。受け入れた側が待ち受ける側。
+    pub fn side(&self) -> Side {
+        match self.role {
+            Role::Connector => Side::Connector,
+            Role::Listener => Side::Listener,
+        }
     }
 
     pub async fn send<T: Serialize>(&mut self, msg: &T) -> Result<(), SyncError> {

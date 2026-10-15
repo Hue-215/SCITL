@@ -29,7 +29,8 @@ class MainActivity : TauriActivity() {
    * 同じ処理の中で、ページを読み込み始めたあとにクライアントを付ける。そのため、メインスレッドの次の回へ
    * 回して包む(その時点では、ページはまだ読み込まれておらず、画面から権限を求められることは無い)。
    * wryの更新で順序が変わったときに守りが黙って外れないよう、まだ付いていなければ少し待って確かめ直し、
-   * 前に戻るたびにも確かめる。
+   * 前に戻るたびにも確かめる。付いていない間はWebViewの既定で要求は断られるが、待つ間にwryが付けると、
+   * 次に確かめるまでの1回分の間隔はwryのクライアントのまま働く。
    */
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
@@ -128,8 +129,8 @@ class MainActivity : TauriActivity() {
     private const val REQUEST_NOTIFICATIONS = 1
 
     // クライアントが付くのを待つ回数と間隔(GuardedChromeClientで包むとき)。
-    private const val GUARD_RETRIES = 20
-    private const val GUARD_RETRY_MS = 100L
+    private const val GUARD_RETRIES = 40
+    private const val GUARD_RETRY_MS = 50L
 
     /** アプリが画面に出ているか。出ている間に終わった応答は、通知しない(ReplyNotifier)。 */
     @Volatile

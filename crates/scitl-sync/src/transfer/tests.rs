@@ -384,7 +384,6 @@ async fn sync_with(
         let result = super::sync(
             &mut session,
             &listener.ctx,
-            Side::Listener,
             &a_id,
             a_stop.stop_signal(),
             |_| {},
@@ -399,7 +398,6 @@ async fn sync_with(
         let result = super::sync(
             &mut session,
             &connector.ctx,
-            Side::Connector,
             &b_id,
             b_stop.stop_signal(),
             on_connector_stage,
@@ -833,7 +831,6 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
         super::sync(
             &mut session,
             &a.ctx,
-            Side::Listener,
             &a_id,
             a_stop.stop_signal(),
             |_| {},
@@ -846,7 +843,6 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
         super::sync(
             &mut session,
             &b.ctx,
-            Side::Connector,
             &b_id,
             b_stop.stop_signal(),
             |_| {},
@@ -1344,4 +1340,73 @@ fn a_choice_is_kept_only_while_the_conflict_stays_the_same() {
     let mut changed = conflict.clone();
     changed.ours.steps[0].description = "別のプロセスが書いた".to_string();
     assert!(!chosen.is_for(&changed));
+}
+
+/// 競合を見せられたら、1回目だけ`write`で待ち受ける側に書き込んでから(別のプロセスの書き込み)、
+/// 相手の側を選ぶ。
+struct WriteWhileChoosing<'a> {
+    write: Box<dyn Fn() + Sync + 'a>,
+    calls: Mutex<usize>,
+}
+
+impl Resolver for WriteWhileChoosing<'_> {
+    fn choose(&self, conflicts: Vec<ConflictView>) -> BoxFuture<'_, Option<Vec<ConflictChoice>>> {
+        let mut calls = self.calls.lock().unwrap();
+        if *calls == 0 {
+            (self.write)();
+        }
+        *calls += 1;
+        let choices = conflicts
+            .iter()
+            .map(|c| ConflictChoice {
+                id: c.id.clone(),
+                side: ChosenSide::Theirs,
+            })
+            .collect();
+        Box::pin(async move { Some(choices) })
+    }
+}
+
+/// 選んでいる間に別のプロセスが書くと、確定をやり直す。そのとき、選んだ競合の中身が変わっていれば
+/// 選び直させ、変わっていなければ聞き直さない。
+#[tokio::test]
+async fn a_conflict_that_changed_after_it_was_chosen_is_asked_again() {
+    for (touches_the_conflict, asked) in [(true, 2), (false, 1)] {
+        let (a, b) = (Device::new(), Device::new());
+        populate(&a).await;
+        sync(&a, &b).await;
+        let task = a.task_uid("夕飯");
+        let (a_task, b_task) = (a.task_id(&task), b.task_id(&task));
+        a.conn()
+            .execute("UPDATE tasks SET title = '晩ご飯' WHERE id = ?1", [a_task])
+            .unwrap();
+        b.conn()
+            .execute("UPDATE tasks SET title = '夕食' WHERE id = ?1", [b_task])
+            .unwrap();
+
+        let resolver = WriteWhileChoosing {
+            write: Box::new(|| {
+                if touches_the_conflict {
+                    a.conn()
+                        .execute(
+                            "UPDATE tasks SET description = '別のプロセス' WHERE id = ?1",
+                            [a_task],
+                        )
+                        .unwrap();
+                } else {
+                    memories::add(&a.conn(), &["別のプロセス".to_string()]).unwrap();
+                }
+            }),
+            calls: Mutex::new(0),
+        };
+        let (ra, rb) = sync_with(&a, &b, &resolver, |_| {}).await;
+        assert_eq!(ra.unwrap().conflicts, 1);
+        rb.unwrap();
+        assert_eq!(
+            *resolver.calls.lock().unwrap(),
+            asked,
+            "touches_the_conflict: {touches_the_conflict}"
+        );
+        assert_same(&a, &b);
+    }
 }
