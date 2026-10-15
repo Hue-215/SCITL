@@ -10,9 +10,9 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Value};
 
 use scitl_core::db::messages::ReplyPart;
-use scitl_core::db::sync::{self as db_sync, Tx};
+use scitl_core::db::sync::{self as db_sync, MessageRef, Tx};
 use scitl_core::error::Result as CoreResult;
-use scitl_core::orchestration::{is_failed, record_ids, RecordIds};
+use scitl_core::orchestration::{is_error_result, record_ids, RecordIds};
 use scitl_core::tools::{IdPosition, IdTable, Segment};
 use scitl_core::CoreError;
 
@@ -65,15 +65,31 @@ impl Ids<i64, String> {
 }
 
 impl Ids<String, i64> {
-    fn from_uids(uids: &db_sync::Uids) -> Self {
-        let map = |pairs: &[(i64, String)]| pairs.iter().map(|(i, u)| (u.clone(), *i)).collect();
+    fn inverse(ids: &Ids<i64, String>) -> Self {
+        let flip = |map: &HashMap<i64, String>| map.iter().map(|(i, u)| (u.clone(), *i)).collect();
         Self {
-            tasks: map(&uids.tasks),
-            steps: map(&uids.steps),
-            memories: map(&uids.memories),
-            messages: map(&uids.messages),
-            attachments: map(&uids.attachments),
+            tasks: flip(&ids.tasks),
+            steps: flip(&ids.steps),
+            memories: flip(&ids.memories),
+            messages: flip(&ids.messages),
+            attachments: flip(&ids.attachments),
         }
+    }
+}
+
+/// この端末のすべての行の連番 → `uid`と、発言の一部(指す先の確かめと試行の番号に使う)。どちらも
+/// 表をすべて読むので、1つのトランザクションでは書き込みの前と後に1度ずつだけ読む。
+pub(crate) struct Snapshot {
+    pub(crate) ids: Ids<i64, String>,
+    pub(crate) messages: Vec<MessageRef>,
+}
+
+impl Snapshot {
+    pub(crate) fn load(tx: &Tx<'_>) -> CoreResult<Self> {
+        Ok(Self {
+            ids: Ids::<i64, String>::from_uids(&tx.uids()?),
+            messages: tx.message_refs()?,
+        })
     }
 }
 
@@ -194,13 +210,22 @@ pub(crate) fn to_transport(
 }
 
 /// 自分の行を運ぶ形で読む。置き換えられない行は、検証で外れた行と同じく扱う。
+#[cfg(test)]
 pub(crate) fn read(
     tx: &Tx<'_>,
     filter: db_sync::Filter<'_>,
 ) -> CoreResult<(Transport, Vec<InvalidRow>)> {
-    let rows = tx.rows(filter)?;
-    let ids = Ids::<i64, String>::from_uids(&tx.uids()?);
-    Ok(to_transport(&rows, &ids))
+    read_with(tx, filter, &Ids::<i64, String>::from_uids(&tx.uids()?))
+}
+
+/// 自分の行を運ぶ形で読む。置き換えられない行は、検証で外れた行と同じく扱う。`ids`は同じ
+/// トランザクションで読んだもの([`Snapshot`])。
+pub(crate) fn read_with(
+    tx: &Tx<'_>,
+    filter: db_sync::Filter<'_>,
+    ids: &Ids<i64, String>,
+) -> CoreResult<(Transport, Vec<InvalidRow>)> {
+    Ok(to_transport(&tx.rows(filter)?, ids))
 }
 
 fn fail(invalid: &mut Vec<InvalidRow>, table: &'static str, id: i64, uid: &str, reason: String) {
@@ -241,10 +266,30 @@ fn parts_to_transport(json: &str, messages: &HashMap<i64, String>) -> Result<Vec
 /// 実行記録の`content`のうち、宣言した位置のIDを`uid`に置き換える。失敗の記録と外部ツールの
 /// 記録はそのまま。
 fn record_to_transport(content: &str, ids: &Ids<i64, String>) -> Result<String, String> {
+    let record = map_declared_ids(content, &mut |key, position, leaf| {
+        let id = leaf
+            .as_i64()
+            .ok_or_else(|| format!("{key} has a non-integer ID at {:?}", position.path))?;
+        let uid = ids
+            .table(position.table)
+            .get(&id)
+            .ok_or_else(|| format!("{key} points at a missing row {id}"))?;
+        *leaf = json!({ UID_MARKER: uid });
+        Ok(())
+    })?;
+    Ok(record.map_or_else(|| content.to_string(), |r| r.to_string()))
+}
+
+/// 実行記録の`content`の、宣言した位置の値すべてに`f`を掛け、掛けたあとの記録を返す(`f`には、
+/// `arguments`と`result`のどちらかと、位置の宣言も渡す)。失敗の記録と外部ツールの記録は触らず`None`。
+pub(crate) fn map_declared_ids(
+    content: &str,
+    f: &mut dyn FnMut(&str, &IdPosition, &mut Value) -> Result<(), String>,
+) -> Result<Option<Value>, String> {
     let mut record: Value =
         serde_json::from_str(content).map_err(|e| format!("unreadable tool record: {e}"))?;
     let Some(positions) = positions_to_convert(&record)? else {
-        return Ok(content.to_string());
+        return Ok(None);
     };
     for (key, positions) in [
         ("arguments", positions.arguments),
@@ -254,31 +299,21 @@ fn record_to_transport(content: &str, ids: &Ids<i64, String>) -> Result<String, 
             continue;
         };
         for position in positions {
-            visit(value, position.path, &mut |leaf| {
-                let id = leaf
-                    .as_i64()
-                    .ok_or_else(|| format!("{key} has a non-integer ID at {:?}", position.path))?;
-                let uid = ids
-                    .table(position.table)
-                    .get(&id)
-                    .ok_or_else(|| format!("{key} points at a missing row {id}"))?;
-                *leaf = json!({ UID_MARKER: uid });
-                Ok(())
-            })?;
+            visit(value, position.path, &mut |leaf| f(key, position, leaf))?;
         }
     }
-    Ok(record.to_string())
+    Ok(Some(record))
 }
 
 /// 置き換える記録なら、その宣言。失敗の記録と外部ツールは`None`。
-pub(crate) fn positions_to_convert(
+fn positions_to_convert(
     record: &Value,
 ) -> Result<Option<&'static scitl_core::tools::IdPositions>, String> {
     let tool = record
         .get("tool")
         .and_then(Value::as_str)
         .ok_or("tool record has no tool name")?;
-    if record.get("result").is_some_and(is_failed) {
+    if record.get("result").is_some_and(is_error_result) {
         return Ok(None);
     }
     match record_ids(tool) {
@@ -290,7 +325,7 @@ pub(crate) fn positions_to_convert(
 
 /// 宣言した位置の値すべてに`f`を掛ける。途中の段が無いのは、その欄を持たない記録(省ける
 /// 引数など)なので飛ばす。段の型が違うのは、宣言に合わない記録。
-pub(crate) fn visit(
+fn visit(
     value: &mut Value,
     path: &[Segment],
     f: &mut dyn FnMut(&mut Value) -> Result<(), String>,
@@ -341,21 +376,22 @@ pub(crate) struct Writer<'t, 'c> {
 }
 
 impl<'t, 'c> Writer<'t, 'c> {
-    pub(crate) fn new(tx: &'t Tx<'c>) -> CoreResult<Self> {
-        let attempt_nos = tx
-            .message_refs()?
-            .into_iter()
-            .filter_map(|m| Some((m.uid, m.attempt_no?)))
+    /// `snapshot`は、書き始める前に同じトランザクションで読んだもの。
+    pub(crate) fn new(tx: &'t Tx<'c>, snapshot: &Snapshot) -> Self {
+        let attempt_nos = snapshot
+            .messages
+            .iter()
+            .filter_map(|m| Some((m.uid.clone(), m.attempt_no?)))
             .collect();
-        Ok(Self {
+        Self {
             tx,
-            ids: Ids::<String, i64>::from_uids(&tx.uids()?),
+            ids: Ids::inverse(&snapshot.ids),
             attempt_nos,
             attempts: HashMap::new(),
             pending: Vec::new(),
             counts: Counts::default(),
             touched_tasks: HashSet::new(),
-        })
+        }
     }
 
     fn id(map: &HashMap<String, i64>, what: &str, uid: &str) -> CoreResult<i64> {
@@ -599,38 +635,16 @@ pub(crate) fn version_json(version: &Version) -> String {
 }
 
 fn record_from_transport(content: &str, ids: &Ids<String, i64>) -> Result<String, String> {
-    let mut record: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
-    let Some(positions) = positions_to_convert(&record)? else {
-        return Ok(content.to_string());
-    };
-    for (key, positions) in [
-        ("arguments", positions.arguments),
-        ("result", positions.result),
-    ] {
-        let Some(value) = record.get_mut(key) else {
-            continue;
-        };
-        for position in positions {
-            convert_back(value, position, ids)?;
-        }
-    }
-    Ok(record.to_string())
-}
-
-fn convert_back(
-    value: &mut Value,
-    position: &IdPosition,
-    ids: &Ids<String, i64>,
-) -> Result<(), String> {
-    visit(value, position.path, &mut |leaf| {
+    let record = map_declared_ids(content, &mut |_, position, leaf| {
         let uid = marker_uid(leaf).ok_or("expected a replaced ID")?;
-        let id = ids
+        let id = *ids
             .table(position.table)
             .get(uid)
             .ok_or_else(|| format!("unresolved ID {uid}"))?;
         *leaf = json!(id);
         Ok(())
-    })
+    })?;
+    Ok(record.map_or_else(|| content.to_string(), |r| r.to_string()))
 }
 
 fn parts_from_transport(parts: &[Part], messages: &HashMap<String, i64>) -> Result<String, String> {

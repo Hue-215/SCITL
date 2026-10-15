@@ -49,16 +49,11 @@ pub fn record_ids(tool: &str) -> RecordIds {
     }
 }
 
-/// 記録の結果が失敗を表すか([`is_error_result`])。失敗の記録は、引数のIDが存在しない行や
-/// 型の違う値でありうる。
-pub fn is_failed(result: &Value) -> bool {
-    is_error_result(result)
-}
-
 /// ツール結果が失敗を表すか。最上位の`error`キーを作るのはSCITL自身だけ
 /// (実行の失敗と`mcp::to_result_value`。サーバーの構造化出力は`structured_content`の下に入る)。
-/// 画面の失敗の印([`ToolExecutionView::is_error`])も同じ基準。
-pub(super) fn is_error_result(result: &Value) -> bool {
+/// 画面の失敗の印([`ToolExecutionView::is_error`])も同じ基準。失敗の記録は、引数のIDが存在しない行や
+/// 型の違う値でありうる(同期は置き換えない)。
+pub fn is_error_result(result: &Value) -> bool {
     result.get("error").is_some()
 }
 

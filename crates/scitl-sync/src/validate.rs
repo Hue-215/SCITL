@@ -7,14 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde_json::Value;
-
 use scitl_core::attachments::LIMITS;
 use scitl_core::db::sync::{rules, Tx};
 use scitl_core::error::Result as CoreResult;
 use scitl_core::tools::IdTable;
 
-use crate::convert::{marker_uid, positions_to_convert, visit, Ids};
+use crate::convert::{map_declared_ids, marker_uid, Snapshot};
 use crate::files::MAX_FILE_BYTES;
 use crate::transport::{MessageRow, Part, Transport, Version};
 use crate::InvalidRow;
@@ -38,32 +36,35 @@ struct KnownMessage {
 
 impl Known {
     pub(crate) fn load(tx: &Tx<'_>) -> CoreResult<Self> {
-        let uids = tx.uids()?;
-        let ids = Ids::<i64, String>::from_uids(&uids);
-        let values = |pairs: &[(i64, String)]| pairs.iter().map(|(_, u)| u.clone()).collect();
-        let messages = tx
-            .message_refs()?
-            .into_iter()
+        Ok(Self::new(&Snapshot::load(tx)?))
+    }
+
+    pub(crate) fn new(snapshot: &Snapshot) -> Self {
+        let ids = &snapshot.ids;
+        let values = |map: &HashMap<i64, String>| map.values().cloned().collect();
+        let messages = snapshot
+            .messages
+            .iter()
             .map(|m| {
                 let task = m.task_id.and_then(|id| ids.tasks.get(&id).cloned());
                 (
-                    m.uid,
+                    m.uid.clone(),
                     KnownMessage {
                         task,
-                        kind: m.kind,
-                        turn_id: m.turn_id,
+                        kind: m.kind.clone(),
+                        turn_id: m.turn_id.clone(),
                         attempt_no: m.attempt_no,
                     },
                 )
             })
             .collect();
-        Ok(Self {
-            tasks: values(&uids.tasks),
-            steps: values(&uids.steps),
-            memories: values(&uids.memories),
-            attachments: values(&uids.attachments),
+        Self {
+            tasks: values(&ids.tasks),
+            steps: values(&ids.steps),
+            memories: values(&ids.memories),
+            attachments: values(&ids.attachments),
             messages,
-        })
+        }
     }
 }
 
@@ -199,6 +200,10 @@ pub(crate) fn check(t: &Transport, known: &Known) -> Result<(), Vec<InvalidRow>>
             match messages.get(r.message.as_str()) {
                 Some((_, m)) if m.role == "user" && m.kind == "normal" => {}
                 _ => return Err("does not belong to a user message sent with it".to_string()),
+            }
+            // 本体は名前の無い添付を受け付けない(`attachments::staging`)。
+            if r.original_name.trim().is_empty() {
+                return Err("the name is empty".to_string());
             }
             match (r.kind.as_str(), &r.content_text, &r.file_hash) {
                 ("text", Some(text), None) => {
@@ -364,27 +369,12 @@ fn uids<'a>(
 
 /// 実行記録の`content`。宣言した位置には、運ぶ行か既にある行の`uid`に置き換えた値がある。
 fn record(content: &str, ids: &IdSets<'_>) -> Result<(), String> {
-    let mut record: Value =
-        serde_json::from_str(content).map_err(|e| format!("unreadable tool record: {e}"))?;
-    let Some(positions) = positions_to_convert(&record)? else {
-        return Ok(());
-    };
-    for (key, positions) in [
-        ("arguments", positions.arguments),
-        ("result", positions.result),
-    ] {
-        let Some(value) = record.get_mut(key) else {
-            continue;
-        };
-        for position in positions {
-            visit(value, position.path, &mut |leaf| match marker_uid(leaf) {
-                Some(uid) if ids.has(position.table, uid) => Ok(()),
-                Some(_) => Err(format!("{key} points at a missing row")),
-                None => Err(format!("{key} has an ID that was not replaced")),
-            })?;
-        }
-    }
-    Ok(())
+    map_declared_ids(content, &mut |key, position, leaf| match marker_uid(leaf) {
+        Some(uid) if ids.has(position.table, uid) => Ok(()),
+        Some(_) => Err(format!("{key} points at a missing row")),
+        None => Err(format!("{key} has an ID that was not replaced")),
+    })
+    .map(drop)
 }
 
 fn timestamps<const N: usize>(values: [Option<&String>; N]) -> Result<(), String> {

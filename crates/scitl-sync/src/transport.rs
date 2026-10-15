@@ -70,6 +70,13 @@ pub(crate) struct MessageRow {
     pub version: Version,
 }
 
+impl MessageRow {
+    /// 消えていない通常発言(会話の鎖に入る行。`docs/sync/index.md` 9節)。
+    pub(crate) fn is_alive_normal(&self) -> bool {
+        self.kind == "normal" && self.deleted_at.is_none()
+    }
+}
+
 /// 返信の行の中身の1要素(`db::messages::ReplyPart`)。ツールは実行記録を`uid`で指す。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]

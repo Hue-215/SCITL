@@ -6,7 +6,7 @@ use crate::SyncError;
 
 /// 数字の桁数。待ち受ける側は1回の待ち受けで相手を1回しか試させないので、当て推量が通るのは
 /// 1回の待ち受けにつき10^-6。
-const DIGITS: usize = 6;
+pub(crate) const DIGITS: usize = 6;
 
 /// 使い捨てで短命なので、捨てるときにメモリを消去しない(`spake2`の状態も、合言葉を消去せずに持つ)。
 #[derive(Clone, PartialEq, Eq)]

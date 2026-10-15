@@ -17,7 +17,7 @@ use scitl_core::in_flight::InFlightSet;
 use scitl_core::{db, paths};
 use scitl_sync::{
     ChosenSide, ConflictChoice, ConflictView, Context, DeviceRegistry, Limits, Listener,
-    LocalVersions, PairingCode, Resolver, SecretStore, Side, SyncError,
+    LocalVersions, PairingCode, Resolver, SecretStore, SyncError,
 };
 
 use crate::DebugError;
@@ -162,7 +162,6 @@ pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugErr
             let outcome = scitl_sync::sync(
                 &mut sync,
                 &ctx,
-                Side::Listener,
                 &device_id,
                 held.stop_signal(),
                 |_| {},
@@ -184,7 +183,6 @@ pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugErr
             let outcome = scitl_sync::sync(
                 &mut sync,
                 &ctx,
-                Side::Connector,
                 &device_id,
                 held.stop_signal(),
                 |_| {},

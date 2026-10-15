@@ -303,17 +303,100 @@ impl Units {
     /// 行の単位をすべて集める(メモリと添付は入れない)。
     pub(crate) fn of(t: &Transport) -> Self {
         let mut units = Self::default();
-        for r in &t.tasks {
-            units.insert(Unit::Task(r.uid.clone()));
-        }
-        for r in &t.steps {
-            units.insert(Unit::Task(r.task.clone()));
-        }
-        for r in &t.messages {
-            units.insert(Unit::of_chat(&r.task));
-        }
+        row_units(t).for_each(|unit| units.insert(unit));
         units
     }
+
+    /// 発言の会話(`task`)が、この集まりの単位か。
+    pub(crate) fn has_chat(&self, task: Option<&str>) -> bool {
+        match task {
+            Some(uid) => self.tasks.contains(uid),
+            None => self.general,
+        }
+    }
+
+    /// `t`の行がすべて、この集まりの単位の行か(求めた単位の行だけが届いたか)。メモリは単位に
+    /// 入らず、添付は一緒に届いた発言のものに限る。
+    pub(crate) fn covers(&self, t: &Transport) -> bool {
+        let messages: HashSet<&str> = t.messages.iter().map(|m| m.uid.as_str()).collect();
+        t.memories.is_empty()
+            && t.tasks.iter().all(|r| self.tasks.contains(&r.uid))
+            && t.steps.iter().all(|r| self.tasks.contains(&r.task))
+            && t.messages.iter().all(|r| self.has_chat(r.task.as_deref()))
+            && t.attachments
+                .iter()
+                .all(|a| messages.contains(a.message.as_str()))
+    }
+}
+
+/// 行の単位を、行の並びの順に(同じ単位も繰り返す)。メモリと添付は単位の行に数えない。
+fn row_units(t: &Transport) -> impl Iterator<Item = Unit> + '_ {
+    t.tasks
+        .iter()
+        .map(|r| Unit::Task(r.uid.clone()))
+        .chain(t.steps.iter().map(|r| Unit::Task(r.task.clone())))
+        .chain(t.messages.iter().map(|r| Unit::of_chat(&r.task)))
+}
+
+/// 1つの単位の行(分けた元の行を指す)。
+#[derive(Default)]
+struct UnitRows<'a> {
+    tasks: Vec<&'a TaskRow>,
+    steps: Vec<&'a StepRow>,
+    messages: Vec<&'a MessageRow>,
+    attachments: Vec<&'a AttachmentRow>,
+}
+
+impl UnitRows<'_> {
+    fn to_transport(&self) -> Transport {
+        fn owned<R: Clone>(rows: &[&R]) -> Vec<R> {
+            rows.iter().map(|r| (*r).clone()).collect()
+        }
+        Transport {
+            tasks: owned(&self.tasks),
+            steps: owned(&self.steps),
+            memories: Vec::new(),
+            messages: owned(&self.messages),
+            attachments: owned(&self.attachments),
+        }
+    }
+}
+
+/// 行を単位ごとに分ける(単位は`t`に現れた順、行は`t`の並びの順)。添付は発言の単位に入れ、発言が
+/// `t`に無い添付はどこにも入れない。
+fn split_by_unit(t: &Transport) -> Vec<(Unit, UnitRows<'_>)> {
+    fn slot(
+        units: &mut Vec<(Unit, UnitRows<'_>)>,
+        index: &mut HashMap<Unit, usize>,
+        unit: Unit,
+    ) -> usize {
+        *index.entry(unit.clone()).or_insert_with(|| {
+            units.push((unit, UnitRows::default()));
+            units.len() - 1
+        })
+    }
+    let mut units = Vec::new();
+    let mut index = HashMap::new();
+    for r in &t.tasks {
+        let i = slot(&mut units, &mut index, Unit::Task(r.uid.clone()));
+        units[i].1.tasks.push(r);
+    }
+    for r in &t.steps {
+        let i = slot(&mut units, &mut index, Unit::Task(r.task.clone()));
+        units[i].1.steps.push(r);
+    }
+    let mut chat_of_message: HashMap<&str, usize> = HashMap::new();
+    for r in &t.messages {
+        let i = slot(&mut units, &mut index, Unit::of_chat(&r.task));
+        units[i].1.messages.push(r);
+        chat_of_message.insert(r.uid.as_str(), i);
+    }
+    for r in &t.attachments {
+        if let Some(&i) = chat_of_message.get(r.message.as_str()) {
+            units[i].1.attachments.push(r);
+        }
+    }
+    units
 }
 
 /// 利用者に選ばせる単位。両側のその単位の行(メモリは行1つ)を持つ。
@@ -398,24 +481,31 @@ pub(crate) fn plan(inputs: &Inputs<'_>) -> Plan {
     }
 
     // 両方が変えた単位と、版で決まらない行のある単位は、単位の行をすべて見る。
-    for unit in units_with_rows(inputs.incoming) {
-        if inputs.complete.contains(&unit) {
+    let incoming_units = split_by_unit(inputs.incoming);
+    for (unit, theirs) in &incoming_units {
+        if inputs.complete.contains(unit) {
             continue;
         }
-        if inputs.changed_here.contains(&unit) || undecided(&unit, inputs.incoming, &local) {
-            plan.needs.insert(unit);
+        if inputs.changed_here.contains(unit) || undecided(theirs, &local) {
+            plan.needs.insert(unit.clone());
         }
     }
     if !plan.needs.is_empty() {
         return plan;
     }
 
-    let mut out = Out::default();
-    for unit in units_with_rows(inputs.incoming) {
-        if inputs.complete.contains(&unit) {
-            whole_unit(&unit, inputs, &local, &mut out, &mut plan);
+    let local_units: HashMap<Unit, UnitRows<'_>> =
+        split_by_unit(inputs.local).into_iter().collect();
+    let mut out = Transport::default();
+    for (unit, theirs) in &incoming_units {
+        if inputs.complete.contains(unit) {
+            let ours = local_units
+                .get(unit)
+                .map(UnitRows::to_transport)
+                .unwrap_or_default();
+            whole_unit(unit, ours, theirs.to_transport(), &mut out, &mut plan);
         } else {
-            by_row(&unit, inputs.incoming, &local, &mut out);
+            by_row(theirs, &local, &mut out);
         }
     }
     for b in &inputs.incoming.memories {
@@ -444,29 +534,18 @@ pub(crate) fn plan(inputs: &Inputs<'_>) -> Plan {
             out.attachments.push(b.clone());
         }
     }
-    plan.rows = out.into_transport(inputs.incoming);
+    // 発言は、Bの行の順(会話の並び)に並べ直す。
+    let order: HashMap<&str, usize> = inputs
+        .incoming
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.uid.as_str(), i))
+        .collect();
+    out.messages
+        .sort_by_key(|m| order.get(m.uid.as_str()).copied().unwrap_or(usize::MAX));
+    plan.rows = out;
     plan
-}
-
-/// 単位を、`incoming`に現れる順に(同じ単位は1度だけ)。
-fn units_with_rows(t: &Transport) -> Vec<Unit> {
-    let mut seen = HashSet::new();
-    let mut units = Vec::new();
-    let mut push = |unit: Unit| {
-        if seen.insert(unit.clone()) {
-            units.push(unit);
-        }
-    };
-    for r in &t.tasks {
-        push(Unit::Task(r.uid.clone()));
-    }
-    for r in &t.steps {
-        push(Unit::Task(r.task.clone()));
-    }
-    for r in &t.messages {
-        push(Unit::of_chat(&r.task));
-    }
-    units
 }
 
 fn fixed_column_differs(table: &'static str, uid: &str) -> InvalidRow {
@@ -490,87 +569,49 @@ fn fixed_columns<R: Versioned>(
     }
 }
 
-/// 版で決まらない行がその単位にあるか。
-fn undecided(unit: &Unit, incoming: &Transport, local: &Index<'_>) -> bool {
-    fn any<R: Versioned>(
-        rows: &[R],
-        local: &HashMap<&str, &R>,
-        in_unit: impl Fn(&R) -> bool,
-    ) -> bool {
-        rows.iter().filter(|r| in_unit(r)).any(|b| {
+/// 版で決まらない行が、単位の行(`theirs`)にあるか。
+fn undecided(theirs: &UnitRows<'_>, local: &Index<'_>) -> bool {
+    fn any<R: Versioned>(rows: &[&R], local: &HashMap<&str, &R>) -> bool {
+        rows.iter().any(|b| {
             local
                 .get(b.uid())
-                .is_some_and(|a| merge_pair(*a, b).is_none())
+                .is_some_and(|a| merge_pair(*a, *b).is_none())
         })
     }
-    match unit {
-        Unit::Task(task) => {
-            any(&incoming.tasks, &local.tasks, |r| &r.uid == task)
-                || any(&incoming.steps, &local.steps, |r| &r.task == task)
-                || any(&incoming.messages, &local.messages, |r| {
-                    r.task.as_ref() == Some(task)
-                })
-        }
-        Unit::General => any(&incoming.messages, &local.messages, |r| r.task.is_none()),
-        Unit::Memory(_) => false,
-    }
+    any(&theirs.tasks, &local.tasks)
+        || any(&theirs.steps, &local.steps)
+        || any(&theirs.messages, &local.messages)
 }
 
-/// 差分だけが届いた単位。Aはこの単位を前回から変えていないので、Bの行は版でAの行を含むか
-/// 同じになる。行ごとに版で決める。
-fn by_row(unit: &Unit, incoming: &Transport, local: &Index<'_>, out: &mut Out) {
-    fn each<R: Versioned>(
-        rows: &[R],
-        local: &HashMap<&str, &R>,
-        in_unit: impl Fn(&R) -> bool,
-        out: &mut Vec<R>,
-    ) {
-        for b in rows.iter().filter(|r| in_unit(r)) {
+/// 差分だけが届いた単位(`theirs`は、その単位の受け取った行)。Aはこの単位を前回から変えていないので、
+/// Bの行は版でAの行を含むか同じになる。行ごとに版で決める。
+fn by_row(theirs: &UnitRows<'_>, local: &Index<'_>, out: &mut Transport) {
+    fn each<R: Versioned>(rows: &[&R], local: &HashMap<&str, &R>, out: &mut Vec<R>) {
+        for b in rows {
             match local.get(b.uid()) {
-                None => out.push(b.clone()),
+                None => out.push((*b).clone()),
                 Some(a) => {
-                    if let Some(m) = merge_pair(*a, b).filter(|m| m != *a) {
+                    if let Some(m) = merge_pair(*a, *b).filter(|m| m != *a) {
                         out.push(m);
                     }
                 }
             }
         }
     }
-    match unit {
-        Unit::Task(task) => {
-            each(
-                &incoming.tasks,
-                &local.tasks,
-                |r| &r.uid == task,
-                &mut out.tasks,
-            );
-            each(
-                &incoming.steps,
-                &local.steps,
-                |r| &r.task == task,
-                &mut out.steps,
-            );
-            each(
-                &incoming.messages,
-                &local.messages,
-                |r| r.task.as_ref() == Some(task),
-                &mut out.messages,
-            );
-        }
-        Unit::General => each(
-            &incoming.messages,
-            &local.messages,
-            |r| r.task.is_none(),
-            &mut out.messages,
-        ),
-        Unit::Memory(_) => {}
-    }
+    each(&theirs.tasks, &local.tasks, &mut out.tasks);
+    each(&theirs.steps, &local.steps, &mut out.steps);
+    each(&theirs.messages, &local.messages, &mut out.messages);
 }
 
-/// 両側の行がすべてそろった単位を決める。
-fn whole_unit(unit: &Unit, inputs: &Inputs<'_>, local: &Index<'_>, out: &mut Out, plan: &mut Plan) {
-    let ours = unit_rows(unit, inputs.local);
-    let theirs = unit_rows(unit, inputs.incoming);
+/// 両側の行がすべてそろった単位を決める。`ours`・`theirs`はその単位の両側の行。添付は、無いものを
+/// [`plan`]が単位によらず足す。
+fn whole_unit(
+    unit: &Unit,
+    ours: Transport,
+    theirs: Transport,
+    out: &mut Transport,
+    plan: &mut Plan,
+) {
     let tasks = pairs(&ours.tasks, &theirs.tasks);
     let steps = pairs(&ours.steps, &theirs.steps);
     let messages = pairs(&ours.messages, &theirs.messages);
@@ -597,11 +638,6 @@ fn whole_unit(unit: &Unit, inputs: &Inputs<'_>, local: &Index<'_>, out: &mut Out
     }
     for p in &messages {
         p.write_into(&mut out.messages);
-    }
-    for b in &theirs.attachments {
-        if !local.attachments.contains_key(b.uid.as_str()) {
-            out.attachments.push(b.clone());
-        }
     }
 
     if let Unit::Task(task) = unit {
@@ -709,7 +745,7 @@ fn pairs<R: Versioned>(ours: &[R], theirs: &[R]) -> Vec<Pair<R>> {
 /// 消えていない通常発言の`uid`。
 fn alive<'a>(messages: impl Iterator<Item = &'a MessageRow>) -> BTreeSet<&'a str> {
     messages
-        .filter(|m| m.kind == "normal" && !m.is_deleted())
+        .filter(|m| m.is_alive_normal())
         .map(|m| m.uid.as_str())
         .collect()
 }
@@ -756,51 +792,6 @@ fn deleted_unknowingly(
     };
     steps.iter().any(|p| p.changed_on(kept_by_ours))
         || messages.iter().any(|p| p.changed_on(kept_by_ours))
-}
-
-/// 単位の行(タスクの行・工程・会話と、その発言の添付。メモリは行1つ)。
-fn unit_rows(unit: &Unit, t: &Transport) -> Transport {
-    let in_chat = |task: &Option<String>| match unit {
-        Unit::Task(uid) => task.as_ref() == Some(uid),
-        Unit::General => task.is_none(),
-        Unit::Memory(_) => false,
-    };
-    let messages: Vec<MessageRow> = t
-        .messages
-        .iter()
-        .filter(|m| in_chat(&m.task))
-        .cloned()
-        .collect();
-    let message_uids: HashSet<&str> = messages.iter().map(|m| m.uid.as_str()).collect();
-    let attachments = t
-        .attachments
-        .iter()
-        .filter(|a| message_uids.contains(a.message.as_str()))
-        .cloned()
-        .collect();
-    match unit {
-        Unit::Task(uid) => Transport {
-            tasks: t.tasks.iter().filter(|r| &r.uid == uid).cloned().collect(),
-            steps: t.steps.iter().filter(|r| &r.task == uid).cloned().collect(),
-            memories: Vec::new(),
-            messages,
-            attachments,
-        },
-        Unit::General => Transport {
-            messages,
-            attachments,
-            ..Transport::default()
-        },
-        Unit::Memory(uid) => Transport {
-            memories: t
-                .memories
-                .iter()
-                .filter(|r| &r.uid == uid)
-                .cloned()
-                .collect(),
-            ..Transport::default()
-        },
-    }
 }
 
 /// 利用者が選んだ側で、競合した単位の結果を作る(9節「選んだ結果の作り方」)。単位のすべての行に
@@ -857,6 +848,7 @@ pub(crate) fn resolve(
         out
     }
     let (ours, theirs) = (&conflict.ours, &conflict.theirs);
+    let ours_attachments: HashSet<&str> = ours.attachments.iter().map(|a| a.uid.as_str()).collect();
     Transport {
         tasks: rows(&ours.tasks, &theirs.tasks, pick, me, number, now),
         steps: rows(&ours.steps, &theirs.steps, pick, me, number, now),
@@ -866,7 +858,7 @@ pub(crate) fn resolve(
         attachments: theirs
             .attachments
             .iter()
-            .filter(|r| !ours.attachments.iter().any(|a| a.uid == r.uid))
+            .filter(|r| !ours_attachments.contains(r.uid.as_str()))
             .cloned()
             .collect(),
     }
@@ -906,37 +898,6 @@ impl<'a> Index<'a> {
             memories: t.memories.iter().map(|r| (r.uid.as_str(), r)).collect(),
             messages: t.messages.iter().map(|r| (r.uid.as_str(), r)).collect(),
             attachments: t.attachments.iter().map(|r| (r.uid.as_str(), r)).collect(),
-        }
-    }
-}
-
-/// 書く行を集める。
-#[derive(Default)]
-struct Out {
-    tasks: Vec<TaskRow>,
-    steps: Vec<StepRow>,
-    memories: Vec<MemoryRow>,
-    messages: Vec<MessageRow>,
-    attachments: Vec<AttachmentRow>,
-}
-
-impl Out {
-    /// 発言は、Bの行の順(会話の並び)に並べ直す。Aにしか無い行は書かない(書く行に入らない)。
-    fn into_transport(mut self, incoming: &Transport) -> Transport {
-        let order: HashMap<&str, usize> = incoming
-            .messages
-            .iter()
-            .enumerate()
-            .map(|(i, m)| (m.uid.as_str(), i))
-            .collect();
-        self.messages
-            .sort_by_key(|m| order.get(m.uid.as_str()).copied().unwrap_or(usize::MAX));
-        Transport {
-            tasks: self.tasks,
-            steps: self.steps,
-            memories: self.memories,
-            messages: self.messages,
-            attachments: self.attachments,
         }
     }
 }

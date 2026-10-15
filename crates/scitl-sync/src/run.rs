@@ -18,12 +18,11 @@ use scitl_core::{blocking, db, text};
 
 use crate::conflict::{ConflictChoice, ConflictView};
 use crate::invitation::{self, QrModules};
-use crate::transfer::{Resolver, Stage};
+use crate::transfer::{cancellable, Resolver, Stage};
 use crate::transport::Counts;
 use crate::{
     confirm_device_id, connect, local_addresses, parse_invitation, parse_peer_address, sync,
-    Context, Invitation, Limits, Listener, LocalVersions, Outcome, PairingCode, Session, Side,
-    SyncError,
+    Context, Invitation, Limits, Listener, LocalVersions, Outcome, PairingCode, Session, SyncError,
 };
 
 /// 始める前の確認のダイアログに出す文面(表示言語)。
@@ -187,16 +186,7 @@ pub async fn listen(
                 Ok((device_id, listener.accept(local_versions()).await?))
             })
             .await?;
-            sync_over(
-                session,
-                ctx,
-                Side::Listener,
-                &device_id,
-                &stop,
-                answers,
-                &events,
-            )
-            .await
+            sync_over(session, ctx, &device_id, &stop, answers, &events).await
         },
     )
     .await
@@ -277,16 +267,7 @@ async fn connect_with(
                 Ok((device_id, session))
             })
             .await?;
-            sync_over(
-                session,
-                ctx,
-                Side::Connector,
-                &device_id,
-                &stop,
-                answers,
-                &events,
-            )
-            .await
+            sync_over(session, ctx, &device_id, &stop, answers, &events).await
         },
     )
     .await
@@ -295,7 +276,6 @@ async fn connect_with(
 async fn sync_over(
     mut session: Session,
     ctx: &Context,
-    side: Side,
     device_id: &str,
     stop: &StopSignal,
     answers: &ConflictAnswers,
@@ -309,7 +289,7 @@ async fn sync_over(
         })
     };
     let ask = Ask { answers, events };
-    let outcome = sync(&mut session, ctx, side, device_id, stop, stage, &ask).await;
+    let outcome = sync(&mut session, ctx, device_id, stop, stage, &ask).await;
     // 止めたあとに届いた選択を受け取らない。
     answers.0.lock().expect("answers mutex poisoned").take();
     session.close().await;
@@ -325,15 +305,6 @@ fn local_versions() -> LocalVersions {
     LocalVersions {
         db_version: db::schema_version(),
     }
-}
-
-async fn cancellable<T>(
-    stop: &StopSignal,
-    future: impl std::future::Future<Output = Result<T, SyncError>>,
-) -> Result<T, SyncError> {
-    stop.unless_requested(future)
-        .await
-        .unwrap_or(Err(SyncError::Cancelled))
 }
 
 /// 全体を押さえ、`target`で相手を決め(QRを読む等。止める指示が来たら捨てる)、確かめてから`sync`を

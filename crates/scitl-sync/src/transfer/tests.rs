@@ -384,7 +384,6 @@ async fn sync_with(
         let result = super::sync(
             &mut session,
             &listener.ctx,
-            Side::Listener,
             &a_id,
             a_stop.stop_signal(),
             |_| {},
@@ -399,7 +398,6 @@ async fn sync_with(
         let result = super::sync(
             &mut session,
             &connector.ctx,
-            Side::Connector,
             &b_id,
             b_stop.stop_signal(),
             on_connector_stage,
@@ -714,6 +712,13 @@ fn rows_from_the_peer_are_checked_like_the_apps_own() {
         assert!(rows.iter().any(|r| r.table == table), "{table}: {rows:?}");
     }
 
+    // 本体が受け付けない、名前の無い添付。
+    let mut nameless = good.clone();
+    nameless.attachments[0].original_name = " ".to_string();
+    let rows = validate::check(&nameless, &nothing).unwrap_err();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].reason.contains("name"), "{rows:?}");
+
     // 置き換えていないIDの残った記録は、受け取る側で断る。
     let mut unreplaced = good.clone();
     let record = unreplaced
@@ -826,7 +831,6 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
         super::sync(
             &mut session,
             &a.ctx,
-            Side::Listener,
             &a_id,
             a_stop.stop_signal(),
             |_| {},
@@ -839,7 +843,6 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
         super::sync(
             &mut session,
             &b.ctx,
-            Side::Connector,
             &b_id,
             b_stop.stop_signal(),
             |_| {},
@@ -1291,4 +1294,119 @@ async fn memories_folded_on_two_pairs_agree() {
     let _ = rd;
     assert_same(&c, &d);
     assert_eq!(memories::list(&c.conn()).unwrap().len(), 1);
+}
+
+/// 書き終えた合図の端末IDは、名乗った端末IDか、巻き戻りで作り直した新しい端末ID。
+#[test]
+fn the_final_device_id_is_the_one_introduced() {
+    let introduced = "a".repeat(32);
+    let agreed = |peer_renews| Agreed {
+        send_from: 0,
+        peer: introduced.clone(),
+        peer_renews,
+    };
+    agreed(false).check_final_device_id(&introduced).unwrap();
+    for other in ["b".repeat(32), "x".to_string()] {
+        assert!(
+            agreed(false).check_final_device_id(&other).is_err(),
+            "{other}"
+        );
+    }
+    agreed(true).check_final_device_id(&"b".repeat(32)).unwrap();
+    for other in [introduced.clone(), "x".to_string()] {
+        assert!(
+            agreed(true).check_final_device_id(&other).is_err(),
+            "{other}"
+        );
+    }
+}
+
+/// 選んだあとに競合の中身が変われば、選び直させる。
+#[test]
+fn a_choice_is_kept_only_while_the_conflict_stays_the_same() {
+    let device = Device::new();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(populate(&device));
+    let (rows, _) =
+        db_sync::transaction(&device.conn(), |tx| convert::read(tx, Filter::All)).unwrap();
+    let conflict = Conflict {
+        unit: merge::Unit::Task(rows.tasks[0].uid.clone()),
+        ours: rows.clone(),
+        theirs: rows,
+    };
+    let chosen = Chosen::new(Pick::Theirs, &conflict);
+    assert!(chosen.is_for(&conflict));
+
+    let mut changed = conflict.clone();
+    changed.ours.steps[0].description = "別のプロセスが書いた".to_string();
+    assert!(!chosen.is_for(&changed));
+}
+
+/// 競合を見せられたら、1回目だけ`write`で待ち受ける側に書き込んでから(別のプロセスの書き込み)、
+/// 相手の側を選ぶ。
+struct WriteWhileChoosing<'a> {
+    write: Box<dyn Fn() + Sync + 'a>,
+    calls: Mutex<usize>,
+}
+
+impl Resolver for WriteWhileChoosing<'_> {
+    fn choose(&self, conflicts: Vec<ConflictView>) -> BoxFuture<'_, Option<Vec<ConflictChoice>>> {
+        let mut calls = self.calls.lock().unwrap();
+        if *calls == 0 {
+            (self.write)();
+        }
+        *calls += 1;
+        let choices = conflicts
+            .iter()
+            .map(|c| ConflictChoice {
+                id: c.id.clone(),
+                side: ChosenSide::Theirs,
+            })
+            .collect();
+        Box::pin(async move { Some(choices) })
+    }
+}
+
+/// 選んでいる間に別のプロセスが書くと、確定をやり直す。そのとき、選んだ競合の中身が変わっていれば
+/// 選び直させ、変わっていなければ聞き直さない。
+#[tokio::test]
+async fn a_conflict_that_changed_after_it_was_chosen_is_asked_again() {
+    for (touches_the_conflict, asked) in [(true, 2), (false, 1)] {
+        let (a, b) = (Device::new(), Device::new());
+        populate(&a).await;
+        sync(&a, &b).await;
+        let task = a.task_uid("夕飯");
+        let (a_task, b_task) = (a.task_id(&task), b.task_id(&task));
+        a.conn()
+            .execute("UPDATE tasks SET title = '晩ご飯' WHERE id = ?1", [a_task])
+            .unwrap();
+        b.conn()
+            .execute("UPDATE tasks SET title = '夕食' WHERE id = ?1", [b_task])
+            .unwrap();
+
+        let resolver = WriteWhileChoosing {
+            write: Box::new(|| {
+                if touches_the_conflict {
+                    a.conn()
+                        .execute(
+                            "UPDATE tasks SET description = '別のプロセス' WHERE id = ?1",
+                            [a_task],
+                        )
+                        .unwrap();
+                } else {
+                    memories::add(&a.conn(), &["別のプロセス".to_string()]).unwrap();
+                }
+            }),
+            calls: Mutex::new(0),
+        };
+        let (ra, rb) = sync_with(&a, &b, &resolver, |_| {}).await;
+        assert_eq!(ra.unwrap().conflicts, 1);
+        rb.unwrap();
+        assert_eq!(
+            *resolver.calls.lock().unwrap(),
+            asked,
+            "touches_the_conflict: {touches_the_conflict}"
+        );
+        assert_same(&a, &b);
+    }
 }

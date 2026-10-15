@@ -16,7 +16,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
 use crate::address::is_allowed_ip;
 use crate::pake::{self, Role, CONFIRM_LEN, MESSAGE_LEN};
-use crate::{frame, tls, PairingCode, SyncError, PROTOCOL_VERSION};
+use crate::{frame, tls, PairingCode, Side, SyncError, PROTOCOL_VERSION};
 
 /// 相手を確かめ終えるまでに読む1メッセージの上限。PAKEのメッセージと確認しか来ない。
 const HANDSHAKE_MAX_MESSAGE: usize = 64;
@@ -184,8 +184,9 @@ impl Listener {
             stream,
             limits: self.limits,
             peer,
+            role: Role::Listener,
         };
-        session.exchange_versions(local, Role::Listener).await?;
+        session.exchange_versions(local).await?;
         Ok(session)
     }
 }
@@ -264,8 +265,9 @@ pub async fn connect(
             stream,
             limits,
             peer: addr,
+            role: Role::Connector,
         };
-        session.exchange_versions(local, Role::Connector).await?;
+        session.exchange_versions(local).await?;
         return Ok(session);
     }
     Err(SyncError::Connect(last_error))
@@ -340,6 +342,7 @@ pub struct Session {
     stream: TlsStream<TcpStream>,
     limits: Limits,
     peer: SocketAddr,
+    role: Role,
 }
 
 impl std::fmt::Debug for Session {
@@ -353,6 +356,14 @@ impl std::fmt::Debug for Session {
 impl Session {
     pub fn peer_address(&self) -> SocketAddr {
         self.peer
+    }
+
+    /// この接続での役。受け入れた側が待ち受ける側。
+    pub fn side(&self) -> Side {
+        match self.role {
+            Role::Connector => Side::Connector,
+            Role::Listener => Side::Listener,
+        }
     }
 
     pub async fn send<T: Serialize>(&mut self, msg: &T) -> Result<(), SyncError> {
@@ -383,27 +394,31 @@ impl Session {
         let _ = timeout(Duration::from_secs(5), self.stream.shutdown()).await;
     }
 
-    /// プロトコルとDBの版を伝え合い、違えばほかに何も送らずに断る。つなぐ側が先に送る。
-    async fn exchange_versions(
+    /// 1つずつ送り合う。つなぐ側が先に送る(両側が先に読むと、どちらも待ち続ける)。
+    pub(crate) async fn exchange<T: Serialize, U: DeserializeOwned>(
         &mut self,
-        local: LocalVersions,
-        role: Role,
-    ) -> Result<(), SyncError> {
+        ours: &T,
+    ) -> Result<U, SyncError> {
+        match self.role {
+            Role::Connector => {
+                self.send(ours).await?;
+                self.recv().await
+            }
+            Role::Listener => {
+                let theirs = self.recv().await?;
+                self.send(ours).await?;
+                Ok(theirs)
+            }
+        }
+    }
+
+    /// プロトコルとDBの版を伝え合い、違えばほかに何も送らずに断る。
+    async fn exchange_versions(&mut self, local: LocalVersions) -> Result<(), SyncError> {
         let ours = Hello {
             protocol: PROTOCOL_VERSION,
             db_version: local.db_version,
         };
-        let theirs: Hello = match role {
-            Role::Connector => {
-                self.send(&ours).await?;
-                self.recv().await?
-            }
-            Role::Listener => {
-                let theirs = self.recv().await?;
-                self.send(&ours).await?;
-                theirs
-            }
-        };
+        let theirs: Hello = self.exchange(&ours).await?;
         if theirs.protocol != ours.protocol {
             return Err(SyncError::ProtocolMismatch {
                 ours: ours.protocol,

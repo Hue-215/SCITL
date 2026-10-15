@@ -236,8 +236,8 @@ fn sync_device_key(device_id: &str) -> String {
 }
 
 /// このマシンの資格情報ストアに、端末IDの項目があるか。無いことと読めないことを分ける
-/// (無ければ写されたDBとみなして端末IDを作り直すが、読めないときは確かめられないので同期を
-/// 始めない)。
+/// (無ければ写されたDBとみなして端末IDを作り直す。読めないときは、作り直した項目を書けたときだけ
+/// 続ける。`docs/sync/index.md` 10節)。
 pub fn sync_device_registered(device_id: &str) -> Result<bool, CoreError> {
     with_entry(&sync_device_key(device_id), |entry| {
         match entry.get_password() {
