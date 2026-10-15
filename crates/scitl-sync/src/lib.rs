@@ -26,11 +26,11 @@ pub use conflict::{
     ConflictView,
 };
 pub use device::{confirm_device_id, renew_device_id, DeviceRegistry, SecretStore};
-pub use error::{InvalidRow, SyncError};
+pub use error::{InvalidRow, SyncError, MESSAGE_KEY_PREFIX};
 pub use invitation::{parse_invitation, Invitation, QrModules};
 pub use run::{
-    answer, cancel, connect_scanned, connect_to, listen, ConflictAnswers, Request, SyncDialog,
-    SyncEvent, SyncReport,
+    answer, cancel, connect_scanned, connect_to, listen, ConflictAnswers, DialogAnswer, Request,
+    SyncDialog, SyncEvent, SyncProgress, SyncReport,
 };
 pub use session::{connect, Limits, Listener, LocalVersions, Session};
 pub use transfer::{sync, Context, Outcome, Resolver, Side, Stage};

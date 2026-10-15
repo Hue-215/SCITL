@@ -648,7 +648,8 @@ async fn listener(
                     .is_some_and(|chosen| chosen.is_for(c))
             })
             .collect();
-        if !pending.is_empty() {
+        let chose = !pending.is_empty();
+        if chose {
             let views: Vec<ConflictView> = pending.iter().map(|c| conflict::view(c)).collect();
             let ids: HashSet<String> = views.iter().map(|v| v.id.clone()).collect();
             session.send(&Message::Choosing).await?;
@@ -681,8 +682,9 @@ async fn listener(
         }
 
         // 6: 確定する。版を振ってから別の書き込みがあれば、振るところからやり直す。
-        if !finishing {
-            if stop.is_requested() {
+        // 確定をやり直す間に選び直したときも、止められない段へ戻ったことを知らせ直す。
+        if !finishing || chose {
+            if !finishing && stop.is_requested() {
                 return Err(SyncError::Cancelled);
             }
             stage(Stage::Finishing);
