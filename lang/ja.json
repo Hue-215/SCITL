@@ -263,7 +263,7 @@
   "settings.sync.error.timed_out": "接続がタイムアウトしました",
   "settings.sync.error.version_mismatch": "バージョンが異なるため同期できません",
   "settings.sync.failed_heading": "同期できませんでした",
-  "settings.sync.intro": "他のSCITLに直接接続し、データの同期を行ないます。",
+  "settings.sync.intro": "他のSCITLに直接接続し、データの同期を行います。",
   "settings.sync.intro_hint": "同期には、2台の端末が同じLANに接続する必要があります。",
   "settings.sync.listen": "コードを発行する",
   "settings.sync.listen_heading": "コードを発行する",
