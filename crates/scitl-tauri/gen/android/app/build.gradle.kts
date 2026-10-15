@@ -122,6 +122,10 @@ android {
     }
     buildTypes {
         getByName("debug") {
+            // 開発版は、リリース版と並べて入れられるよう別のアプリにする(名前はsrc/debugで置き換える)。
+            // この行はtauri-cliがビルドのたびに`tauri.conf.json`の`bundle.android.debugApplicationIdSuffix`
+            // から書き直す(無ければ消す)ので、変えるならそちらを変える。
+            applicationIdSuffix = ".dev"
             isDebuggable = true
             isJniDebuggable = true
             isMinifyEnabled = false

@@ -57,7 +57,12 @@ until [ "$(adb -s emulator-5556 shell getprop sys.boot_completed | tr -d '\r')" 
 
 `crates/scitl-tauri`で行う。**確かめる前に、今のブランチからビルドし直す**。エミュレーターに前の
 APKが残っていると、直したはずの箇所を古いまま見ることになる(入れた時刻は
-`adb shell dumpsys package net.niigo.scitl | grep lastUpdateTime`で分かる)。
+`adb shell dumpsys package net.niigo.scitl.dev | grep lastUpdateTime`で分かる)。
+
+以下のコマンドは、デバッグビルド(開発版)のapplicationId`net.niigo.scitl.dev`で書く。リリースのAPK
+(`release-build`スキル7節)を確かめるときは`net.niigo.scitl`に読み替える。Kotlinのクラスの場所は
+`net.niigo.scitl`のままなので、`am start`ではActivityを完全な名前で書く(`.MainActivity`と略すと
+`net.niigo.scitl.dev.MainActivity`を探す)。
 
 ### APKを作って入れる(既定)
 
@@ -65,10 +70,10 @@ APKが残っていると、直したはずの箇所を古いまま見ること�
 npm --prefix ../../frontend ci && npm ci
 npx tauri android build --debug --apk --target x86_64
 adb -s emulator-5556 install -r gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-adb -s emulator-5556 shell am start -n net.niigo.scitl/.MainActivity
+adb -s emulator-5556 shell am start -n net.niigo.scitl.dev/net.niigo.scitl.MainActivity
 ```
 
-同じAPKを2台へ入れられる。入れ直してもアプリのデータは残る(消すなら`adb shell pm clear net.niigo.scitl`)。
+同じAPKを2台へ入れられる。入れ直してもアプリのデータは残る(消すなら`adb shell pm clear net.niigo.scitl.dev`)。
 
 ### 開発サーバーの画面を読む(`tauri android dev`)
 
@@ -83,7 +88,7 @@ npx tauri android dev Small_Phone_API_37
   Rust側から開発サーバーへ中継する(遷移の判定はこれを通す。`architecture/webview-boundary.md`「Android」)。
   HMRはViteのクライアントが`ws://localhost:1420`へ直接つなぎ直して効く(コンソールに`[vite] connected.`)
 - 開発サーバーのポートは1つなので、同時に読めるのは1台だけ
-- 止めたら`adb reverse --remove-all`。入ったのは開発用のAPKなので、APKの確認に戻るときは入れ直す
+- 止めたら`adb reverse --remove-all`。入ったのは開発サーバーを読むAPKなので、APKの確認に戻るときは入れ直す
 
 ## 4. 撮る・触る・測る
 
@@ -112,13 +117,13 @@ adb -s emulator-5556 shell input swipe 5 640 500 640 300        # 左端から�
   `adb shell dumpsys input_method | grep mInputShown`
 - `input text`は英数字だけを送れる(空白は`%s`)。日本語の変換・確定のEnterは確かめられないので実機で見る
 - ジェスチャーナビゲーションでは、画面の左右の端からのスワイプはOSの「戻る」にも取られる
-- `adb shell am kill net.niigo.scitl`は裏にあるプロセスを終わらせるが、最近使ったアプリの一覧の
+- `adb shell am kill net.niigo.scitl.dev`は裏にあるプロセスを終わらせるが、最近使ったアプリの一覧の
   タスクは残る。次に起動するとそのタスクを使い回すので、起点のIntentは最初に起動したときのままに
   なる。タスクごと無い状態から起動を試すときは、先に`adb shell am stack list`でタスクのIDを見て
   `adb shell am stack remove <ID>`で消す(`am force-stop`はアプリの通知も消す)
 - 通知を押すときは`adb shell cmd statusbar expand-notifications`でシェードを開き、撮ってから位置を決める
 - Tauriを更新したら、いちばん上の画面での「戻る」でプロセスが残るかを、タスクごと無い状態から
-  `am start`で起動して確かめる(`am stack remove`のあと`am start`→「戻る」→`pidof net.niigo.scitl`)。
+  `am start`で起動して確かめる(`am stack remove`のあと`am start`→「戻る」→`pidof net.niigo.scitl.dev`)。
   残るのは`MainActivity.onBackPressed`の上書きによるもので、Tauri本体のAppPluginがこれを呼ぶ実装に
   頼っている(`docs/spec/ui.md`「戻る」)
 
@@ -128,7 +133,7 @@ adb -s emulator-5556 shell input swipe 5 640 500 640 300        # 左端から�
 `cdp-eval.mjs`はリポジトリ直下から呼ぶ形で書く。
 
 ```sh
-P=$(adb -s emulator-5556 shell pidof net.niigo.scitl | tr -d '\r')
+P=$(adb -s emulator-5556 shell pidof net.niigo.scitl.dev | tr -d '\r')
 adb -s emulator-5556 forward tcp:9223 localabstract:webview_devtools_remote_$P
 curl -s localhost:9223/json                 # 画面のURL。空なら読み込めていない
 node .claude/skills/android-check/cdp-eval.mjs 9223 \
@@ -142,7 +147,7 @@ node .claude/skills/android-check/cdp-eval.mjs 9223 \
   (API 37のエミュレーターでは上24px・下24px)
 - 人が見るときは、デスクトップのChromeの`chrome://inspect/#devices`に同じWebViewが出る
 - Tauri・wryを更新したら、画面からカメラ・マイクを使えないことを確かめる。アプリにカメラを許可して
-  (`adb shell pm grant net.niigo.scitl android.permission.CAMERA`)起動し、
+  (`adb shell pm grant net.niigo.scitl.dev android.permission.CAMERA`)起動し、
   `'(async () => { try { await navigator.mediaDevices.getUserMedia({ video: true }); return "GRANTED" } catch (e) { return e.name } })()'`
   が`NotAllowedError`になること(`audio: true`も同じ)。`GRANTED`なら`MainActivity`の包み
   (`GuardedChromeClient`)が外れている(`docs/spec/architecture/webview-boundary.md`「Android」)
@@ -155,7 +160,10 @@ node .claude/skills/android-check/cdp-eval.mjs 9223 \
 
 1. 端末の「開発者向けオプション」で「USBデバッグ」を有効にし、USBでつなぐ。`adb devices`に出て
    `device`になれば済み(`unauthorized`なら端末側で許可する)
-2. `npx tauri android build --debug --apk --target aarch64`で作り、`adb -s <シリアル> install -r`で入れる
+2. `npx tauri android build --debug --apk --target aarch64`で作り、`adb -s <シリアル> install -r`で入れる。
+   開発版なので、リリース版を入れた端末にもそのまま入る。デバッグ用の鍵は機械ごとに作られるので、
+   別の機械でビルドした開発版は上書きできない。`adb uninstall net.niigo.scitl.dev`してから入れる
+   (開発版のデータは消える)
 3. 撮る・測るは4節と同じ(`-s`に実機のシリアルを渡す)。押す・打つは手で行う
 
 実機での`tauri android dev`(`npx tauri android dev <モデル名>`)は確かめていない。
