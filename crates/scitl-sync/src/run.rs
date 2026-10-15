@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use scitl_core::db::messages::Chat;
 use scitl_core::i18n::{self, Language};
-use scitl_core::in_flight::{InFlightSet, StopSignal};
+use scitl_core::in_flight::{InFlightSet, Occupied, StopSignal};
 use scitl_core::qr_scan::ScanError;
 use scitl_core::{blocking, db, text};
 
@@ -34,12 +34,41 @@ pub struct SyncDialog {
     pub cancel_label: String,
 }
 
-/// 画面へ知らせる途中経過。数字を含むので`Debug`を持たない(ログに出さない)。
+/// 始める前の確認のダイアログの答え。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogAnswer {
+    Confirmed,
+    Declined,
+    /// 出せなかった(別のダイアログが出ている等)。
+    NotShown,
+}
+
+/// 画面へ知らせる途中経過と、その時点で止められるか。画面は`stoppable`が偽の間は「戻る」を出さない。
+/// 数字を含むので`Debug`を持たない(ログに出さない)。
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct SyncEvent {
+    pub stoppable: bool,
+    #[serde(flatten)]
+    pub progress: SyncProgress,
+}
+
+impl From<SyncProgress> for SyncEvent {
+    fn from(progress: SyncProgress) -> Self {
+        Self {
+            stoppable: progress.stoppable(),
+            progress,
+        }
+    }
+}
+
+/// 途中経過。
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum SyncEvent {
-    /// 待ち受けを始めた。相手の端末で打つアドレス(候補のすべて)と数字と、同じものを読ませるQR。
+pub enum SyncProgress {
+    /// 待ち受けを始めた。相手の端末で打つアドレス(候補のすべて)と、読み上げやすく区切った数字と、
+    /// 同じものを読ませるQR。
     Listening {
         addresses: Vec<String>,
         code: String,
@@ -53,6 +82,20 @@ pub enum SyncEvent {
     Conflicts { conflicts: Vec<ConflictView> },
     /// 書き始める段に入った。ここからは止められない。
     Finishing,
+}
+
+impl SyncProgress {
+    /// 止める指示を受け付けるか。書き始めたあとに止めると、書き終えたのに止めたように見えるので、
+    /// 止めない(`transfer::sync`)。
+    fn stoppable(&self) -> bool {
+        match self {
+            Self::Listening { .. }
+            | Self::Syncing
+            | Self::PeerChoosing
+            | Self::Conflicts { .. } => true,
+            Self::Finishing => false,
+        }
+    }
 }
 
 /// 同期の結果。失敗は種類([`SyncError::kind`])と、英語の診断文。
@@ -136,7 +179,7 @@ impl<E: Fn(SyncEvent) + Sync> Resolver for Ask<'_, E> {
             ids: conflicts.iter().map(|c| c.id.clone()).collect(),
             reply,
         });
-        (self.events)(SyncEvent::Conflicts { conflicts });
+        (self.events)(SyncProgress::Conflicts { conflicts }.into());
         Box::pin(async move { chosen.await.ok() })
     }
 }
@@ -144,7 +187,7 @@ impl<E: Fn(SyncEvent) + Sync> Resolver for Ask<'_, E> {
 /// 待ち受けて、つないできた相手と同期する。
 pub async fn listen(
     request: Request<'_>,
-    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    confirm: impl FnOnce(&SyncDialog) -> DialogAnswer + Send + 'static,
     events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
     let dialog = SyncDialog {
@@ -171,18 +214,21 @@ pub async fn listen(
             let (device_id, session) = cancellable(&stop, async {
                 let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
                 let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
-                events(SyncEvent::Listening {
-                    addresses: listener
-                        .addresses()
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect(),
-                    code: listener.code().as_str().to_string(),
-                    qr: invitation::modules(&invitation::encode(
-                        listener.addresses(),
-                        listener.code(),
-                    )),
-                });
+                events(
+                    SyncProgress::Listening {
+                        addresses: listener
+                            .addresses()
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect(),
+                        code: listener.code().spaced(),
+                        qr: invitation::modules(&invitation::encode(
+                            listener.addresses(),
+                            listener.code(),
+                        )),
+                    }
+                    .into(),
+                );
                 Ok((device_id, listener.accept(local_versions()).await?))
             })
             .await?;
@@ -197,7 +243,7 @@ pub async fn connect_to(
     request: Request<'_>,
     address: &str,
     code: &str,
-    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    confirm: impl FnOnce(&SyncDialog) -> DialogAnswer + Send + 'static,
     events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
     match parse_peer_address(address).and_then(|a| Ok((a, PairingCode::parse(code)?))) {
@@ -219,7 +265,7 @@ pub async fn connect_to(
 pub async fn connect_scanned(
     request: Request<'_>,
     scan: impl std::future::Future<Output = Result<Option<String>, ScanError>>,
-    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    confirm: impl FnOnce(&SyncDialog) -> DialogAnswer + Send + 'static,
     events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
     let target = async {
@@ -233,7 +279,7 @@ pub async fn connect_scanned(
 async fn connect_with(
     request: Request<'_>,
     target: impl std::future::Future<Output = Result<(Vec<SocketAddr>, PairingCode), SyncError>>,
-    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    confirm: impl FnOnce(&SyncDialog) -> DialogAnswer + Send + 'static,
     events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
     let lang = request.lang;
@@ -281,12 +327,15 @@ async fn sync_over(
     answers: &ConflictAnswers,
     events: &(impl Fn(SyncEvent) + Sync),
 ) -> Result<Outcome, SyncError> {
-    events(SyncEvent::Syncing);
+    events(SyncProgress::Syncing.into());
     let stage = |stage| {
-        events(match stage {
-            Stage::PeerChoosing => SyncEvent::PeerChoosing,
-            Stage::Finishing => SyncEvent::Finishing,
-        })
+        events(
+            match stage {
+                Stage::PeerChoosing => SyncProgress::PeerChoosing,
+                Stage::Finishing => SyncProgress::Finishing,
+            }
+            .into(),
+        )
     };
     let ask = Ask { answers, events };
     let outcome = sync(&mut session, ctx, device_id, stop, stage, &ask).await;
@@ -313,15 +362,17 @@ async fn run<'c, T, F, Fut>(
     request: Request<'c>,
     target: impl std::future::Future<Output = Result<T, SyncError>>,
     dialog: impl FnOnce(&T) -> SyncDialog,
-    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    confirm: impl FnOnce(&SyncDialog) -> DialogAnswer + Send + 'static,
     sync: F,
 ) -> SyncReport
 where
     F: FnOnce(&'c Context, StopSignal, T) -> Fut,
     Fut: std::future::Future<Output = Result<Outcome, SyncError>>,
 {
-    let Some(all) = request.generating.try_begin_all() else {
-        return Err(SyncError::Busy).into();
+    let all = match request.generating.try_begin_all() {
+        Ok(all) => all,
+        Err(Occupied::Some) => return Err(SyncError::Generating).into(),
+        Err(Occupied::All) => return Err(SyncError::AlreadySyncing).into(),
     };
     let target = match cancellable(all.stop_signal(), target).await {
         Ok(target) => target,
@@ -329,8 +380,9 @@ where
     };
     let dialog = dialog(&target);
     match blocking::run(move || Ok(confirm(&dialog))).await {
-        Ok(true) => {}
-        Ok(false) => return SyncReport::Cancelled,
+        Ok(DialogAnswer::Confirmed) => {}
+        Ok(DialogAnswer::Declined) => return SyncReport::Cancelled,
+        Ok(DialogAnswer::NotShown) => return Err(SyncError::DialogUnavailable).into(),
         Err(e) => return Err(SyncError::Core(e)).into(),
     }
     if all.stop_signal().is_requested() {
@@ -405,7 +457,9 @@ mod tests {
             SyncError::InvalidInvitation,
             SyncError::Scan(ScanError::CameraDenied),
             SyncError::Scan(ScanError::Unavailable(String::new())),
-            SyncError::Busy,
+            SyncError::Generating,
+            SyncError::AlreadySyncing,
+            SyncError::DialogUnavailable,
             SyncError::Cancelled,
         ];
         for e in &all {
@@ -434,7 +488,9 @@ mod tests {
                 | SyncError::InvalidCode
                 | SyncError::InvalidInvitation
                 | SyncError::Scan(_)
-                | SyncError::Busy
+                | SyncError::Generating
+                | SyncError::AlreadySyncing
+                | SyncError::DialogUnavailable
                 | SyncError::Cancelled => {}
             }
         }
@@ -448,14 +504,14 @@ mod tests {
             .into_iter()
             .filter(|e| !matches!(e, SyncError::Cancelled))
         {
-            let key = format!("settings.sync.error.{}", e.kind());
+            let key = format!("{}{}", crate::error::MESSAGE_KEY_PREFIX, e.kind());
             for lang in Language::ALL {
                 assert_ne!(i18n::text(lang, &key), key, "{key} in {lang:?}");
             }
         }
     }
 
-    fn no_dialog(_: &SyncDialog) -> bool {
+    fn no_dialog(_: &SyncDialog) -> DialogAnswer {
         panic!("the dialog must not be shown")
     }
 
@@ -496,7 +552,7 @@ mod tests {
         };
         let report = listen(request, no_dialog, |_| {}).await;
         assert!(
-            matches!(&report, SyncReport::Failed { kind, .. } if kind == "busy"),
+            matches!(&report, SyncReport::Failed { kind, .. } if kind == "generating"),
             "{report:?}"
         );
     }
@@ -516,7 +572,7 @@ mod tests {
         let scan = async { panic!("the scanner must not be opened") };
         let report = connect_scanned(request, scan, no_dialog, |_| {}).await;
         assert!(
-            matches!(&report, SyncReport::Failed { kind, .. } if kind == "busy"),
+            matches!(&report, SyncReport::Failed { kind, .. } if kind == "generating"),
             "{report:?}"
         );
     }
@@ -588,9 +644,80 @@ mod tests {
             answers: &ConflictAnswers::default(),
             lang: Language::DEFAULT,
         };
-        let report = listen(request, |_| false, |e| events.lock().unwrap().push(e)).await;
+        let report = listen(
+            request,
+            |_| DialogAnswer::Declined,
+            |e| events.lock().unwrap().push(e),
+        )
+        .await;
         assert_eq!(report, SyncReport::Cancelled);
         assert!(events.lock().unwrap().is_empty());
         assert!(generating.try_begin(Chat::General).is_some());
+    }
+
+    /// 出せなかったことは、取りやめと分けて失敗で返す。
+    #[tokio::test]
+    async fn a_dialog_that_cannot_be_shown_fails_and_lets_chats_run_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            answers: &ConflictAnswers::default(),
+            lang: Language::DEFAULT,
+        };
+        let report = listen(request, |_| DialogAnswer::NotShown, |_| {}).await;
+        assert!(
+            matches!(&report, SyncReport::Failed { kind, .. } if kind == "dialog_unavailable"),
+            "{report:?}"
+        );
+        assert!(generating.try_begin(Chat::General).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_second_sync_does_not_start_while_one_is_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let _syncing = generating.try_begin_all().unwrap();
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            answers: &ConflictAnswers::default(),
+            lang: Language::DEFAULT,
+        };
+        let report = listen(request, no_dialog, |_| {}).await;
+        assert!(
+            matches!(&report, SyncReport::Failed { kind, .. } if kind == "already_syncing"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn only_the_writing_stage_cannot_be_stopped() {
+        let event = |progress: SyncProgress| SyncEvent::from(progress).stoppable;
+        assert!(event(SyncProgress::Syncing));
+        assert!(event(SyncProgress::PeerChoosing));
+        assert!(event(SyncProgress::Conflicts {
+            conflicts: Vec::new()
+        }));
+        assert!(!event(SyncProgress::Finishing));
+    }
+
+    /// 画面と写し合う値を、ts-rsの生成物と同じ置き場所(`frontend/src/bindings/`)へ書き出す
+    /// (`scitl_core`の`i18n::tests::export_shared_constants`と同じ扱い)。
+    #[test]
+    fn export_sync_constants() {
+        let dir = std::env::var("TS_RS_EXPORT_DIR").expect("set in .cargo/config.toml");
+        let body = format!(
+            "// This file was generated by a test in scitl-sync (`run::tests::export_sync_constants`). Do not edit this file manually.\n\
+             \n\
+             /** 同期の失敗の文言のキーの前置き(`error::MESSAGE_KEY_PREFIX`)。 */\n\
+             export const SYNC_ERROR_KEY_PREFIX = {};\n",
+            serde_json::to_string(crate::error::MESSAGE_KEY_PREFIX).unwrap(),
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(std::path::Path::new(&dir).join("SyncConstants.ts"), body).unwrap();
     }
 }

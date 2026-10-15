@@ -86,15 +86,18 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
 
     /// 処理中の対象が1つも無ければ全体を押さえ、ガードを返す。押さえている間は、どの対象も
     /// [`try_begin`](Self::try_begin)できない(同期の間、送信・編集・タスクの操作を受け付けない。
-    /// `docs/sync/index.md` 4節)。処理中の対象があるか、既に押さえていれば`None`。
-    pub fn try_begin_all(&self) -> Option<InFlightAll<'_, K>> {
+    /// `docs/sync/index.md` 4節)。押さえられなければ、その理由。
+    pub fn try_begin_all(&self) -> Result<InFlightAll<'_, K>, Occupied> {
         let mut entries = self.lock();
-        if entries.all.is_some() || !entries.keys.is_empty() {
-            return None;
+        if entries.all.is_some() {
+            return Err(Occupied::All);
+        }
+        if !entries.keys.is_empty() {
+            return Err(Occupied::Some);
         }
         let (sender, receiver) = watch::channel(false);
         entries.all = Some(sender);
-        Some(InFlightAll {
+        Ok(InFlightAll {
             set: self,
             stop: StopSignal(receiver),
         })
@@ -114,6 +117,15 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
     fn lock(&self) -> std::sync::MutexGuard<'_, Entries<K>> {
         self.entries.lock().expect("in-flight set mutex poisoned")
     }
+}
+
+/// 全体を押さえられなかった理由([`InFlightSet::try_begin_all`])。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Occupied {
+    /// 処理中の対象がある。
+    Some,
+    /// 既に全体を押さえている。
+    All,
 }
 
 /// 全体を押さえている間持つガード([`InFlightSet::try_begin_all`])。
@@ -335,11 +347,15 @@ mod tests {
     fn holding_everything_waits_for_none_and_keeps_others_out() {
         let set = InFlightSet::new();
         let one = set.try_begin(1).unwrap();
-        assert!(set.try_begin_all().is_none(), "処理中があれば押さえない");
+        assert_eq!(
+            set.try_begin_all().err(),
+            Some(Occupied::Some),
+            "処理中があれば押さえない"
+        );
         drop(one);
         let all = set.try_begin_all().unwrap();
         assert!(set.try_begin(1).is_none());
-        assert!(set.try_begin_all().is_none());
+        assert_eq!(set.try_begin_all().err(), Some(Occupied::All));
         assert!(set.request_stop_all());
         assert!(all.stop_signal().is_requested());
         drop(all);

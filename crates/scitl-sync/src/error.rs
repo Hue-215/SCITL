@@ -69,16 +69,26 @@ pub enum SyncError {
     /// QRを読めなかった(カメラを使えない等)。
     #[error(transparent)]
     Scan(#[from] scitl_core::qr_scan::ScanError),
-    /// 応答を生成中の会話があるか、別の同期の最中。
-    #[error("a response is being generated or another sync is running")]
-    Busy,
+    /// 応答を生成中の会話がある。
+    #[error("a response is being generated")]
+    Generating,
+    /// 別の同期の最中。
+    #[error("another sync is running")]
+    AlreadySyncing,
+    /// 始める前の確認のダイアログを出せなかった(別のダイアログが出ている)。
+    #[error("could not show the confirmation dialog")]
+    DialogUnavailable,
     /// 止める指示で止めた。
     #[error("stopped")]
     Cancelled,
 }
 
+/// 同期の失敗の文言のキーの前置き(言語ファイルの`settings.sync.error.{種類}`)。画面は
+/// [`SyncError::kind`]を付けて引く。
+pub const MESSAGE_KEY_PREFIX: &str = "settings.sync.error.";
+
 impl SyncError {
-    /// 画面が文言を引く種類(`settings.sync.error.{種類}`)。
+    /// 画面が文言を引く種類([`MESSAGE_KEY_PREFIX`]に付ける)。
     pub fn kind(&self) -> &'static str {
         match self {
             Self::AddressNotAllowed(_) => "invalid_address",
@@ -108,7 +118,9 @@ impl SyncError {
             Self::PeerRefused(AbortReason::Mismatch) => "peer_mismatch",
             Self::PeerRefused(AbortReason::Cancelled) => "peer_cancelled",
             Self::PeerRefused(AbortReason::Failed) => "peer_failed",
-            Self::Busy => "busy",
+            Self::Generating => "generating",
+            Self::AlreadySyncing => "already_syncing",
+            Self::DialogUnavailable => "dialog_unavailable",
             Self::Cancelled => "cancelled",
             Self::Core(_) => "internal",
         }
