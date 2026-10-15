@@ -61,7 +61,8 @@ APKが残っていると、直したはずの箇所を古いまま見ること�
 
 デバッグビルドは開発版(`net.niigo.scitl.dev`)として入る(`docs/spec/architecture/tech-stack.md`
 「Androidのビルド」)。以下のコマンドはその識別子で書く。リリースのAPK(`release-build`スキル7節)を
-確かめるときは`net.niigo.scitl`に読み替える。
+確かめるときは`net.niigo.scitl`に読み替える。Kotlinのクラスの場所は`net.niigo.scitl`のままなので、
+`am start`ではActivityを完全な名前で書く(`.MainActivity`と略すと`net.niigo.scitl.dev.MainActivity`を探す)。
 
 ### APKを作って入れる(既定)
 
@@ -160,6 +161,9 @@ node .claude/skills/android-check/cdp-eval.mjs 9223 \
 1. 端末の「開発者向けオプション」で「USBデバッグ」を有効にし、USBでつなぐ。`adb devices`に出て
    `device`になれば済み(`unauthorized`なら端末側で許可する)
 2. `npx tauri android build --debug --apk --target aarch64`で作り、`adb -s <シリアル> install -r`で入れる
+   (APKを端末へ送って開いてもよい)。開発版なので、リリース版を入れた端末にもそのまま入る。デバッグ用の
+   鍵は機械ごとに作られるので、別の機械でビルドした開発版は上書きできない。開発版をアンインストール
+   してから入れる(開発版のデータは消える)
 3. 撮る・測るは4節と同じ(`-s`に実機のシリアルを渡す)。押す・打つは手で行う
 
 実機での`tauri android dev`(`npx tauri android dev <モデル名>`)は確かめていない。
