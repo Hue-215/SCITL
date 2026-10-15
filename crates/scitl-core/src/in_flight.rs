@@ -93,7 +93,7 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
             return Err(Occupied::All);
         }
         if !entries.keys.is_empty() {
-            return Err(Occupied::Some);
+            return Err(Occupied::Keys);
         }
         let (sender, receiver) = watch::channel(false);
         entries.all = Some(sender);
@@ -123,7 +123,7 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Occupied {
     /// 処理中の対象がある。
-    Some,
+    Keys,
     /// 既に全体を押さえている。
     All,
 }
@@ -349,7 +349,7 @@ mod tests {
         let one = set.try_begin(1).unwrap();
         assert_eq!(
             set.try_begin_all().err(),
-            Some(Occupied::Some),
+            Some(Occupied::Keys),
             "処理中があれば押さえない"
         );
         drop(one);

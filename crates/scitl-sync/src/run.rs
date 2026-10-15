@@ -371,7 +371,7 @@ where
 {
     let all = match request.generating.try_begin_all() {
         Ok(all) => all,
-        Err(Occupied::Some) => return Err(SyncError::Generating).into(),
+        Err(Occupied::Keys) => return Err(SyncError::Generating).into(),
         Err(Occupied::All) => return Err(SyncError::AlreadySyncing).into(),
     };
     let target = match cancellable(all.stop_signal(), target).await {

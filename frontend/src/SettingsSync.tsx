@@ -282,6 +282,8 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   // 止められるか(Rust側が途中経過に載せて知らせる)。最初の途中経過が届くまでは止められる。
   const [stoppable, setStoppable] = useState(true)
   const [conflicts, setConflicts] = useState<ConflictView[] | null>(null)
+  // 最後に届いた競合。選んで送ったときに、そのあと次の競合が届いていないかを見る。
+  const latestConflicts = useRef<ConflictView[] | null>(null)
   // 競合が届くたびに増やし、選び直し(確定をやり直したとき)を最初の1件から始める。
   const [conflictRound, setConflictRound] = useState(0)
   const [result, setResult] = useState<SyncReport | null>(null)
@@ -310,11 +312,13 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
         setListening({ addresses: event.addresses, code: event.code, qr: event.qr })
         break
       case 'conflicts':
+        latestConflicts.current = event.conflicts
         setConflicts(event.conflicts)
         setConflictRound((n) => n + 1)
         break
       default:
         setListening(null)
+        latestConflicts.current = null
         setConflicts(null)
         setStage(event.type)
     }
@@ -335,6 +339,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       setRunning(null)
       setListening(null)
       setStage(null)
+      latestConflicts.current = null
       setConflicts(null)
     }
     // 止めたときは入力の画面へ戻る。
@@ -431,8 +436,14 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
         key={conflictRound}
         conflicts={conflicts}
         stopButton={stopButton}
-        // 送ったあとに次の競合(確定をやり直したとき)が届いていれば、そちらを残す。
-        onDone={(sent) => setConflicts((c) => (c === sent ? null : c))}
+        // 送ったあとに次の競合(確定をやり直したとき)が届いていれば、そちらを残す。届いていなければ、
+        // Rust側は選んだ直後に書き込みへ進むので、その段が届くまでも止めない。
+        onDone={(sent) => {
+          if (latestConflicts.current !== sent) return
+          latestConflicts.current = null
+          setConflicts(null)
+          setStoppable(false)
+        }}
       />
     )
   }
