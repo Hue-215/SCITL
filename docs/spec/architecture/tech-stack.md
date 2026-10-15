@@ -84,6 +84,18 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
   タグ`RustStdoutStderr`でlogcatに出るので、`adb logcat -s SCITL RustStdoutStderr`で両方を読む
   (`sanitize.md`「無害化」の表の下)
 
+デバッグビルド(`--debug`・`tauri android dev`)は、開発版(識別子`net.niigo.scitl.dev`、ランチャーの名前
+「SCITL Dev」)として入り、リリース版(`net.niigo.scitl`)と並べて入れられる。データと登録(秘密情報を含む)は
+リリース版と別に持つ。識別子の接尾辞は`tauri.conf.json`の`bundle.android.debugApplicationIdSuffix`に書く
+(tauri-cliがビルドのたびに`build.gradle.kts`へ書き写す)。名前は`gen/android/app/src/debug`の`strings.xml`で置き換える。
+Kotlinのクラスの場所(`namespace`)は`net.niigo.scitl`のままなので、`adb shell am start`ではActivityを
+`net.niigo.scitl.dev/net.niigo.scitl.MainActivity`と書く。
+
+実機に開発版を入れるときは、`npx tauri android build --debug --apk --target aarch64`で作り、
+`gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`を`adb install -r`で入れる
+(APKを端末へ送って開いてもよい)。デバッグ用の鍵は機械ごとに作られるので、別の機械でビルドした開発版は
+上書きできない。開発版をアンインストールしてから入れる(開発版のデータは消える)。
+
 配布するAPK(署名したリリースビルド)の作り方、署名の鍵の扱い、版(`versionCode`)の決まり方は
 `.claude/skills/release-build` 7節。リリースビルドはR8が使われていないクラスを消すので、RustからJNIで
 呼ぶクラスを足したら`gen/android/app/proguard-rules.pro`に残す指定を書く(デバッグビルドでは気付けない)。

@@ -228,9 +228,9 @@ keytool -genkeypair -keystore <置き場所>/scitl-release.p12 -storetype PKCS12
 keytool -list -v -keystore <置き場所>/scitl-release.p12 -alias scitl | grep SHA256   # 指紋
 ```
 
-デバッグビルド(`tauri android build --debug`)は、機械ごとに作られるデバッグ用の鍵で署名される。
-本番の鍵とは別なので、デバッグビルドを入れてある端末にリリースのAPKは上書きできない(逆も同じ。
-`INSTALL_FAILED_UPDATE_INCOMPATIBLE`)。先に`adb uninstall net.niigo.scitl`する(データは消える)。
+デバッグビルド(`tauri android build --debug`)は、機械ごとに作られるデバッグ用の鍵で署名され、別のアプリ
+(開発版、`net.niigo.scitl.dev`)として入るので、リリースのAPKと並べて入れられる
+(`docs/spec/architecture/tech-stack.md`「Androidのビルド」)。
 
 ### 実行する
 
@@ -307,7 +307,7 @@ bashで実行する(zshの`read -p`は別の意味になる)。`read`は1行ず�
 
 ```sh
 aapt2 dump badging <apk> | head -3        # versionCode・versionName・minSdk・targetSdk
-adb install <apk>                         # 上書きなら -r。デバッグビルドが入っていれば先にアンインストールする
+adb install <apk>                         # 上書きなら -r
 adb logcat -s SCITL RustStdoutStderr AndroidRuntime
 ```
 
