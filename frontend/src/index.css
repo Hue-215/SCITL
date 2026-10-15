@@ -1742,6 +1742,12 @@ details[open] > summary > .disclosure-mark,
   text-align: center;
 }
 
+/* 入力の画面は、上下だけ中央に寄せる(欄は左揃えのまま)。 */
+.sync-screen-body.middle {
+  min-height: 100%;
+  justify-content: safe center;
+}
+
 /* 競合の画面は、両側の枠を高さいっぱいに分け合う。 */
 .sync-screen-body.fill {
   height: 100%;
@@ -1774,12 +1780,13 @@ details[open] > summary > .disclosure-mark,
   font-family: var(--font-family-mono);
 }
 
-.sync-listen-instead {
-  display: flex;
-  flex-direction: column;
+/* 入力欄の下に並べるボタン(コードを発行する・QRを読み取る)。同じ幅で分け合い、1つだけ(カメラの
+   無い端末)なら行の幅いっぱいにする。 */
+.sync-alt-actions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--space-2);
-  border-top: var(--border-width) solid var(--color-border);
-  padding-top: var(--space-4);
 }
 
 /* 待ち受けのQR。画面の色によらず白地に黒で描く(読み取りに要る)。 */

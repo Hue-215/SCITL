@@ -129,7 +129,8 @@ function SideContent({ side, kind }: { side: ConflictSide; kind: ConflictView['k
 }
 
 // 同期の画面の1枚。見出しの帯・本文・下のボタンの行。情報の少ない画面(`centered`)は本文を
-// 上下左右の中央に寄せる。競合の画面(`fill`)は本文を高さいっぱいに広げる。
+// 上下左右の中央に、入力の画面(`middle`)は上下だけ中央に寄せる。競合の画面(`fill`)は本文を
+// 高さいっぱいに広げる。
 function SyncPage({
   title,
   aside,
@@ -139,7 +140,7 @@ function SyncPage({
 }: {
   title: string
   aside?: string
-  layout?: 'centered' | 'fill'
+  layout?: 'centered' | 'middle' | 'fill'
   actions?: ReactNode
   children: ReactNode
 }) {
@@ -275,7 +276,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   const [conflicts, setConflicts] = useState<ConflictView[] | null>(null)
   // 競合が届くたびに増やし、選び直し(確定をやり直したとき)を最初の1件から始める。
   const [conflictRound, setConflictRound] = useState(0)
-  const [result, setResult] = useState<{ role: Running; report: SyncReport } | null>(null)
+  const [result, setResult] = useState<SyncReport | null>(null)
   const [inputError, setInputError] = useState<Failure | null>(null)
   const [address, setAddress] = useState('')
   const [code, setCode] = useState('')
@@ -332,7 +333,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       setInputError(report)
       return
     }
-    setResult({ role: which, report })
+    setResult(report)
   }
 
   const connect = (e: React.FormEvent) => {
@@ -340,9 +341,9 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     void start('connect', () => syncConnect(address, code, onEvent))
   }
 
-  // 数字が合わなかったら、同じ数字ではもうつなげないので、欄を空けておく。
+  // コードが合わなかったら、同じコードではもう接続できない(発行した側が捨てている)ので、欄を空けておく。
   const retry = () => {
-    if (result?.report.status === 'failed' && result.report.kind === 'code_mismatch') setCode('')
+    if (result?.status === 'failed' && result.kind === 'code_mismatch') setCode('')
     setResult(null)
   }
 
@@ -357,12 +358,12 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
 
   const stopButton = (
     <button type="button" onClick={() => void cancelSync()}>
-      {t('settings.sync.stop')}
+      {t('settings.sync.back')}
     </button>
   )
 
   if (result !== null) {
-    const { role, report } = result
+    const report = result
     if (report.status === 'synced') {
       const counts = [
         ['settings.sync.count_tasks', report.changed.tasks],
@@ -392,7 +393,6 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       )
     }
     if (report.status === 'failed') {
-      const mismatch = report.kind === 'code_mismatch'
       return (
         <SyncPage
           title={t('settings.sync.failed_heading')}
@@ -411,13 +411,6 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
           <p className="error" role="alert">
             {failureMessage(report)}
           </p>
-          {mismatch && role === 'connect' && (
-            <div>
-              <p>{t('settings.sync.mismatch_connect_hint')}</p>
-              <p className="settings-hint">{t('settings.sync.mismatch_connect_note')}</p>
-            </div>
-          )}
-          {mismatch && role === 'listen' && <p>{t('settings.sync.mismatch_listen_hint')}</p>}
           <p className="settings-hint">{isolated(report.detail)}</p>
         </SyncPage>
       )
@@ -438,7 +431,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
 
   if (running !== null && stage === 'finishing') {
     return (
-      <SyncPage title={t('settings.sync.writing')} layout="centered">
+      <SyncPage title={t('settings.sync.progress_heading')} layout="centered">
         <div>
           <p>{t('settings.sync.writing_message')}</p>
           <p className="settings-hint">{t('settings.sync.writing_hint')}</p>
@@ -449,26 +442,23 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
 
   if (running !== null && stage === 'peer_choosing') {
     return (
-      <SyncPage title={t('settings.sync.in_progress')} layout="centered" actions={stopButton}>
-        <div>
-          <p>{t('settings.sync.peer_choosing')}</p>
-          <p className="settings-hint">{t('settings.sync.peer_choosing_hint')}</p>
-        </div>
+      <SyncPage title={t('settings.sync.progress_heading')} layout="centered" actions={stopButton}>
+        <p>{t('settings.sync.peer_choosing')}</p>
       </SyncPage>
     )
   }
 
   if (running !== null && stage === 'syncing') {
     return (
-      <SyncPage title={t('settings.sync.in_progress')} layout="centered" actions={stopButton}>
-        <p>{t('settings.sync.merging')}</p>
+      <SyncPage title={t('settings.sync.progress_heading')} layout="centered" actions={stopButton}>
+        <p>{t('settings.sync.syncing')}</p>
       </SyncPage>
     )
   }
 
   if (running === 'listen' && listening !== null) {
     return (
-      <SyncPage title={t('settings.sync.listening')} layout="centered" actions={stopButton}>
+      <SyncPage title={t('settings.sync.listen_heading')} layout="centered" actions={stopButton}>
         <p>{t('settings.sync.listen_hint')}</p>
         <QrCode qr={listening.qr} />
         <button type="button" onClick={() => setShowCodes(true)}>
@@ -476,7 +466,6 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
         </button>
         {showCodes && (
           <Dialog title={t('settings.sync.codes_title')} onClose={() => setShowCodes(false)}>
-            <p>{t('settings.sync.codes_hint')}</p>
             <div className="settings-field">
               <span className="settings-hint">{t('settings.sync.address_label')}</span>
               <ul className="sync-addresses">
@@ -486,9 +475,6 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
                   </li>
                 ))}
               </ul>
-              {listening.addresses.length > 1 && (
-                <span className="settings-hint">{t('settings.sync.other_addresses_hint')}</span>
-              )}
             </div>
             <div className="settings-field">
               <span className="settings-hint">{t('settings.sync.code_label')}</span>
@@ -507,7 +493,13 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
 
   if (running !== null) {
     return (
-      <SyncPage title={t('settings.sync.in_progress')} layout="centered" actions={stopButton}>
+      <SyncPage
+        title={t(
+          running === 'listen' ? 'settings.sync.listen_heading' : 'settings.sync.progress_heading',
+        )}
+        layout="centered"
+        actions={stopButton}
+      >
         <p>
           {t(running === 'listen' ? 'settings.sync.preparing_listen' : 'settings.sync.connecting')}
         </p>
@@ -518,6 +510,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   return (
     <SyncPage
       title={t('settings.sync.connect_heading')}
+      layout="middle"
       actions={
         <>
           <button type="button" onClick={onClose}>
@@ -564,23 +557,21 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
             {failureMessage(inputError)}
           </p>
         )}
-        {canScan && (
-          <button
-            type="button"
-            onClick={() => void start('connect', () => syncConnectScanned(onEvent))}
-          >
-            {t('settings.sync.scan')}
-          </button>
-        )}
-      </form>
-      <div className="sync-listen-instead">
-        <p className="settings-hint">{t('settings.sync.listen_instead_hint')}</p>
-        <div className="button-row">
+        {/* カメラの無い端末では「QRを読み取る」を出さず、「コードを発行する」が行の幅を占める。 */}
+        <div className="sync-alt-actions">
           <button type="button" onClick={() => void start('listen', () => syncListen(onEvent))}>
             {t('settings.sync.listen')}
           </button>
+          {canScan && (
+            <button
+              type="button"
+              onClick={() => void start('connect', () => syncConnectScanned(onEvent))}
+            >
+              {t('settings.sync.scan')}
+            </button>
+          )}
         </div>
-      </div>
+      </form>
     </SyncPage>
   )
 }
