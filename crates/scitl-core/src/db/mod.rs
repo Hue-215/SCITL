@@ -30,6 +30,8 @@ const REPLY_PART_TRUNCATED_SQL: &str =
 const SYNC_COLUMNS_SQL: &str = include_str!("../../../../migrations/0011_sync_columns.sql");
 const MESSAGES_CHAT_ORDER_SQL: &str =
     include_str!("../../../../migrations/0012_messages_chat_order.sql");
+const SYNC_DEVICE_TOKEN_SQL: &str =
+    include_str!("../../../../migrations/0013_sync_device_token.sql");
 
 /// DBの列に文字列で持つ列挙。列の値との対応をここに1度だけ書き、書き込み(`ToSql`)と
 /// 読み出し(`FromSql`)を同じ対応から作る。値は列のCHECK制約と揃える。
@@ -138,6 +140,7 @@ const MIGRATIONS: &[&str] = &[
     REPLY_PART_TRUNCATED_SQL,
     SYNC_COLUMNS_SQL,
     MESSAGES_CHAT_ORDER_SQL,
+    SYNC_DEVICE_TOKEN_SQL,
 ];
 
 /// このビルドのDBの版(`user_version`)。同期の相手と版を伝え合うのに使う(`docs/sync/index.md` 3節)。
@@ -707,10 +710,13 @@ mod tests {
         }
         assert_eq!(sync_seq_of(&conn, "attachments", attachment), 1);
         assert_eq!(counter(&conn), 1);
-        let device_id: String = conn
-            .query_row("SELECT device_id FROM sync_state", [], |r| r.get(0))
+        let (device_id, token): (String, String) = conn
+            .query_row("SELECT device_id, device_token FROM sync_state", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         assert!(is_uid(&device_id), "{device_id}");
+        assert!(is_uid(&token) && token != "0".repeat(32), "{token}");
 
         let prev_uid = |id: i64| -> Option<String> {
             conn.query_row("SELECT prev_uid FROM messages WHERE id = ?1", [id], |r| {

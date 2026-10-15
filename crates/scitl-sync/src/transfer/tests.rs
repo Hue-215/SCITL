@@ -23,15 +23,18 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\nnot really a picture";
 
 /// 資格情報ストアの代わり。
 #[derive(Default)]
-struct Registry(Mutex<std::collections::HashSet<String>>);
+struct Registry(Mutex<std::collections::HashMap<String, String>>);
 
 impl crate::DeviceRegistry for Registry {
-    fn is_registered(&self, device_id: &str) -> Result<bool, scitl_core::CoreError> {
-        Ok(self.0.lock().unwrap().contains(device_id))
+    fn is_current(&self, device_id: &str, token: &str) -> Result<bool, scitl_core::CoreError> {
+        Ok(self.0.lock().unwrap().get(device_id).map(String::as_str) == Some(token))
     }
 
-    fn register(&self, device_id: &str) -> Result<(), scitl_core::CoreError> {
-        self.0.lock().unwrap().insert(device_id.to_string());
+    fn register(&self, device_id: &str, token: &str) -> Result<(), scitl_core::CoreError> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(device_id.to_string(), token.to_string());
         Ok(())
     }
 }

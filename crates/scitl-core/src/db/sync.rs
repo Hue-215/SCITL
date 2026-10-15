@@ -27,23 +27,59 @@ pub fn device_state(conn: &Connection) -> Result<DeviceState> {
     )?)
 }
 
-/// 端末IDを作り直す(`docs/sync/index.md` 10節)。それまでの版とカーソルはそのまま使える。
-pub fn renew_device_id(conn: &Connection) -> Result<String> {
+/// 端末IDと、資格情報ストアの端末IDの項目と同じ値(`docs/sync/index.md` 10節)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceToken {
+    pub device_id: String,
+    pub token: String,
+}
+
+pub fn device_token(conn: &Connection) -> Result<DeviceToken> {
     Ok(conn.query_row(
-        "UPDATE sync_state SET device_id = lower(hex(randomblob(16))) WHERE id = 1
-         RETURNING device_id",
+        "SELECT device_id, device_token FROM sync_state WHERE id = 1",
         [],
-        |row| row.get(0),
+        device_token_row,
     )?)
 }
 
-/// 端末IDを渡した値にする(作り直した端末IDの項目を資格情報ストアに書けなかったときに、元へ戻す)。
-pub fn set_device_id(conn: &Connection, device_id: &str) -> Result<()> {
+/// 項目の値を替える。`renew_id`なら端末IDも作り直す(それまでの版とカーソルはそのまま使える)。
+pub fn replace_device_token(conn: &Connection, renew_id: bool) -> Result<DeviceToken> {
+    Ok(conn.query_row(
+        "UPDATE sync_state
+         SET device_id = CASE WHEN ?1 THEN lower(hex(randomblob(16))) ELSE device_id END,
+             device_token = lower(hex(randomblob(16)))
+         WHERE id = 1
+         RETURNING device_id, device_token",
+        [renew_id],
+        device_token_row,
+    )?)
+}
+
+/// [`replace_device_token`]で`replaced`にしたものを、資格情報ストアに書けなかったときに`before`へ戻す。
+/// その後に別プロセスが替えていれば、そちらを残す。
+pub fn restore_device_token(
+    conn: &Connection,
+    before: &DeviceToken,
+    replaced: &DeviceToken,
+) -> Result<()> {
     conn.execute(
-        "UPDATE sync_state SET device_id = ?1 WHERE id = 1",
-        [device_id],
+        "UPDATE sync_state SET device_id = ?1, device_token = ?2
+         WHERE id = 1 AND device_id = ?3 AND device_token = ?4",
+        rusqlite::params![
+            before.device_id,
+            before.token,
+            replaced.device_id,
+            replaced.token
+        ],
     )?;
     Ok(())
+}
+
+fn device_token_row(row: &Row<'_>) -> rusqlite::Result<DeviceToken> {
+    Ok(DeviceToken {
+        device_id: row.get(0)?,
+        token: row.get(1)?,
+    })
 }
 
 /// 相手ごとのカーソル(`sync_cursors`)。`sent_seq`は相手へ渡した位置(自分の番号)、
@@ -221,10 +257,6 @@ pub fn transaction<T>(conn: &Connection, f: impl FnOnce(&Tx<'_>) -> Result<T>) -
 impl Tx<'_> {
     pub fn device_state(&self) -> Result<DeviceState> {
         device_state(self.conn)
-    }
-
-    pub fn renew_device_id(&self) -> Result<String> {
-        renew_device_id(self.conn)
     }
 
     pub fn cursor(&self, peer_device_id: &str) -> Result<Cursor> {

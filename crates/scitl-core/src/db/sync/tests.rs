@@ -130,12 +130,32 @@ fn the_highest_number_seen_of_a_device_comes_from_the_versions() {
 }
 
 #[test]
-fn the_device_id_can_be_renewed() {
+fn the_token_can_be_replaced_with_or_without_the_device_id() {
     let conn = db::open_in_memory().unwrap();
-    let before = device_state(&conn).unwrap();
-    let renewed = renew_device_id(&conn).unwrap();
-    assert_ne!(renewed, before.device_id);
-    assert_eq!(device_state(&conn).unwrap().device_id, renewed);
+    let before = device_token(&conn).unwrap();
+    let rotated = replace_device_token(&conn, false).unwrap();
+    assert_eq!(rotated.device_id, before.device_id);
+    assert_ne!(rotated.token, before.token);
+    let renewed = replace_device_token(&conn, true).unwrap();
+    assert_ne!(renewed.device_id, before.device_id);
+    assert_ne!(renewed.token, rotated.token);
+    assert_eq!(device_token(&conn).unwrap(), renewed);
+    assert_eq!(device_state(&conn).unwrap().device_id, renewed.device_id);
+}
+
+#[test]
+fn restoring_the_token_keeps_a_later_replacement() {
+    let conn = db::open_in_memory().unwrap();
+    let before = device_token(&conn).unwrap();
+    let replaced = replace_device_token(&conn, true).unwrap();
+    restore_device_token(&conn, &before, &replaced).unwrap();
+    assert_eq!(device_token(&conn).unwrap(), before);
+
+    // 別プロセスが替えたあとなら戻さない。
+    let replaced = replace_device_token(&conn, true).unwrap();
+    let later = replace_device_token(&conn, false).unwrap();
+    restore_device_token(&conn, &before, &replaced).unwrap();
+    assert_eq!(device_token(&conn).unwrap(), later);
 }
 
 #[test]
