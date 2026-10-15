@@ -109,7 +109,7 @@ SCITL/
 │   ├── scitl-debug-cli/            # scitl-cliのコマンドに、応答生成・設定・登録を足す
 │   ├── scitl-sync/                 # 端末間の同期の接続・やり取り(../sync/index.md)。DBへはscitl-coreを通す
 │   └── scitl-tauri/                # 薄いIPCシェル
-│       ├── tauri.conf.json         # CSP・devCsp・AndroidのminSdkと開発版の識別子
+│       ├── tauri.conf.json         # CSP・devCsp・AndroidのminSdkと開発版のapplicationIdの接尾辞
 │       ├── gen/android/            # Androidのプロジェクト(architecture/tech-stack.md「Androidのビルド」)
 │       └── src/commands/
 ├── frontend/                       # React + TypeScript + Vite。表示だけを持つ

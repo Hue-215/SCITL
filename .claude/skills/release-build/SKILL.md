@@ -228,8 +228,7 @@ keytool -genkeypair -keystore <置き場所>/scitl-release.p12 -storetype PKCS12
 keytool -list -v -keystore <置き場所>/scitl-release.p12 -alias scitl | grep SHA256   # 指紋
 ```
 
-デバッグビルド(`tauri android build --debug`)は、機械ごとに作られるデバッグ用の鍵で署名され、別のアプリ
-(開発版、`net.niigo.scitl.dev`)として入るので、リリースのAPKと並べて入れられる
+デバッグビルドは別のアプリ(開発版)として入るので、本番の鍵で署名したAPKと並べて入れられる
 (`docs/spec/architecture/tech-stack.md`「Androidのビルド」)。
 
 ### 実行する
