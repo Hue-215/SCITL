@@ -19,6 +19,7 @@ import type {
   SyncEvent,
   SyncReport,
 } from './types'
+import { SYNC_ERROR_KEY_PREFIX } from './bindings/SyncConstants'
 import Dialog from './Dialog'
 import { isolated, type MessageKey, t } from './i18n'
 import { useCloseOnBack } from './useCloseOnBack'
@@ -38,12 +39,7 @@ const INPUT_FAILURES = new Set([
 
 // 失敗の種類から文言を引く。英語の診断文は別に添える。
 function failureMessage(report: Failure): string {
-  return t(`settings.sync.error.${report.kind}` as MessageKey)
-}
-
-// 数字は3桁ずつに分けて出す(読み上げて打ちやすいように)。
-function spacedCode(code: string): string {
-  return `${code.slice(0, 3)} ${code.slice(3)}`
+  return t(`${SYNC_ERROR_KEY_PREFIX}${report.kind}` as MessageKey)
 }
 
 // 升目をSVGの1本の経路にする。周りに4升の余白を取る(読み取りに要る)。
@@ -281,9 +277,13 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   } | null>(null)
   const [showCodes, setShowCodes] = useState(false)
   const [canScan, setCanScan] = useState(false)
-  // 相手を確かめたあとの段。書き始めた段(`finishing`)は止められない。
+  // 相手を確かめたあとの段。
   const [stage, setStage] = useState<Stage | null>(null)
+  // 止められるか(Rust側が途中経過に載せて知らせる)。最初の途中経過が届くまでは止められる。
+  const [stoppable, setStoppable] = useState(true)
   const [conflicts, setConflicts] = useState<ConflictView[] | null>(null)
+  // 最後に届いた競合。選んで送ったときに、そのあと次の競合が届いていないかを見る。
+  const latestConflicts = useRef<ConflictView[] | null>(null)
   // 競合が届くたびに増やし、選び直し(確定をやり直したとき)を最初の1件から始める。
   const [conflictRound, setConflictRound] = useState(0)
   const [result, setResult] = useState<SyncReport | null>(null)
@@ -306,16 +306,19 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   // 途中経過と結果は別の経路で届くので、結果のあとに届いた途中経過は捨てる。
   const onEvent = (event: SyncEvent) => {
     if (!runningRef.current) return
+    setStoppable(event.stoppable)
     switch (event.type) {
       case 'listening':
         setListening({ addresses: event.addresses, code: event.code, qr: event.qr })
         break
       case 'conflicts':
+        latestConflicts.current = event.conflicts
         setConflicts(event.conflicts)
         setConflictRound((n) => n + 1)
         break
       default:
         setListening(null)
+        latestConflicts.current = null
         setConflicts(null)
         setStage(event.type)
     }
@@ -326,6 +329,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     setResult(null)
     setInputError(null)
     setShowCodes(false)
+    setStoppable(true)
     runningRef.current = true
     let report: SyncReport
     try {
@@ -335,6 +339,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       setRunning(null)
       setListening(null)
       setStage(null)
+      latestConflicts.current = null
       setConflicts(null)
     }
     // 止めたときは入力の画面へ戻る。
@@ -358,16 +363,13 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     setResult(null)
   }
 
-  // 書き始めたら止められない。確定をやり直して競合を選び直す間は、まだ書いていないので止められる。
-  const stoppable = running !== null && !(stage === 'finishing' && conflicts === null)
-
-  // Androidの「戻る」は、画面の「戻る」「やめる」「閉じる」と同じ。書いている間は何もしない。
+  // Androidの「戻る」は、画面の「戻る」「閉じる」と同じ。止められない間は何もしない。
   useCloseOnBack(true, () => {
     if (running === null) onClose()
     else if (stoppable) void cancelSync()
   })
 
-  const stopButton = (
+  const stopButton = stoppable && (
     <button type="button" onClick={() => void cancelSync()}>
       {t('settings.sync.back')}
     </button>
@@ -434,8 +436,14 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
         key={conflictRound}
         conflicts={conflicts}
         stopButton={stopButton}
-        // 送ったあとに次の競合(確定をやり直したとき)が届いていれば、そちらを残す。
-        onDone={(sent) => setConflicts((c) => (c === sent ? null : c))}
+        // 送ったあとに次の競合(確定をやり直したとき)が届いていれば、そちらを残す。届いていなければ、
+        // Rust側は選んだ直後に書き込みへ進むので、その段が届くまでも止めない。
+        onDone={(sent) => {
+          if (latestConflicts.current !== sent) return
+          latestConflicts.current = null
+          setConflicts(null)
+          setStoppable(false)
+        }}
       />
     )
   }
@@ -489,7 +497,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
             </div>
             <div className="settings-field">
               <span className="settings-hint">{t('settings.sync.code_label')}</span>
-              <code className="sync-code">{spacedCode(listening.code)}</code>
+              <code className="sync-code">{listening.code}</code>
             </div>
             <div className="button-row dialog-actions">
               <button type="button" onClick={() => setShowCodes(false)}>
