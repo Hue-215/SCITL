@@ -1708,6 +1708,13 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-5);
 }
 
+/* 同期の待ち受けのQR(SettingsSync.tsx)。画面の色によらず白地に黒で描く(読み取りに要る)。 */
+.sync-qr {
+  display: block;
+  width: min(100%, 240px);
+  height: auto;
+}
+
 /* 同期の競合(SettingsSync.tsx)。単位ごとの枠と、両側の選択肢は.provider-cardと同じく枠線だけで
    塗らない。選んだ側は枠の色で示す(選択状態はラジオボタン自身も持つ)。両側は幅が足りれば横に並べ、
    狭い窓では縦に積む。 */

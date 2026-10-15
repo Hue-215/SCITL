@@ -42,6 +42,31 @@ pub async fn sync_connect(
     .await)
 }
 
+/// カメラで待ち受ける側のQRを読み、その相手へつないで同期する。読み取りはRust側からOSに頼み、
+/// 読んだ中身は画面へ渡さない。
+#[tauri::command]
+pub async fn sync_connect_scanned(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    on_event: Channel<SyncEvent>,
+) -> Result<SyncReport, ()> {
+    Ok(scitl_sync::connect_scanned(
+        request(&state),
+        scitl_core::qr_scan::scan(),
+        dialog::confirm_sync(&app),
+        |event| {
+            let _ = on_event.send(event);
+        },
+    )
+    .await)
+}
+
+/// この端末でQRを読めるか(読めなければ、画面は読むボタンを出さない)。
+#[tauri::command]
+pub fn can_scan_sync_qr() -> bool {
+    scitl_core::qr_scan::available()
+}
+
 /// 進んでいる同期を止める。同期していなければ何もしない。
 #[tauri::command]
 pub fn cancel_sync(state: State<'_, AppState>) {

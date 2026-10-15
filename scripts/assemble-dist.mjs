@@ -374,19 +374,32 @@ function frontendLicenses() {
 
 // ---- AndroidのAPKに入るMavenの依存のライセンス ----
 
-// POMが書くライセンスの入手先から、ライセンスを見分ける(POMの名前は書き方が揃っていない)。
-const POM_LICENSES = [[/^https?:\/\/www\.apache\.org\/licenses\/LICENSE-2\.0(\.txt|\.html)?$/, 'Apache-2.0']]
+// POMが書くライセンスの入手先から、ライセンスを見分ける(POMの名前は書き方が揃っていない)。3つ目は
+// 載せる文面(licenses/の下のフォルダ)で、無ければPOM_LICENSE_TEXTの標準の文面を使う。
+const POM_LICENSES = [
+  [/^https?:\/\/www\.apache\.org\/licenses\/LICENSE-2\.0(\.txt|\.html)?$/, 'Apache-2.0'],
+  // CameraX(camera-core)が取り込んだlibyuv。BSD-3-Clauseは文面に著作権者が入るので、libyuvのものを載せる。
+  [
+    /^https:\/\/chromium\.googlesource\.com\/libyuv\/libyuv\/\+\/refs\/heads\/main\/README\.chromium$/,
+    'BSD-3-Clause',
+    'libyuv',
+  ],
+]
 
 // POMにライセンスを書いていない依存の扱い。
 const POM_WITHOUT_LICENSE = {
   // GuavaからListenableFutureだけを切り出したパッケージ。ライセンスは親のPOM(guava-parent)にある。
   'com.google.guava:listenablefuture': { license: 'Apache-2.0' },
+  // ライセンスは親のPOM(auto-value-parent・zxing-parent)にある。
+  'com.google.auto.value:auto-value-annotations': { license: 'Apache-2.0' },
+  'com.google.zxing:core': { license: 'Apache-2.0' },
   // クレート`rustls-platform-verifier-android`と同じリポジトリから出る、Kotlinの部品。
   'org.rustls:rustls-platform-verifier': { crate: 'rustls-platform-verifier-android' },
 }
 
 // ライセンスの標準の文面(licenses/の下のフォルダ)。Mavenのパッケージはライセンス文を持たず、POMが
-// 入手先を指すだけなので、標準の文面を載せる。
+// 入手先を指すだけなので、標準の文面を載せる。著作権者が文面に入るライセンス(BSD等)は標準の文面を
+// 持てないので、ここに置かず、POM_LICENSESの項に文面を持たせる。
 const POM_LICENSE_TEXT = { 'Apache-2.0': 'apache-2.0' }
 
 // Gradleのタスク`scitlReleaseDependencies`が書き出した一覧から、本文を作る。見分けられないライセンス・
@@ -398,7 +411,8 @@ function gradleLicenses(file) {
   const accepted = acceptedLicenses()
   const stale = new Set(Object.keys(POM_WITHOUT_LICENSE))
   const index = []
-  const used = new Set()
+  // 載せる文面(licenses/の下のフォルダ)と、その見出し。
+  const used = new Map()
   const rejected = []
   const notices = new Map()
   for (const dep of JSON.parse(readFileSync(file, 'utf8'))) {
@@ -416,18 +430,19 @@ function gradleLicenses(file) {
       index.push(`${id} ${dep.version}  (same repository and license as the Rust crate ${known.crate}; see rust.txt)`)
       continue
     }
-    const licenses = known
-      ? [known.license]
-      : dep.licenses.map(({ url }) => POM_LICENSES.find(([pattern]) => pattern.test(url ?? ''))?.[1])
-    if (licenses.length === 0 || licenses.some((license) => !license || !accepted.has(license))) {
+    const found = known
+      ? [[undefined, known.license]]
+      : dep.licenses.map(({ url }) => POM_LICENSES.find(([pattern]) => pattern.test(url ?? '')) ?? [])
+    const licenses = found.map(([, license, text]) => ({ license, text: text ?? POM_LICENSE_TEXT[license] }))
+    if (licenses.length === 0 || licenses.some(({ license }) => !license || !accepted.has(license))) {
       rejected.push(`${id} ${dep.version} (${dep.licenses.map((l) => `${l.name} <${l.url}>`).join(', ') || 'no license'})`)
       continue
     }
-    for (const license of licenses) {
-      if (!POM_LICENSE_TEXT[license]) fail(`no standard text for ${license} (add it to POM_LICENSE_TEXT)`)
-      used.add(license)
+    for (const { license, text } of licenses) {
+      if (!text) fail(`no text for ${license} of ${id} (add it to POM_LICENSE_TEXT or the POM_LICENSES entry)`)
+      used.set(text, text === POM_LICENSE_TEXT[license] ? license : `${license} (${text})`)
     }
-    index.push(`${id} ${dep.version}  (${licenses.join(' AND ')})  ${where}`)
+    index.push(`${id} ${dep.version}  (${licenses.map(({ license }) => license).join(' AND ')})  ${where}`)
   }
   if (rejected.length > 0) {
     fail(`Maven packages with licenses that are unknown or not accepted in about.toml: ${rejected.join(', ')}`)
@@ -447,12 +462,12 @@ function gradleLicenses(file) {
     '',
     ...index,
     '',
-    ...[...used].sort().flatMap((license) => [
+    ...[...used].sort(([, a], [, b]) => a.localeCompare(b)).flatMap(([text, heading]) => [
       rule,
-      license,
+      heading,
       rule,
       '',
-      ...suppliedFiles(POM_LICENSE_TEXT[license]).map(([, text]) => text.trim()),
+      ...suppliedFiles(text).map(([, content]) => content.trim()),
       '',
     ]),
     ...[...notices.values()].flatMap(({ text, labels }) => [rule, ...labels, rule, '', text, '']),

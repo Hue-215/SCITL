@@ -141,6 +141,11 @@ node .claude/skills/android-check/cdp-eval.mjs 9223 \
   `(() => { const p = document.createElement("div"); p.style.cssText = "position:fixed;top:env(safe-area-inset-top);bottom:env(safe-area-inset-bottom)"; document.body.append(p); const r = p.getBoundingClientRect(); p.remove(); return { top: r.top, bottom: innerHeight - r.bottom }; })()`
   (API 37のエミュレーターでは上24px・下24px)
 - 人が見るときは、デスクトップのChromeの`chrome://inspect/#devices`に同じWebViewが出る
+- Tauri・wryを更新したら、画面からカメラ・マイクを使えないことを確かめる。アプリにカメラを許可して
+  (`adb shell pm grant net.niigo.scitl android.permission.CAMERA`)起動し、
+  `'(async () => { try { await navigator.mediaDevices.getUserMedia({ video: true }); return "GRANTED" } catch (e) { return e.name } })()'`
+  が`NotAllowedError`になること(`audio: true`も同じ)。`GRANTED`なら`MainActivity`の包み
+  (`GuardedChromeClient`)が外れている(`docs/spec/architecture/webview-boundary.md`「Android」)
 - 終えたら`adb forward --remove-all`
 
 ## 5. 実機で確かめる

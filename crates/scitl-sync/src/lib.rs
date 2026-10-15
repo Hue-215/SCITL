@@ -9,6 +9,7 @@ mod device;
 mod error;
 mod files;
 mod frame;
+mod invitation;
 mod merge;
 mod pake;
 mod run;
@@ -26,8 +27,10 @@ pub use conflict::{
 };
 pub use device::{confirm_device_id, renew_device_id, DeviceRegistry, SecretStore};
 pub use error::{InvalidRow, SyncError};
+pub use invitation::{parse_invitation, Invitation, QrModules};
 pub use run::{
-    answer, cancel, connect_to, listen, ConflictAnswers, Request, SyncDialog, SyncEvent, SyncReport,
+    answer, cancel, connect_scanned, connect_to, listen, ConflictAnswers, Request, SyncDialog,
+    SyncEvent, SyncReport,
 };
 pub use session::{connect, Limits, Listener, LocalVersions, Session};
 pub use transfer::{sync, Context, Outcome, Resolver, Side, Stage};

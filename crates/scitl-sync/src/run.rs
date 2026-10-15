@@ -13,14 +13,17 @@ use serde::Serialize;
 use scitl_core::db::messages::Chat;
 use scitl_core::i18n::{self, Language};
 use scitl_core::in_flight::{InFlightSet, StopSignal};
+use scitl_core::qr_scan::ScanError;
 use scitl_core::{blocking, db, text};
 
 use crate::conflict::{ConflictChoice, ConflictView};
+use crate::invitation::{self, QrModules};
 use crate::transfer::{Resolver, Stage};
 use crate::transport::Counts;
 use crate::{
-    confirm_device_id, connect, local_addresses, parse_peer_address, sync, Context, Limits,
-    Listener, LocalVersions, Outcome, PairingCode, Session, Side, SyncError,
+    confirm_device_id, connect, local_addresses, parse_invitation, parse_peer_address, sync,
+    Context, Invitation, Limits, Listener, LocalVersions, Outcome, PairingCode, Session, Side,
+    SyncError,
 };
 
 /// 始める前の確認のダイアログに出す文面(表示言語)。
@@ -37,10 +40,11 @@ pub struct SyncDialog {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyncEvent {
-    /// 待ち受けを始めた。相手の端末で打つアドレス(候補のすべて)と数字。
+    /// 待ち受けを始めた。相手の端末で打つアドレス(候補のすべて)と数字と、同じものを読ませるQR。
     Listening {
         addresses: Vec<String>,
         code: String,
+        qr: QrModules,
     },
     /// 相手を確かめ終え、同期を始めた。
     Syncing,
@@ -158,32 +162,43 @@ pub async fn listen(
         cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
     };
     let answers = request.answers;
-    run(request, dialog, confirm, |ctx, stop| async move {
-        let (device_id, session) = cancellable(&stop, async {
-            let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
-            let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
-            events(SyncEvent::Listening {
-                addresses: listener
-                    .addresses()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect(),
-                code: listener.code().as_str().to_string(),
-            });
-            Ok((device_id, listener.accept(local_versions()).await?))
-        })
-        .await?;
-        sync_over(
-            session,
-            ctx,
-            Side::Listener,
-            &device_id,
-            &stop,
-            answers,
-            &events,
-        )
-        .await
-    })
+    let target = async { Ok(()) };
+    run(
+        request,
+        target,
+        |()| dialog,
+        confirm,
+        |ctx, stop, ()| async move {
+            let (device_id, session) = cancellable(&stop, async {
+                let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
+                let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
+                events(SyncEvent::Listening {
+                    addresses: listener
+                        .addresses()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    code: listener.code().as_str().to_string(),
+                    qr: invitation::modules(&invitation::encode(
+                        listener.addresses(),
+                        listener.code(),
+                    )),
+                });
+                Ok((device_id, listener.accept(local_versions()).await?))
+            })
+            .await?;
+            sync_over(
+                session,
+                ctx,
+                Side::Listener,
+                &device_id,
+                &stop,
+                answers,
+                &events,
+            )
+            .await
+        },
+    )
     .await
 }
 
@@ -195,43 +210,85 @@ pub async fn connect_to(
     confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
     events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
-    let parsed = parse_peer_address(address).and_then(|a| Ok((a, PairingCode::parse(code)?)));
-    let (address, code): (SocketAddr, PairingCode) = match parsed {
-        Ok(parsed) => parsed,
-        Err(e) => return Err(e).into(),
+    match parse_peer_address(address).and_then(|a| Ok((a, PairingCode::parse(code)?))) {
+        Ok((address, code)) => {
+            connect_with(
+                request,
+                async { Ok((vec![address], code)) },
+                confirm,
+                events,
+            )
+            .await
+        }
+        Err(e) => Err(e).into(),
+    }
+}
+
+/// 待ち受ける側のQRを`scan`で読み、その候補へ順につないで同期する。`scan`は、利用者が読むのを
+/// やめたら`None`を返す。読むのは全体を押さえてからで、止める指示が来たら`scan`を捨てる。
+pub async fn connect_scanned(
+    request: Request<'_>,
+    scan: impl std::future::Future<Output = Result<Option<String>, ScanError>>,
+    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    events: impl Fn(SyncEvent) + Sync,
+) -> SyncReport {
+    let target = async {
+        let text = scan.await?.ok_or(SyncError::Cancelled)?;
+        let Invitation { addresses, code } = parse_invitation(&text)?;
+        Ok((addresses, code))
     };
-    let dialog = SyncDialog {
-        title: i18n::text(request.lang, "sync_dialog.connect_title").to_string(),
-        message: i18n::format(
-            request.lang,
-            "sync_dialog.connect_message",
-            &[(
-                "address",
-                &text::reveal_invisible_line(&address.to_string()),
-            )],
-        ),
-        confirm_label: i18n::text(request.lang, "sync_dialog.connect_confirm").to_string(),
-        cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
+    connect_with(request, target, confirm, events).await
+}
+
+async fn connect_with(
+    request: Request<'_>,
+    target: impl std::future::Future<Output = Result<(Vec<SocketAddr>, PairingCode), SyncError>>,
+    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    events: impl Fn(SyncEvent) + Sync,
+) -> SyncReport {
+    let lang = request.lang;
+    let dialog = move |(addresses, _): &(Vec<SocketAddr>, PairingCode)| {
+        let shown: Vec<String> = addresses
+            .iter()
+            .map(|a| text::reveal_invisible_line(&a.to_string()))
+            .collect();
+        SyncDialog {
+            title: i18n::text(lang, "sync_dialog.connect_title").to_string(),
+            message: i18n::format(
+                lang,
+                "sync_dialog.connect_message",
+                &[("address", &shown.join(", "))],
+            ),
+            confirm_label: i18n::text(lang, "sync_dialog.connect_confirm").to_string(),
+            cancel_label: i18n::text(lang, "common.cancel").to_string(),
+        }
     };
     let answers = request.answers;
-    run(request, dialog, confirm, |ctx, stop| async move {
-        let (device_id, session) = cancellable(&stop, async {
-            let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
-            let session = connect(&[address], &code, local_versions(), Limits::default()).await?;
-            Ok((device_id, session))
-        })
-        .await?;
-        sync_over(
-            session,
-            ctx,
-            Side::Connector,
-            &device_id,
-            &stop,
-            answers,
-            &events,
-        )
-        .await
-    })
+    run(
+        request,
+        target,
+        dialog,
+        confirm,
+        |ctx, stop, (addresses, code)| async move {
+            let (device_id, session) = cancellable(&stop, async {
+                let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
+                let session =
+                    connect(&addresses, &code, local_versions(), Limits::default()).await?;
+                Ok((device_id, session))
+            })
+            .await?;
+            sync_over(
+                session,
+                ctx,
+                Side::Connector,
+                &device_id,
+                &stop,
+                answers,
+                &events,
+            )
+            .await
+        },
+    )
     .await
 }
 
@@ -279,21 +336,27 @@ async fn cancellable<T>(
         .unwrap_or(Err(SyncError::Cancelled))
 }
 
-/// 全体を押さえ、確かめてから`sync`を走らせる。`sync`には止める指示を渡す。止められるのは、
-/// 自分が書き始める前まで(`transfer::sync`)。
-async fn run<'c, F, Fut>(
+/// 全体を押さえ、`target`で相手を決め(QRを読む等。止める指示が来たら捨てる)、確かめてから`sync`を
+/// 走らせる。`sync`には止める指示を渡す。止められるのは、自分が書き始める前まで(`transfer::sync`)。
+async fn run<'c, T, F, Fut>(
     request: Request<'c>,
-    dialog: SyncDialog,
+    target: impl std::future::Future<Output = Result<T, SyncError>>,
+    dialog: impl FnOnce(&T) -> SyncDialog,
     confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
     sync: F,
 ) -> SyncReport
 where
-    F: FnOnce(&'c Context, StopSignal) -> Fut,
+    F: FnOnce(&'c Context, StopSignal, T) -> Fut,
     Fut: std::future::Future<Output = Result<Outcome, SyncError>>,
 {
     let Some(all) = request.generating.try_begin_all() else {
         return Err(SyncError::Busy).into();
     };
+    let target = match cancellable(all.stop_signal(), target).await {
+        Ok(target) => target,
+        Err(e) => return Err(e).into(),
+    };
+    let dialog = dialog(&target);
     match blocking::run(move || Ok(confirm(&dialog))).await {
         Ok(true) => {}
         Ok(false) => return SyncReport::Cancelled,
@@ -302,7 +365,9 @@ where
     if all.stop_signal().is_requested() {
         return SyncReport::Cancelled;
     }
-    sync(request.ctx, all.stop_signal().clone()).await.into()
+    sync(request.ctx, all.stop_signal().clone(), target)
+        .await
+        .into()
 }
 
 #[cfg(test)]
@@ -366,6 +431,9 @@ mod tests {
             SyncError::PeerRefused(AbortReason::Failed),
             SyncError::Core(CoreError::Cancelled),
             SyncError::InvalidCode,
+            SyncError::InvalidInvitation,
+            SyncError::Scan(ScanError::CameraDenied),
+            SyncError::Scan(ScanError::Unavailable(String::new())),
             SyncError::Busy,
             SyncError::Cancelled,
         ];
@@ -393,6 +461,8 @@ mod tests {
                 | SyncError::PeerRefused(_)
                 | SyncError::Core(_)
                 | SyncError::InvalidCode
+                | SyncError::InvalidInvitation
+                | SyncError::Scan(_)
                 | SyncError::Busy
                 | SyncError::Cancelled => {}
             }
@@ -456,6 +526,81 @@ mod tests {
         let report = listen(request, no_dialog, |_| {}).await;
         assert!(
             matches!(&report, SyncReport::Failed { kind, .. } if kind == "busy"),
+            "{report:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_camera_is_not_opened_while_a_response_is_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let _busy = generating.try_begin(Chat::General).unwrap();
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            answers: &ConflictAnswers::default(),
+            lang: Language::DEFAULT,
+        };
+        let scan = async { panic!("the scanner must not be opened") };
+        let report = connect_scanned(request, scan, no_dialog, |_| {}).await;
+        assert!(
+            matches!(&report, SyncReport::Failed { kind, .. } if kind == "busy"),
+            "{report:?}"
+        );
+    }
+
+    /// 読んでいる間の「やめる」で、読み取りを捨てて取りやめにする(捨てると読み取りの画面が閉じる)。
+    #[tokio::test]
+    async fn stopping_while_scanning_drops_the_scan() {
+        struct Dropped<'a>(&'a std::sync::atomic::AtomicBool);
+        impl Drop for Dropped<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let dropped = std::sync::atomic::AtomicBool::new(false);
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            answers: &ConflictAnswers::default(),
+            lang: Language::DEFAULT,
+        };
+        let scan = async {
+            let _guard = Dropped(&dropped);
+            std::future::pending::<Result<Option<String>, ScanError>>().await
+        };
+        let stop = async {
+            while !cancel(&generating) {
+                tokio::task::yield_now().await;
+            }
+        };
+        let (report, ()) = tokio::join!(connect_scanned(request, scan, no_dialog, |_| {}), stop);
+        assert_eq!(report, SyncReport::Cancelled);
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(generating.try_begin(Chat::General).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_qr_code_that_is_not_ours_is_refused_before_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(&dir);
+        let generating = InFlightSet::new();
+        let request = Request {
+            ctx: &ctx,
+            generating: &generating,
+            answers: &ConflictAnswers::default(),
+            lang: Language::DEFAULT,
+        };
+        let scan = async { Ok(Some("scitl-sync;1;012345;example.com:443".to_string())) };
+        let report = connect_scanned(request, scan, no_dialog, |_| {}).await;
+        // 読んだ中身を詳細に載せない(画面へ返さない)。
+        assert!(
+            matches!(&report, SyncReport::Failed { kind, detail }
+                if kind == "invalid_qr" && !detail.contains("example.com")),
             "{report:?}"
         );
     }

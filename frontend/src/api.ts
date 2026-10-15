@@ -406,6 +406,15 @@ export function syncConnect(
   return invoke('sync_connect', { address, code, onEvent: new Channel(onEvent) })
 }
 
+// 待ち受ける側のQRをカメラで読んでつなぐ。読むのもRust側(OS)で、読んだ中身は画面に届かない。
+export function syncConnectScanned(onEvent: (event: SyncEvent) => void): Promise<SyncReport> {
+  return invoke('sync_connect_scanned', { onEvent: new Channel(onEvent) })
+}
+
+export function canScanSyncQr(): Promise<boolean> {
+  return invoke('can_scan_sync_qr')
+}
+
 export function cancelSync(): Promise<void> {
   return invoke('cancel_sync')
 }

@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 
+use scitl_core::qr_scan::ScanError;
 use serde::Serialize;
 
 use crate::transport::AbortReason;
@@ -62,6 +63,12 @@ pub enum SyncError {
     /// 数字の形が違う(6桁でない)。
     #[error("the pairing code must be 6 digits")]
     InvalidCode,
+    /// 読んだQRが、SCITLの同期のQRではない。
+    #[error("the QR code is not a SCITL sync code")]
+    InvalidInvitation,
+    /// QRを読めなかった(カメラを使えない等)。
+    #[error(transparent)]
+    Scan(#[from] scitl_core::qr_scan::ScanError),
     /// 応答を生成中の会話があるか、別の同期の最中。
     #[error("a response is being generated or another sync is running")]
     Busy,
@@ -76,6 +83,9 @@ impl SyncError {
         match self {
             Self::AddressNotAllowed(_) => "invalid_address",
             Self::InvalidCode => "invalid_code",
+            Self::InvalidInvitation => "invalid_qr",
+            Self::Scan(ScanError::CameraDenied) => "camera_denied",
+            Self::Scan(ScanError::Unavailable(_)) => "scan_failed",
             Self::NoLocalAddress => "no_local_address",
             Self::Bind(_) => "listen_failed",
             Self::Connect(_) => "connect_failed",

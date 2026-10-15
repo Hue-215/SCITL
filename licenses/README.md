@@ -10,7 +10,8 @@
 - **STD**: Rustの標準ライブラリと、それと一緒に実行ファイルに入るクレートのうち、依存の一覧に
   現れないもの(cargo-aboutは標準ライブラリの中を見ない)
 - **POM_LICENSE_TEXT**: AndroidのAPKに入るMavenの依存の分。Mavenのパッケージはライセンス文を持たず、
-  POMが入手先を指すだけなので、ライセンスごとに標準の文面を1つ置く
+  POMが入手先を指すだけなので、ライセンスごとに標準の文面を1つ置く。著作権者が文面に入るライセンス(BSD等)は
+  標準の文面を持てないので、そのライセンスを見分ける**POM_LICENSES**の項に、依存の文面を持たせる
 
 | フォルダ | 対象 | 入手先 |
 |---|---|---|
@@ -26,6 +27,7 @@
 | `ndk-context` | ndk-context(Androidのみ) | https://github.com/rust-mobile/ndk のタグ`ndk-context-0.1.1` |
 | `rustls-platform-verifier` | rustls-platform-verifier-android(Androidのみ。APKに入るKotlinの部品を含む) | https://github.com/rustls/rustls-platform-verifier のタグ`v/0.7.1` |
 | `apache-2.0` | Apache-2.0の標準の文面(POM_LICENSE_TEXT) | https://www.apache.org/licenses/LICENSE-2.0.txt |
+| `libyuv` | CameraX(camera-core)が取り込んだlibyuvのBSD-3-Clause(POM_LICENSES。Androidのみ) | https://chromium.googlesource.com/libyuv/libyuv のコミット`58d817e`の`LICENSE` |
 | `webview2-sdk` | webview2-com-sysが静的にリンクするWebView2のローダー(BUNDLED) | NuGetの`Microsoft.Web.WebView2` 1.0.3800.47の`LICENSE.txt`・`NOTICE.txt` |
 | `rust` | Rustの標準ライブラリ(STD) | https://github.com/rust-lang/rust のタグ`1.93.1`の`COPYRIGHT`・`LICENSE-MIT`・`LICENSE-APACHE` |
 | `addr2line` | 標準ライブラリが使うaddr2line(STD) | https://github.com/gimli-rs/addr2line のタグ`0.25.1` |

@@ -8,6 +8,12 @@
     <!-- 応答が終わったことの通知(ReplyNotifier)に要る。初めて応答を生成するときに1回だけ求める。
          許可が無くてもサービスは動き、通知が出ないだけになる。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 同期の相手のQRを読む(ScanActivity)。読むときに初めて求める。カメラの無い端末にも入れられる
+         ようにする(無ければ、アドレスと数字を打つ)。docs/sync/index.md 11節 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- CAMERAの権限はautofocusも必須とみなさせるので、これも外す -->
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <!-- 平文httpの可否はNetwork Security Configで決める。設定はrustls-platform-verifierが持つもので、
          平文を止め、証明書の失効の確認でCRLを取りに行く先にだけ許す(デバッグビルドは
@@ -32,6 +38,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".ScanActivity"
+            android:exported="false"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode" />
         <service
             android:name=".GeneratingService"
             android:exported="false"
