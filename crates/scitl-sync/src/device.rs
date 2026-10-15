@@ -69,8 +69,7 @@ async fn replace_token(
     renew_id: bool,
 ) -> Result<String, SyncError> {
     let (before, replaced) = db::with_conn(db.clone(), move |conn| {
-        let before = db::sync::device_token(conn)?;
-        Ok((before, db::sync::replace_device_token(conn, renew_id)?))
+        db::sync::replace_device_token(conn, renew_id)
     })
     .await?;
     let written = replaced.clone();
@@ -215,6 +214,18 @@ mod tests {
         assert_eq!(confirm_device_id(original, registry).await.unwrap(), id);
     }
 
+    /// DBの値を替えたところで切れ、項目が古いまま残ったときは、次の同期で作り直す。
+    #[tokio::test]
+    async fn a_token_left_half_replaced_gets_a_new_id() {
+        let db = database();
+        let registry = Arc::new(Registry::default());
+        let id = confirm_device_id(db.clone(), registry.clone())
+            .await
+            .unwrap();
+        db::sync::replace_device_token(&db.lock().unwrap(), false).unwrap();
+        assert_ne!(confirm_device_id(db, registry).await.unwrap(), id);
+    }
+
     /// 古い項目だけが読めない(Androidで保存先の鍵が失われた)ときは、作り直して続ける。
     #[tokio::test]
     async fn an_unreadable_item_is_replaced_when_a_new_one_can_be_written() {
@@ -237,6 +248,22 @@ mod tests {
         let before = device_token(&db);
         let registry = Arc::new(Registry {
             unreadable: true,
+            unwritable: true,
+            ..Default::default()
+        });
+        assert!(matches!(
+            confirm_device_id(db.clone(), registry).await,
+            Err(SyncError::DeviceCheck(_))
+        ));
+        assert_eq!(device_token(&db), before);
+    }
+
+    /// 作り直した端末IDの項目を書けなければ、元の端末IDに戻して始めない。
+    #[tokio::test]
+    async fn an_unregistered_device_keeps_its_id_when_no_item_can_be_written() {
+        let db = database();
+        let before = device_token(&db);
+        let registry = Arc::new(Registry {
             unwritable: true,
             ..Default::default()
         });

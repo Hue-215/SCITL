@@ -42,17 +42,25 @@ pub fn device_token(conn: &Connection) -> Result<DeviceToken> {
     )?)
 }
 
-/// 項目の値を替える。`renew_id`なら端末IDも作り直す(それまでの版とカーソルはそのまま使える)。
-pub fn replace_device_token(conn: &Connection, renew_id: bool) -> Result<DeviceToken> {
-    Ok(conn.query_row(
-        "UPDATE sync_state
-         SET device_id = CASE WHEN ?1 THEN lower(hex(randomblob(16))) ELSE device_id END,
-             device_token = lower(hex(randomblob(16)))
-         WHERE id = 1
-         RETURNING device_id, device_token",
-        [renew_id],
-        device_token_row,
-    )?)
+/// 項目の値を替え、替える前と後を返す。`renew_id`なら端末IDも作り直す(それまでの版とカーソルは
+/// そのまま使える)。
+pub fn replace_device_token(
+    conn: &Connection,
+    renew_id: bool,
+) -> Result<(DeviceToken, DeviceToken)> {
+    in_transaction(conn, |conn| {
+        let before = device_token(conn)?;
+        let replaced = conn.query_row(
+            "UPDATE sync_state
+             SET device_id = CASE WHEN ?1 THEN lower(hex(randomblob(16))) ELSE device_id END,
+                 device_token = lower(hex(randomblob(16)))
+             WHERE id = 1
+             RETURNING device_id, device_token",
+            [renew_id],
+            device_token_row,
+        )?;
+        Ok((before, replaced))
+    })
 }
 
 /// [`replace_device_token`]で`replaced`にしたものを、資格情報ストアに書けなかったときに`before`へ戻す。

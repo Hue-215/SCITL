@@ -141,7 +141,7 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 | id | INTEGER | PRIMARY KEY、`CHECK (id = 1)`。行は1つだけ |
 | device_id | TEXT | NOT NULL。小文字16進32桁。マイグレーションで乱数で作る |
 | counter | INTEGER | NOT NULL、1以上。`sync_seq`と版の番号はどちらもここから取る |
-| device_token | TEXT | NOT NULL。小文字16進32桁。資格情報ストアの端末IDの項目と同じ値で、同期を始めるたびに両方を替える(`../../sync/index.md` 10節)。マイグレーションで乱数で作る。前からある項目は値を持っていないので、次の同期で端末IDを1度作り直す |
+| device_token | TEXT | NOT NULL。小文字16進32桁。資格情報ストアの端末IDの項目と同じ値で、同期を始めるたびに両方を替える(`../../sync/index.md` 10節)。マイグレーションで乱数で作る。移行の前に作った項目の値はDBに無いので、次の同期で端末IDを1度作り直す |
 
 #### sync_cursors(相手ごとのカーソル)
 
