@@ -142,6 +142,12 @@ impl DataLayout {
     pub fn export(&self) -> PathBuf {
         self.root.join("export")
     }
+
+    /// 書き込みの途中で落ちて残った一時ファイル(`config.toml`と添付の実体のもの)を消す。
+    pub fn remove_stale_temp_files(&self) {
+        crate::files::remove_stale_temp_files(&self.root);
+        crate::files::remove_stale_temp_files(&self.attachments());
+    }
 }
 
 /// アプリのデータを置くディレクトリを作る。Unixでは持ち主だけが入れる権限(0700)にし、
@@ -315,5 +321,27 @@ mod data_dir_tests {
         let root = temp.path().ancestors().last().unwrap();
 
         assert!(data_dir_beside(&temp.path().join("scitl"), root).is_ok());
+    }
+
+    #[test]
+    fn stale_temp_files_are_removed_from_the_root_and_the_attachments() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = DataLayout::new(temp.path());
+        std::fs::create_dir(data.attachments()).unwrap();
+        let ulid = ulid::Ulid::from_datetime(std::time::SystemTime::UNIX_EPOCH);
+        let left = [
+            data.root().join(format!(".config.toml.{ulid}.tmp")),
+            data.attachments()
+                .join(format!(".{}.{ulid}.tmp", "0".repeat(64))),
+        ];
+        for path in &left {
+            std::fs::write(path, b"data").unwrap();
+        }
+
+        data.remove_stale_temp_files();
+
+        for path in &left {
+            assert!(!path.exists(), "{}", path.display());
+        }
     }
 }
