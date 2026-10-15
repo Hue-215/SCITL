@@ -530,6 +530,15 @@ mod tests {
         }
         let proguard = include_str!("../gen/android/app/proguard-rules.pro");
         assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{SCANNER_CLASS} {{")));
+        // アプリがカメラの権限を持つので、画面(WebView)からのカメラ等の要求はネイティブの側で断る。
+        let activity =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
+        assert!(activity.contains("GuardedChromeClient(inner ?: WebChromeClient())"));
+        let guarded =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/GuardedChromeClient.kt");
+        assert!(guarded.contains(
+            "override fun onPermissionRequest(request: PermissionRequest) {\n    request.deny()\n  }"
+        ));
         // 読み取りの画面は、ほかのアプリから開けない。
         let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
         assert!(manifest

@@ -108,6 +108,9 @@ class ScanActivity : ComponentActivity() {
         runOnUiThread { deliver(QrScanner.SCANNED + text) }
       } catch (e: ReaderException) {
         // この1枚にはQRが無いか、読めなかった。次の1枚を待つ。
+      } catch (e: RuntimeException) {
+        // 細工したQRでZXingの中が想定外の例外を出しても、読み取りのスレッドの例外はプロセスごと
+        // 落とすので、その1枚を読み捨てる。
       } finally {
         reader.reset()
       }

@@ -6,6 +6,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.webkit.WebChromeClient
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import java.util.concurrent.atomic.AtomicLong
 
@@ -17,6 +21,21 @@ class MainActivity : TauriActivity() {
     // 画面の向きを変えた等でActivityが作り直されたときは、同じIntentがもう一度届く。押したのは
     // 前の1回だけなので、頼みにしない。
     if (savedInstanceState == null) keepRequestedChat(intent)
+  }
+
+  /**
+   * 画面からのカメラ・マイク等の要求を断るクライアントで包む(GuardedChromeClient)。wryはこの呼び出しの
+   * あとでクライアントを付けるので、メインスレッドの後ろへ回して包む。画面からの権限の要求も
+   * メインスレッドへのメッセージで届くので、包む前に処理されることは無い。
+   */
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    Handler(Looper.getMainLooper()).post {
+      val inner = webView.webChromeClient
+      if (inner !is GuardedChromeClient) {
+        webView.webChromeClient = GuardedChromeClient(inner ?: WebChromeClient())
+      }
+    }
   }
 
   override fun onNewIntent(intent: Intent) {

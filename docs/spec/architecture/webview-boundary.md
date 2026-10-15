@@ -144,7 +144,8 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   - 待ち受ける側のQRを読んでつなぐコマンド(`sync_connect_scanned`。Androidだけ)は、カメラの読み取りの画面
     (Kotlinの`ScanActivity`)をRust側から開き、読んだ中身を画面へ返さない。乗っ取られた画面はいつでも
     呼べるが、起きるのは読み取りの画面が前に出ることと、読めたときに宛先を出した確認のダイアログが
-    出ることだけ
+    出ることだけ。画面自身がカメラを使う経路(`getUserMedia`)は、下の「Android」の「画面からのカメラ・
+    マイク等の要求」で断っている
   - WebViewが元から持つ経路: 利用者が入力欄に貼り付けたときに渡る`clipboardData`(WebView2ではファイルも
     載る)と、乗っ取った側が画面に置いた`<input type="file">`で利用者が選んだファイルは、ページの
     スクリプトから読める。どちらも利用者の操作を要し、WebView自身の機能なのでRust側では止められない。
@@ -253,6 +254,14 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   (`ERR_ABORTED`)。どちらの場合もWebViewは外部のページを読み込まない。本文中のリンクは、確認の
   ダイアログの「開く」を押すと`tauri-plugin-opener`がブラウザへ渡す(`open`クレートはAndroidで動かない。
   Issue #492で替えた)
+- **画面からのカメラ・マイク等の要求**: wryのWebChromeClientは、アプリがAndroidの権限を持っていれば、
+  画面の`getUserMedia`等の要求をそのまま許す。アプリはQRを読むためにカメラの権限を持つ(Issue #592)ので、
+  `MainActivity`がクライアントを`GuardedChromeClient`で包み、権限の要求と位置情報の要求を常に断る。
+  wryはクライアントを`onWebViewCreate`のあとで付けるので、メインスレッドの後ろへ回して包む。
+  アプリがカメラの権限を許されていても、画面の`getUserMedia`がカメラ・マイクとも`NotAllowedError`で
+  断られることを、DevToolsから確かめた(2026-10)。Tauri・wryを更新したら、同じ確かめ方で見直す。
+  `Permissions-Policy`のヘッダー(`app.security.headers`)では止められない。Tauri 2.11(tauri-utils 2.9.3)は
+  これを`Permission-Policy`という誤った名前で送り、WebViewが解釈しない
 - **権限の設定(capabilities)**: 「戻る」の受け手の権限(上の「CSP / Tauri権限設定」)を足したあとも、
   自前のコマンドとChannelの取得(`plugin:__TAURI_CHANNEL__|fetch`)が権限で拒まれずに呼べる
   (Issue #475、2026-10)
