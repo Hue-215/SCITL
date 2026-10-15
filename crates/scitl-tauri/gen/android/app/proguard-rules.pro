@@ -32,3 +32,9 @@
 -keep class net.niigo.scitl.MainActivity {
     public static long takeRequestedChat();
 }
+
+# 同期の相手のQRを読む画面を開き、結果を引き取る(`scitl_core::qr_scan`)。
+-keep class net.niigo.scitl.QrScanner {
+    public static long start(android.content.Context);
+    public static java.lang.String poll(long);
+}

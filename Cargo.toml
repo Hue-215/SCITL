@@ -129,6 +129,9 @@ rand_core = "0.6"
 # 待ち受ける側が出すアドレスの候補(インターフェースのアドレス)を列挙する。`libc`・`windows-sys`は
 # 既にある版
 if-addrs = "0.15"
+# 待ち受ける側のアドレスと数字をQRにする(`scitl-sync/src/invitation.rs`)。描くのは画面なので、
+# 画像・SVGを作るfeature(`image`を引き込む)は切る。切ると依存が無い
+qrcode = { version = "0.14", default-features = false }
 
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"

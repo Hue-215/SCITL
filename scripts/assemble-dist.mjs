@@ -375,19 +375,28 @@ function frontendLicenses() {
 // ---- AndroidのAPKに入るMavenの依存のライセンス ----
 
 // POMが書くライセンスの入手先から、ライセンスを見分ける(POMの名前は書き方が揃っていない)。
-const POM_LICENSES = [[/^https?:\/\/www\.apache\.org\/licenses\/LICENSE-2\.0(\.txt|\.html)?$/, 'Apache-2.0']]
+const POM_LICENSES = [
+  [/^https?:\/\/www\.apache\.org\/licenses\/LICENSE-2\.0(\.txt|\.html)?$/, 'Apache-2.0'],
+  // CameraX(camera-core)が取り込んだlibyuv。
+  [/^https:\/\/chromium\.googlesource\.com\/libyuv\/libyuv\/\+\/refs\/heads\/main\/README\.chromium$/, 'BSD-3-Clause'],
+]
 
 // POMにライセンスを書いていない依存の扱い。
 const POM_WITHOUT_LICENSE = {
   // GuavaからListenableFutureだけを切り出したパッケージ。ライセンスは親のPOM(guava-parent)にある。
   'com.google.guava:listenablefuture': { license: 'Apache-2.0' },
+  // ライセンスは親のPOM(auto-value-parent・zxing-parent)にある。
+  'com.google.auto.value:auto-value-annotations': { license: 'Apache-2.0' },
+  'com.google.zxing:core': { license: 'Apache-2.0' },
   // クレート`rustls-platform-verifier-android`と同じリポジトリから出る、Kotlinの部品。
   'org.rustls:rustls-platform-verifier': { crate: 'rustls-platform-verifier-android' },
 }
 
 // ライセンスの標準の文面(licenses/の下のフォルダ)。Mavenのパッケージはライセンス文を持たず、POMが
 // 入手先を指すだけなので、標準の文面を載せる。
-const POM_LICENSE_TEXT = { 'Apache-2.0': 'apache-2.0' }
+// BSD-3-Clauseは文面に著作権者が入るので、標準の文面ではなくlibyuvのものを置く(今これに当たるのは
+// libyuvだけ。ほかのBSD-3-Clauseの依存が入ったら、その文面も載せる形に変える)。
+const POM_LICENSE_TEXT = { 'Apache-2.0': 'apache-2.0', 'BSD-3-Clause': 'libyuv' }
 
 // Gradleのタスク`scitlReleaseDependencies`が書き出した一覧から、本文を作る。見分けられないライセンス・
 // 許容していないライセンスの依存があれば失敗する。jarの中の表示のファイル(META-INFのNOTICE・LICENSE)は、

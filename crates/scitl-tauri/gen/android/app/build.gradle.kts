@@ -162,6 +162,12 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     implementation("$rustlsPlatformVerifierGroup:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
+    // 同期の相手のQRを読む(ScanActivity)。CameraXは1.6からKotlin 2.1で作られ、このプロジェクトの
+    // Kotlin(1.9)では読めないので1.5に留める。ZXingは読み取りの部分(core)だけを使う。
+    implementation("androidx.camera:camera-camera2:1.5.3")
+    implementation("androidx.camera:camera-lifecycle:1.5.3")
+    implementation("androidx.camera:camera-view:1.5.3")
+    implementation("com.google.zxing:core:3.5.4")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

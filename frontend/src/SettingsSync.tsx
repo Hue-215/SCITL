@@ -2,8 +2,22 @@
 // 結果を出す。競合が出たら(待ち受ける側)両側の中身を並べ、単位ごとに残す側を選ばせる。
 // 待ち受け・接続・結合の順序と、始める前の確認はRust側が持つ(`scitl_sync::listen`)。
 import { useEffect, useId, useRef, useState } from 'react'
-import { cancelSync, resolveSyncConflicts, syncConnect, syncListen } from './api'
-import type { ChosenSide, ConflictSide, ConflictView, SyncEvent, SyncReport } from './types'
+import {
+  canScanSyncQr,
+  cancelSync,
+  resolveSyncConflicts,
+  syncConnect,
+  syncConnectScanned,
+  syncListen,
+} from './api'
+import type {
+  ChosenSide,
+  ConflictSide,
+  ConflictView,
+  QrModules,
+  SyncEvent,
+  SyncReport,
+} from './types'
 import { isolated, type MessageKey, t } from './i18n'
 
 type Running = 'listen' | 'connect'
@@ -27,6 +41,29 @@ function reportText(report: SyncReport): string {
 // 数字は3桁ずつに分けて出す(読み上げて打ちやすいように)。
 function spacedCode(code: string): string {
   return `${code.slice(0, 3)} ${code.slice(3)}`
+}
+
+// 升目をSVGの1本の経路にする。周りに4升の余白を取る(読み取りに要る)。
+function QrCode({ qr }: { qr: QrModules }) {
+  const margin = 4
+  const path = qr.dark
+    .map((dark, i) =>
+      dark ? `M${(i % qr.size) + margin} ${Math.floor(i / qr.size) + margin}h1v1h-1z` : '',
+    )
+    .join('')
+  const extent = qr.size + margin * 2
+  return (
+    <svg
+      className="sync-qr"
+      viewBox={`0 0 ${extent} ${extent}`}
+      role="img"
+      aria-label={t('settings.sync.qr_label')}
+      shapeRendering="crispEdges"
+    >
+      <rect width={extent} height={extent} fill="#fff" />
+      <path d={path} fill="#000" />
+    </svg>
+  )
 }
 
 const ROLE_LABELS: Record<string, MessageKey> = {
@@ -157,7 +194,12 @@ function ConflictChooser({
 
 export function SyncTab() {
   const [running, setRunning] = useState<Running | null>(null)
-  const [listening, setListening] = useState<{ addresses: string[]; code: string } | null>(null)
+  const [listening, setListening] = useState<{
+    addresses: string[]
+    code: string
+    qr: QrModules
+  } | null>(null)
+  const [canScan, setCanScan] = useState(false)
   // 相手を確かめたあとの段。書き始めた段(`finishing`)は止められない。
   const [stage, setStage] = useState<Stage | null>(null)
   const [conflicts, setConflicts] = useState<ConflictView[] | null>(null)
@@ -168,6 +210,9 @@ export function SyncTab() {
   const connectId = useId()
   // タブを離れたら(設定画面を閉じたときも)、進んでいる同期を止める。
   const runningRef = useRef(false)
+  useEffect(() => {
+    void canScanSyncQr().then(setCanScan)
+  }, [])
   useEffect(
     () => () => {
       if (runningRef.current) void cancelSync()
@@ -180,7 +225,7 @@ export function SyncTab() {
     if (!runningRef.current) return
     switch (event.type) {
       case 'listening':
-        setListening({ addresses: event.addresses, code: event.code })
+        setListening({ addresses: event.addresses, code: event.code, qr: event.qr })
         break
       case 'conflicts':
         setConflicts(event.conflicts)
@@ -259,6 +304,7 @@ export function SyncTab() {
               <span>{t('settings.sync.code_label')}</span>
               <code>{spacedCode(listening.code)}</code>
             </div>
+            <QrCode qr={listening.qr} />
           </>
         )}
         <div className="button-row">
@@ -309,13 +355,24 @@ export function SyncTab() {
           {running === 'connect' ? (
             stopButton
           ) : (
-            <button
-              type="submit"
-              className="primary"
-              disabled={running !== null || address.trim() === '' || code.trim() === ''}
-            >
-              {t('settings.sync.connect')}
-            </button>
+            <>
+              <button
+                type="submit"
+                className="primary"
+                disabled={running !== null || address.trim() === '' || code.trim() === ''}
+              >
+                {t('settings.sync.connect')}
+              </button>
+              {canScan && (
+                <button
+                  type="button"
+                  disabled={running !== null}
+                  onClick={() => void start('connect', () => syncConnectScanned(onEvent))}
+                >
+                  {t('settings.sync.scan')}
+                </button>
+              )}
+            </>
           )}
         </div>
       </form>

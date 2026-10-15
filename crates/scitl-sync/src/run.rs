@@ -13,14 +13,17 @@ use serde::Serialize;
 use scitl_core::db::messages::Chat;
 use scitl_core::i18n::{self, Language};
 use scitl_core::in_flight::{InFlightSet, StopSignal};
+use scitl_core::qr_scan::ScanError;
 use scitl_core::{blocking, db, text};
 
 use crate::conflict::{ConflictChoice, ConflictView};
+use crate::invitation::{self, QrModules};
 use crate::transfer::{Resolver, Stage};
 use crate::transport::Counts;
 use crate::{
-    confirm_device_id, connect, local_addresses, parse_peer_address, sync, Context, Limits,
-    Listener, LocalVersions, Outcome, PairingCode, Session, Side, SyncError,
+    confirm_device_id, connect, local_addresses, parse_invitation, parse_peer_address, sync,
+    Context, Invitation, Limits, Listener, LocalVersions, Outcome, PairingCode, Session, Side,
+    SyncError,
 };
 
 /// 始める前の確認のダイアログに出す文面(表示言語)。
@@ -37,10 +40,11 @@ pub struct SyncDialog {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyncEvent {
-    /// 待ち受けを始めた。相手の端末で打つアドレス(候補のすべて)と数字。
+    /// 待ち受けを始めた。相手の端末で打つアドレス(候補のすべて)と数字と、同じものを読ませるQR。
     Listening {
         addresses: Vec<String>,
         code: String,
+        qr: QrModules,
     },
     /// 相手を確かめ終え、同期を始めた。
     Syncing,
@@ -169,6 +173,7 @@ pub async fn listen(
                     .map(ToString::to_string)
                     .collect(),
                 code: listener.code().as_str().to_string(),
+                qr: invitation::modules(&invitation::encode(listener.addresses(), listener.code())),
             });
             Ok((device_id, listener.accept(local_versions()).await?))
         })
@@ -195,20 +200,50 @@ pub async fn connect_to(
     confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
     events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
-    let parsed = parse_peer_address(address).and_then(|a| Ok((a, PairingCode::parse(code)?)));
-    let (address, code): (SocketAddr, PairingCode) = match parsed {
-        Ok(parsed) => parsed,
-        Err(e) => return Err(e).into(),
+    match parse_peer_address(address).and_then(|a| Ok((a, PairingCode::parse(code)?))) {
+        Ok((address, code)) => connect_with(request, vec![address], code, confirm, events).await,
+        Err(e) => Err(e).into(),
+    }
+}
+
+/// 待ち受ける側のQRを`scan`で読み、その候補へ順につないで同期する。`scan`は、利用者が読むのを
+/// やめたら`None`を返す。
+pub async fn connect_scanned(
+    request: Request<'_>,
+    scan: impl std::future::Future<Output = Result<Option<String>, ScanError>>,
+    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    events: impl Fn(SyncEvent) + Sync,
+) -> SyncReport {
+    let text = match scan.await {
+        Ok(Some(text)) => text,
+        Ok(None) => return SyncReport::Cancelled,
+        Err(e) => return Err(SyncError::Scan(e)).into(),
     };
+    match parse_invitation(&text) {
+        Ok(Invitation { addresses, code }) => {
+            connect_with(request, addresses, code, confirm, events).await
+        }
+        Err(e) => Err(e).into(),
+    }
+}
+
+async fn connect_with(
+    request: Request<'_>,
+    addresses: Vec<SocketAddr>,
+    code: PairingCode,
+    confirm: impl FnOnce(&SyncDialog) -> bool + Send + 'static,
+    events: impl Fn(SyncEvent) + Sync,
+) -> SyncReport {
+    let shown: Vec<String> = addresses
+        .iter()
+        .map(|a| text::reveal_invisible_line(&a.to_string()))
+        .collect();
     let dialog = SyncDialog {
         title: i18n::text(request.lang, "sync_dialog.connect_title").to_string(),
         message: i18n::format(
             request.lang,
             "sync_dialog.connect_message",
-            &[(
-                "address",
-                &text::reveal_invisible_line(&address.to_string()),
-            )],
+            &[("address", &shown.join(", "))],
         ),
         confirm_label: i18n::text(request.lang, "sync_dialog.connect_confirm").to_string(),
         cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
@@ -217,7 +252,7 @@ pub async fn connect_to(
     run(request, dialog, confirm, |ctx, stop| async move {
         let (device_id, session) = cancellable(&stop, async {
             let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
-            let session = connect(&[address], &code, local_versions(), Limits::default()).await?;
+            let session = connect(&addresses, &code, local_versions(), Limits::default()).await?;
             Ok((device_id, session))
         })
         .await?;
@@ -366,6 +401,9 @@ mod tests {
             SyncError::PeerRefused(AbortReason::Failed),
             SyncError::Core(CoreError::Cancelled),
             SyncError::InvalidCode,
+            SyncError::InvalidInvitation,
+            SyncError::Scan(ScanError::CameraDenied),
+            SyncError::Scan(ScanError::Unavailable(String::new())),
             SyncError::Busy,
             SyncError::Cancelled,
         ];
@@ -393,6 +431,8 @@ mod tests {
                 | SyncError::PeerRefused(_)
                 | SyncError::Core(_)
                 | SyncError::InvalidCode
+                | SyncError::InvalidInvitation
+                | SyncError::Scan(_)
                 | SyncError::Busy
                 | SyncError::Cancelled => {}
             }

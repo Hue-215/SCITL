@@ -201,6 +201,8 @@ pub fn run() {
             commands::requested_chat::watch_requested_chats,
             commands::sync::sync_listen,
             commands::sync::sync_connect,
+            commands::sync::sync_connect_scanned,
+            commands::sync::can_scan_sync_qr,
             commands::sync::cancel_sync,
             commands::sync::resolve_sync_conflicts,
         ])
@@ -506,6 +508,30 @@ mod tests {
         for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
             assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
         }
+    }
+
+    /// 同期のQRの読み取りを、coreが名前と値で指せること(`scitl_core::qr_scan`)。
+    #[test]
+    fn core_qr_scan_names_match_kotlin() {
+        use scitl_core::qr_scan::{CANCELLED, DENIED, FAILED, SCANNED, SCANNER_CLASS};
+        let scanner = include_str!("../gen/android/app/src/main/java/net/niigo/scitl/QrScanner.kt");
+        assert!(scanner.contains(&format!("object {SCANNER_CLASS} {{")));
+        assert!(scanner.contains("fun start(context: Context): Long"));
+        assert!(scanner.contains("fun poll(id: Long): String?"));
+        for (name, value) in [
+            ("SCANNED", SCANNED),
+            ("CANCELLED", CANCELLED),
+            ("DENIED", DENIED),
+            ("FAILED", FAILED),
+        ] {
+            assert!(scanner.contains(&format!("const val {name} = \"{value}\"")));
+        }
+        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
+        assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{SCANNER_CLASS} {{")));
+        // 読み取りの画面は、ほかのアプリから開けない。
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        assert!(manifest
+            .contains("android:name=\".ScanActivity\"\n            android:exported=\"false\" />"));
     }
 
     /// 応答の生成中のサービスを、ほかのアプリから始められないこと。
