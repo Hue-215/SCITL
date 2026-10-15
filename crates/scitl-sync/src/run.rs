@@ -336,6 +336,9 @@ where
     if all.stop_signal().is_requested() {
         return SyncReport::Cancelled;
     }
+    // 承認してから終えるまで(待ち受けを含む)。Androidでは、この間フォアグラウンドサービスにして、
+    // 裏へ回ったり画面が消えたりしても接続を切られないようにする。承認の直後は前に出ているので始められる。
+    let _long_running = all.long_running();
     sync(request.ctx, all.stop_signal().clone(), target)
         .await
         .into()

@@ -303,8 +303,8 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
 #[cfg(target_os = "android")]
 fn generating_set(settings: &Arc<Settings>) -> InFlightSet<Chat> {
     let settings = Arc::clone(settings);
-    InFlightSet::watching_long_running(move |generating| {
-        scitl_core::foreground_service::set_running(generating, settings.display_language())
+    InFlightSet::watching_long_running(move |running| {
+        scitl_core::foreground_service::set_running(running, settings.display_language())
     })
 }
 
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(conf["productName"], scitl_core::PRODUCT_NAME);
     }
 
-    /// 応答の生成中のサービスを、coreが名前で指せ、通知の文面を渡せること
+    /// 応答の生成中と同期の間のサービスを、coreが名前で指せ、通知の文面を渡せること
     /// (`scitl_core::foreground_service`)。
     #[test]
     fn core_service_class_matches_android_manifest() {
@@ -479,6 +479,10 @@ mod tests {
             (
                 "EXTRA_CHANNEL",
                 scitl_core::foreground_service::EXTRA_CHANNEL,
+            ),
+            (
+                "EXTRA_ASK_NOTIFICATIONS",
+                scitl_core::foreground_service::EXTRA_ASK_NOTIFICATIONS,
             ),
         ] {
             assert!(kotlin.contains(&format!("const val {name} = \"{value}\"")));
