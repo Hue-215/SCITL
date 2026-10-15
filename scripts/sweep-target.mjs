@@ -4,9 +4,10 @@
 //   node scripts/sweep-target.mjs [日数(既定は3)]
 //
 // cargoは、Cargo.lockやワークスペースの版が変わるたびに別のハッシュの生成物を作り、古いものを消さない。
-// ビルドのたびに、使う生成物の`.fingerprint/<名前>-<ハッシュ>`を読むので、そこが日数より前から
-// 読まれていなければ(atimeはrelatimeで1日に1回しか進まないので、日単位で見る)、同じハッシュの
-// `deps`・`build`・`examples`の生成物ごと消す。`incremental`は、最後にコンパイルした時刻で見る。
+// ビルドのたびに、使う生成物の`.fingerprint/<名前>-<ハッシュ>/`の中のファイルを読むので、それが日数より
+// 前から読まれていなければ、同じハッシュの`deps`・`build`・`examples`の生成物ごと消す(Linuxのrelatimeでは
+// atimeが1日に1回しか進まないので、日単位で見る)。読んでもatimeが進まない環境(Windowsの多く・noatime)
+// では、使用中のものまで消してしまうので、この判定はしない。`incremental`は、最後にコンパイルした時刻で見る。
 // それ以外(`target/debug/data`・`target/dist`・実行ファイルの写し)には触れない。
 
 import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
@@ -41,46 +42,67 @@ function sizeOf(path) {
   return list(path).reduce((sum, name) => sum + sizeOf(join(path, name)), 0);
 }
 
+// 並行するビルドが消した・実行中で消せない(Windows)ものは飛ばす
 function remove(path) {
-  freed += sizeOf(path);
-  rmSync(path, { recursive: true, force: true });
+  try {
+    const size = sizeOf(path);
+    rmSync(path, { recursive: true, force: true });
+    freed += size;
+  } catch {}
+}
+
+function stat(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
 }
 
 function lastUsed(path) {
-  const st = lstatSync(path);
-  return Math.max(st.atimeMs, st.mtimeMs);
+  const st = stat(path);
+  return st ? Math.max(st.atimeMs, st.mtimeMs) : Infinity;
 }
 
 function sweepProfile(profile) {
   const fingerprints = join(profile, ".fingerprint");
+  // ディレクトリ自身のatimeは、このスクリプトが中を一覧するだけで進むので見ない
+  const units = list(fingerprints).flatMap((name) => {
+    const hash = HASH.exec(name)?.[1];
+    if (!hash) return [];
+    const dir = join(fingerprints, name);
+    const files = list(dir).map((f) => stat(join(dir, f))).filter(Boolean);
+    return [{ dir, hash, files }];
+  });
+  const atimeWorks = units.some((u) => u.files.some((st) => st.atimeMs > st.mtimeMs));
+
   const live = new Set();
   const stale = new Set();
-  for (const name of list(fingerprints)) {
-    const hash = HASH.exec(name)?.[1];
-    if (!hash) continue;
-    const dir = join(fingerprints, name);
-    const used = Math.max(lastUsed(dir), ...list(dir).map((f) => lastUsed(join(dir, f))));
-    if (used >= cutoff) {
+  for (const { dir, hash, files } of units) {
+    const used = files.length ? Math.max(...files.map((st) => Math.max(st.atimeMs, st.mtimeMs))) : Infinity;
+    if (!atimeWorks || used >= cutoff) {
       live.add(hash);
     } else {
       stale.add(hash);
       remove(dir);
     }
   }
-  for (const sub of ["deps", "build", "examples"]) {
-    for (const name of list(join(profile, sub))) {
-      const path = join(profile, sub, name);
-      const hash = HASH.exec(name)?.[1];
-      const old = lastUsed(path) < cutoff;
-      // `.fingerprint`の無いハッシュは、もうどのビルドからも使われない
-      if (hash ? !live.has(hash) && (stale.has(hash) || old) : LEFTOVER.test(name) && old) {
-        remove(path);
+  if (atimeWorks) {
+    for (const sub of ["deps", "build", "examples"]) {
+      for (const name of list(join(profile, sub))) {
+        const path = join(profile, sub, name);
+        const hash = HASH.exec(name)?.[1];
+        const old = lastUsed(path) < cutoff;
+        // `.fingerprint`の無いハッシュは、もうどのビルドからも使われないので、古ければ消す
+        if (hash ? !live.has(hash) && (stale.has(hash) || old) : LEFTOVER.test(name) && old) {
+          remove(path);
+        }
       }
     }
   }
   for (const name of list(join(profile, "incremental"))) {
     const path = join(profile, "incremental", name);
-    if (lstatSync(path).mtimeMs < cutoff) remove(path);
+    if ((stat(path)?.mtimeMs ?? Infinity) < cutoff) remove(path);
   }
 }
 
