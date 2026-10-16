@@ -209,7 +209,7 @@ pub(crate) fn to_transport(
     (out, invalid)
 }
 
-/// 自分の行を運ぶ形で読む。置き換えられない行は、検証で外れた行と同じく扱う。
+/// [`read_with`]の、`ids`をその場で読む形。
 #[cfg(test)]
 pub(crate) fn read(
     tx: &Tx<'_>,
@@ -218,7 +218,8 @@ pub(crate) fn read(
     read_with(tx, filter, &Ids::<i64, String>::from_uids(&tx.uids()?))
 }
 
-/// [`read`]の、`ids`を渡す形。`ids`は同じトランザクションで読んだもの([`Snapshot`])。
+/// 自分の行を運ぶ形で読む。置き換えられない行は、検証で外れた行と同じく扱う。`ids`は同じ
+/// トランザクションで読んだもの([`Snapshot`])。
 pub(crate) fn read_with(
     tx: &Tx<'_>,
     filter: db_sync::Filter<'_>,

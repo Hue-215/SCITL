@@ -125,7 +125,7 @@ adb -s emulator-5556 shell input swipe 5 640 500 640 300        # 左端から�
 - Tauriを更新したら、いちばん上の画面での「戻る」でプロセスが残るかを、タスクごと無い状態から
   `am start`で起動して確かめる(`am stack remove`のあと`am start`→「戻る」→`pidof net.niigo.scitl.dev`)。
   残るのは`MainActivity.onBackPressed`の上書きによるもので、Tauri本体のAppPluginがこれを呼ぶ実装に
-  頼っている(`docs/spec/ui.md`「戻る」)
+  頼っている(`docs/spec/ui.md`「指で操作する端末」)
 
 ### 実寸を測る(WebViewのDevTools)
 

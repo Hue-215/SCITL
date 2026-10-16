@@ -103,8 +103,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # 依存として既にビルドされているものを使う
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 # MCPクライアント。OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない
-# 先へ通信しうるので有効にしない。`client`(素朴なクライアント)・`transport-streamable-http-client-reqwest`(streamable_http、
-# 内部でreqwestを使う)のみ。サーバーを子プロセスとして起動するstdio方式は持たない
+# 先へ通信しうるので有効にしない。`client`(素朴なクライアント)・
+# `transport-streamable-http-client-reqwest`(streamable_http、内部でreqwestを使う)のみ。サーバーを子プロセスとして起動するstdio方式は持たない
 # (`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
 rmcp = { version = "=3.4.0", default-features = false, features = [
     "client",

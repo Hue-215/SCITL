@@ -767,7 +767,8 @@ mod tests {
 
     const OPENING: &str = "開始の発言";
 
-    /// 本文に付いた印も、本文の無いラウンドに残った印も。保存の無いターンを中身から組み立てても、印の無いときと同じ発言列になる。
+    /// 本文に付いた印と、本文の無いラウンドに残った印の両方を確かめる。保存の無いターンを中身から
+    /// 組み立てても、印の無いときと同じ発言列になる。
     #[test]
     fn truncation_marks_do_not_change_what_is_sent() {
         let text = |round, truncated| ResolvedPart::Text {

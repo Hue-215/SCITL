@@ -1917,8 +1917,8 @@ async fn run_turn_persists_error_message_for_unready_adapter_without_calling_sen
     assert_eq!(error_message.error_kind.as_deref(), Some("no_model"));
 }
 
-/// 詳細(プロバイダーの応答本文)も、システムプロンプトを含めどこにも載らない(外部から来た文字列をモデルに渡すと注入の経路に
-/// なる)。
+/// エラー発言の詳細(プロバイダーの応答本文)は、システムプロンプトを含めどこにも載らない(外部から
+/// 来た文字列をモデルに渡すと注入の経路になる)。
 #[tokio::test]
 async fn error_messages_are_excluded_from_the_next_turns_history() {
     let conn = db::open_in_memory().unwrap();
@@ -2369,7 +2369,7 @@ async fn a_replied_turn_saves_what_was_sent() {
     assert_eq!(rounds[2]["assistant"]["content"], "工程を追加しました");
 }
 
-/// 次のターンに並べないため。
+/// 保存しないのは、次のターンに並べないため。
 #[tokio::test]
 async fn a_failed_turn_saves_nothing() {
     let conn = db::open_in_memory().unwrap();
@@ -2520,7 +2520,8 @@ async fn thinking_is_not_sent_back_to_a_provider_that_cannot_read_it() {
     );
 }
 
-/// 次のターンからも外したまま並べ(同じ失敗を繰り返さない)、外したあとに受け取った思考は送り返す。
+/// 断られて外した思考は次のターンからも外したまま並べ(同じ失敗を繰り返さない)、外したあとに
+/// 受け取った思考は送り返す。
 #[tokio::test]
 async fn thinking_rejected_by_the_provider_is_dropped_from_then_on() {
     let conn = db::open_in_memory().unwrap();
@@ -2747,7 +2748,7 @@ async fn a_changed_system_prompt_is_told_without_changing_the_front() {
     assert_eq!(replay_of(sent, "返信2"), thinking_2);
 }
 
-/// ニックネームはシステムプロンプトに入るため。
+/// ニックネームはシステムプロンプトに入るので、変えたら通知が要る。
 #[tokio::test]
 async fn a_changed_nickname_is_told_as_a_system_update() {
     let conn = db::open_in_memory().unwrap();

@@ -460,7 +460,7 @@ mod tests {
         assert!(!failure.user_message().contains("42"));
     }
 
-    /// 文言がそれぞれの上限を案内するため。
+    /// 文言がそれぞれの上限を案内するので分ける。
     #[test]
     fn tool_limit_failures_are_distinct_kinds() {
         assert_ne!(

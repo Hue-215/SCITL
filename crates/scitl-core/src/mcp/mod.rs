@@ -966,7 +966,7 @@ mod tests {
         assert_eq!(names.len(), MAX_TOOL_PAGES);
     }
 
-    /// 続けて同じものも、周回するものも。
+    /// 続けて同じカーソルが返る場合と、周回して返る場合の両方を確かめる。
     #[tokio::test]
     async fn listing_stops_when_a_cursor_comes_back() {
         let names =

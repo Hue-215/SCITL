@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(f.sent_from(), [u6]);
     }
 
-    /// 画像があって、間引いている会話。
+    /// 画像があり、履歴を間引いている会話で確かめる。
     #[test]
     fn one_saved_input_decides_both_marks() {
         let f = Fixture::new();

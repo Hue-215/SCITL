@@ -1845,7 +1845,8 @@ mod tests {
         assert_eq!(opener(&conn, task_id).unwrap(), Some(Opener::Reply));
     }
 
-    /// 返信の無いまま終わった試行の番号が大きくても、生きている返信のある試行を出す。返信が消えれば、ターンごと外れる。
+    /// 返信の無いまま終わった試行の番号が大きくても、生きている返信のある試行を出す。返信が消えれば、
+    /// ターンごと外れる。
     #[test]
     fn the_shown_attempt_is_the_one_with_a_surviving_reply() {
         let conn = db::open_in_memory().unwrap();

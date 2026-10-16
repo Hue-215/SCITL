@@ -608,7 +608,8 @@ models = ["a"]
         assert_eq!(known.unknown_language(), None);
     }
 
-    /// `#[serde(default)]`の無い`Option`が欠損時に`None`になるserde_deriveの挙動に頼っているため、その確認。
+    /// `#[serde(default)]`の無い`Option`が欠損時に`None`になるserde_deriveの挙動に頼っているため、
+    /// その確認。
     #[test]
     fn load_reads_config_without_task_chat_system_prompt_key() {
         let dir = tempfile::tempdir().unwrap();
