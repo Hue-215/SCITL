@@ -8,7 +8,7 @@ description: PR作成前のレビュー手順および、結果の残し方。PR
 PR作成前に、次の順に進める。後の段が前の段の直しもまとめて見るので、順番を入れ替えない。
 
 1. `/simplify`で、変更したコードを整える。
-2. 差分がセキュリティに関わる(外部通信・秘密情報・権限設定・外から受け取る入力・プロンプト注入対策・実行時依存の追加など)ときは、claude-securityの差分スキャン(Scan changes)を`medium`で回し、報告された指摘を直す。
+2. 差分がセキュリティに関わる(外部通信・秘密情報・権限設定・外から受け取る入力・プロンプト注入対策・実行時依存の追加など)ときは、claude-securityの差分スキャンを回し、報告された指摘を直す。commitしていない変更は対象外なので、先にcommitする。`/claude-security`はClaudeからは呼べない(`disable-model-invocation`)ので、ユーザーに`/claude-security scan changes --base <ベースブランチ> --effort medium`の実行を頼む。
 3. `pr-review-toolkit:review-pr`でレビューを行う。デフォルトだとcommitしていない範囲のみを参照するので、`<ベースブランチ>...HEAD`を指定して呼ぶ。観点は`code tests errors comments types`を指定する(`simplify`は1で済んでいる)。
 
 レビューの扱い:
