@@ -26,7 +26,7 @@ pub struct ToolExecutionRecord {
     pub(crate) call_id: Option<String>,
 }
 
-/// 記録のどこに端末の中の連番が入るか(`docs/sync/index.md` 6節)。
+/// 記録のどこに端末の中の連番が入るか(`docs/sync/index.md`「IDと行の変換」)。
 #[derive(Debug)]
 pub enum RecordIds {
     /// 内部ツールと、画面・CLIからの操作。

@@ -57,7 +57,7 @@ pub enum ResponseEvent {
 pub enum FinishReason {
     Stop,
     ToolCall,
-    /// 出力が長さ制限で打ち切られた。Stopに潰すと打ち切りを上位層が検知できない。
+    /// 出力が長さ制限で打ち切られた。Stopにまとめると打ち切りを上位層が検知できない。
     Length,
 }
 
@@ -353,7 +353,7 @@ pub enum Readiness {
     NoModel,
 }
 
-/// 具象プロバイダの境界。`orchestration::turn`はこのtraitのみを知り、プロバイダ固有の癖は
+/// プロバイダの差を吸収するtrait。`orchestration::turn`はこのtraitだけを知り、プロバイダ固有の癖は
 /// 各実装内に閉じ込める。
 #[async_trait::async_trait]
 pub trait LlmAdapter: Send + Sync {

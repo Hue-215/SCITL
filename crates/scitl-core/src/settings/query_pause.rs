@@ -1,4 +1,4 @@
-//! 同期の間、設定からの問い合わせ(推論サーバー・MCPサーバー)を止める印(`docs/sync/index.md` 11節)。
+//! 同期の間、設定からの問い合わせ(推論サーバー・MCPサーバー)を止める印(`docs/sync/index.md`「画面とCLI」)。
 //! 乗っ取られた画面が、待ち受け中の数字をモデル名やヘッダーに入れ、LANの上の相手へ送らせるのを防ぐ。
 
 use std::sync::atomic::{AtomicUsize, Ordering};

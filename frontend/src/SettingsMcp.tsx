@@ -64,7 +64,7 @@ export function McpTab({
       />
 
       {/* ツール呼び出し全体の上限。内部ツールにも
-          効くので、MCPサーバーの一覧より後ろ、タブの末尾に置く。サーバーの追加とは
+          掛かるので、MCPサーバーの一覧より後ろ、タブの末尾に置く。サーバーの追加とは
           別の話なので、追加フォームと同じ形の仕切り線で切る。 */}
       <section className="settings-section settings-section-break">
         <NumberField

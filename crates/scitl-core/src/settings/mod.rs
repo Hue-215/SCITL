@@ -494,7 +494,7 @@ impl Draft<'_> {
             current.config = Arc::clone(&config);
             // 入力を変えない変更で組み立て直した結果は、その間に読み直し
             // ([`Settings::reload_unavailable_key`])が使える状態にしていれば当てはめない
-            // (読み直しの成功を、こちらの失敗で潰さないため)。
+            // (読み直しの成功を、こちらの失敗で上書きしないため)。
             if let Some(adapter) = rebuilt {
                 if inputs_changed || !matches!(current.adapter, AdapterState::Ready(_)) {
                     current.adapter = adapter;

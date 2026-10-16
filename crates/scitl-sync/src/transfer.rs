@@ -1,4 +1,4 @@
-//! 同期1回の流れ(`docs/sync/index.md` 4節)。つなぐ側(B)が差分を送り、待ち受ける側(A)が結合して
+//! 同期1回の流れ(`docs/sync/index.md`「同期1回の流れ」)。つなぐ側(B)が差分を送り、待ち受ける側(A)が結合して
 //! 確定し、結果を返す。Bはそれを確定し、照合の値で同じ結果になったことを確かめる。
 //!
 //! 片方が空でも同じ流れで、初めての相手には全部の行を送る(カーソルが0)。途中で切れても、
@@ -111,13 +111,13 @@ fn reason_to_tell(e: &SyncError) -> Option<AbortReason> {
     }
 }
 
-/// 伝え合ったあとに両側が同じに決める値(7節)。
+/// 伝え合ったあとに両側が同じに決める値(「差分」)。
 struct Agreed {
     /// 自分が送る行の位置(自分の番号。これより後に変わった行を送る)。
     send_from: i64,
     /// 相手が名乗った端末ID。
     peer: String,
-    /// 相手の番号が巻き戻っていて、相手が端末IDを作り直す(10節)。
+    /// 相手の番号が巻き戻っていて、相手が端末IDを作り直す(「端末ID」)。
     peer_renews: bool,
 }
 
@@ -186,8 +186,8 @@ async fn transaction<T: Send + 'static>(
     .await?
 }
 
-/// 端末IDとカーソルを伝え合い、送る位置を決める(7節)。どちらかの番号が巻き戻っていれば、
-/// 両方とも全部を送り直し、巻き戻った側は端末IDを作り直す(10節)。
+/// 端末IDとカーソルを伝え合い、送る位置を決める(「差分」)。どちらかの番号が巻き戻っていれば、
+/// 両方とも全部を送り直し、巻き戻った側は端末IDを作り直す(「端末ID」)。
 async fn introduce(
     session: &mut Session,
     ctx: &Context,
@@ -253,7 +253,7 @@ async fn introduce(
 }
 
 /// 受け取った版に、この端末の番号として、まだ振っていない番号が無いこと。正しい相手なら、巻き戻りは
-/// 伝え合う段で分かっている(7節)。ここで外れる行を取り込むと、この端末のあとの編集が古い番号に負ける。
+/// 伝え合う段で分かっている(「差分」)。ここで外れる行を取り込むと、この端末のあとの編集が古い番号に負ける。
 fn check_own_numbers(t: &Transport, me: &db_sync::DeviceState) -> Result<(), SyncError> {
     let versions = t
         .tasks
@@ -613,7 +613,7 @@ async fn listener(
             continue;
         }
 
-        // 足す添付の実体のうち、無いものをBに求める(行を書く前に置く。5節)。
+        // 足す添付の実体のうち、無いものをBに求める(行を書く前に置く。「同期するもの」)。
         let local_attachments: HashSet<&str> = view
             .local
             .attachments
@@ -808,7 +808,7 @@ fn extend_unique(t: &mut Transport, extra: Transport) {
     add(&mut t.attachments, extra.attachments, |r| &r.uid);
 }
 
-/// 結合の結果を書き、Bへ返す行と照合の値を作る(4節の6と7)。書いた行の数、書き終えた時点の
+/// 結合の結果を書き、Bへ返す行と照合の値を作る(「同期1回の流れ」の6と7)。書いた行の数、書き終えた時点の
 /// カウンター、Bへ返す行、照合の値を返す。
 fn commit(
     tx: &Tx<'_>,
@@ -854,7 +854,7 @@ fn commit(
     }
     let mut changed = writer.finish()?;
 
-    // 同じ本文のメモリを畳む。編集として扱い、版を進める(8節)。
+    // 同じ本文のメモリを畳む。編集として扱い、版を進める(「版と結合」)。
     let alive = tx.alive_memories()?;
     let duplicates: HashSet<&str> =
         merge::duplicate_memories(alive.iter().map(|m| (m.uid.as_str(), m.content.as_str())))
@@ -936,7 +936,7 @@ fn without_echo(mut written: Transport, incoming: &Transport) -> Transport {
     written
 }
 
-/// 照合の値(4節)。今回やり取りした行の、確定後の状態を、運ぶ形で`uid`の順に並べたもののハッシュ。
+/// 照合の値(「同期1回の流れ」)。今回やり取りした行の、確定後の状態を、運ぶ形で`uid`の順に並べたもののハッシュ。
 /// 試行は入れない。`ids`は書いたあとに読んだもの。
 fn digest_of(
     tx: &Tx<'_>,
@@ -1061,7 +1061,7 @@ async fn read_file(store: &AttachmentStore, hash: &str) -> Result<Vec<u8>, SyncE
     Ok(blocking::run(move || store.read(&hash)).await?)
 }
 
-/// 送る前に、行が指す自分の実体を確かめる(送る側で外れた行を示すため。`docs/sync/index.md` 5節)。
+/// 送る前に、行が指す自分の実体を確かめる(送る側で外れた行を示すため。`docs/sync/index.md`「同期するもの」)。
 /// `checked`は、この同期で確かめた添付の行の`uid`(実体を読み直さない)。
 async fn check_own_files(
     ctx: &Context,

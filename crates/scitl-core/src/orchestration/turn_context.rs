@@ -25,7 +25,7 @@ pub struct TurnContext<'a> {
     /// 使うモデルの能力(`llm::resolve_capabilities`で解決済み)。
     pub capabilities: ModelCapabilities,
     /// リクエストで指定する思考の強さ。思考に対応しないモデルでは`None`
-    /// ([`LlmAdapter::send`]の契約)。
+    /// ([`LlmAdapter::send`]を参照)。
     pub reasoning_effort: Option<ReasoningEffort>,
     pub mcp: McpAccess<'a>,
     pub limits: ToolLimits,

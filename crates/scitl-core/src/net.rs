@@ -17,7 +17,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// 名乗らずに通信する(自前のUser-Agentを求める通信先がある)。
 const USER_AGENT: &str = concat!("SCITL/", env!("CARGO_PKG_VERSION"));
 
-/// ホストの分類。平文httpを許すかどうかは、この分類だけで決める。宛先を絞る仕組みを足しても、
+/// ホストの分類。平文httpを許すかどうかは、この分類だけで決める。宛先を絞る機能(オフラインスイッチ等)を足しても、
 /// 平文httpの可否はそちらと別にこの分類で判定する(両方を満たしたときだけ通す)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostClass {

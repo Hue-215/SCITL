@@ -11,7 +11,7 @@ use super::{with_db, CommandResult};
 use crate::AppState;
 
 /// `task_id`は表示中のタスクとしてフロントエンドが渡す
-/// (ターン開始時に対象を固定するツール`get_current_task_detail`とは別の境界)。
+/// (ターン開始時に対象を固定するツール`get_current_task_detail`とは対象の決め方が違う)。
 #[tauri::command]
 pub async fn get_task_detail(
     state: State<'_, AppState>,

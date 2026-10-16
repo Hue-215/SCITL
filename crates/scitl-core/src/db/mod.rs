@@ -143,7 +143,7 @@ const MIGRATIONS: &[&str] = &[
     SYNC_DEVICE_TOKEN_SQL,
 ];
 
-/// このビルドのDBの版(`user_version`)。同期の相手と版を伝え合うのに使う(`docs/sync/index.md` 3節)。
+/// このビルドのDBの版(`user_version`)。同期の相手と版を伝え合うのに使う(`docs/sync/index.md`「接続」)。
 pub fn schema_version() -> u32 {
     MIGRATIONS.len() as u32
 }
@@ -619,7 +619,7 @@ mod tests {
     }
 
     /// 既存の行には`uid`を振り、番号1で書いたものとし、版を空にして印を付けない
-    /// (`docs/sync/index.md` 12節)。既存の通常発言の`prev_uid`は、会話ごとに直前の消えていない
+    /// (`docs/sync/index.md`「段階」)。既存の通常発言の`prev_uid`は、会話ごとに直前の消えていない
     /// 通常発言を指す。
     #[test]
     fn existing_rows_get_sync_columns_without_a_mark() {

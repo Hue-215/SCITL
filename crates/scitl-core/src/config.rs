@@ -256,7 +256,7 @@ pub struct McpServerConfig {
 pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
 
 /// サーバー識別子を検証する([`MCP_SERVER_NAME_MAX_CHARS`]字以内、英数字とアンダースコア
-/// のみ)。画面の入力チェックはセキュリティ境界ではないので、ここでも検証する。
+/// のみ)。画面の入力チェックは守りにならないので、ここでも検証する。
 pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(CoreError::InvalidSettings(

@@ -1,4 +1,4 @@
-//! カメラでQRを読む(Androidだけ。`docs/sync/index.md` 11節)。カメラはOSの機能なので、画面
+//! カメラでQRを読む(Androidだけ。`docs/sync/index.md`「画面とCLI」)。カメラはOSの機能なので、画面
 //! (WebView)には読ませない。読み取りの画面は`gen/android`のKotlin(`ScanActivity`)にあり、ここからは
 //! 開くこと・結果を引き取ること・閉じることだけを頼む。読んだ中身は確かめずに返す。
 

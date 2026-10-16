@@ -81,7 +81,7 @@ pub struct McpToolInfo {
     pub name: String,
     pub description: Option<String>,
     /// サーバーが宣言した引数スキーマ(JSON Schema)。モデルへツールを公開するときに渡す。
-    /// 中身は検証しない(信頼境界はユーザーが登録したこと自体に置く)。公開できる形かは
+    /// 中身は検証しない(ユーザーが登録したこと自体を信頼の根拠にする)。公開できる形かは
     /// `tools::external`が見る。設定画面へは渡さない。
     pub input_schema: Value,
 }

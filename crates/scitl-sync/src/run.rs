@@ -1,4 +1,4 @@
-//! 画面から始める同期(`docs/sync/index.md` 11節)。画面は始めることと「やめる」、競合ごとに選んだ側を
+//! 画面から始める同期(`docs/sync/index.md`「画面とCLI」)。画面は始めることと「やめる」、競合ごとに選んだ側を
 //! 伝え、途中経過を受け取るだけで、待ち受け・接続・結合の順序はここが持つ。始める前に、ネイティブの
 //! ダイアログで利用者に確かめる(同期を始めるコマンドは、乗っ取られた画面も呼べるため)。
 
@@ -135,10 +135,10 @@ impl From<Result<Outcome, SyncError>> for SyncReport {
 pub struct Request<'a> {
     pub ctx: &'a Context,
     /// 応答を生成中の会話。同期の間は全体を押さえ、送信・編集・タスクの操作を受け付けない
-    /// (4節)。生成中の会話があれば始めない。
+    /// (「同期1回の流れ」)。生成中の会話があれば始めない。
     pub generating: &'a InFlightSet<Chat>,
     /// 設定からの推論サーバー・MCPサーバーへの問い合わせ。同期の間は止める(乗っ取られた画面に、
-    /// 数字をモデル名等に入れてLANの上へ送らせない。11節)。
+    /// 数字をモデル名等に入れてLANの上へ送らせない。「画面とCLI」)。
     pub queries: &'a QueryPause,
     pub answers: &'a ConflictAnswers,
     pub lang: Language,

@@ -1053,7 +1053,7 @@ async fn deleting_a_task_the_other_side_kept_using_is_chosen_by_the_user() {
     assert!(tasks::get_task(&a.conn(), a_task).is_ok());
 }
 
-/// 初めて同期する2台は、どちらも総合チャットを使っていれば必ず選ばせる(9節)。タスクは別々なので
+/// 初めて同期する2台は、どちらも総合チャットを使っていれば必ず選ばせる(「会話の枝と、競合の単位」)。タスクは別々なので
 /// 両方が残り、同じ本文のメモリは1つに畳む。
 #[tokio::test]
 async fn two_devices_with_their_own_data_meet() {
@@ -1257,7 +1257,7 @@ async fn resolving_with_different_times_on_each_side_settles_both_sides() {
     }
 }
 
-/// 同じ競合を2組が別々に、逆の側に解いたら、両方を見た端末でもう一度選ばせる(9節)。
+/// 同じ競合を2組が別々に、逆の側に解いたら、両方を見た端末でもう一度選ばせる(「会話の枝と、競合の単位」)。
 #[tokio::test]
 async fn the_same_conflict_settled_both_ways_is_asked_again() {
     let (a, b, c, d) = (Device::new(), Device::new(), Device::new(), Device::new());
@@ -1292,7 +1292,7 @@ async fn the_same_conflict_settled_both_ways_is_asked_again() {
     assert_same(&a, &b);
 }
 
-/// 同じ本文のメモリを2組が別々に畳んでも、消す行が同じなので揃う(8節)。
+/// 同じ本文のメモリを2組が別々に畳んでも、消す行が同じなので揃う(「版と結合」)。
 #[tokio::test]
 async fn memories_folded_on_two_pairs_agree() {
     let (a, b, c, d) = (Device::new(), Device::new(), Device::new(), Device::new());

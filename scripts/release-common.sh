@@ -1,7 +1,7 @@
 # 配布用のビルドのスクリプト(release-build.sh・release-build-android.sh)が読み込む共通の部分。
 # ビルドした人の絶対パス(ホームディレクトリ・CARGO_HOME・このリポジトリの場所)を、バイナリに
 # 焼き込まれるパス(依存クレートのパニックの位置等)から外す指定と、外れたことの検査を持つ。
-# 仕組みは.claude/skills/release-build/SKILL.md「何をしているか」。
+# 詳しくは.claude/skills/release-build/SKILL.md「何をしているか」。
 
 if [[ -n "${RUSTFLAGS:-}" || -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]]; then
   echo "RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS を外してから実行してください(置き換えの指定を上書きしないため)" >&2

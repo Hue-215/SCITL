@@ -229,7 +229,7 @@ pub fn delete(key_ref: &str) -> Result<(), CoreError> {
     })
 }
 
-/// 同期の端末IDの項目の名前(`docs/sync/index.md` 10節)。1台のマシンにデータが複数あっても
+/// 同期の端末IDの項目の名前(`docs/sync/index.md`「端末ID」)。1台のマシンにデータが複数あっても
 /// 取り違えないよう、端末IDを名前に含める。
 fn sync_device_key(device_id: &str) -> String {
     format!("sync-device:{device_id}")
@@ -237,7 +237,7 @@ fn sync_device_key(device_id: &str) -> String {
 
 /// このマシンの資格情報ストアに端末IDの項目があり、値がDBの持つ`token`と同じか。無いことと
 /// 読めないことを分ける(無いか値が違えば、写したDBか戻したDBとみなして端末IDを作り直す。読めない
-/// ときは、作り直した項目を書けたときだけ続ける。`docs/sync/index.md` 10節)。
+/// ときは、作り直した項目を書けたときだけ続ける。`docs/sync/index.md`「端末ID」)。
 pub fn sync_device_is_current(device_id: &str, token: &str) -> Result<bool, CoreError> {
     with_entry(&sync_device_key(device_id), |entry| {
         match entry.get_password() {

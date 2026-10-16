@@ -43,7 +43,7 @@ pub(super) struct Normalized {
 }
 
 /// 画像として扱う形式の画像を正規化する。元がJPEGならJPEG、それ以外(アニメーションは
-/// 先頭のフレーム)はPNGにする。写真以外をJPEGにすると文字が潰れやすく、WebPはローカルの
+/// 先頭のフレーム)はPNGにする。写真以外をJPEGにすると文字がにじみやすく、WebPはローカルの
 /// モデルに読めないものがあるため。デコードできない(壊れている・画素数が上限を超える)
 /// ときは`None`。
 pub(super) fn normalize_image(bytes: &[u8]) -> Option<Normalized> {

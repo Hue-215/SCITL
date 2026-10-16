@@ -1,4 +1,4 @@
-//! 待ち受けと接続(`docs/sync/index.md` 3節)。TLSを張り、数字で互いを確かめ、版を伝え合うまで。
+//! 待ち受けと接続(`docs/sync/index.md`「接続」)。TLSを張り、数字で互いを確かめ、版を伝え合うまで。
 //! 確かめたあとのやり取りは[`Session`]の上で行う。
 
 use std::net::{IpAddr, SocketAddr};

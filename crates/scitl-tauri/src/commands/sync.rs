@@ -1,4 +1,4 @@
-//! 端末間の同期(`docs/sync/index.md` 11節)。どちらの役も、始める前にRust側からネイティブの
+//! 端末間の同期(`docs/sync/index.md`「画面とCLI」)。どちらの役も、始める前にRust側からネイティブの
 //! ダイアログで確かめる。途中経過と競合は`Channel`で知らせ、結果は失敗も含めて`SyncReport`で返す。
 
 use scitl_sync::{ConflictChoice, Request, SyncEvent, SyncReport};

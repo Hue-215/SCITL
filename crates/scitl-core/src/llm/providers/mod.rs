@@ -866,7 +866,7 @@ mod tests {
 
     #[test]
     fn accepts_http_private_ip_literal_base_url() {
-        // 境界値はnet.rsで確かめ、ここではLLMプロバイダー側にも効いていることだけを見る。
+        // 境界値はnet.rsで確かめ、ここではLLMプロバイダー側でも同じ判定を通ることだけを見る。
         assert!(parse_base_url("http://192.168.1.107:11434/v1").is_ok());
     }
 

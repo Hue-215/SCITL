@@ -76,7 +76,7 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
     }
 
     /// 処理中の`key`に止める指示を出す。処理中でなければ何もせず`false`。`true`は指示を
-    /// 出したことを表すだけで、止まったことは表さない。指示は今の処理だけに効き、次に
+    /// 出したことを表すだけで、止まったことは表さない。指示は今の処理だけのもので、次に
     /// `try_begin`した処理には持ち越さない。
     pub fn request_stop(&self, key: &K) -> bool {
         match self.lock().keys.get(key) {
@@ -90,7 +90,7 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
 
     /// 処理中の対象が1つも無ければ全体を押さえ、ガードを返す。押さえている間は、どの対象も
     /// [`try_begin`](Self::try_begin)できない(同期の間、送信・編集・タスクの操作を受け付けない。
-    /// `docs/sync/index.md` 4節)。押さえられなければ、その理由。
+    /// `docs/sync/index.md`「同期1回の流れ」)。押さえられなければ、その理由。
     pub fn try_begin_all(&self) -> Result<InFlightAll<'_, K>, Occupied> {
         let mut entries = self.lock();
         if entries.all.is_some() {

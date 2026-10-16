@@ -6,7 +6,7 @@ import android.content.pm.PackageManager
 import java.lang.ref.WeakReference
 
 /**
- * カメラでQRを読む(docs/sync/index.md 11節)。Rust側(scitl_core::qr_scan)が[start]で読み取りの
+ * カメラでQRを読む(docs/sync/index.md「画面とCLI」)。Rust側(scitl_core::qr_scan)が[start]で読み取りの
  * 画面(ScanActivity)を開き、[poll]で結果を引き取り、やめるときは[cancel]で閉じる。読み取りは
  * WebViewを通さない。
  *

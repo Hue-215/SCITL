@@ -1764,7 +1764,7 @@ async fn run_turn_persists_error_message_for_tool_round_limit() {
     assert_eq!(tool_execution_count(&messages), 4);
 }
 
-/// 設定したラウンド数の上限がそのまま効く。`turn.rs`が定数ではなく渡された値を
+/// 設定したラウンド数の上限がそのまま使われる。`turn.rs`が定数ではなく渡された値を
 /// 見ていることを、実際に回った回数で確かめる。
 #[tokio::test]
 async fn run_turn_honors_the_configured_max_tool_rounds() {

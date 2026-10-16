@@ -1092,7 +1092,7 @@ fn capability_overrides_are_kept_only_while_they_differ_from_the_default() {
     assert!(settings.set_model_visible(&id, "missing", true).is_err());
 }
 
-/// 自動検出の結果は、手動設定を外す基準と、ターンに渡す能力の両方に効く。
+/// 自動検出の結果は、手動設定を外す基準と、ターンに渡す能力の両方に使われる。
 #[test]
 fn detected_capabilities_are_the_layer_below_manual_settings() {
     let (settings, _path, _dir) = temp_settings();

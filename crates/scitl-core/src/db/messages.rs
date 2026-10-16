@@ -85,7 +85,7 @@ pub enum Origin<'a> {
 }
 
 /// 応答生成以外の経路の印(`messages.source`)。`Sync`は同期が置く、結合後のタスクの全体の記録
-/// (`docs/sync/index.md` 8節)。
+/// (`docs/sync/index.md`「版と結合」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationSource {
     Ui,
