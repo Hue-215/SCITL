@@ -92,7 +92,6 @@ impl StoredMessage {
         messages.iter().map(Self::of).collect()
     }
 
-    /// 送り返す思考を外す。
     pub(super) fn drop_replay(&mut self) {
         if let Self::Assistant { replay, .. } = self {
             *replay = Replay::default();

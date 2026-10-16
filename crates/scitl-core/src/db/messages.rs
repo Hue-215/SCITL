@@ -392,7 +392,7 @@ pub(crate) fn list_tool_records_for_chat(conn: &Connection, chat: Chat) -> Resul
     Ok(rows)
 }
 
-/// idで1件取得する(論理削除済みは対象外)。
+/// 論理削除済みは対象外。
 pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     let found = conn
         .query_row(

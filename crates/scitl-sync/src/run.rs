@@ -63,7 +63,6 @@ impl From<SyncProgress> for SyncEvent {
     }
 }
 
-/// 途中経過。
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]

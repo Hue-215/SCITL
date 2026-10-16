@@ -56,7 +56,6 @@ pub struct Outcome {
     pub conflicts: usize,
 }
 
-/// 途中の段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     /// 待ち受ける側が、利用者に競合を選ばせている(つなぐ側で知らせる)。

@@ -37,7 +37,6 @@ const ATTACHMENTS_DIR: &str = "attachments";
 /// 上限に届かないよう短めにする(タイトルの全体はファイルの中にある)。
 const TITLE_CHARS_IN_FILE_NAME: usize = 40;
 
-/// 書き出す範囲。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportScope {
     /// 全タスク・総合チャット・メモリ。

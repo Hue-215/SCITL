@@ -168,7 +168,6 @@ pub struct InFlight<'a, K: Eq + Hash + Clone> {
 }
 
 impl<K: Eq + Hash + Clone> InFlight<'_, K> {
-    /// この処理への止める指示。
     pub fn stop_signal(&self) -> &StopSignal {
         &self.stop
     }

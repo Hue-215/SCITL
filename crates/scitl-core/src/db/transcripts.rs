@@ -115,7 +115,7 @@ fn transcript_from_row(row: &rusqlite::Row) -> rusqlite::Result<Transcript> {
     })
 }
 
-/// 試行1つ分の保存。無ければ`None`。
+/// 試行1つ分の保存。
 pub fn find(conn: &Connection, turn_id: &str, attempt_no: i64) -> Result<Option<Transcript>> {
     Ok(conn
         .query_row(
@@ -172,7 +172,7 @@ pub fn inputs_for_chat(conn: &Connection, chat: Chat) -> Result<Vec<(String, i64
     Ok(rows)
 }
 
-/// 指紋が指す本文。無ければ`None`。
+/// 指紋が指す本文。
 pub fn blob(conn: &Connection, digest: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row(

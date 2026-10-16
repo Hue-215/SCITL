@@ -49,7 +49,6 @@ impl AttachmentStore {
         }
     }
 
-    /// その実体を置いてあるか。
     pub fn contains(&self, hash: &str) -> Result<bool> {
         Ok(self.blob_path(hash)?.is_file())
     }
@@ -159,7 +158,6 @@ impl AttachmentStore {
     }
 }
 
-/// 置き場所にある実体1つ。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StoredBlob {
     pub hash: String,
