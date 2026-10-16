@@ -28,7 +28,6 @@ use openai_compat::OpenAiCompatAdapter;
 
 pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
 
-/// [`build_active_adapter`]の結果。
 pub enum ActiveAdapter {
     Ready(SharedAdapter),
     NoProvider,
@@ -447,7 +446,6 @@ async fn load_credentials_off_thread(provider: &ProviderConfig) -> Result<Creden
 /// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
 const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is not available.)";
 
-/// 鍵を載せるヘッダー。方言ごとに違う。
 #[derive(Clone, Copy)]
 enum KeyHeader {
     /// `Authorization: Bearer`
@@ -866,7 +864,7 @@ mod tests {
 
     #[test]
     fn accepts_http_private_ip_literal_base_url() {
-        // 境界値はnet.rsで確かめ、ここではLLMプロバイダー側にも効いていることだけを見る。
+        // 境界値はnet.rsで確かめ、ここではLLMプロバイダー側でも同じ判定を通ることだけを見る。
         assert!(parse_base_url("http://192.168.1.107:11434/v1").is_ok());
     }
 

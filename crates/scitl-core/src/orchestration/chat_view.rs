@@ -254,7 +254,6 @@ struct SentImages {
     inputs: HashMap<i64, HashSet<String>>,
     /// 添付のidから実体のハッシュ。
     hashes: HashMap<i64, String>,
-    /// 返信の有無から見たユーザー発言。
     replies: Replies,
 }
 
@@ -472,8 +471,6 @@ mod tests {
         }
     }
 
-    /// 履歴を間引いていれば、保存のある最後の返信を作ったときに送っていた範囲の始まりの発言に
-    /// 印を付ける。
     #[test]
     fn marks_the_message_the_sent_history_starts_from() {
         let f = Fixture::new();
@@ -507,7 +504,7 @@ mod tests {
         assert_eq!(f.sent_from(), [u6]);
     }
 
-    /// 画像があって間引いている会話では、同じ保存の入力から2つの印がどちらも決まる。
+    /// 画像があり、履歴を間引いている会話で確かめる。
     #[test]
     fn one_saved_input_decides_both_marks() {
         let f = Fixture::new();
@@ -519,8 +516,7 @@ mod tests {
         assert_eq!(f.undelivered(), HashMap::from([(u1, ids)]));
     }
 
-    /// 位置の発言より前に表示する発言が無ければ、印は要らない。聞き取りから始まった会話のように
-    /// 前に返信があれば、印を出す。
+    /// 聞き取りから始まった会話のように前に返信があれば、印を出す。
     #[test]
     fn marks_nothing_when_no_message_comes_before_the_position() {
         let f = Fixture::new();
@@ -537,7 +533,6 @@ mod tests {
         assert_eq!(f.sent_from(), [u1]);
     }
 
-    /// 返信の中身が指す実行記録は、独立した行として返さず、返信の中身の位置に起きた順で並ぶ。
     /// 操作の記録は会話に並ぶ行のまま。
     #[test]
     fn records_of_a_reply_are_listed_inside_it_in_order() {
@@ -701,7 +696,6 @@ mod tests {
         assert_eq!(f.undelivered(), HashMap::from([(u, vec![ids[1]])]));
     }
 
-    /// 開けるのはその他の添付だけで、開けないOSでは何も開けない。
     #[test]
     fn only_other_files_are_revealable_and_none_where_folders_cannot_be_opened() {
         let f = Fixture::new();
@@ -732,8 +726,7 @@ mod tests {
         assert_eq!(f.undelivered(), HashMap::from([(u, vec![ids[1]])]));
     }
 
-    /// 失敗したターンの画像は、あとの返信が載せずに書かれたら渡していない。まだ返信が1つも無い
-    /// うちは、再試行すれば渡るので分からない扱いにする。
+    /// まだ返信が1つも無いうちは、再試行すれば渡るので分からない扱いにする。
     #[test]
     fn an_image_of_a_failed_turn_is_not_delivered_once_a_later_reply_left_it_out() {
         let f = Fixture::new();

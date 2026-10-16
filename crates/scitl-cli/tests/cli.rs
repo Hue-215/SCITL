@@ -205,7 +205,6 @@ fn argument_errors_reach_the_terminal_escaped() {
     );
 }
 
-/// 応答生成・設定に触れるコマンドはscitl-debug-cliだけが持つ。
 #[test]
 fn commands_beyond_tasks_and_showing_chats_are_not_offered() {
     let data = DataDir::new();

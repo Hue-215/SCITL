@@ -161,8 +161,7 @@ mod tests {
         latest + budget.saturating_sub(latest) / 2
     }
 
-    /// 超えたら、ぎりぎりまでではなく、新しい発言を除いた予算の半分まで、ユーザー発言の境目で
-    /// 落とす。
+    /// ユーザー発言の境目で落とす。
     #[test]
     fn drops_the_oldest_units_down_to_half_the_budget() {
         let [call, result] = tool_round_trip();
@@ -190,8 +189,6 @@ mod tests {
         assert!(size(&history, before) > target);
     }
 
-    /// 新しい発言ひとつが予算の半分を超えても、残りの予算の半分までは直前のやり取りを残す
-    /// (全体を予算の半分に収めようとすると、新しい発言のほかに1往復しか残らない)。
     #[test]
     fn keeps_recent_history_beside_a_message_over_half_the_budget() {
         // 同じ大きさの7往復(0, 2, …, 12から始まる)と、その8往復分を超える新しい発言(14)。
@@ -228,7 +225,6 @@ mod tests {
         );
     }
 
-    /// 新しい発言が予算を使い切るときは、それだけを送る。
     #[test]
     fn keeps_only_the_latest_message_when_it_uses_up_the_budget() {
         let history = vec![user("u1"), assistant("a1"), user(&"長い発言 ".repeat(200))];

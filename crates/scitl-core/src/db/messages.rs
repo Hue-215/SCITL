@@ -85,7 +85,7 @@ pub enum Origin<'a> {
 }
 
 /// 応答生成以外の経路の印(`messages.source`)。`Sync`は同期が置く、結合後のタスクの全体の記録
-/// (`docs/sync/index.md` 8節)。
+/// (`docs/sync/index.md`「版と結合」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationSource {
     Ui,
@@ -125,7 +125,7 @@ pub struct NewMessage<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplyPart {
-    /// 思考の表示用のテキスト。表示専用で、モデルへの入力にもエクスポートにも出さない。
+    /// 思考の表示用のテキスト。モデルへの入力にもエクスポートにも出さない。
     Reasoning {
         round: u32,
         text: String,
@@ -392,7 +392,7 @@ pub(crate) fn list_tool_records_for_chat(conn: &Connection, chat: Chat) -> Resul
     Ok(rows)
 }
 
-/// idで1件取得する(論理削除済みは対象外)。
+/// 論理削除済みは対象外。
 pub fn find_message(conn: &Connection, id: i64) -> Result<Option<Message>> {
     let found = conn
         .query_row(
@@ -457,8 +457,7 @@ fn message_from_row(row: &rusqlite::Row) -> rusqlite::Result<Message> {
 }
 
 /// 発言を1件だけ論理削除する。対象はユーザー発言とターンの返信(アシスタント発言・
-/// エラー発言)の通常発言のみで、ツール実行記録は消さない。`deleted_at`を立てるだけなので、
-/// NULLに戻せば復元できる。
+/// エラー発言)の通常発言のみで、ツール実行記録は消さない。
 ///
 /// 発言の削除の入口(`orchestration::delete_message`)には使わない。途中の発言だけを消すと、その
 /// 後ろに送った会話の前提が変わるため、削除は[`soft_delete_normal_from`]で以降をまとめて消す。
@@ -586,7 +585,7 @@ pub enum Opener {
     Reply,
 }
 
-/// タスクの会話を始めた側。まだ1行も無ければ`None`。
+/// まだ1行も無ければ`None`。
 ///
 /// 論理削除した行も含めた最初の行で決める。最初のユーザー発言を消しても編集で置き換えても
 /// 行は残るので、答えが変わらない。応答生成以外の経路での操作の記録はこの会話の発言ではないので
@@ -611,7 +610,7 @@ pub fn opener(conn: &Connection, task_id: i64) -> Result<Option<Opener>> {
     }))
 }
 
-/// 指定`turn_id`の次の試行番号を採番する。削除された古い試行と番号が重ならないよう、
+/// 削除された古い試行と番号が重ならないよう、
 /// 論理削除済みの試行も`MAX`の対象に含める。
 pub fn next_attempt_no(conn: &Connection, turn_id: &str) -> Result<i64> {
     let max: Option<i64> = conn.query_row(
@@ -940,7 +939,7 @@ mod tests {
             .is_err());
     }
 
-    /// 中身を持つのはターンの返信の行だけで、それには必ず持つ(`0008_reply_parts.sql`のトリガー)。
+    /// `0008_reply_parts.sql`のトリガーが強制する。
     #[test]
     fn parts_are_held_by_exactly_the_replies_of_turns() {
         let conn = db::open_in_memory().unwrap();
@@ -1238,8 +1237,8 @@ mod tests {
         assert!(assistant_deleted_at.is_some());
     }
 
-    /// 生き残っている最後の通常発言より後ろのターンの記録だけを消す。それより前のターンの記録、
-    /// 応答生成以外の経路での操作の記録、別の会話の記録は消さない。
+    /// 最後の通常発言より前のターンの記録、応答生成以外の経路での操作の記録、別の会話の記録は
+    /// 消さない。
     #[test]
     fn soft_delete_trailing_turn_records_removes_only_turn_records_after_the_last_message() {
         let conn = db::open_in_memory().unwrap();
@@ -1351,7 +1350,6 @@ mod tests {
         assert!(!alive(after_edit));
     }
 
-    /// 通常発言が1つも残っていなければ、会話のターンの記録すべてを消す。
     #[test]
     fn soft_delete_trailing_turn_records_removes_every_turn_record_of_an_emptied_chat() {
         let conn = db::open_in_memory().unwrap();
@@ -1653,8 +1651,8 @@ mod tests {
         assert!(serde_json::from_value::<Chat>(serde_json::json!({ "kind": "task" })).is_err());
     }
 
-    /// 通常発言は、その会話の消えていない最後の通常発言に続ける。編集で消した発言は飛ばすので、
-    /// 消えていない通常発言は1本の列になる。実行記録と操作の記録は列に入らない。
+    /// 編集で消した発言は飛ばすので、消えていない通常発言は1本の列になる。実行記録と操作の
+    /// 記録は列に入らない。
     #[test]
     fn normal_messages_continue_the_last_surviving_normal_message() {
         let conn = db::open_in_memory().unwrap();
@@ -1767,7 +1765,7 @@ mod tests {
         assert!(on_record.is_err(), "{on_record:?}");
     }
 
-    /// 会話の行は`id`の順に並ぶ。`created_at`は端末の時計で決まるので、並びに使わない。
+    /// `created_at`は端末の時計で決まるので、並びに使わない。
     #[test]
     fn rows_of_a_chat_follow_their_ids_even_when_the_clock_went_back() {
         let conn = db::open_in_memory().unwrap();
@@ -1847,8 +1845,8 @@ mod tests {
         assert_eq!(opener(&conn, task_id).unwrap(), Some(Opener::Reply));
     }
 
-    /// 表示する試行は、消えていない通常発言を持つ試行。返信の無いまま終わった試行の番号が
-    /// 大きくても、生きている返信のある試行を出す。返信が消えれば、ターンごと外れる。
+    /// 返信の無いまま終わった試行の番号が大きくても、生きている返信のある試行を出す。返信が消えれば、
+    /// ターンごと外れる。
     #[test]
     fn the_shown_attempt_is_the_one_with_a_surviving_reply() {
         let conn = db::open_in_memory().unwrap();

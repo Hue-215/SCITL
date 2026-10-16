@@ -33,7 +33,7 @@ pub(super) const DELETE_TASK_IDS: IdPositions = IdPositions {
     }],
 };
 
-/// タイトルの変更。整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
+/// 整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
 pub async fn rename_task(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,
@@ -116,7 +116,7 @@ async fn update(
     .await
 }
 
-/// 同期が置く、結合後のタスクの全体の記録の`content`(`docs/sync/index.md` 8節)。モデルが状態を
+/// 同期が置く、結合後のタスクの全体の記録の`content`(`docs/sync/index.md`「版と結合」)。モデルが状態を
 /// 読むツールの呼び出しと同じ形にし、形式の説明(`llm::user_message_format_note`)を変えずに済ませる。
 pub(crate) fn task_state_record(conn: &Connection, task_id: i64) -> Result<String> {
     let result = get_current_task_detail::task_detail(conn, task_id)?;

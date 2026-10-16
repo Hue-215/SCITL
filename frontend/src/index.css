@@ -1,14 +1,6 @@
 /*
- * スタイルは2層で構成する。
- *
- *   1. 基盤層(要素セレクタ): アプリで使う要素の既定の見た目をここで決める。
- *      ブラウザとOS(WebKitGTK/GTKテーマ)の既定値は、クラスを付け忘れた要素にも
- *      必ず適用されるため、クラス側で個別に打ち消すのでは必ず漏れる。
- *   2. 画面層(クラスセレクタ): 基盤層との差分だけを書く。基盤層で足りているものを
- *      再掲しない。
- *
- * 新しい要素を画面に足すときは、まず基盤層に既定があるかを確認すること。無ければ
- * 画面側ではなく基盤層に足す。
+ * 基盤層(要素セレクタ)でアプリで使う要素の既定の見た目を決め、画面層(クラスセレクタ)には
+ * 基盤層との差分だけを書く(docs/spec/ui.md「スタイルシートの2層構成」)。
  */
 
 /* ---- 基盤層 ---- */
@@ -25,11 +17,11 @@
 :root {
   color-scheme: light dark;
   font-family: var(--font-family);
-  /* 同梱していないウェイトを太字として合成させない(字形が潰れる)。斜体の合成は残す
+  /* 同梱していないウェイトを太字として合成させない(字形が崩れる)。斜体の合成は残す
      (日本語の書体は斜体を持たず、.entry-tool等の斜体はこれで作られる)。 */
   font-synthesis: style;
   /* AndroidのWebViewが押した部品に重ねる青い塗りを消す。押した手応えは部品自身の
-     :active・:hoverの塗りで出す。継承される値なので、根に置けば全体に効く。 */
+     :active・:hoverの塗りで出す。継承される値なので、根に置けば全体に掛かる。 */
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -343,7 +335,7 @@ option {
 
 /* 平らなボタン: 一覧の行や補助的な操作のように、並べたときに塗りがうるさくなるもの。
    普段は塗りも影も持たず、指し示すと浮き、押すと沈む。選択中(.selected)は沈んだまま
-   残す。ホバーは指し示せる端末でだけ効かせる(タッチ端末では浮いたまま残るため)。
+   残す。ホバーは指し示せる端末でだけ当てる(タッチ端末では浮いたまま残るため)。
    対象の一覧を1回だけ書くため、状態ごとの指定は入れ子(&)で持つ。アイコンだけのボタンも既定は
    平らにし、塗りを持たせたいもの(入力欄の下の添付・送信)は.raised・.primaryで外す。 */
 :is(
@@ -559,7 +551,7 @@ option {
 
 .chat-compose textarea {
   /* 基盤層の--textarea-min-heightより低い、1行分の高さを下限にする。1行の中身がある限り内容側の
-     高さ(1行分とpadding・border)がこの下限を上回るため実質効かないが、フォントサイズを変えた
+     高さ(1行分とpadding・border)がこの下限を上回るため実質使われないが、フォントサイズを変えた
      ときの保険として床に置く。 */
   min-height: var(--control-size-md);
 }
@@ -757,7 +749,7 @@ option {
 }
 
 /* 引き出したカラムと暗幕の上では、ブラウザに縦のスクロールだけを任せ、横の指の動きは閉じる
-   スワイプ(useDrawerSwipe.ts)に使う。内容側には付けない(コードの塊・表の横スクロールが効かなくなる)。 */
+   スワイプ(useDrawerSwipe.ts)に使う。内容側には付けない(コードの塊・表の横スクロールが動かなくなる)。 */
 .narrow .drawer,
 .drawer-backdrop {
   touch-action: pan-y;
@@ -1033,7 +1025,7 @@ details[open] > summary > .disclosure-mark,
   color: var(--color-text-secondary);
 }
 
-/* Markdownとして描画しない本文(エラー発言・応答待ち)。改行入りの文言を空白に潰さない。 */
+/* Markdownとして描画しない本文(エラー発言・応答待ち)。改行入りの文言の改行を空白にしない。 */
 .entry-content {
   white-space: pre-wrap;
   word-break: break-word;
@@ -1503,7 +1495,7 @@ details[open] > summary > .disclosure-mark,
   flex-shrink: 0;
 }
 
-/* 一覧が空のときの一文。プロバイダー・モデル・MCPサーバー・ツールで共通。 */
+/* プロバイダー・モデル・MCPサーバー・ツールで共通。 */
 .list-empty {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
@@ -1550,7 +1542,7 @@ details[open] > summary > .disclosure-mark,
 }
 
 /* 名前の列だけが残りの幅を取り、区切りの無い英数字の連続でも折り返す。狭い窓では
-   1文字ずつに潰れないよう下限を持たせ、足りない分は表の横スクロールに回す。
+   1文字ずつで折り返さないよう下限を持たせ、足りない分は表の横スクロールに回す。
    下限はここでしか使わない値なのでトークン化しない。 */
 .model-table .model-name {
   width: 100%;
@@ -1951,7 +1943,7 @@ button.danger {
   border-color: var(--color-danger);
 }
 
-/* 受け付けなかった添付。送られない。 */
+/* 受け付けなかった添付。 */
 .chip-error {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);

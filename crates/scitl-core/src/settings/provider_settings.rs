@@ -21,7 +21,7 @@ pub struct NewProvider {
     pub api_format: ApiFormat,
     pub base_url: String,
     pub api_key: Option<SecretString>,
-    /// カスタムHTTPヘッダー。値は保存後は`key_ref`に置き換わる。
+    /// 値は保存後は`key_ref`に置き換わる。
     pub headers: HeaderInput,
 }
 
@@ -116,8 +116,8 @@ impl Settings {
     }
 
     /// アクティブなプロバイダーを消したら、選択を移す([`Config::reselect_active_provider`])。
-    /// 保存済みAPIキーも消す。鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに設定が消えた鍵を
-    /// 指して残る)。
+    /// 保存済みAPIキーも消す。鍵は設定の保存が済んでから消す(先に消すと、保存に失敗したときに
+    /// 設定が消えた鍵を指して残る)。
     pub fn delete_provider(&self, provider_id: &str) -> Result<SettingsView> {
         let mut draft = self.edit();
         let config = &mut draft.config;

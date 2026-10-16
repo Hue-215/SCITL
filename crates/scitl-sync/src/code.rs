@@ -1,4 +1,4 @@
-//! 待ち受けのたびに作る数字(`docs/sync/index.md` 3節)。利用者が目で運び、PAKEの合言葉にする。
+//! 待ち受けのたびに作る数字(`docs/sync/index.md`「接続」)。利用者が目で運び、PAKEの合言葉にする。
 
 use std::fmt;
 

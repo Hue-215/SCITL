@@ -1,4 +1,4 @@
-//! 運ぶ形(`docs/sync/index.md` 6節)。端末の中の連番を持たず、行どうしは`uid`で指す。相手を
+//! 運ぶ形(`docs/sync/index.md`「IDと行の変換」)。端末の中の連番を持たず、行どうしは`uid`で指す。相手を
 //! 確かめたあとのメッセージ([`Message`])の中身。
 
 use std::collections::BTreeMap;
@@ -49,7 +49,7 @@ pub(crate) struct MemoryRow {
 /// `content`は、実行記録ならIDを[`UID_MARKER`]の形に置き換えたJSONの文字列。
 ///
 /// 試行の番号は端末の中の値なので運ばず、試行の最初の行の`uid`(`attempt`)で試行を指す。
-/// 受け取る側が自分の番号を振り直す(`docs/sync/index.md` 9節「試行の番号」)。
+/// 受け取る側が自分の番号を振り直す(`docs/sync/index.md`「会話の枝と、競合の単位」「試行の番号」)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MessageRow {
@@ -71,7 +71,7 @@ pub(crate) struct MessageRow {
 }
 
 impl MessageRow {
-    /// 消えていない通常発言(会話の鎖に入る行。`docs/sync/index.md` 9節)。
+    /// 消えていない通常発言(会話の鎖に入る行。`docs/sync/index.md`「会話の枝と、競合の単位」)。
     pub(crate) fn is_alive_normal(&self) -> bool {
         self.kind == "normal" && self.deleted_at.is_none()
     }
@@ -142,7 +142,7 @@ impl Transport {
     }
 }
 
-/// 相手を確かめたあとのメッセージ。流れは`docs/sync/index.md` 4節(つなぐ側がB、待ち受ける側がA)。
+/// 相手を確かめたあとのメッセージ。流れは`docs/sync/index.md`「同期1回の流れ」(つなぐ側がB、待ち受ける側がA)。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Message {
@@ -150,7 +150,7 @@ pub(crate) enum Message {
     Intro {
         device_id: String,
     },
-    /// カーソルの突き合わせに要るもの(7節)。`cursor`は自分が相手について持つカーソル、
+    /// カーソルの突き合わせに要るもの(「差分」)。`cursor`は自分が相手について持つカーソル、
     /// `seen_of_you`は自分が知る相手の番号の最大(カーソルと版から)。
     State {
         counter: i64,
@@ -175,7 +175,7 @@ pub(crate) enum Message {
     },
     /// Bの差分の終わり。
     RowsEnd,
-    /// AがBに、単位の行をすべて求める(両方が変えた単位。8節)。
+    /// AがBに、単位の行をすべて求める(両方が変えた単位。「版と結合」)。
     NeedUnits {
         tasks: Vec<String>,
         general: bool,

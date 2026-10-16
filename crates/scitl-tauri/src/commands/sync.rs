@@ -1,4 +1,4 @@
-//! 端末間の同期(`docs/sync/index.md` 11節)。どちらの役も、始める前にRust側からネイティブの
+//! 端末間の同期(`docs/sync/index.md`「画面とCLI」)。どちらの役も、始める前にRust側からネイティブの
 //! ダイアログで確かめる。途中経過と競合は`Channel`で知らせ、結果は失敗も含めて`SyncReport`で返す。
 
 use scitl_sync::{ConflictChoice, Request, SyncEvent, SyncReport};
@@ -57,20 +57,19 @@ pub async fn sync_connect_scanned(
     .await)
 }
 
-/// この端末でQRを読めるか(読めなければ、画面は読むボタンを出さない)。
+/// 読み取りのボタンを出すかの判定([`scitl_core::qr_scan::available`])。
 #[tauri::command]
 pub fn can_scan_sync_qr() -> bool {
     scitl_core::qr_scan::available()
 }
 
-/// 進んでいる同期を止める。同期していなければ何もしない。
+/// 進んでいる同期を止める([`scitl_sync::cancel`])。
 #[tauri::command]
 pub fn cancel_sync(state: State<'_, AppState>) {
     scitl_sync::cancel(&state.generating);
 }
 
-/// 見せている競合の、選んだ側を渡す。見せている競合のすべてに1つずつ選んでいなければ受け取らず、
-/// `false`を返す。
+/// 競合で選んだ側を渡す([`scitl_sync::answer`])。
 #[tauri::command]
 pub fn resolve_sync_conflicts(state: State<'_, AppState>, choices: Vec<ConflictChoice>) -> bool {
     scitl_sync::answer(&state.sync_answers, choices)

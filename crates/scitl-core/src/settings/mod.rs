@@ -170,11 +170,9 @@ pub struct Settings {
     config_error: Option<String>,
     current: Mutex<Current>,
     writer: Mutex<()>,
-    /// 取得済みのMCPツール一覧([`crate::mcp::ToolCatalog`])。
     mcp_tools: Arc<ToolCatalog>,
     /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。
     fetching: InFlightSet<String>,
-    /// モデル能力の自動検出の結果([`DetectedCatalog`])。
     detected: DetectedCatalog,
     /// [`Self::detect_model_capabilities`]の同時実行を1プロバイダーにつき1本に絞る。
     detecting: InFlightSet<String>,
@@ -494,7 +492,7 @@ impl Draft<'_> {
             current.config = Arc::clone(&config);
             // 入力を変えない変更で組み立て直した結果は、その間に読み直し
             // ([`Settings::reload_unavailable_key`])が使える状態にしていれば当てはめない
-            // (読み直しの成功を、こちらの失敗で潰さないため)。
+            // (読み直しの成功を、こちらの失敗で上書きしないため)。
             if let Some(adapter) = rebuilt {
                 if inputs_changed || !matches!(current.adapter, AdapterState::Ready(_)) {
                     current.adapter = adapter;

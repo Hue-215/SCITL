@@ -17,7 +17,7 @@ const REDACTED: &str = "[redacted]";
 /// 要求URLが現れたときの置き換え先。
 const URL_PLACEHOLDER: &str = "[url]";
 
-/// LLM呼び出しの失敗。`CoreError::Llm`として上位へ返る。
+/// `CoreError::Llm`として上位へ返る。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LlmError {
     /// 送る前にリクエストを組み立てられなかった。起きうるのは、APIキーにヘッダーへ
@@ -317,8 +317,7 @@ mod tests {
         assert!(!rejected_certificate(&Wrapped(Box::new(refused))));
     }
 
-    /// 実際の接続で、証明書の検証で断られた失敗を通信の失敗と見分ける。信頼されていない
-    /// 証明書を出すTLSのサーバーへ、アプリのHTTPクライアントでつなぐ。
+    /// 信頼されていない証明書を出すTLSのサーバーへ、アプリのHTTPクライアントでつなぐ。
     ///
     /// 見分けは、reqwestが返す失敗の原因の連鎖の形と、そこに現れるrustlsの型に頼っている。
     /// 依存を上げて、連鎖の包み方が変わったとき・rustlsが2つの版に分かれたとき(型が別になる)・
@@ -450,7 +449,6 @@ mod tests {
         );
     }
 
-    /// ヘッダーに載せられない文字を含む鍵は、送る前に失敗する。
     #[tokio::test]
     async fn a_key_that_cannot_be_a_header_is_an_invalid_request() {
         let (url, _port) = refused_url();

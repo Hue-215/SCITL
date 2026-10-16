@@ -1,4 +1,4 @@
-# WebViewとの境界
+# WebViewとRust側の分担
 
 ## 画面が持つもの・持たないもの
 
@@ -16,7 +16,7 @@ AndroidはAndroid System WebView)。ブラウザの機能(ファイル・クリ�
 何を読むかを利用者がネイティブのダイアログで選ぶ、等)。WebViewの機能はブラウザとしての制約(利用者の
 操作の中でしか読めない等)の下で動くが、コマンドはその制約を受けないので、移すことで広がる場合もある。
 
-**画面が持つもの**:
+画面が持つもの:
 
 - 描画: 配置・テーマ(OSの明暗への追従を含む)・文言の引き当て(`i18n.md`)・日時や大きさの書式
 - 窓の幅・主な入力の手段(指かマウスか)・ホバーできるかによる描き分けと、キー操作の割り当て
@@ -50,7 +50,7 @@ AndroidはAndroid System WebView)。ブラウザの機能(ファイル・クリ�
   からも書けるなら、そこではコマンドにしない理由が「増えない」に留まる(コマンドにしても守りは増えない)。
   書けなかったときは、ボタンの文言で知らせる
 
-**画面が持たないもの**(Rust側に置く):
+画面が持たないもの(Rust側に置く):
 
 - 秘密情報の保持と読み出し(入力欄で受けた値はそのままコマンドへ渡す。`network-secrets.md`「秘密情報」)、
   外部への通信(下の「CSP / Tauri権限設定」で止める)、DB
@@ -65,12 +65,11 @@ AndroidはAndroid System WebView)。ブラウザの機能(ファイル・クリ�
 
 ## IPCコマンドの設計
 
-フロントエンドは秘密情報を一切受け取らず、DB・ネットワーク・ファイルに直接触れない(上の節)。
 コマンド名は「デシリアライズ→coreを1つ呼ぶ→シリアライズ」の単一の機能に対応する
 narrow な verb-noun とし、`run_query` のような汎用コマンドは作らない(コマンド名を
-見るだけで権限範囲が監査できる状態を保つ)。1つの操作は1つのコマンドにする。
+見るだけで権限範囲が監査できる状態を保つ)。
 
-コマンドが受け渡す型はRust側を正本とし、TypeScriptの定義(`frontend/src/bindings/`)は
+コマンドが受け渡す型はRust側で定義し、TypeScriptの定義(`frontend/src/bindings/`)は
 `ts-rs`で生成する。手で写すと、Rust側の変更に追従し損ねても型検査が通ってしまうため。
 生成は`cargo test`が行い、CIは生成し直した結果とコミット済みの生成物が一致することを確かめる。
 
@@ -82,23 +81,23 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 
 `get_current_task_detail` のようなモデル向けツール(引数なし、対象はターン開始時に
 オーケストレーション側が固定)と、フロントエンド向けIPCコマンドの `task_id` 引数
-(フロントエンドが表示中のタスクとして渡す)は**区別されるべき別の境界**であり、
+(フロントエンドが表示中のタスクとして渡す)は、対象の決め方が違うので混ぜない。
 ツール登録箇所にその旨のコメントを残す。
 
 ## CSP / Tauri権限設定
 
 - `default-src 'self'` / `img-src 'self' data:`(外部画像を読み込ませない。
-  本文中の画像記法をリンクへ変換する自前処理と合わせた多層防御。片方が破れても止まる)/
+  本文中の画像記法をリンクへ変換する自前処理と合わせた多層防御)/
   `script-src 'self'`(CDN・inline eval不可)
 - `connect-src ipc: http://ipc.localhost`。全通信はRust側で行う設計なので、WebViewからの
   外部接続は本来ゼロのはず。許可しているのはRust側へのIPCの窓口(Linux・macOSは`ipc:`、
   Windows・Androidは`http://ipc.localhost`)だけで、これ以外に広げる必要が出たら「Rustが全通信を担う」
-  境界が破れた合図。`useHttpsScheme`を有効にすると窓口は`https://ipc.localhost`になるが、CSP3では
+  決まりが崩れた合図。`useHttpsScheme`を有効にすると窓口は`https://ipc.localhost`になるが、CSP3では
   スキームが`http`のソース式は`https`のURLにも当たるので、CSPを替えなくても通る(Androidで確認。
   WindowsのWebView2も同じChromiumの判定のはずだが未確認。下の「Android」の節)。
   IPCの窓口を塞ぐと、Tauriは`postMessage`へ黙って切り替えて動き続け、目に見える症状は、Channelの
   8KBを超える通知の取得(`plugin:__TAURI_CHANNEL__|fetch`)が止まり、長い途中経過がそのターンの間
-  出なくなることだけになる(生のバイト列を受け取るコマンドはIssue #476で無くした)。気付けないので、
+  出なくなることだけになる(生のバイト列を受け取るコマンドは持たない)。気付けないので、
   `csp`・`devCsp`の`connect-src`に両方の窓口があることを`cargo test`で確かめる
   (`scitl-tauri`の`csp_lets_the_webview_reach_the_ipc_endpoints`。メンテナの判断)。CSPを変えたときに
   実際に届くかは、本番ビルドで長い返信(8KBを超える思考や本文)の途中経過が出続けるかで確かめる
@@ -201,7 +200,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
     見せる形にする(`sanitize.md`「ネイティブのダイアログ」)。開けないリンクは理由を知らせて閉じるだけ、
     OSへ渡すのに失敗したときもダイアログで知らせる
   - OSへ渡すのは、デスクトップは`open`クレート(`link::open_confirmed`)、Androidは`open`クレートが
-    動かないので`tauri-plugin-opener`の`open_url`(`ACTION_VIEW`のIntent。Issue #440で調べた)。openerは
+    動かないので`tauri-plugin-opener`の`open_url`(`ACTION_VIEW`のIntent)。openerは
     画面向けのコマンドも持つが、画面に権限を与えないので届かない。既定ではリンクのクリックを奪う
     スクリプトを画面に差し込むので、切って登録する(`open_js_links_on_click(false)`)
   - 見出しのURLは開くときと同じ解釈で正規化した形にし、開けるWebのリンクは移動先のホストを必ず別の
@@ -224,26 +223,26 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
   以後試さない。`../ui.md`「指で操作する端末」)。乗っ取られた画面にできるのは、受け手を残して「戻る」で
   裏へ回らないようにするか、外してダイアログが閉じないようにすることだけで、ホーム・最近使ったアプリ
   からは出られる。画面へ届くのは`canGoBack`だけで、ほかのプラグインの受け手には`core:app`の権限が
-  効かない
-- Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「ローカル完結」)
+  及ばない
+- Tauriのupdaterプラグインを有効化しない(`../principles.md` 1節「ローカルで完結させる」)
 - 多重起動の防止(`tauri-plugin-single-instance`)はJSのAPIを持たず、capabilitiesに権限を
   足さない。`deep-link`のfeatureは有効にしない(`concurrency.md`「多重起動の防止」)
 
 ### Android
 
-上の決まりがAndroidのWebViewでも今のまま効くかを、エミュレーター(Android 17・API 37、Android
+上の決まりがAndroidのWebViewでも今のまま通用するかを、エミュレーター(Android 17・API 37、Android
 System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(Issue #477、2026-10)。
 
-- **CSP**: ヘッダーで効いており、起動時の違反は無い。外部への`fetch`は`connect-src`の違反として止まる
-- **IPCの宛先**: Androidの`shouldInterceptRequest`はPOSTの本文を読めないので、Tauriはコマンドを
-  **常に`postMessage`で送り**、`connect-src`の対象にならない。`http://ipc.localhost`への`fetch`を使うのは
+- CSPはヘッダーで掛かっており、起動時の違反は無い。外部への`fetch`は`connect-src`の違反として止まる
+- IPCでは、Androidの`shouldInterceptRequest`がPOSTの本文を読めないので、Tauriはコマンドを
+  常に`postMessage`で送り、`connect-src`の対象にならない。`http://ipc.localhost`への`fetch`を使うのは
   Channelの8KBを超える通知の取得(`plugin:__TAURI_CHANNEL__|fetch`)だけで、CSPに止められずRustまで届く。
   `useHttpsScheme`を有効にしたAPKでは、画面が`https://tauri.localhost`、窓口が`https://ipc.localhost`に
   変わり、CSPを替えずに画面の読み込みもChannelの取得も違反なく動いた(遷移の判定も`https`を通す)
 - **生のバイト列を受け取るコマンドはAndroidでは必ず失敗する**。`postMessage`は本文をJSONにするので、
-  `InvokeBody::Raw`が届かない。そうしたコマンドは持たない(添付はIssue #476で、Rust側がOSの選択画面で
-  選ばせて読む形にした。選んだものは`content://`のURIで届き、`tauri-plugin-fs`で開く)
-- **遷移の判定**: 画面は`http://tauri.localhost`から配られ、`is_app_url`の`http(s)://tauri.localhost`に当たる。
+  `InvokeBody::Raw`が届かない。そうしたコマンドは持たない(添付は、Rust側がOSの選択画面で
+  選ばせて読む。選んだものは`content://`のURIで届き、`tauri-plugin-fs`で開く)
+- 画面は`http://tauri.localhost`から配られ、`is_app_url`の`http(s)://tauri.localhost`に当たる。
   開発時(`tauri android dev`)も、Tauriは画面を`http://tauri.localhost`で開いてRust側から開発サーバーへ
   中継する(`devUrl`のホストが`localhost`かIPアドレスのとき)。そのため判定は、開発時も開発サーバーの
   オリジンに加えてカスタムプロトコルを通す(通さないと最初の遷移が止まり、画面が白いままになる)。
@@ -253,9 +252,8 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   サーバーの画面が出る)。
   外部のURLへの遷移は、`location`の書き換え・`href`を持つ`<a>`のクリック・`window.open`のどれも止まる
   (`ERR_ABORTED`)。どちらの場合もWebViewは外部のページを読み込まない。本文中のリンクは、確認の
-  ダイアログの「開く」を押すと`tauri-plugin-opener`がブラウザへ渡す(`open`クレートはAndroidで動かない。
-  Issue #492で替えた)
-- **画面からのカメラ・マイク等の要求**: wryのWebChromeClientは、アプリがAndroidの権限を持っていれば、
+  ダイアログの「開く」を押すと`tauri-plugin-opener`がブラウザへ渡す(`open`クレートはAndroidで動かない)
+- 画面からのカメラ・マイク等の要求は断る。wryのWebChromeClientは、アプリがAndroidの権限を持っていれば、
   画面の`getUserMedia`等の要求をそのまま許す。アプリはQRを読むためにカメラの権限を持つ(Issue #592)ので、
   `MainActivity`がクライアントを`GuardedChromeClient`で包み、権限の要求と位置情報の要求を常に断る。
   wryはクライアントを`onWebViewCreate`のあとで付けるので、メインスレッドの後ろへ回して包む。
@@ -264,6 +262,6 @@ System WebView 145、Tauri 2.11.6、デバッグ用のAPK)で確かめた結果(
   (`android-check`スキル)。包めないまま前に出ると、logcatのタグ`SCITL`に出る。
   `Permissions-Policy`のヘッダー(`app.security.headers`)では止められない。Tauri 2.11(tauri-utils 2.9.3)は
   これを`Permission-Policy`という誤った名前で送り、WebViewが解釈しない
-- **権限の設定(capabilities)**: 「戻る」の受け手の権限(上の「CSP / Tauri権限設定」)を足したあとも、
+- 権限の設定(capabilities)に「戻る」の受け手の権限(上の「CSP / Tauri権限設定」)を足したあとも、
   自前のコマンドとChannelの取得(`plugin:__TAURI_CHANNEL__|fetch`)が権限で拒まれずに呼べる
   (Issue #475、2026-10)

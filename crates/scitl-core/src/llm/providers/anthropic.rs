@@ -241,10 +241,9 @@ struct RequestMessage {
     content: Vec<RequestPart>,
 }
 
-/// 思考をどう指定するか。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Thinking {
-    /// 指定しない(思考に対応しないモデル)。
+    /// 思考に対応しないモデル。
     Unspecified,
     Disabled,
     Adaptive(&'static str),
@@ -782,8 +781,7 @@ mod tests {
         assert!(callable.get("tool_choice").is_none());
     }
 
-    /// ツールの往復は`tool_use`と、続くユーザー発言の`tool_result`になる。結果の後ろに続く
-    /// ユーザー発言は、同じユーザー発言の`tool_result`の後ろに並ぶ。
+    /// 結果の後ろに続くユーザー発言は、同じユーザー発言の`tool_result`の後ろに並ぶ。
     #[test]
     fn sends_the_tool_round_trip_as_tool_use_and_tool_result() {
         let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
@@ -853,8 +851,7 @@ mod tests {
         assert!(text.contains(&format!(r#""content":[{thinking},{tool_use}]"#)));
     }
 
-    /// 受け取ったブロックは、要素の中の空白も含めてそのまま返す。続くアシスタント発言と同じ
-    /// 役割でまとめても、組み立てたブロックの前にそのまま並ぶ。
+    /// 続くアシスタント発言と同じ役割でまとめても、組み立てたブロックの前にそのまま並ぶ。
     #[test]
     fn keeps_received_blocks_verbatim_when_merged_with_built_ones() {
         let thinking = r#"{ "type" : "thinking", "thinking": "", "signature": "sig" }"#;
@@ -903,7 +900,7 @@ mod tests {
         assert_eq!(roles, ["user", "assistant", "user"]);
     }
 
-    /// プレビューでは、送り返す思考の署名も縮める(読めないので)。思考の要約は縮めない。
+    /// 思考の要約は縮めない。
     #[test]
     fn preview_shortens_the_signature_of_replayed_thinking() {
         let messages = [
@@ -925,8 +922,7 @@ mod tests {
         assert_eq!(block["thinking"], "plan");
     }
 
-    /// ツール結果の画像も縮める。ツールの引数の中は、同じ形の値でも縮めない(モデルに渡る値を
-    /// 隠さない)。
+    /// ツールの引数の中は、同じ形の値でも縮めない。
     #[test]
     fn preview_shortens_the_result_image_but_not_the_arguments() {
         let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
@@ -960,7 +956,6 @@ mod tests {
             .starts_with("… ("));
     }
 
-    /// 同じ方言なら、別のモデルの思考も送り返す(読めないブロックはAPIが捨てる)。
     #[test]
     fn accepts_replays_from_any_model_of_the_same_format() {
         let adapter = adapter("http://127.0.0.1:9", "");
@@ -1149,7 +1144,6 @@ mod tests {
         );
     }
 
-    /// レート制限の`Retry-After`の秒数を詳細に添える(待つ秒数を利用者に見せるため)。
     #[tokio::test]
     async fn a_rate_limit_carries_the_retry_after_seconds() {
         let (base_url, handle) = spawn_server_with_headers(vec![(
@@ -1168,7 +1162,6 @@ mod tests {
         );
     }
 
-    /// HTTP 200で返ったエラー本文と、返信の形をしていない本文は、空の応答にしない。
     #[tokio::test]
     async fn a_body_that_is_not_a_message_is_not_an_empty_reply() {
         for (body, expected) in [

@@ -1,4 +1,4 @@
-//! 待ち受ける側が出すQR(`docs/sync/index.md` 3節)。中身は手で打つアドレス(候補のうち先頭から
+//! 待ち受ける側が出すQR(`docs/sync/index.md`「接続」)。中身は手で打つアドレス(候補のうち先頭から
 //! [`MAX_ADDRESSES`]個)と数字で、相手の確かめ方は打ったときと変わらない。読んだ中身は外から来た
 //! 入力なので、出す側が書く形だけを受け付ける。
 //!
@@ -121,7 +121,7 @@ mod tests {
         assert_eq!(read.code, code);
     }
 
-    /// 候補がいくつあっても、出したQRは読める(多ければ上限まで入る)。
+    /// 候補が多ければ上限まで入る。
     #[test]
     fn what_is_shown_is_always_readable() {
         let code = PairingCode::parse("012345").unwrap();

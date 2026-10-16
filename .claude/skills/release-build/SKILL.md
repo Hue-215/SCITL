@@ -1,6 +1,6 @@
 ---
 name: release-build
-description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→配布物を作って起動を確かめる→mainへ取り込む→タグ→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1・release-build-android.shの使い方、Androidの署名の鍵の扱い、ビルドした人の絶対パスをバイナリから外す仕組みと確かめ方、配布物(zip・tar.gz・APK)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
+description: SCITLのリリースの流れ(release/*を切る→版を上げる→確かめる→配布物を作って起動を確かめる→mainへ取り込む→タグ→GitHub Releases→developへ戻す)と、配布用ビルドの手順(scripts/release-build.sh・release-build.ps1・release-build-android.shの使い方、Androidの署名の鍵の扱い、ビルドした人の絶対パスをバイナリから外す方法と確かめ方、配布物(zip・tar.gz・APK)と第三者ライセンスの一覧の組み立て、trim-pathsが安定版に入ったときの移し替え)。リリースするとき、版を上げるとき、配布物を作るとき、依存のライセンスの許容(about.toml)を変えるとき、配布用ビルドの設定(RUSTFLAGS・[profile.release])を変えるとき、バイナリに焼き込まれる情報を調べるときに開く。
 ---
 
 # 配布用のビルド
@@ -27,9 +27,9 @@ shはGNU tarのオプションを使うので、Linux向け。
   スクリプトが`--no-bundle`を付け、`--bundles`・`--no-bundle`を渡すと止まる。
   `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わる。スクリプトは前のビルドの
   実行ファイルを先に消すので、検査の前に止まる)
-- `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`を設定したままだと止まる。外してから実行する。スクリプトが渡す
+- `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`を設定したままだと止まる。スクリプトが渡す
   `CARGO_ENCODED_RUSTFLAGS`は、ほかの場所のrustflags(`~/.cargo/config.toml`の`build.rustflags`・
-  `[target.*].rustflags`、`CARGO_BUILD_RUSTFLAGS`等)より優先され、それらは**黙って効かなくなる**
+  `[target.*].rustflags`、`CARGO_BUILD_RUSTFLAGS`等)より優先され、それらは黙って無視される
   (リンカーの指定や`target-cpu`等)。リポジトリの`.cargo/config.toml`にrustflagsは無い
 - フラグが開発時のビルドと違うので、`target/release`は全部作り直しになる
 - `tauri build`は`crates/scitl-tauri/Cargo.toml`の依存の書き方を自分の形(`{ version = "2",
@@ -69,7 +69,7 @@ rustcの置き換えは、依存クレートがCのコンパイラに作らせ�
   (`…\CARGO~1\registry\…`)にしてからコンパイラへ渡す。MSVCは`#include`されたファイルだけを長い形に
   直すので、両方の形が焼き込まれる。ps1は3つの場所それぞれの8.3形式も、置き換え・取り除き・検査の
   対象にする
-- `/d1trimfile:`は文書に載っていないフラグ(MSVC 14.51で確認、2026-10)。効かなくなれば検査が失敗する
+- `/d1trimfile:`は文書に載っていないフラグ(MSVC 14.51で確認、2026-10)。働かなくなれば検査が失敗する
 - cargoは`CL`の変化を見ない。`CL`に渡すフラグを変えたら、`cargo clean --release -p aws-lc-sys`で
   Cのソースを作り直させる
 
@@ -163,26 +163,26 @@ Cargoの`trim-paths`が安定版に入ったら、`[profile.release]`に`trim-pa
 `release/*`を切るところから、`main`への取り込み・タグ・配布までは、メンテナが行う(CLAUDE.md)。
 Claudeは頼まれた段だけを手伝う。版はセマンティックバージョニングで、最初の版は`0.1.0`。
 
-1. **`release/<版>`を切る**: `develop`から切る(例: `release/0.1.0`)
-2. **版を上げる**: `Cargo.toml`の`[workspace.package]`の`version`が`release/<版>`の版と違えば書き換え、
+1. `develop`から`release/<版>`を切る(例: `release/0.1.0`)
+2. `Cargo.toml`の`[workspace.package]`の`version`が`release/<版>`の版と違えば書き換え、
    `cargo check --workspace`で`Cargo.lock`を更新して、両方をコミットする。版はここ1箇所で、GUI・CLI・
    配布物の名前はここから取る(`tauri.conf.json`には`version`を置かない。`package.json`の`0.0.0`は
    配布物に出ない)
-3. **確かめる**: `release/*`へのpushでCIが回る(Windowsのジョブを含む)。すべて通ることと、Dependabotの
+3. `release/*`へのpushでCIが回る(Windowsのジョブを含む)。すべて通ることと、Dependabotの
    開いているアラートが無いことを確かめる(`gh api 'repos/{owner}/{repo}/dependabot/alerts?state=open' --jq length`。
    扱いは`docs/spec/architecture/tech-stack.md`「依存の脆弱性」)。直すものがあれば`release/*`の上で直す
-4. **配布物を作る**: `release/<版>`の先頭で、LinuxとWindowsのそれぞれで1節のスクリプトを走らせる。
+4. `release/<版>`の先頭で、LinuxとWindowsのそれぞれで1節のスクリプトを走らせる。
    出来るのは`target/dist/scitl-<版>-linux-x64.tar.gz`と`target/dist/scitl-<版>-windows-x64.zip`。
    版はCargo.tomlから取り、コミットの情報は焼き込まないので、`main`へ取り込んだ後のものと中身は同じ。
-   AndroidのAPKは、Linuxで`release-build.sh`の**後に**7節のスクリプトを走らせて作る(`release-build.sh`は
+   AndroidのAPKは、Linuxで`release-build.sh`の後に7節のスクリプトを走らせて作る(`release-build.sh`は
    `target/dist`を空にしてから始める)。出来るのは`target/dist/scitl-<版>-android-arm64.apk`
-5. **起動を確かめる**: 一時ディレクトリの外(`target/`の下など)に展開して起動し、画面が出ることと、
+5. 一時ディレクトリの外(`target/`の下など)に展開して起動し、画面が出ることと、
    展開したフォルダに`data`ができることを見る。APKは7節の「確かめる」のとおりに実機へ入れて見る。
    直すものがあれば`release/*`の上で直し、手順4からやり直す(タグを打つ前に済ませ、打ち直しを避ける)
-6. **`main`へ取り込む**: `release/<版>` → `main`のPRを作り、メンテナがマージする
-7. **タグを打つ**: `main`のマージコミットに注釈付きタグ`v<版>`を打ってpushする
+6. `release/<版>` → `main`のPRを作り、メンテナがマージする
+7. `main`のマージコミットに注釈付きタグ`v<版>`を打ってpushする
    (`git tag -a v0.1.0 -m "SCITL 0.1.0"`)
-8. **GitHub Releasesに置く**: `gh release create v<版> <tar.gz> <zip> <apk> --title "SCITL <版>" --notes-file <ノート>`。
+8. GitHub Releasesに置く(`gh release create v<版> <tar.gz> <zip> <apk> --title "SCITL <版>" --notes-file <ノート>`)。
    リポジトリが非公開の間は、コラボレーターしかダウンロードできない。ノートには変わったことを書き、
    次も書く(`README.md`は内容を意図して少なくしてあり、配布物に入るのもそれなので、利用者が
    これらを読めるのはノートだけになる。ビルドする環境を変えたら、求めるglibcの版を直す)
@@ -198,7 +198,7 @@ Claudeは頼まれた段だけを手伝う。版はセマンティックバー�
    - 外部ツール(MCP)はstreamable_httpだけに対応すること。stdioで動くサーバーは中継するツール
      (`supergateway`・`mcp-proxy`等)で使い、中継は`127.0.0.1`で待ち受けさせ、認証用のトークンを
      必須にして、その値をヘッダーとして登録すること(`docs/spec/tools.md` 4.5節)
-9. **`develop`へ戻す**: `release/*`の上で版を上げた・直したものがあれば、`release/<版>` → `develop`の
+9. `release/*`の上で版を上げた・直したものがあれば、`release/<版>` → `develop`の
    PRを作り、メンテナがマージする。何も無ければ省く
 
 ## 7. Androidの配布物
@@ -261,16 +261,16 @@ bashで実行する(zshの`read -p`は別の意味になる)。`read`は1行ず�
 
 ### 何をしているか
 
-- **版**: `versionName`は`Cargo.toml`の`[workspace.package]`の版、`versionCode`は
+- `versionName`は`Cargo.toml`の`[workspace.package]`の版、`versionCode`は
   `major×1000000 + minor×1000 + patch`(0.2.0なら2000)。Gradleがcargoの解決結果から引くので、
   6節の手順2で版を上げれば両方上がる。`versionCode`が入っているものより小さいAPKは、上書きの
   インストールを断られる。`tauri.conf.json`に`version`を置かないのは6節のとおりで、tauri-cliは
   その場合`tauri.properties`を書かないので、これには頼らない
-- **絶対パス**: 2節と同じ置き換えを、ネイティブのライブラリ(`lib/arm64-v8a/libscitl_tauri_lib.so`)に
+- 2節と同じパスの置き換えを、ネイティブのライブラリ(`lib/arm64-v8a/libscitl_tauri_lib.so`)に
   掛ける。環境変数は、tauri-cli → Gradle → tauri-cli → cargoの経路をそのまま届く(置き換えを
   付けないと、`.so`に依存クレートの場所が残る)。NDKのclangでビルドされるCのソース
   (`aws-lc-sys`・SQLite)の場所は、`.so`に入っていない(NDK 30.0で確認、2026-10。入れば検査が失敗する)
-- **第三者ライセンスの一覧**: APKの中の`assets/licenses/`に、`LICENSE`と`THIRD-PARTY-LICENSES/`を入れる
+- 第三者ライセンスの一覧として、APKの中の`assets/licenses/`に、`LICENSE`と`THIRD-PARTY-LICENSES/`を入れる
   (APKは1つのファイルで渡るので、隣に置いても一緒に届かない)。Gradleのタスク`scitlLicenses`が、
   リリースのAPKを作るたびに`assemble-dist.mjs --android-licenses`を呼んで組み立てる
   - `rust.txt`は、cargo-aboutにAndroid向け(`aarch64-linux-android`)で洗い出させる。Androidにしか
@@ -287,7 +287,7 @@ bashで実行する(zshの`read -p`は別の意味になる)。`read`は1行ず�
     書いていないので、同じリポジトリのクレート`rustls-platform-verifier-android`の項(`rust.txt`)を指す
   - `assemble-dist.mjs --check-licenses`(CIと、ビルドの前)は、Android向けのクレートの一覧も確かめる。
     Mavenの依存はGradleを動かさないと分からないので、APKを作るときにだけ確かめる
-- **縮小(R8)**: リリースビルドはR8が使われていないクラスを消し、名前を変える。RustからJNIで呼ぶ
+- リリースビルドはR8が使われていないクラスを消し、名前を変える。RustからJNIで呼ぶ
   クラスは見えないので、`gen/android/app/proguard-rules.pro`に残す指定を書く。JNIで呼ぶものを足したら、
   ここにも足し、リリースのAPKで動かして確かめる(デバッグビルドは縮小しないので、気付けない)
 

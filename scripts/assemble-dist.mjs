@@ -4,8 +4,8 @@
 //   node scripts/assemble-dist.mjs <実行ファイル>...
 //
 // `target/dist/scitl-<版>-<OS>-<CPU>/`を作り直し、渡された実行ファイル、このリポジトリのREADME.md、
-// このリポジトリのLICENSE、第三者ライセンスの一覧(THIRD-PARTY-LICENSES/)を入れて、フォルダの名前を標準出力に書く
-// (名前はASCIIだけなので、呼び出し側の文字コードに左右されない)。圧縮は呼び出し側が行う。
+// このリポジトリのLICENSE、第三者ライセンスの一覧(THIRD-PARTY-LICENSES/)を入れて、フォルダの名前を
+// 標準出力に書く(名前はASCIIだけなので、呼び出し側の文字コードに左右されない)。圧縮は呼び出し側が行う。
 //
 //   node scripts/assemble-dist.mjs --check-licenses
 //
@@ -334,8 +334,9 @@ function rustLicenses({ targets, supplied, bundled: bundledBy }) {
 // ---- npmのパッケージのライセンス ----
 
 // 画面のバンドルに入ったnpmのパッケージの一覧の本文を作る。フロントエンドのビルド(Viteの
-// `build.license`が出し、`vite.config.ts`が`dist`の外へ移したもの)の一覧を読み、許容していないライセンスのパッケージか、ライセンスファイルを
-// 持たない(著作権者の名前を載せられない)パッケージがあれば失敗する。
+// `build.license`が出し、`vite.config.ts`が`dist`の外へ移したもの)の一覧を読み、許容していない
+// ライセンスのパッケージか、ライセンスファイルを持たない(著作権者の名前を載せられない)パッケージが
+// あれば失敗する。
 function frontendLicenses() {
   const file = join(root, 'frontend', 'dist-meta', 'license.json')
   if (!existsSync(file)) fail(`missing: ${file} (build the frontend first)`)

@@ -1,5 +1,5 @@
 //! 同期の層(`scitl-sync`)がDBに触る入口(`docs/sync/index.md`)。行は端末の中の連番のまま読み書き
-//! する。運ぶ写しの連番を`uid`へ置き換えるのは同期の層で、ここは知らない(6節)。どの行を書くかを
+//! する。運ぶ写しの連番を`uid`へ置き換えるのは同期の層で、ここは知らない(「IDと行の変換」)。どの行を書くかを
 //! 決める規則も同期の層が持ち、ここは言われた行を書くだけ。
 
 use rusqlite::{Connection, OptionalExtension, Row};
@@ -27,7 +27,7 @@ pub fn device_state(conn: &Connection) -> Result<DeviceState> {
     )?)
 }
 
-/// 端末IDと、資格情報ストアの端末IDの項目と同じ値(`docs/sync/index.md` 10節)。
+/// 端末IDと、資格情報ストアの端末IDの項目と同じ値(`docs/sync/index.md`「端末ID」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceToken {
     pub device_id: String,
@@ -108,7 +108,7 @@ pub fn record_cursor(conn: &Connection, peer_device_id: &str, cursor: Cursor) ->
     Ok(())
 }
 
-/// 相手ごとのカーソル。初めての相手は0から(全部を送る)。
+/// 初めての相手は0から(全部を送る)。
 pub fn cursor(conn: &Connection, peer_device_id: &str) -> Result<Cursor> {
     Ok(conn
         .query_row(
@@ -180,7 +180,7 @@ pub struct MessageRow {
     pub turn_id: Option<String>,
     pub attempt_no: Option<i64>,
     /// 試行(`turn_id`と`attempt_no`の組)の最初の行の`uid`。試行の番号は端末の中の値なので
-    /// (`docs/sync/index.md` 9節)、端末を跨いで試行を指すのに使う。書くときは見ない。
+    /// (`docs/sync/index.md`「会話の枝と、競合の単位」)、端末を跨いで試行を指すのに使う。書くときは見ない。
     pub attempt_key: Option<String>,
     pub deleted_at: Option<String>,
     pub created_at: String,
@@ -216,7 +216,7 @@ pub struct Rows {
 #[derive(Debug, Clone, Copy)]
 pub enum Filter<'a> {
     All,
-    /// `sync_seq`がこれより大きい行(前回相手へ渡した位置より後に変わった行。7節)。
+    /// `sync_seq`がこれより大きい行(前回相手へ渡した位置より後に変わった行。「差分」)。
     Since(i64),
     /// `uid`がこれらの行(表を問わない)。
     Uids(&'a [String]),
@@ -257,7 +257,7 @@ pub struct Tx<'c> {
 }
 
 /// 1つのトランザクションで読み書きする。`f`が失敗すれば何も残さない。通信と利用者の選択を
-/// 跨がないこと(`docs/sync/index.md` 4節)は呼び出し側が守る。
+/// 跨がないこと(`docs/sync/index.md`「同期1回の流れ」)は呼び出し側が守る。
 pub fn transaction<T>(conn: &Connection, f: impl FnOnce(&Tx<'_>) -> Result<T>) -> Result<T> {
     in_transaction(conn, |conn| f(&Tx { conn }))
 }
@@ -276,7 +276,7 @@ impl Tx<'_> {
     }
 
     /// 版の中の、端末`device_id`の番号の最大(無ければ0)。相手の番号の巻き戻りを見るのに使う
-    /// (`docs/sync/index.md` 10節)。
+    /// (`docs/sync/index.md`「端末ID」)。
     pub fn seen_of(&self, device_id: &str) -> Result<i64> {
         let path = version_path(device_id);
         let mut seen = 0;
@@ -291,7 +291,7 @@ impl Tx<'_> {
         Ok(seen)
     }
 
-    /// 印のある行に、この端末の分の版を振って印を外す(`docs/sync/index.md` 8節)。振る番号は
+    /// 印のある行に、この端末の分の版を振って印を外す(`docs/sync/index.md`「版と結合」)。振る番号は
     /// カウンターを進めて取った値で、この回の行すべてに同じ値を使う。
     pub fn stamp(&self) -> Result<()> {
         let number = self.next_number()?;
@@ -355,7 +355,7 @@ impl Tx<'_> {
         )
     }
 
-    /// 消えていないメモリのすべて(`id`の順)。同じ本文を畳むのに使う(`docs/sync/index.md` 8節)。
+    /// 消えていないメモリのすべて(`id`の順)。同じ本文を畳むのに使う(`docs/sync/index.md`「版と結合」)。
     pub fn alive_memories(&self) -> Result<Vec<MemoryRow>> {
         select(
             self.conn,
@@ -552,7 +552,7 @@ impl Tx<'_> {
         Ok(())
     }
 
-    /// 結合後のタスクの全体を、操作の記録としてその会話の末尾に置く(`docs/sync/index.md` 8節)。
+    /// 結合後のタスクの全体を、操作の記録としてその会話の末尾に置く(`docs/sync/index.md`「版と結合」)。
     /// `uid`と`created_at`は呼び出し側が決める(別の2台が同じ結合をしても同じ行になるように)。
     pub fn insert_task_state_record(
         &self,
@@ -583,7 +583,7 @@ impl Tx<'_> {
     }
 
     /// 印をすべて外す。同期の層の書き込み(取り込み・版を振った書き込み)のあとに、同じ
-    /// トランザクションで呼ぶ(`docs/sync/index.md` 1節)。
+    /// トランザクションで呼ぶ(`docs/sync/index.md`「構成」)。
     pub fn clear_changed(&self) -> Result<()> {
         for table in VERSIONED {
             self.conn.execute(
@@ -609,7 +609,6 @@ struct Where {
 }
 
 impl Where {
-    /// どの表にも同じ条件。
     const fn every_table(clause: &'static str) -> Self {
         Self {
             tasks: clause,
@@ -798,7 +797,7 @@ fn select_with<T>(
     Ok(rows)
 }
 
-/// 取り込む行が、本体が書く行と同じ形かを確かめる規則(`docs/sync/index.md` 5節)。保存の前の
+/// 取り込む行が、本体が書く行と同じ形かを確かめる規則(`docs/sync/index.md`「同期するもの」)。保存の前の
 /// 正規化を通して値が変わらないこと、形式が保存のときの形であることを見る。件数の上限は見ない
 /// (2台で足した分を合わせると超えうる。上限は追加のときにだけ掛ける)。
 pub mod rules {

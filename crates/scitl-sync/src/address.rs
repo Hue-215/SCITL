@@ -1,4 +1,4 @@
-//! 宛先と待ち受けのアドレスの絞り込み(`docs/sync/index.md` 3節)。分類は`net::classify_host`と同じ。
+//! 宛先と待ち受けのアドレスの絞り込み(`docs/sync/index.md`「接続」)。分類は`net::classify_host`と同じ。
 
 use std::net::{IpAddr, SocketAddr};
 

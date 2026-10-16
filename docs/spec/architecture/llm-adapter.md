@@ -1,17 +1,16 @@
 # LLMアダプタ層とイベント列
 
-`trait LlmAdapter` を境界とし、`orchestration/turn.rs` は具象プロバイダを一切知らない。
-プロバイダ固有の癖は各 `providers/*.rs` の内部に閉じ込め、プロバイダ追加はファイル1つの
-追加で済み、`turn.rs` は無変更のままにする。
+`orchestration/turn.rs` は `trait LlmAdapter` だけを通してプロバイダを呼び、具象プロバイダを知らない。
+プロバイダ固有の癖は各 `providers/*.rs` の内部に閉じ込め、プロバイダの追加はファイル1つの追加で済ませる。
 
 ## モデルの能力の解決
 
 `llm::resolve_capabilities` に一本化し、項目ごとに、値を持つ一番上の層が決める(Issue #69)。
 
-- **手動設定**(`config::ModelOverrides`): 下の層と違う値だけを持ち、同じ値にされたら外す。
+- 手動設定(`config::ModelOverrides`)は、下の層と違う値だけを持ち、同じ値にされたら外す。
   手動設定の有無が「初期値から変えたか」をそのまま表すので、設定画面の「初期値に戻す」は
   その有無だけで出し分けられる(Issue #65)
-- **自動検出**: 問い合わせ先は`base_url`と同じオリジンに限り、通信先は増やさない。結果は
+- 自動検出の問い合わせ先は`base_url`と同じオリジンに限り、通信先は増やさない。結果は
   外部ツールの一覧と同じくメモリにだけ持ち、`config.toml`には書かない
   - OpenAI互換(`llm/providers/local_server.rs`): 接続先がループバックかプライベートIPのとき
     だけ、llama.cpp・LM Studio・Ollamaの独自APIに問い合わせる(`/v1`の1つ上)。サーバーの種類は
@@ -30,7 +29,7 @@
     失敗しても追加は済ませる。`settings::Settings::add_models`)と、起動後にモデルごとに最初の1回
     (チャット欄のモデル選択を開いたときか、ターンを始めるとき。タスクの作成では作ってから。
     `prompt-shape.md`の聞き取りの節)
-- **既定値**(`llm::DEFAULT_CAPABILITIES`): モデル名によらず一律の値1つ(思考は
+- 既定値(`llm::DEFAULT_CAPABILITIES`)は、モデル名によらず一律の値1つ(思考は
   あり、画像はなし、コンテキスト長は`FALLBACK_CONTEXT_LENGTH`)。モデル名から能力を引く表は
   持たない。出典を確かめられず、新しいモデルが出るたびに追従する手段も無いため。実物との
   違いは手動設定と自動検出で埋める
@@ -45,8 +44,7 @@
 
 3方言とも、プロバイダーが提供するモデル名を一覧のAPI(OpenAI互換は`GET {base_url}/models`、
 Anthropic形式は`GET /v1/models`、Gemini形式は`GET /v1beta/models`)で取る。結果は設定には書かず、
-利用者が選んだものだけを登録する。提供される一覧をまとめて登録することはしない。一覧には
-埋め込み・音声等のチャットに使えないモデルも混ざるため。一覧が返すのは名前だけとして扱い、
+利用者が選んだものだけを登録する。一覧には埋め込み・音声等のチャットに使えないモデルも混ざるため。一覧が返すのは名前だけとして扱い、
 能力は登録後に上の層で決める。
 
 ## ツール呼び出しへの対応
@@ -76,11 +74,11 @@ Anthropic形式は`GET /v1/models`、Gemini形式は`GET /v1beta/models`)で取�
 
 ## イベント列と失敗の種類
 
-**方言吸収層が上位に返す形は、完成した応答1つではなくイベントの並び**(本文デルタ/
+方言吸収層が上位に返す形は、完成した応答1つではなくイベントの並び(本文デルタ/
 思考デルタ/確定したツール呼び出し/終了理由)とする(`../principles.md` 3節「応答はイベントの
 並びとして受け取る」、Issue #8)。
 
-**失敗も種類を付けて返す**(Issue #180): アダプタは失敗を`llm::LlmError`の種類(タイムアウト・
+失敗も種類を付けて返す(Issue #180)。アダプタは失敗を`llm::LlmError`の種類(タイムアウト・
 通信の失敗・応答の解釈失敗・空応答・コンテキスト超過・認証・利用制限・その他のHTTPエラー等)に
 して返し、`orchestration::turn_error`は種類から文言と`error_kind`を選ぶだけにする。文字列の
 中身で分類すると、文言が変わったときに黙って分類から漏れるため。
@@ -100,24 +98,24 @@ Anthropic形式は`GET /v1/models`、Gemini形式は`GET /v1beta/models`)で取�
 
 ## 発言列とツールの往復
 
-**アダプタに渡す発言列も、ツール呼び出しの往復を表現できる形にする**: モデルが出した
+アダプタに渡す発言列も、ツール呼び出しの往復を表現できる形にする。モデルが出した
 ツール呼び出しと、その実行結果は、同一ターン内のループでモデルに返す必要がある
 (`../tools.md` 4節)。このため発言列の要素は `{role, content}` の平坦な構造ではなく、
 system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出しに対する結果)を
 区別する列挙型とする。平坦な構造では「userなのに `tool_call_id` を持つ」といった
 不正な組み合わせを型で防げない(`config.rs` の `McpEndpoint` をタグ付きenumにしたのと同じ理由)。
 
-- **呼び出しIDを捏造しない**: 同一ターン内の往復では、`tool_call_id` はプロバイダーが
+- 呼び出しIDを捏造しない。同一ターン内の往復では、`tool_call_id` はプロバイダーが
   払い出したものをそのまま返し、払い出さないプロバイダーにはフィールドごと省略する。
   IDを要求する厳格なサーバーは必ず自分で払い出すため、どちらの向きでも破綻しない
-- **過去のターンの呼び出しには、実行記録の行idからIDを作る**(`../tools.md` 4節、
-  Issue #11): 上の理屈は、払い出したサーバー自身に返すことが前提になっている。過去のターンは
+- 過去のターンの呼び出しには、実行記録の行idからIDを作る(`../tools.md` 4節、
+  Issue #11)。上の理屈は、払い出したサーバー自身に返すことが前提になっている。過去のターンは
   プロバイダーやモデルを切り替えたあとに送ることがあり、IDが無い・書式が違う・連番で
   重なると、リクエストごと拒否される。その行が間引かれるまで毎ターン失敗し続けるため、
   払い出されたIDは使わず、行idから英数字9文字のIDを作る(知られている中で最も厳しい
   書式の制約に合わせる)。行idから作るのでリクエスト内で重ならず、ラウンドをまたいでも
   変わらない。払い出されたIDは実行記録に記録として残すだけにする
-- **送った形の保存から並べるターンは、払い出した送り先にだけ保存したIDのまま送る**(#374):
+- 送った形の保存から並べるターンは、払い出した送り先にだけ保存したIDのまま送る(#374)。
   方言か要求URLのオリジンが保存と違えば、アダプタに渡す前に、その試行の実行記録の行idから作った
   IDに置き換える(保存は書き換えない)。保存した往復の呼び出しはすべて実行して記録を書いたもの
   なので、呼び出しと記録は実行した順に1対1で対応する。対応が取れない保存は使わず、実行記録から
@@ -132,7 +130,7 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 ## 送り返す応答(`Replay`)
 
-**プロバイダーが送り返しを求める応答は`llm::Replay`で運ぶ**: 次のリクエストで、前の応答を
+プロバイダーが送り返しを求める応答は`llm::Replay`で運ぶ。次のリクエストで、前の応答を
 署名付きの思考ごと受け取ったまま返すよう求める方言がある(`../principles.md` 3節「思考は受け取った
 まま送り返す」)。アダプタは返すべきものを`Replay`として返し、`orchestration::turn`はそれを往復の
 アシスタント発言に載せるだけにする。`Replay`の中身は`llm`の外からは読めず、表示されない。何を
@@ -159,7 +157,7 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 ## OpenAI互換
 
-**OpenAI互換**(`llm::providers::openai_compat`): Chat Completions(`POST {base_url}/chat/completions`)を
+`llm::providers::openai_compat`は、Chat Completions(`POST {base_url}/chat/completions`)を
 `stream: true`で呼び、SSEで届く断片を受け取った順にイベントとして渡す(Issue #204)。SSEの分割は方言によらない
 `llm/providers/sse.rs`が持ち、`data`の読み方はアダプタが持つ。
 
@@ -189,7 +187,7 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 ## Anthropic形式
 
-**Anthropic形式**(`llm::providers::anthropic`、Issue #81): Messages API(`POST {base_url}/v1/messages`)を
+`llm::providers::anthropic`(Issue #81)は、Messages API(`POST {base_url}/v1/messages`)を
 `stream: true`で呼び、SSEで届くイベントを受け取った順に読む(Issue #204。`anthropic/stream.rs`)。出典は公式
 ドキュメント(errors・thinking・prompt caching・models・streaming)。
 
@@ -203,7 +201,7 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
   で送り、思考を切れないモデルに拒まれたら、イベントを渡す前に`effort: "low"`で呼び直す。
   予算で指定する古い世代(`budget_tokens`)には対応しない(Issue #272)。adaptiveを拒むモデルには、
   思考のチェックを外すよう促すエラー発言になる
-- **ツールの往復の途中の思考ブロック**: ツール呼び出しの次のリクエストでは、直前のアシスタント
+- ツール呼び出しの次のリクエストでは、直前のアシスタント
   発言の思考ブロックを受け取ったまま返さないと400になる。中身だけでなく並びも変えられないので、
   思考ブロックを含む応答は、応答のブロックを並びごと`Replay`に入れる。返すブロックより前が
   変わると受け付けないモデルもあるので、ターン内の組み立ては追記だけにしてある(`transcript.md`「前に送った部分を書き換えない」)
@@ -243,7 +241,7 @@ system / user / assistant(ツール呼び出しを伴いうる)/ tool(呼び出�
 
 ## Gemini形式
 
-**Gemini形式**(`llm::providers::gemini`、Issue #81): Interactions API(`POST {base_url}/v1beta/interactions`)を
+`llm::providers::gemini`(Issue #81)は、Interactions API(`POST {base_url}/v1beta/interactions`)を
 `stream: true`で呼び、SSEで届くイベントを受け取った順に読む(Issue #204。`gemini/stream.rs`)。旧来のAPIとされる
 `generateContent`ではなくこちらを使うのは、新しい機能がInteractions APIにだけ入るため。出典は公式ドキュメント
 (Interactions API reference・thinking・function calling・api-errors・models)。ストリーミングのイベントの形は、

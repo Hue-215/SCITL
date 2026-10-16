@@ -1,5 +1,5 @@
 //! 端末間の同期(`docs/sync/index.md`)。接続・やり取り・結合・取り込みを持ち、DBへは`scitl-core`を
-//! 通して触る。待ち受けとそのための依存は`scitl-core`に入れず、ここに閉じる(1節)。
+//! 通して触る。待ち受けとそのための依存は`scitl-core`に入れず、ここに閉じる(「構成」)。
 
 mod address;
 mod code;
@@ -37,5 +37,5 @@ pub use transfer::{sync, Context, Outcome, Resolver, Side, Stage};
 pub use transport::{AbortReason, Counts};
 
 /// プロトコルの版。運ぶ形・IDの宣言・取り込む行の検証・照合の値のどれかを変えたら上げる
-/// (`docs/sync/index.md` 3節)。
+/// (`docs/sync/index.md`「接続」)。
 pub const PROTOCOL_VERSION: u32 = 3;

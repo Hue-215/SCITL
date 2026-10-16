@@ -119,7 +119,7 @@ export default function ChatCompose({
   const compose = useContext(ComposeContext)
   if (!compose) throw new Error('ChatCompose needs ComposeProvider')
   const { draft, setDraft, staged, setReceiveTarget, receive } = compose
-  // 添付を足せるか。選ぶ・落とす・貼り付けるのどれにも同じ条件を使う。
+  // 選ぶ・落とす・貼り付けるのどれにも同じ条件を使う。
   const canAdd = !disabled
   // 選んでいるモデルが添付を種別ごとにどう受け取るか。警告の判断はRust側が済ませてある。
   const [deliveries, setDeliveries] = useState<AttachmentDeliveries | null>(null)

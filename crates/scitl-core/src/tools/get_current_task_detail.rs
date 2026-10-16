@@ -9,7 +9,6 @@ use super::Run;
 use super::{IdPosition, IdTable, Segment, NO_IDS};
 
 internal_tool! {
-    /// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない。
     name: "get_current_task_detail",
     run: Run::ReadTask(execute),
     ids: super::IdPositions { arguments: NO_IDS, result: TASK_DETAIL },
@@ -21,7 +20,7 @@ internal_tool! {
     }),
 }
 
-/// [`task_detail`]の形のうち、IDの入る位置。工程の追加・更新・削除ツールも同じ形を返す。
+/// [`task_detail`]の形のうち、IDの入る位置。
 pub(super) const TASK_DETAIL: &[IdPosition] = &[
     IdPosition {
         path: &[Segment::Key("task"), Segment::Key("id")],

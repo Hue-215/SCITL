@@ -29,9 +29,9 @@ pub mod tools;
 
 pub use error::CoreError;
 
-/// アプリの識別子。Tauriの`identifier`(`scitl-tauri/tauri.conf.json`)と揃える。キャッシュディレクトリの
+/// Tauriの`identifier`(`scitl-tauri/tauri.conf.json`)と揃える。キャッシュディレクトリの
 /// 名前もこれで決まる。設定ファイルはRustの定数を参照できないので、scitl-tauriのテストが照合する。
 pub const APP_IDENTIFIER: &str = "net.niigo.scitl";
 
-/// 製品名。Tauriの`productName`と揃える(照合は`APP_IDENTIFIER`と同じ)。
+/// Tauriの`productName`と揃える(照合は`APP_IDENTIFIER`と同じ)。
 pub const PRODUCT_NAME: &str = "SCITL Task Companion";

@@ -2,6 +2,5 @@
 
 /**
  * サイドバーのタスク一覧表示に必要な最小限の情報。
- * 本文(description)は一覧に出さないため含めない。
  */
 export type TaskSummary = { id: number, title: string | null, deadline: string | null, archived_at: string | null, steps_done: number, steps_total: number, };

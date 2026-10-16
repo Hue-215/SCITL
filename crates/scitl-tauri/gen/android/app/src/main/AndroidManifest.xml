@@ -9,7 +9,7 @@
          許可が無くてもサービスは動き、通知が出ないだけになる。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 同期の相手のQRを読む(ScanActivity)。読むときに初めて求める。カメラの無い端末にも入れられる
-         ようにする(無ければ、アドレスと数字を打つ)。docs/sync/index.md 11節 -->
+         ようにする(無ければ、アドレスと数字を打つ)。docs/sync/index.md「画面とCLI」 -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- CAMERAの権限はautofocusも必須とみなさせるので、これも外す -->

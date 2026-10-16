@@ -13,8 +13,7 @@ interface DialogProps {
   width?: string
 }
 
-// ダイアログの共通枠。余白・角丸・ボタン配置を統一する。本文は children に委ね、枠自体は
-// 内容を知らない。
+// ダイアログの共通枠。余白・角丸・ボタン配置を統一する。
 export default function Dialog({ title, onClose, children, width }: DialogProps) {
   const boxRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<Element | null>(null)

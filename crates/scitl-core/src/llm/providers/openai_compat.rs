@@ -28,9 +28,8 @@ pub struct OpenAiCompatAdapter {
 
 impl OpenAiCompatAdapter {
     /// 鍵とカスタムヘッダーの値は`credentials`の中で`SecretString`のまま持ち、平文`String`を
-    /// 経由させない。`request_timeout`は
-    /// 設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)で、データの届かない
-    /// 時間の上限として使う。
+    /// 経由させない。`request_timeout`は設定の応答タイムアウト
+    /// (`config::GeneralConfig::response_timeout`)で、データの届かない時間の上限として使う。
     pub fn new(
         base_url: impl Into<String>,
         credentials: Credentials,

@@ -52,7 +52,6 @@ fn versions_are_ordered_device_by_device() {
     );
 }
 
-/// どの端末で結合しても同じ結果になる(自分の分を進めない)。
 #[test]
 fn the_same_state_changed_on_both_sides_merges_the_same_either_way() {
     let mut a = step("s", v(&[("a", 2)]));
@@ -126,7 +125,6 @@ fn a_chat_continued_from_the_same_point_on_both_sides_is_a_conflict() {
     assert_eq!(plan.rows.messages.len(), 1);
 }
 
-/// 片方が消した範囲の後ろに、もう片方が続けた。
 #[test]
 fn continuing_after_a_message_deleted_on_the_other_side_is_a_conflict() {
     let first = message("a", None, v(&[]));
@@ -141,7 +139,7 @@ fn continuing_after_a_message_deleted_on_the_other_side_is_a_conflict() {
     assert_eq!(plan.conflicts.len(), 1);
 }
 
-/// 選んだ側の値を取り、選ばなかった側にしか無い行を消し、どの行も版を進める。
+/// どの行も版を進める。
 #[test]
 fn resolving_takes_the_chosen_side_and_deletes_what_only_the_other_had() {
     let first = message("a", None, v(&[("a", 1)]));
@@ -174,7 +172,7 @@ fn resolving_takes_the_chosen_side_and_deletes_what_only_the_other_had() {
     assert_eq!(out.messages[1].uid, "c".repeat(32));
 }
 
-/// 求めた単位の行だけが届いたか。メモリと、一緒に届いていない発言の添付は外れる。
+/// メモリと、一緒に届いていない発言の添付は外れる。
 #[test]
 fn only_rows_of_the_requested_units_are_covered() {
     let task = "t".repeat(32);

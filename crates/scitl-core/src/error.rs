@@ -19,7 +19,6 @@ pub enum CoreError {
     /// 添付の実体の読み書き・送信前の添付の取り出しの失敗。
     #[error("attachment error: {0}")]
     Attachment(String),
-    /// Markdownエクスポートの書き込みの失敗。
     #[error("export error: {0}")]
     Export(String),
     #[error("invalid message operation: {0}")]
@@ -34,7 +33,7 @@ pub enum CoreError {
     UnknownTool(String),
     #[error("invalid argument {name}: {reason}")]
     InvalidArgument { name: String, reason: String },
-    /// LLMプロバイダーの呼び出しの失敗。種類はアダプタが決める。
+    /// 種類はアダプタが決める。
     #[error("llm provider error: {0}")]
     Llm(#[from] crate::llm::LlmError),
     #[error("invalid provider configuration: {0}")]
@@ -217,7 +216,7 @@ mod tests {
         );
     }
 
-    /// どの種類にも、すべての表示言語の文言がある。値は差し込まない(詳細は画面が後ろに添える)。
+    /// 値は差し込まない(詳細は画面が後ろに添える)。
     #[test]
     fn every_kind_has_a_message_in_every_language() {
         let mut kinds = std::collections::HashSet::new();

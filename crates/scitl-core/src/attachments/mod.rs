@@ -32,7 +32,6 @@ use crate::error::{CoreError, Result};
 pub enum Delivery {
     /// テキストの本文を送る。
     Content,
-    /// 画像を一緒に送る。
     Image,
     /// 名前・種類・大きさだけを送る。
     NameOnly,
@@ -137,7 +136,6 @@ impl Attachments {
             .received
             .take(batch_id, index)
             .ok_or_else(|| CoreError::Attachment("received file not found".to_string()))?;
-        // 読む前に席を取る。並べて受け取っても、上限を超える分は読まない。
         let Some(seat) = self.staged.reserve() else {
             return Ok(staging::too_many());
         };
@@ -376,7 +374,6 @@ mod tests {
         assert_eq!(decoded.width(), edge);
     }
 
-    /// 1つの発言に付けられる数に達していたら、受け取ったファイルを読まずに断る。
     #[test]
     fn refuses_received_files_without_reading_them_once_full() {
         let t = TempStore::new();

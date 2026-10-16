@@ -11,7 +11,6 @@ use super::update_step::STEP_ID_ARGUMENT;
 use super::Run;
 
 internal_tool! {
-    /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
     name: "delete_step",
     run: Run::UpdateTask(execute),
     ids: super::IdPositions { arguments: STEP_ID_ARGUMENT, result: TASK_DETAIL },

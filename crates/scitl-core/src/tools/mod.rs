@@ -86,7 +86,7 @@ pub(crate) struct InternalTool {
 }
 
 /// 実行記録の引数と結果のうち、端末の中の連番(モデルに見せたID)が入る位置。同期で、運ぶ写しの
-/// 連番を全体で一意な`uid`へ置き換えるのに使う(`docs/sync/index.md` 6節)。数字のどれがIDで、
+/// 連番を全体で一意な`uid`へ置き換えるのに使う(`docs/sync/index.md`「IDと行の変換」)。数字のどれがIDで、
 /// どの表のものかは中身からは分からないので、ツールごとに定義の隣で宣言する。
 #[derive(Debug)]
 pub struct IdPositions {
@@ -405,7 +405,6 @@ mod tests {
         assert!(!names(Chat::General).contains(&update_task::NAME.to_string()));
     }
 
-    /// メモリはタスクに紐づかないので、総合チャットでも書き込める。
     #[test]
     fn general_chat_can_write_memories() {
         let conn = db::open_in_memory().unwrap();
@@ -445,9 +444,6 @@ mod tests {
         }
     }
 
-    /// 同期で置き換えるIDの宣言(`docs/sync/index.md` 6節)が、実際の引数と結果に合うこと。
-    /// 宣言した位置には整数があり、IDらしい欄はどれも宣言に入っている(足した欄の宣言漏れを
-    /// 止める)。
     #[test]
     fn id_declarations_match_what_the_tools_record() {
         use crate::db::attachments::{AttachmentContent, AttachmentKind, NewAttachment};

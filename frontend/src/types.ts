@@ -1,5 +1,5 @@
-// 画面とRust側でやり取りする型。Rust側の型を正本とし、`bindings/`は`cargo test`がそこから
-// 生成する(手で直さない)。ここは生成した型の入口と、画面だけが使う型を持つ。
+// 画面とRust側でやり取りする型。`bindings/`は`cargo test`がRust側の型から生成する
+// (手で直さない)。ここは生成した型の入口と、画面だけが使う型を持つ。
 export type { ApiFormat } from './bindings/ApiFormat'
 export type { ApiFormatChoice } from './bindings/ApiFormatChoice'
 export type { AttachmentDeliveries } from './bindings/AttachmentDeliveries'

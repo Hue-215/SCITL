@@ -9,10 +9,10 @@
 HTTPクライアント(`reqwest`)は既定のままだと以下が「意図しない通信」を静かに許してしまうため、
 明示的に設定する:
 
-- **環境変数のプロキシ設定を既定で読む**: プロキシを使う場合は設定項目として明示させ、
-  既定では `.no_proxy()` を指定する
-- **リダイレクトを既定で追う**: 同一ホストも含めて一律に追わない(`Policy::none()`)
-- **TLSバックエンド**: `rustls` を選び、OS依存のTLS実装によるばらつきを減らす。信頼ルートは
+- 環境変数のプロキシ設定を既定で読む。既定では `.no_proxy()` を指定し、プロキシを使う場合は
+  設定項目として明示させる
+- リダイレクトを既定で追う。同一ホストも含めて一律に追わない(`Policy::none()`)
+- TLSバックエンドは `rustls` を選び、OS依存のTLS実装によるばらつきを減らす。信頼ルートは
   `rustls-platform-verifier`(reqwestの`rustls` feature)経由でOSの証明書ストアを使う
   (TLS実装自体はrustlsのままで、証明書の検証元だけをOS標準に揃える)
 
@@ -29,9 +29,9 @@ User-Agentを求める通信先がある(OpenCode Go等)。送るのは名前と
 待つ時間の上限も`hardened_client`の引数(`net::RequestTimeout`)で決める。接続確立の上限は全経路で共通に掛け、
 それに加える上限は経路ごとに選ぶ。
 
-- **全体**(`Total`): 応答本文を読み切るまでの上限。モデル一覧・能力の検出
-- **無通信の間隔**(`BetweenReads`): データの届かない時間の上限で、届くたびに測り直す。チャット(どの方言も
-  既定ではストリーミングで読む)。全体で切ると、届き続けている長い応答を途中で切ってしまう。最初の
+- 全体(`Total`)は、応答本文を読み切るまでの上限。モデル一覧・能力の検出に使う
+- 無通信の間隔(`BetweenReads`)は、データの届かない時間の上限で、届くたびに測り直す。チャット(どの方言も
+  既定ではストリーミングで読む)に使う。全体で切ると、届き続けている長い応答を途中で切ってしまう。最初の
   データが届くまで(プロンプトの処理中)も同じ上限で待つ。ストリーミングを切ったとき
   (`llm-adapter.md`「ストリーミングの切り替え」)も測り方は変えない(切ってもSSEで返すサーバーがある)。
   生成が終わるまで何も届かないのが普通なので、同じ値が実質、生成の完了を待つ時間の上限になる。時間では止まらない分は、読む量の上限で止める
@@ -39,14 +39,14 @@ User-Agentを求める通信先がある(OpenCode Go等)。送るのは名前と
   読む。モデル一覧・能力の検出も同じ上限で読む。MCPには掛からない: `../tools.md`「外部(MCP)ツールの
   公開」)。生存確認のコメントだけを
   送り続けるサーバーでは切れないが、利用者が画面から止められる(`concurrency.md`「応答生成の停止」)
-- **無し**(`None`): MCP。段ごとの上限を呼び出し側の`tokio::time::timeout`が持ち、長寿命のSSEストリームも使う
+- 無し(`None`)はMCPに使う。段ごとの上限を呼び出し側の`tokio::time::timeout`が持ち、長寿命のSSEストリームも使う
 
 ### Androidの信頼ルート(Issue #470)
 
 Androidでも信頼ルートはOSの証明書ストアで、検証はAndroidの証明書の検証(`TrustManager`)が行う。
 `rustls-platform-verifier`は検証のたびにJNIでKotlinの部品を呼ぶので、次の2つが要る。
 
-- **Kotlinの部品の同梱**: 部品は、上流がGitHubのブランチ`maven-archive`に置くMavenのリポジトリから
+- Kotlinの部品を同梱する。部品は、上流がGitHubのブランチ`maven-archive`に置くMavenのリポジトリから
   Gradleが取る(クレート`rustls-platform-verifier-android`は、0.2.0から部品を同梱しなくなった)。版は
   `gen/android/app/build.gradle.kts`が`cargo metadata`から引くそのクレートの版に合わせる。グループ
   `org.rustls`はこの参照先からだけ取り(`exclusiveContent`)、GoogleやMaven Centralに同じ名前のものが
@@ -58,7 +58,7 @@ Androidでも信頼ルートはOSの証明書ストアで、検証はAndroidの�
   値を書き換えずに上流を調べる。
   部品はNetwork Security Configも持つ(「Androidでの平文http」)。リリースビルドで縮めるときに
   消されないよう、`proguard-rules.pro`で残す
-- **JNIの参照の受け渡し**: JVMとApplicationのContextを`net::android::init`で渡す。JavaVMとActivityは
+- JVMとApplicationのContextを`net::android::init`で渡す。JavaVMとActivityは
   wryがWebViewのスレッドで呼ぶコールバックからしか得られない(Tauri 2.11が使うtao 0.35は
   `ndk-context`を初期化しない)ので、GUIの`setup`がメインの窓のWebViewに頼み、渡すのは
   WebViewを作った後になる。渡せなかったときは、ページを読み込むたびに頼み直す
@@ -88,15 +88,14 @@ OSの検証に従う。`rustls-platform-verifier`はどのOSでも葉の証明�
 | Linux | 確かめない(webpkiにCRLを渡していない) | しない |
 
 この通信の宛先(CA)は利用者が登録したものではないが、`../principles.md` 1節の例外として認める。
-宛先は登録した通信先の証明書が決め、アプリが選んで増やすものではない。止めると、失効した証明書を
-見分けられなくなる。Windowsの検証は、失効の確認のほかに、足りない中間証明書の取得(証明書が指す
+Windowsの検証は、失効の確認のほかに、足りない中間証明書の取得(証明書が指す
 AIA)やルート証明書の更新でも外へ通信しうる(`rustls-platform-verifier`は止めていない)。
 
-- **`hardened_client`を通らない**: これらの通信はOS(Windows)やJava(Android)が行うので、
+- これらの通信はOS(Windows)やJava(Android)が行い、`hardened_client`を通らないので、
   プロキシの設定・リダイレクトの扱い・将来のオフラインスイッチ(Issue #3)の遮断点の外にある。
   オフラインスイッチを作るときは、公的CAの証明書を持つLANのHTTPSサーバーにつなぐと、外へ
   失効を確かめに行くことを考える
-- **伝わるもの**: CAには、利用者のIPアドレスと取ったもの、JavaやOSのHTTPが付ける名前(Androidは
+- CAには、利用者のIPアドレスと取ったもの、JavaやOSのHTTPが付ける名前(Androidは
   `User-Agent: Dalvik/…`に機種名とOSの版を載せる)が伝わる。平文なので、経路上からも取ったURLが
   見える。CRLは発行元ごと(またはそれを分けた一部)なので、どの通信先につないだかまでは絞りにくい
   (OCSPは葉の証明書を名指しする)
@@ -141,19 +140,18 @@ Androidでは次のとおり(`rustls-platform-verifier-android` 0.2.0。Issue #5
 推論サーバーをTLS無しで登録できるようにするための緩和で、宛先はここでも「ユーザーが明示登録
 したもの」に限られる(`../principles.md` 1節)。
 
-- **`localhost`のほかはIPリテラルだけで判定し**、ホスト名は名前解決しない。ホスト名でプライベート判定すると、
-  検証時と接続時で名前解決の結果が変わりうる(DNSリバインディング)ため、ホスト名は
-  `localhost`以外すべて`https`必須のままとする
-- **IPv4のリンクローカル(169.254.0.0/16)は対象外**。169.254.169.254はクラウド各社の
+- `localhost`のほかはIPリテラルだけで判定し、ホスト名は名前解決しない。ホスト名でプライベート判定すると、
+  検証時と接続時で名前解決の結果が変わりうる(DNSリバインディング)ため
+- IPv4のリンクローカル(169.254.0.0/16)は対象外。169.254.169.254はクラウド各社の
   メタデータエンドポイント(IMDS)であり、平文httpしか話さない代表的なSSRF標的のため
-- **IPv6 ULAの中にあるIPv6版のIMDSも対象外**。AWSの`fd00:ec2::254`(`fd00:ec2::/32`ごと)と
+- IPv6 ULAの中にあるIPv6版のIMDSも対象外。AWSの`fd00:ec2::254`(`fd00:ec2::/32`ごと)と
   Google Cloudの`fd20:ce::254`(このアドレスだけ)。理由はIPv4のリンクローカルと同じ。ローカル推論サーバーの
   能力の検出も同じ分類で対象を決めるので、これらのアドレスは検出の対象にもならない
-- **IPv4射影IPv6(`::ffff:a.b.c.d`)は射影元のIPv4アドレスとして判定する**。接続できた場合の
+- IPv4射影IPv6(`::ffff:a.b.c.d`)は射影元のIPv4アドレスとして判定する。接続できた場合の
   宛先は射影元と同じなので、書き方で判定が変わらないようにする(`::ffff:127.0.0.1`はループバック、
   `::ffff:169.254.169.254`は対象外)。非推奨のIPv4互換形式(`::a.b.c.d`)は射影として扱わない
 - この判定は将来のオフラインスイッチ(Issue #3、宛先の段階: 外部通信許可/プライベートIPのみ/
-  localhostのみ)とは**独立した別の軸**で、両者はANDで合成する。宛先の段階を緩めても、
+  localhostのみ)とは独立した別の軸で、両者はANDで合成する。宛先の段階を緩めても、
   平文httpが許されるかどうかは`classify_host`だけが決める
 - リダイレクトを一律に追わない設定(上記)は緩めない。緩めると、登録したLANサーバーが
   公開ホストへリダイレクトを返すだけで通信先が広がる
@@ -162,7 +160,7 @@ Androidでは次のとおり(`rustls-platform-verifier-android` 0.2.0。Issue #5
 
 Androidでも、平文httpを許すかは`classify_host`だけが決める。
 
-- **Java側の平文HTTPの制限は掛からない**: マニフェストの`usesCleartextTraffic`と、Network Security Configの
+- Java側の平文HTTPの制限は掛からない。マニフェストの`usesCleartextTraffic`と、Network Security Configの
   平文の可否(`cleartextTrafficPermitted`)は、Javaの一部のHTTPライブラリとWebViewが自分から参照する決まりで、
   ネイティブのソケットには掛からない(https://developer.android.com/guide/topics/manifest/application-element#usesCleartextTraffic)。
   `false`にしたデバッグAPKをエミュレーター(Android 17・API 37、targetSdk 36)で動かし、平文httpのまま
@@ -172,33 +170,32 @@ Androidでも、平文httpを許すかは`classify_host`だけが決める。
   - LAN上の別マシンのMCPサーバー(`http://192.168.x.x`)からのツールの一覧の取得
 
   エミュレーターの通信はホストを経由するので、実機のWi-FiからLANへ届くかは確かめていない
-- **平文の可否はNetwork Security Configで決める**: マニフェストの`networkSecurityConfig`が指す設定は、
+- 平文の可否はNetwork Security Configで決める。マニフェストの`networkSecurityConfig`が指す設定は、
   `rustls-platform-verifier`のKotlinの部品が持つもの(`res/xml/network_security_config.xml`)をそのまま
   使う。平文httpを止め(`base-config`)、CAがCRLを配るホストにだけ許す(上流がCCADBから作る一覧で、
   0.2.0では376件。「証明書の失効の確認」)。画面(WebView)とJava側の平文httpを止める守り(CSPと二重)は
   残り、空くのは一覧のホストへの平文だけになる(画面からはCSPと遷移の制限で止まる)。一覧は
   サブドメインを含み、一般のサイトを兼ねるホスト(`www.microsoft.com`等)もある。一覧は、部品の版を上げるときに
-  上流に任せて更新する。LANへの平文httpのために平文を許さない(Rust側の通信には効かず、守りだけが外れる)
-- **デバッグビルドはすべての平文を許す**: `gen/android/app/src/debug/res/xml/network_security_config.xml`が
+  上流に任せて更新する。LANへの平文httpのために平文を許さない(Rust側の通信には関わらず、守りだけが外れる)
+- デバッグビルドはすべての平文を許す。`gen/android/app/src/debug/res/xml/network_security_config.xml`が
   部品の設定を同じ名前で置き換える。`tauri android dev`で、画面のHMRがViteの開発サーバーへ平文で
   つなぐため
-- **`usesCleartextTraffic`は置かない**: Network Security Configがあると無視される(Android 7以上)ので、
-  置くと効かない値が残る
-- **証明書の設定は置かない**: Network Security Configのtrust-anchors・debug-overridesなどの証明書の
-  検証の設定は、Androidの証明書の検証(`TrustManager`)を通してRust側のHTTPSにも効きうる
+- `usesCleartextTraffic`は置かない。Network Security Configがあると無視される(Android 7以上)ので、
+  置いても使われない値が残る
+- 証明書の設定は置かない。Network Security Configのtrust-anchors・debug-overridesなどの証明書の
+  検証の設定は、Androidの証明書の検証(`TrustManager`)を通してRust側のHTTPSにも及びうる
   (「Androidの信頼ルート」)。部品の設定もデバッグの置き換えも、平文の可否だけを持つ。部品の版を
   上げたら、証明書の設定が入っていないことを確かめる
-- **ローカルネットワークの権限**: targetSdk 36では、LANへの通信は`INTERNET`だけで許される(一時的な
+- targetSdk 36では、LANへの通信は`INTERNET`だけで許される(一時的な
   措置とされている)。Android 17のエミュレーターでも、上の確認のとき権限無しで通った。37以上へ
   上げるときの見直しは`tech-stack.md`「AndroidのSDKの版」
-- **エミュレーターから見たホスト**: `10.0.2.2`はホストのループバックへ届く(エミュレーターの中の
+- エミュレーターからは、`10.0.2.2`がホストのループバックへ届く(エミュレーターの中の
   `127.0.0.1`・`localhost`はエミュレーター自身)。プライベートIPなので、今の判定のまま平文httpが通る。
   ホストの推論サーバーは`127.0.0.1`で待ち受けたままでよい
 
 ## 秘密情報
 
-`secrets.rs` をOS資格情報ストア呼び出しの唯一の入口とする。他のどのモジュール(LLMアダプタ・
-Tauriコマンド・CLI)も `keyring_core` に直接触れない。設定ファイルには `key_ref` のような
+`secrets.rs` をOS資格情報ストア呼び出しの唯一の入口とする。設定ファイルには `key_ref` のような
 不透明な参照文字列のみを持ち、**平文の鍵を持つフィールドを型として存在させない**。
 IPC経由でフロントエンドに秘密情報が渡る経路を構造的に作らない。
 
@@ -218,7 +215,7 @@ IPC経由でフロントエンドに秘密情報が渡る経路を構造的に�
 見せないもの。実装によっては`key_ref`)。
 
 MCPサーバーの秘密情報(ヘッダーの値)と、プロバイダーのカスタムヘッダーの値も同じ `secrets.rs` を経由する
-(プロバイダーのAPIキーと別の仕組みを作らない。`../principles.md` 5節)。カスタムヘッダーは、値が
+(プロバイダーのAPIキーと別の経路を作らない。`../principles.md` 5節)。カスタムヘッダーは、値が
 秘密かどうかを区別せずにすべて秘密情報として扱い、画面には名前だけを出す。
 
 ### カスタムヘッダー(Issue #454)
@@ -226,20 +223,20 @@ MCPサーバーの秘密情報(ヘッダーの値)と、プロバイダーのカ
 プロバイダーにも、MCPサーバーと同じくカスタムHTTPヘッダーを登録できる。登録時に受け取り、後から編集は
 できない(削除して登録し直す)。
 
-- **断る名前**: リクエストの構造を決める名前(`net::validate_custom_header_name`。MCPと共通)と、その方言で
+- 断る名前は、リクエストの構造を決める名前(`net::validate_custom_header_name`。MCPと共通)と、その方言で
   SCITL自身が付けるヘッダー(OpenAI互換の`authorization`、Anthropic形式の`x-api-key`・`anthropic-version`、
   Gemini形式の`x-goog-api-key`)。鍵は`key_ref`で扱っており、二重に指定させない。`User-Agent`は断らず、
   登録した値が送られる
-- **`{session_id}`**: 値の中の`{session_id}`は、送るときに会話ごとのID(`llm::SessionId`)に置き換える。
+- 値の中の`{session_id}`は、送るときに会話ごとのID(`llm::SessionId`)に置き換える。
   置き換えるのはこの1種類だけで、ほかの`{...}`は書かれたまま送る。会話の情報を外へ出す変数を増やすと、
   そのたびに何を出すかの判断が要るため。会話の無いリクエスト(モデル一覧の取得・能力の検出)では、
   `{session_id}`を含むヘッダーだけを省く(空の値に置き換えて送ると、空のIDとして断る送り先がある)
-- **IDの作り方**: SHA-256(起動ごとのシード ‖ 会話のキー)の先頭128ビットを16進で書いたもの。シードは
+- このIDは、SHA-256(起動ごとのシード ‖ 会話のキー)の先頭128ビットを16進で書いたもの。シードは
   OSの乱数から起動ごとに1度だけ作り、保存しない。会話のキーは、タスクのチャットならタスクのIDと作成日時、
   総合チャットなら固定の文字列。外へ出るのはハッシュだけで、シードを知らない送り先は値からタスクの番号を
   割り出せない。起動し直すとIDは変わる(プロンプトキャッシュの寿命が短く、再起動をまたいで保つ意味が
   薄いため)
-- **値を読めなかったとき**: 鍵と同じく「鍵を読めなかったとき」の扱いに乗る。その値を抜いて送ることはしない
+- 値を読めなかったときは、鍵と同じく「鍵を読めなかったとき」の扱いに乗る。その値を抜いて送ることはしない
 
 エラー文(`llm::ErrorDetail`)では、鍵に加えてカスタムヘッダーの値も伏せる(`llm::SentSecrets`)。
 ゲートウェイがリクエストヘッダーをエコーバックすると、本文にそのまま現れうるため。`{session_id}`を
@@ -322,12 +319,12 @@ D-Busの呼び出しの上限(約25秒)を2回待つことになる。
 同じにする(ファイルは`keyring-scitl-task-companion`)。鍵は利用者の認証に結び付けずに作られる
 (`setUserAuthenticationRequired(false)`)ので、画面のロック中にも読め、承認を求めない。
 
-- **JNIの参照の受け渡し**: このクレートはJavaVMとContextを`ndk-context`から取るが、Tauri 2.11が使う
+- このクレートはJavaVMとContextを`ndk-context`から取るが、Tauri 2.11が使う
   tao 0.35は`ndk-context`を初期化しない(クレートのREADMEの「Tauri Mobileは初期化済み」は今の版に
   当たらない)。証明書の検証(「Androidの信頼ルート」)と同じWebViewのコールバックで、
   `secrets::android::init`がApplicationのContextのグローバル参照を作って渡す。参照はプロセスの
   終わりまで消さない
-- **渡すのは1回だけ**: `ndk-context` 0.1.1は、2回目の初期化を`assert!`でpanicさせ、初期化前の
+- 渡すのは1回だけにする。`ndk-context` 0.1.1は、2回目の初期化を`assert!`でpanicさせ、初期化前の
   読み出しも`expect`でpanicさせる(済んだかを問い合わせる手段は無い)。`secrets.rs`が済んだ印を持ち、
   済むまでは保存先を組み立てずに`NoStorageAccess`を返す(「鍵を読めなかったとき」の扱いに乗り、
   やり直さない)。taoが`ndk-context`を初期化する版(0.37以上)へ上げるときは、二重の初期化になるので
@@ -339,15 +336,15 @@ D-Busの呼び出しの上限(約25秒)を2回待つことになる。
   `gen/android/app/build.gradle.kts`が`cargo metadata`の結果を見てAndroidのビルドを止める。
   クレートは同じ初期化をKotlinから呼ぶ入口(`io.crates.keyring.Keyring`の`initializeNdkContext`)も
   持つが、そのクラスを足すと二重の初期化になるので足さない
-- **起動時の読み損ね**: 設定の読み込み(起動時)はアクティブなプロバイダーの鍵を読むが、渡すのは
+- 設定の読み込み(起動時)はアクティブなプロバイダーの鍵を読むが、渡すのは
   WebViewを作った後なので、それより先に読んで「鍵を読めない」になりうる。そのままだと次のターンの
   開始・タスクの追加・設定の変更まで、設定画面に理由が出続ける。GUIは、渡し終えたときと`AppState`を
   登録したときの両方で、鍵を読めずにいれば読み直させる(どちらが先に済むかは決まらないので、後に
   済んだ側の呼び出しで読み直しが起きる)
-- **バックアップ・移行・アンインストール**: 自動バックアップと端末間の移行はSharedPreferencesを含めて
+- 自動バックアップと端末間の移行はSharedPreferencesを含めて
   切ってある(`../data-model/tables.md`「データディレクトリの場所」)。Keystoreの鍵は端末の外へ出ないので、
   ファイルだけが移っても復号できない。アンインストールで鍵とファイルは消え、入れ直すと`NoEntry`になる
-- **ファイルと鍵の片方だけが残ったとき**: ファイル(の中の保存先の設定)が無いのに同じ名前の鍵が
+- ファイル(の中の保存先の設定)が無いのに同じ名前の鍵が
   Keystoreに残っていると、1回目の組み立ては"Encryption key already exists"で失敗する
   (`Vault::create_key`)。失敗する前に設定がファイルへ書かれるので、次の組み立てからは残った鍵で通る
   (`secrets.rs`は組み立ての失敗を覚えないので、次の操作で直る)。逆に鍵だけが無いときは、クレートが

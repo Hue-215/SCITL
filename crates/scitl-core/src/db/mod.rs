@@ -143,7 +143,7 @@ const MIGRATIONS: &[&str] = &[
     SYNC_DEVICE_TOKEN_SQL,
 ];
 
-/// このビルドのDBの版(`user_version`)。同期の相手と版を伝え合うのに使う(`docs/sync/index.md` 3節)。
+/// このビルドのDBの版(`user_version`)。同期の相手と版を伝え合うのに使う(`docs/sync/index.md`「接続」)。
 pub fn schema_version() -> u32 {
     MIGRATIONS.len() as u32
 }
@@ -619,7 +619,7 @@ mod tests {
     }
 
     /// 既存の行には`uid`を振り、番号1で書いたものとし、版を空にして印を付けない
-    /// (`docs/sync/index.md` 12節)。既存の通常発言の`prev_uid`は、会話ごとに直前の消えていない
+    /// (`docs/sync/index.md`「段階」)。既存の通常発言の`prev_uid`は、会話ごとに直前の消えていない
     /// 通常発言を指す。
     #[test]
     fn existing_rows_get_sync_columns_without_a_mark() {
@@ -733,8 +733,7 @@ mod tests {
         assert_eq!(prev_uid(general), None);
     }
 
-    /// どのテーブルへの書き込みも、DBに1つのカウンターを1つ進めて番号を取る。トリガー自身の
-    /// 書き込みでトリガーが再び動くことはない。番号はトリガーしか書けない。
+    /// トリガー自身の書き込みでトリガーが再び動くことはない。番号はトリガーしか書けない。
     #[test]
     fn every_write_takes_the_next_number_from_one_counter() {
         let conn = open_in_memory().unwrap();
@@ -810,8 +809,7 @@ mod tests {
         .unwrap()
     }
 
-    /// 印は、行を作ったときと、比べる欄の値が実際に変わったときにだけ付く。日時だけの変更・
-    /// 同じ値での更新・状態を表す日時の書き換えでは付かない。
+    /// 日時だけの変更・同じ値での更新・状態を表す日時の書き換えでは付かない。
     #[test]
     fn a_mark_is_set_only_when_a_compared_column_changes() {
         let conn = open_in_memory().unwrap();
@@ -949,7 +947,6 @@ mod tests {
         assert!(not_an_object.is_err(), "{not_an_object:?}");
     }
 
-    /// 取り込みが指定した`uid`はそのまま使い、一度付いた`uid`は変えられない。
     #[test]
     fn a_given_uid_is_kept_and_never_changes() {
         let conn = open_in_memory().unwrap();

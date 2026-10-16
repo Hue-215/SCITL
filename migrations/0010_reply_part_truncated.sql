@@ -1,4 +1,4 @@
 -- 返信の中身(`messages.parts`)に、出力の長さの上限で切れたことの印(`{"type":"truncated"}`)が
 -- 入るようになった(docs/spec/data-model/messages.md「1ターン内の往復で保存するもの」)。表の形は
 -- 変わらないが、印を知らない古い版は中身を読めず、その会話を表示も送信もできなくなる。版を上げて、
--- 古い版が「新しい版のDB」として開くのを断るようにする(docs/spec/data-model/tables.md 5節)。
+-- 古い版が「新しい版のDB」として開くのを断るようにする(docs/spec/data-model/tables.md「マイグレーション」)。

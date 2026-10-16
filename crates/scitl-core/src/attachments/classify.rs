@@ -11,7 +11,6 @@ pub struct Limits {
     pub text_bytes: u64,
     /// OpenAI互換APIが1枚に受け付ける大きさに合わせる。
     pub image_bytes: u64,
-    /// 1つの発言に付けられる数。
     pub per_message: usize,
 }
 
@@ -22,8 +21,8 @@ pub const LIMITS: Limits = Limits {
 };
 
 impl Limits {
-    /// その種別の大きさの上限。その他は受け付けないので`None`(モデルが中身に
-    /// 何もできないのに、読んだかのように見えて紛らわしいため)。
+    /// その他は受け付けないので`None`(モデルが中身に何もできないのに、読んだかのように
+    /// 見えて紛らわしいため)。
     pub fn bytes_for(&self, kind: AttachmentKind) -> Option<u64> {
         match kind {
             AttachmentKind::Text => Some(self.text_bytes),
@@ -103,7 +102,7 @@ pub fn classify_prefix(bytes: &[u8]) -> Classified {
     }
 }
 
-/// 画像として扱う形式なら、そのMIME。data URLに書くMIMEもここからしか来ない。
+/// data URLに書くMIMEもここからしか来ない。
 pub fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
     if let Some((_, mime_type)) = IMAGE_SIGNATURES
         .iter()

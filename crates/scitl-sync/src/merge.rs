@@ -1,4 +1,4 @@
-//! 結合(`docs/sync/index.md` 8節・9節)。待ち受ける側(A)が、受け取った行(B)と自分の行だけから
+//! 結合(`docs/sync/index.md`「版と結合」「会話の枝と、競合の単位」)。待ち受ける側(A)が、受け取った行(B)と自分の行だけから
 //! 結果を決める。通信もDBも触らず、運ぶ形(`uid`で指し合う行)の上で決める。
 //!
 //! 単位(タスク・総合チャット)は、Bから差分だけが届いていれば、行ごとに版で決める。両方がその
@@ -57,7 +57,7 @@ pub(crate) fn join(a: &Version, b: &Version) -> Version {
     out
 }
 
-/// 状態を表す日時は、どちらにもあれば早い方(同じ操作を2台でしても揃わない。8節)。
+/// 状態を表す日時は、どちらにもあれば早い方(同じ操作を2台でしても揃わない。「版と結合」)。
 fn earlier(value: &mut Option<String>, other: &Option<String>) {
     if let (Some(v), Some(o)) = (value.as_mut(), other) {
         if o < v {
@@ -72,7 +72,7 @@ fn later(value: &mut String, other: &str) {
     }
 }
 
-/// 版を持つ行。比べる欄と日時の扱いは`docs/sync/index.md` 8節の表。
+/// 版を持つ行。比べる欄と日時の扱いは`docs/sync/index.md`「版と結合」の表。
 pub(crate) trait Versioned: Clone + PartialEq {
     fn uid(&self) -> &str;
     fn version(&self) -> &Version;
@@ -222,10 +222,10 @@ impl Versioned for MessageRow {
 }
 
 /// 2つの行を版で結合する。決まらなければ(版が並んで値が違う、同じ版で値が違う)`None`。
-/// 自分の分は進めない(どの端末で結合しても同じ結果にする。8節)。
+/// 自分の分は進めない(どの端末で結合しても同じ結果にする。「版と結合」)。
 pub(crate) fn merge_pair<R: Versioned>(a: &R, b: &R) -> Option<R> {
     let (mut out, other) = match compare(a.version(), b.version()) {
-        // 同じ版で値が違うのは、端末IDの重複の印(10節)。競合として扱う。
+        // 同じ版で値が違うのは、端末IDの重複の印(「端末ID」)。競合として扱う。
         Order::Same if !a.same_state(b) => return None,
         Order::Same | Order::Newer => (a.clone(), b),
         Order::Older => (b.clone(), a),
@@ -240,7 +240,7 @@ pub(crate) fn merge_pair<R: Versioned>(a: &R, b: &R) -> Option<R> {
     Some(out)
 }
 
-/// 単位。競合はこの単位で選ばせる(9節)。
+/// 単位。競合はこの単位で選ばせる(「会話の枝と、競合の単位」)。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Unit {
     Task(String),
@@ -416,7 +416,7 @@ pub(crate) enum Pick {
     Theirs,
 }
 
-/// 結合後のタスクの全体の記録(8節)。
+/// 結合後のタスクの全体の記録(「版と結合」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskStateRecord {
     pub task: String,
@@ -750,7 +750,7 @@ fn alive<'a>(messages: impl Iterator<Item = &'a MessageRow>) -> BTreeSet<&'a str
         .collect()
 }
 
-/// 結合した会話の形が破れたか(9節)。消えていない通常発言が、`prev_uid`を辿って1本の列に
+/// 結合した会話の形が破れたか(「会話の枝と、競合の単位」)。消えていない通常発言が、`prev_uid`を辿って1本の列に
 /// ならない。結合の結果がどちらか一方の会話と同じなら、形を見ない。
 fn broken_chat(messages: &[Pair<MessageRow>], ours: &[MessageRow], theirs: &[MessageRow]) -> bool {
     let merged: Vec<&MessageRow> = messages.iter().filter_map(|p| p.merged.as_ref()).collect();
@@ -771,7 +771,7 @@ fn broken_chat(messages: &[Pair<MessageRow>], ours: &[MessageRow], theirs: &[Mes
         })
 }
 
-/// 片方がタスクを削除し、もう片方がそれを知らずに工程か会話を変えたか(9節)。
+/// 片方がタスクを削除し、もう片方がそれを知らずに工程か会話を変えたか(「会話の枝と、競合の単位」)。
 fn deleted_unknowingly(
     tasks: &[Pair<TaskRow>],
     steps: &[Pair<StepRow>],
@@ -794,7 +794,7 @@ fn deleted_unknowingly(
         || messages.iter().any(|p| p.changed_on(kept_by_ours))
 }
 
-/// 利用者が選んだ側で、競合した単位の結果を作る(9節「選んだ結果の作り方」)。単位のすべての行に
+/// 利用者が選んだ側で、競合した単位の結果を作る(「選んだ結果の作り方」)。単位のすべての行に
 /// ついて、選んだ側の値を取り、版は両方の最大に自分の分(`me`の`number`)を進める。選ばなかった
 /// 側にしか無い行は論理削除する。値が変わらなかった行も版を進める。
 pub(crate) fn resolve(
@@ -864,7 +864,7 @@ pub(crate) fn resolve(
     }
 }
 
-/// 消えていないメモリのうち、同じ本文の2つ目以降(`uid`の大きい方)。残すのは`uid`の最小の行(8節)。
+/// 消えていないメモリのうち、同じ本文の2つ目以降(`uid`の大きい方)。残すのは`uid`の最小の行(「版と結合」)。
 pub(crate) fn duplicate_memories<'a>(
     memories: impl Iterator<Item = (&'a str, &'a str)>,
 ) -> Vec<&'a str> {

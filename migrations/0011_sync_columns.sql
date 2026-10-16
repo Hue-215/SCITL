@@ -1,4 +1,4 @@
--- 同期のために持つ情報(docs/sync/index.md 1節。列の意味はdocs/spec/data-model/tables.md「同期のための列」)。
+-- 同期のために持つ情報(docs/sync/index.md「構成」。列の意味はdocs/spec/data-model/tables.md「同期のための列」)。
 -- 編集する側のコードは同期を知らず、`uid`・`sync_seq`・印はここのトリガーが付ける。
 --
 -- 足す列の制約は`ADD COLUMN`に書く(既存の行にも確かめられる)。`uid`は既定値に式を置けないので
@@ -26,7 +26,6 @@ CREATE TABLE sync_cursors (
     received_seq    INTEGER NOT NULL DEFAULT 0 CHECK (received_seq >= 0)
 );
 
--- 同期する各テーブルに`uid`と`sync_seq`。
 ALTER TABLE tasks ADD COLUMN uid TEXT NULL
     CHECK (uid IS NULL OR (typeof(uid) = 'text' AND length(uid) = 32 AND uid NOT GLOB '*[^0-9a-f]*'));
 ALTER TABLE tasks ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0;
@@ -44,7 +43,7 @@ ALTER TABLE attachments ADD COLUMN uid TEXT NULL
 ALTER TABLE attachments ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0;
 
 -- 版(端末ID → その端末での番号のJSONオブジェクト)と「同期のあとに変えた」印。`messages`の版と印は
--- `deleted_at`のもの。既存の行は、版を空にし、印を付けない(docs/sync/index.md 12節)。
+-- `deleted_at`のもの。既存の行は、版を空にし、印を付けない(docs/sync/index.md「段階」)。
 ALTER TABLE tasks ADD COLUMN sync_version TEXT NOT NULL DEFAULT '{}'
     CHECK (json_valid(sync_version) AND json_type(sync_version) = 'object');
 ALTER TABLE tasks ADD COLUMN sync_changed INTEGER NOT NULL DEFAULT 0 CHECK (sync_changed IN (0, 1));
@@ -59,7 +58,7 @@ ALTER TABLE messages ADD COLUMN sync_version TEXT NOT NULL DEFAULT '{}'
 ALTER TABLE messages ADD COLUMN sync_changed INTEGER NOT NULL DEFAULT 0 CHECK (sync_changed IN (0, 1));
 
 -- 通常発言が作った時点で続けた、その会話の消えていない最後の通常発言。付けるのはトリガーではなく
--- `db::messages::insert_message`(docs/sync/index.md 1節)。
+-- `db::messages::insert_message`(docs/sync/index.md「構成」)。
 ALTER TABLE messages ADD COLUMN prev_uid TEXT NULL
     CHECK (prev_uid IS NULL OR (kind = 'normal' AND typeof(prev_uid) = 'text'
                                 AND length(prev_uid) = 32 AND prev_uid NOT GLOB '*[^0-9a-f]*'));
@@ -168,7 +167,7 @@ BEGIN
 END;
 
 -- INSERTでは、指定の無い`uid`を振り、`sync_seq`を振り、印を付ける。UPDATEでは`sync_seq`を振り直し、
--- 比べる欄(docs/sync/index.md 8節の表)の値が実際に変わったときだけ印を付ける(付いている印は
+-- 比べる欄(docs/sync/index.md「版と結合」の表)の値が実際に変わったときだけ印を付ける(付いている印は
 -- そのまま)。どちらも取り込みにも掛かる。印を外すのは同期の層の書き込みだけ。
 --
 -- UPDATEのトリガーは`sync_seq`を書かない書き込みにだけ掛け、トリガー自身の書き込みで再び動かない

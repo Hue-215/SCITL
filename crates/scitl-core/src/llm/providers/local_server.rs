@@ -464,8 +464,7 @@ mod tests {
         );
     }
 
-    /// llama.cppのルーターモードでは、読み込み済みのモデルだけをモデルごとに問い合わせ、読み込ま
-    /// れていないモデルは今は答えられないモデルにする。知らないモデルは結果に含めない。
+    /// 読み込まれていないモデルは今は答えられないモデルにし、知らないモデルは結果に含めない。
     #[tokio::test]
     async fn asks_a_llama_cpp_router_about_each_loaded_model() {
         let (base_url, requests) = spawn_server(|line| match line {
