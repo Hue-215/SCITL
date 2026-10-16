@@ -81,12 +81,12 @@ adb -s emulator-5556 shell am start -n net.niigo.scitl.dev/net.niigo.scitl.MainA
 npx tauri android dev Small_Phone_API_37
 ```
 
-- 端末は**AVD名**で指定する。シリアル(`emulator-5556`)は一致せず、aarch64向けに
+- 端末はAVD名で指定する。シリアル(`emulator-5556`)は一致せず、aarch64向けに
   ビルドしたうえでAndroid Studioを開こうとする。一致したかは最初の出力の
   `Detected connected device: <名前> ... with target "x86_64-linux-android"`で分かる
 - tauri-cliは`adb reverse tcp:1420 tcp:1420`を張る。画面は`http://tauri.localhost/`で開き、Tauriが
   Rust側から開発サーバーへ中継する(遷移の判定はこれを通す。`architecture/webview-boundary.md`「Android」)。
-  HMRはViteのクライアントが`ws://localhost:1420`へ直接つなぎ直して効く(コンソールに`[vite] connected.`)
+  HMRはViteのクライアントが`ws://localhost:1420`へ直接つなぎ直して動く(コンソールに`[vite] connected.`)
 - 開発サーバーのポートは1つなので、同時に読めるのは1台だけ
 - 止めたら`adb reverse --remove-all`。入ったのは開発サーバーを読むAPKなので、APKの確認に戻るときは入れ直す
 
