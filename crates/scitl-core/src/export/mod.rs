@@ -619,11 +619,19 @@ mod tests {
         names
     }
 
-    /// タスク1件の書き出しは、そのタスクのファイルと添付だけを書く。
+    /// タスク1件の書き出しは、そのタスクのファイル(説明・工程を含む)と添付だけを書く。
+    /// アーカイブしたタスクも書ける。
     #[test]
     fn a_task_export_writes_only_that_task() {
         let f = Fixture::new();
         let kept = f.task("残す");
+        let update = TaskUpdate {
+            description: tasks::FieldChange::Set("the description".to_string()),
+            status: Some(TaskStatus::Archived),
+            ..Default::default()
+        };
+        tasks::update_task(&f.conn, kept, update).unwrap();
+        task_steps::add_steps(&f.conn, kept, &["the step".to_string()]).unwrap();
         let m = f.say(Chat::Task(kept), "mine");
         f.attach(m, "mine.txt", AttachmentContent::Text("本文".to_string()));
         let other = f.task("ほか");
@@ -650,7 +658,25 @@ mod tests {
             [ATTACHMENTS_DIR.to_string(), format!("task-{kept}-残す.md")]
         );
         assert_eq!(file_names(&folder.join(ATTACHMENTS_DIR)).len(), 1);
-        assert!(read(folder.join(format!("task-{kept}-残す.md"))).contains("mine"));
+        let body = read(folder.join(format!("task-{kept}-残す.md")));
+        for expected in ["the description", "the step", "mine", "- Status: archived"] {
+            assert!(body.contains(expected), "{expected}: {body}");
+        }
+        assert!(!body.contains("other"));
+    }
+
+    /// 同じ秒の同じ範囲の書き出しは番号で分かれ、範囲の違う書き出しとは名前が重ならない。
+    #[test]
+    fn exports_of_the_same_scope_get_their_own_folders() {
+        let f = Fixture::new();
+        let id = f.task("同じ");
+        let scope = ExportScope::Chat(Chat::Task(id));
+        let (first, _) = f.export_scope(scope);
+        let (second, _) = f.export_scope(scope);
+        let (all, _) = f.export();
+        assert_ne!(first.folder, second.folder);
+        assert!(first.folder.ends_with(&format!("-task-{id}")));
+        assert!(!all.folder.contains("task"));
     }
 
     #[test]
