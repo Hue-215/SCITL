@@ -11,15 +11,14 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 use super::CommandResult;
 use crate::AppState;
 
-/// このOSで書き出す先。画面は、押せる操作と結果の文言を出し分けるために使う。
+/// このOSで書き出す先([`ExportTarget::CURRENT`])。
 #[tauri::command]
 pub fn get_export_target() -> ExportTarget {
     ExportTarget::CURRENT
 }
 
-/// 全部を書き出す。選んだファイルへ書くOSでは、Rust側から保存画面を出し、閉じるまで待つ。何を
-/// 書くかは利用者が選ぶので、乗っ取られた画面から呼ばれても、選ばれない限りキャッシュの外には何も
-/// 書かない。
+/// 全部を書き出す。選んだファイルへ書くOSでは、Rust側から保存画面を出し、閉じるまで待つ
+/// ([`scitl_core::export::export_to_chosen_file`])。
 #[tauri::command]
 pub async fn export_markdown(
     app: AppHandle,
@@ -68,7 +67,7 @@ async fn export(
     Ok(outcome)
 }
 
-/// 書き出し先のフォルダを開く。外部プロセスの起動を伴うため`blocking::run`で呼ぶ。
+/// 外部プロセスの起動を伴うため`blocking::run`で呼ぶ。
 #[tauri::command]
 pub async fn open_export_folder(state: State<'_, AppState>) -> CommandResult<()> {
     let root = state.export_dir.clone();

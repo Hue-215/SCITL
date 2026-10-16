@@ -99,8 +99,7 @@ export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
 }
 
-// 送っていない添付をすべて捨てる。画面は起動のたびに呼ぶ(読み込み直した画面は入力欄の添付を
-// 持たないので、Rust側に残った預かりが数の上限を埋めないように)。
+// 送っていない添付をすべて捨てる。画面は起動のたびに呼ぶ。
 export function discardAllStagedAttachments(): Promise<void> {
   return invoke('discard_all_staged_attachments')
 }
@@ -267,7 +266,7 @@ export function addProvider(
   return invoke('add_provider', { name, apiFormat, baseUrl, apiKey, headers })
 }
 
-// 入力中のベースURLへのヒント(版のパスまで書いた等)。判定はRust側(アダプタの知識)。
+// 入力中のベースURLへのヒント(版のパスまで書いた等)。判定はRust側。
 export function getBaseUrlHint(apiFormat: ApiFormat, baseUrl: string): Promise<BaseUrlHint | null> {
   return invoke('get_base_url_hint', { apiFormat, baseUrl })
 }

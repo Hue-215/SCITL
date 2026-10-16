@@ -33,8 +33,7 @@ pub async fn list_tasks(
 
 /// 新規タスク追加ボタン。作ったら続けて聞き取りを始める([`scitl_core::settings::Settings::create_task`])。
 /// 作ったタスクと聞き取りの途中経過は、この順で`on_event`へ送る。送れなくても(画面が
-/// 閉じた等)聞き取りは最後まで走らせるので、送信の失敗は捨てる。チャットを使えない間は
-/// 作らずに理由を返す。
+/// 閉じた等)聞き取りは最後まで走らせるので、送信の失敗は捨てる。
 #[tauri::command]
 pub async fn create_task(
     state: State<'_, AppState>,

@@ -27,7 +27,7 @@ object QrScanner {
   private var settled = false
   private var screen: WeakReference<ScanActivity>? = null
 
-  /** カメラがあるか(Rust側からJNIで呼ぶ)。無ければ、画面は読むボタンを出さない。 */
+  /** カメラがあるか(Rust側からJNIで呼ぶ)。 */
   @JvmStatic
   fun available(context: Context): Boolean =
     context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
