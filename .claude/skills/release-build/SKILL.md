@@ -27,7 +27,7 @@ shはGNU tarのオプションを使うので、Linux向け。
   スクリプトが`--no-bundle`を付け、`--bundles`・`--no-bundle`を渡すと止まる。
   `--target`と`CARGO_TARGET_DIR`には対応しない(検査するバイナリの場所が変わる。スクリプトは前のビルドの
   実行ファイルを先に消すので、検査の前に止まる)
-- `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`を設定したままだと止まる。外してから実行する。スクリプトが渡す
+- `RUSTFLAGS`・`CARGO_ENCODED_RUSTFLAGS`を設定したままだと止まる。スクリプトが渡す
   `CARGO_ENCODED_RUSTFLAGS`は、ほかの場所のrustflags(`~/.cargo/config.toml`の`build.rustflags`・
   `[target.*].rustflags`、`CARGO_BUILD_RUSTFLAGS`等)より優先され、それらは黙って無視される
   (リンカーの指定や`target-cpu`等)。リポジトリの`.cargo/config.toml`にrustflagsは無い

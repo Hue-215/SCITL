@@ -65,10 +65,9 @@ AndroidはAndroid System WebView)。ブラウザの機能(ファイル・クリ�
 
 ## IPCコマンドの設計
 
-フロントエンドは秘密情報を一切受け取らず、DB・ネットワーク・ファイルに直接触れない(上の節)。
 コマンド名は「デシリアライズ→coreを1つ呼ぶ→シリアライズ」の単一の機能に対応する
 narrow な verb-noun とし、`run_query` のような汎用コマンドは作らない(コマンド名を
-見るだけで権限範囲が監査できる状態を保つ)。1つの操作は1つのコマンドにする。
+見るだけで権限範囲が監査できる状態を保つ)。
 
 コマンドが受け渡す型はRust側で定義し、TypeScriptの定義(`frontend/src/bindings/`)は
 `ts-rs`で生成する。手で写すと、Rust側の変更に追従し損ねても型検査が通ってしまうため。
@@ -88,7 +87,7 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 ## CSP / Tauri権限設定
 
 - `default-src 'self'` / `img-src 'self' data:`(外部画像を読み込ませない。
-  本文中の画像記法をリンクへ変換する自前処理と合わせた多層防御。片方が破れても止まる)/
+  本文中の画像記法をリンクへ変換する自前処理と合わせた多層防御)/
   `script-src 'self'`(CDN・inline eval不可)
 - `connect-src ipc: http://ipc.localhost`。全通信はRust側で行う設計なので、WebViewからの
   外部接続は本来ゼロのはず。許可しているのはRust側へのIPCの窓口(Linux・macOSは`ipc:`、

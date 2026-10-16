@@ -28,11 +28,11 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 | カラム | 型 | 制約・備考 |
 |---|---|---|
 | id | INTEGER | PRIMARY KEY |
-| title | TEXT | NULL可。NULL=未設定(表示側でフォールバック)。空文字列は書かない。長さの上限は`../tools.md` 2節 |
-| description | TEXT | NULL可。NULL=未設定。空文字列は書かない。長さの上限は`../tools.md` 2節 |
+| title | TEXT | NULL可(表示側でフォールバック)。空文字列は書かない。長さの上限は`../tools.md` 2節 |
+| description | TEXT | NULL可。空文字列は書かない。長さの上限は`../tools.md` 2節 |
 | deadline | TEXT | `YYYY-MM-DD`。NULL可 |
-| archived_at | TEXT | ISO8601。NULL=未アーカイブ。再度アーカイブしても上書きしない |
-| deleted_at | TEXT | ISO8601。NULL=未削除 |
+| archived_at | TEXT | ISO8601。再度アーカイブしても上書きしない |
+| deleted_at | TEXT | ISO8601 |
 | created_at | TEXT | ISO8601。NOT NULL |
 | updated_at | TEXT | ISO8601。NOT NULL。配下の工程への更新操作でも更新する |
 
@@ -49,8 +49,8 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 | id | INTEGER | PRIMARY KEY |
 | task_id | INTEGER | NOT NULL, `REFERENCES tasks(id)` |
 | description | TEXT | NOT NULL。前後の空白を落として保存し、空は書かない。長さと件数の上限は`../tools.md` 2節 |
-| done_at | TEXT | ISO8601。NULL=未完了 |
-| deleted_at | TEXT | ISO8601。NULL=未削除 |
+| done_at | TEXT | ISO8601 |
+| deleted_at | TEXT | ISO8601 |
 | order_index | INTEGER | NOT NULL。並びはこの順、同じなら`uid`の順(2台で足した工程は重なる。`../../sync/index.md` 6節) |
 | created_at | TEXT | ISO8601。NOT NULL |
 
@@ -102,7 +102,7 @@ SQLiteを使う(理由は`../architecture/tech-stack.md`)。「物理削除し�
 | content | TEXT | NOT NULL。1行の事実。空は書かない。長さと件数の上限は`../tools.md` 2節 |
 | created_at | TEXT | ISO8601。NOT NULL。並びはこの列(同じならid)の順 |
 | updated_at | TEXT | ISO8601。NOT NULL。値が実際に変わったかは比べずに進める |
-| deleted_at | TEXT | ISO8601。NULL=未削除 |
+| deleted_at | TEXT | ISO8601 |
 
 - `content`は、描かれない文字(`text::is_invisible_format`)と重ねた異体字セレクタ
   (`text::drop_stacked_variation_selectors`。重ねると1文字の後ろに任意のバイト列を隠せる)を除き、

@@ -161,7 +161,7 @@ targetSdkを37以上へ上げるときに見直すこと:
   同梱フォントはSIL OFL 1.1(同梱は可、フォント自体はOFLのまま)。同梱アイコン(Material Symbolsの
   SVGの形を`frontend/src/Icon.tsx`に写したもの)はApache-2.0で、配布物の第三者ライセンスの一覧に
   ライセンス文(`frontend/src/icons/MaterialSymbols-LICENSE.txt`)を入れる(`scripts/assemble-dist.mjs`)。
-  npmのパッケージとしては入れていない(写し元は`@material-symbols/svg-400`)。ライセンスはMIT予定なので、
+  npmのパッケージとしては入れていない(写し元は`@material-symbols/svg-400`)。ライセンスはMITなので、
   コピーレフトのライブラリは使わない
 - BSL-1.0(Boost Software License)は許容する(MITと同じ許容型で、コピーレフトではない。バイナリでの
   配布には表示も求めない)。入るのはWindowsのクリップボードを読む`clipboard-win`と、その依存の`error-code`
