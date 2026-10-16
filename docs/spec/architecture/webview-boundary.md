@@ -87,8 +87,6 @@ narrow な verb-noun とし、`run_query` のような汎用コマンドは作�
 
 ## CSP / Tauri権限設定
 
-この見出しの内容を変える差分は、Opusでレビューする(CLAUDE.md「Opusでレビューする条件」)。
-
 - `default-src 'self'` / `img-src 'self' data:`(外部画像を読み込ませない。
   本文中の画像記法をリンクへ変換する自前処理と合わせた多層防御。片方が破れても止まる)/
   `script-src 'self'`(CDN・inline eval不可)
