@@ -547,7 +547,6 @@ mod tests {
         assert_eq!(kept(&messages), [true, true]);
     }
 
-    /// 前の区間の思考が外れると、それより後ろの区間の指紋も合わなくなる。
     #[test]
     fn dropping_earlier_thinking_drops_everything_after() {
         let sent = opening();
@@ -628,8 +627,7 @@ mod tests {
         assert_eq!(kept(&messages), [true, false]);
     }
 
-    /// 今と同じ送り先が前の思考をすべて外して送った区間(送り返した思考を断られた)があれば、
-    /// 前の思考を外したまま並べ、その区間からの思考を返す。
+    /// その区間からの思考は返す。
     #[test]
     fn keeps_the_thinking_dropped_after_a_rejection_out() {
         let mut sent = opening();
@@ -665,7 +663,6 @@ mod tests {
         assert_eq!(kept(&messages), [true, false]);
     }
 
-    /// 保存から並べた区間の外にある思考は送らない。
     #[test]
     fn drops_thinking_outside_saved_segments() {
         let sent = opening();
@@ -715,7 +712,6 @@ mod tests {
         ExternalToolset::default().with_unavailable([&server], &[])
     }
 
-    /// 固定したツール定義は、今と同じか、繋がらないサーバーのツールが欠けているだけなら残す。
     #[test]
     fn keeps_the_frozen_tools_unless_they_really_changed() {
         let internal = ToolSchema::internal("get_task", "d", serde_json::json!({"type": "object"}));
@@ -769,7 +765,7 @@ mod tests {
         assert!(Head::frozen(unreadable, &current, &external).is_none());
     }
 
-    /// 並びに残った最後の通知が何を伝えているかを読む。前の通知は、後の通知で上書きされている。
+    /// 前の通知は、後の通知で上書きされている。
     #[test]
     fn reads_what_the_last_system_update_in_the_sequence_tells() {
         let mut messages = opening();
@@ -788,7 +784,6 @@ mod tests {
         assert_eq!(last_update_tells(&messages, "newer"), Some(true));
     }
 
-    /// 変更の通知は、新しい入力の最初のユーザー発言の囲みの前に置く。無ければ通知だけの発言にする。
     #[test]
     fn puts_the_system_update_before_the_first_new_user_message() {
         let mut messages = opening();

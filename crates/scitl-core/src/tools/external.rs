@@ -131,7 +131,6 @@ impl ExternalToolset {
         self
     }
 
-    /// 繋がらなかったサーバーのツールの公開名か。
     pub fn is_unavailable(&self, exposed_name: &str) -> bool {
         self.unavailable.contains(exposed_name)
     }
@@ -259,7 +258,7 @@ mod tests {
         );
     }
 
-    /// 設定画面で見えない文字は、モデルへ渡す説明からも除く。改行は残す。
+    /// 改行は残す。
     #[test]
     fn descriptions_lose_invisible_characters_as_on_screen() {
         let mut read = tool("read");
@@ -274,7 +273,6 @@ mod tests {
         );
     }
 
-    /// 見えない文字を除いてから予約タグを無害化する。除いたことで現れた予約タグの形も残さない。
     #[test]
     fn reserved_tags_revealed_by_removing_invisible_characters_are_neutralized() {
         let mut read = tool("read");
@@ -322,8 +320,6 @@ mod tests {
         assert!(toolset.exposed_names().is_empty());
     }
 
-    /// 繋がらなかったサーバーの有効なツールを記録する。公開しているツールや内部ツールと同じ
-    /// 名前は記録せず、呼ばれたらそちらを実行する。
     #[test]
     fn records_tools_of_unreachable_servers_unless_the_name_is_taken() {
         // 同じ名前のサーバーが2つある設定(手で書き換えた等)。

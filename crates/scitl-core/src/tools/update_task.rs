@@ -16,8 +16,7 @@ use super::NO_IDS;
 const CLEARABLE: &[&str] = &["deadline", "description"];
 
 internal_tool! {
-    /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
-    name: "update_task",
+        name: "update_task",
     run: Run::UpdateTask(execute),
     ids: super::IdPositions { arguments: NO_IDS, result: TASK_DETAIL },
     "Update this conversation's task.",

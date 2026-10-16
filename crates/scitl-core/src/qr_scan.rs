@@ -13,7 +13,6 @@ pub const CANCELLED: &str = "C";
 pub const DENIED: &str = "D";
 pub const FAILED: &str = "F";
 
-/// 結果を引き取りに行く間隔。
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// 読み取りの画面を開いたままにできる長さ。過ぎたら画面を閉じ、読めなかったことにする(画面が
@@ -23,7 +22,6 @@ const GIVE_UP_AFTER: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
-    /// 利用者がカメラの使用を許可しなかった。
     #[error("camera permission was denied")]
     CameraDenied,
     /// カメラで読めない(カメラが無い・開けない、この端末では読まない等)。
@@ -31,14 +29,14 @@ pub enum ScanError {
     Unavailable(String),
 }
 
-/// カメラでQRを読み、中身を返す。利用者が読むのをやめたら`None`。返す前に捨てると(止める指示等)、
+/// 利用者が読むのをやめたら`None`。返す前に捨てると(止める指示等)、
 /// 読み取りの画面を閉じる。
 #[cfg(target_os = "android")]
 pub async fn scan() -> Result<Option<String>, ScanError> {
     android::scan().await
 }
 
-/// カメラでQRを読み、中身を返す。デスクトップでは読まない(アドレスと数字を打つ)。
+/// デスクトップでは読まない(アドレスと数字を打つ)。
 #[cfg(not(target_os = "android"))]
 pub async fn scan() -> Result<Option<String>, ScanError> {
     Err(ScanError::Unavailable(
@@ -52,7 +50,7 @@ pub fn available() -> bool {
     android::available()
 }
 
-/// この端末でQRを読めるか。デスクトップでは読まない。
+/// デスクトップでは読まない。
 #[cfg(not(target_os = "android"))]
 pub fn available() -> bool {
     false

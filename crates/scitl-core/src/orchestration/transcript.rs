@@ -87,7 +87,7 @@ impl StoredMessage {
         })
     }
 
-    /// 発言の列を保存する形にする。1つでも保存できなければ`None`。
+    /// 1つでも保存できなければ`None`。
     pub(super) fn all_of(messages: &[ChatMessage]) -> Option<Vec<Self>> {
         messages.iter().map(Self::of).collect()
     }
@@ -98,7 +98,7 @@ impl StoredMessage {
         }
     }
 
-    /// 保存した発言を読み戻す。画像の実体を読めなければ`None`。
+    /// 画像の実体を読めなければ`None`。
     fn restore(&self, store: &AttachmentStore) -> Option<ChatMessage> {
         Some(match self {
             Self::User { text, images } => ChatMessage::User {
@@ -203,7 +203,6 @@ impl Front {
 
 /// 保存に添えた先頭(システムプロンプトとツール定義)の本文。
 pub(super) struct SavedHead {
-    /// 先頭に置いたシステムプロンプト。
     pub(super) system: String,
     /// 渡したツール定義の一覧の本文([`tools_body`])。
     pub(super) tools: String,
@@ -218,7 +217,6 @@ pub(super) struct Replayable {
     pub(super) input_rows: Vec<i64>,
     /// 入力と往復と最後の応答。
     pub(super) messages: Vec<ChatMessage>,
-    /// 前を固定する材料。
     pub(super) front: Front,
 }
 
@@ -432,7 +430,6 @@ mod tests {
         (dir, store)
     }
 
-    /// 保存した本文が通った無害化の規則と囲みの形を、形の版と一緒に固定する。
     #[test]
     fn the_form_version_pins_the_neutralization_rules_and_the_wrappers() {
         use crate::attachments::Delivery;
@@ -492,7 +489,6 @@ mod tests {
         );
     }
 
-    /// 保存したツール定義の本文から、同じ本文になる定義の一覧を読み戻せる。
     #[test]
     fn tool_definitions_read_back_to_the_same_body() {
         let tools = [
@@ -522,7 +518,6 @@ mod tests {
         assert_eq!(loaded.messages.len(), 2);
     }
 
-    /// 読めない保存・形の版が違う保存・今のモデルが受け付けない形を含む保存は使わない。
     #[test]
     fn does_not_load_what_it_cannot_read_or_the_model_cannot_take() {
         let (_dir, store) = empty_store();
@@ -637,7 +632,6 @@ mod tests {
         );
     }
 
-    /// 思考の生ブロックを持つ発言も、受け取ったままの形で読み戻せる。
     #[test]
     fn a_message_with_a_replay_reads_back_verbatim() {
         let replay: Replay =
@@ -656,8 +650,7 @@ mod tests {
         );
     }
 
-    /// 保存した発言は、引数のキーの順を変えずに読み戻す。前の版が名前順で保存したものも、
-    /// 書き直すと保存した文字列に戻るので、指紋が合ったまま並ぶ。
+    /// 前の版が名前順で保存したものも、書き直すと保存した文字列に戻るので、指紋が合ったまま並ぶ。
     #[test]
     fn a_stored_message_reads_back_with_its_keys_in_the_saved_order() {
         let call = |arguments: &str| {
@@ -685,7 +678,6 @@ mod tests {
         }
     }
 
-    /// 同じものを同じ順に並べれば同じ指紋になり、何か1つ変われば変わる。
     #[test]
     fn the_prefix_digest_follows_everything_placed_so_far() {
         let digest_of = |system: &str, texts: &[&str]| {

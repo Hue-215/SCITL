@@ -30,7 +30,6 @@ impl NumberField {
     }
 }
 
-/// 受け付けなかった理由の1つ。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]

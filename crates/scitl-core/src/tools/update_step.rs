@@ -11,8 +11,7 @@ use super::Run;
 use super::{IdPosition, IdTable, Segment};
 
 internal_tool! {
-    /// タスクチャット版のスキーマ。`task_id`を引数に含めない。
-    name: "update_step",
+        name: "update_step",
     run: Run::UpdateTask(execute),
     ids: super::IdPositions { arguments: STEP_ID_ARGUMENT, result: TASK_DETAIL },
     "Update a step of this conversation's task.",

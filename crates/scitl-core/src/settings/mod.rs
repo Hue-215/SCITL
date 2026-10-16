@@ -170,11 +170,9 @@ pub struct Settings {
     config_error: Option<String>,
     current: Mutex<Current>,
     writer: Mutex<()>,
-    /// 取得済みのMCPツール一覧([`crate::mcp::ToolCatalog`])。
     mcp_tools: Arc<ToolCatalog>,
     /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。
     fetching: InFlightSet<String>,
-    /// モデル能力の自動検出の結果([`DetectedCatalog`])。
     detected: DetectedCatalog,
     /// [`Self::detect_model_capabilities`]の同時実行を1プロバイダーにつき1本に絞る。
     detecting: InFlightSet<String>,

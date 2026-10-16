@@ -9,7 +9,7 @@ use super::Run;
 use super::{IdPosition, IdTable, Segment, NO_IDS};
 
 internal_tool! {
-    /// 引数なし。文脈から決まる情報を持たないため会話によらず同一のスキーマ。
+    /// 文脈から決まる情報を持たないため会話によらず同一のスキーマ。
     name: "get_task_list",
     run: Run::Read(execute),
     ids: super::IdPositions { arguments: NO_IDS, result: TASK_LIST },

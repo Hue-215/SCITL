@@ -104,7 +104,7 @@ impl ToolCatalog {
         self.lock().get(server_id).cloned()
     }
 
-    /// 取得できた一覧を載せる。続けて失敗した回数は数え直す。
+    /// 続けて失敗した回数は数え直す。
     pub fn store(&self, server_id: &str, tools: Vec<McpToolInfo>) {
         self.lock().insert(server_id.to_string(), tools);
         self.failures().remove(server_id);
@@ -158,7 +158,7 @@ impl McpSessions {
         Self::default()
     }
 
-    /// ツール一覧を取得する。このターンで既に接続済みならその接続を使い回す。
+    /// このターンで既に接続済みならその接続を使い回す。
     pub async fn list_tools(
         &mut self,
         server: &McpServerConfig,
@@ -306,9 +306,7 @@ impl McpSessions {
             .service)
     }
 
-    /// 開いたセッションをすべて閉じる。ターンの終わりに必ず呼ぶ。
-    /// 切断にも上限を設ける(応じないサーバーがあっても待ち続けない)。閉じたあとに接続を
-    /// 捨てるので、閉じきれずに残った要求もそこで打ち切られる(`http::Connection`)。
+    /// 閉じたあとに接続を捨てるので、閉じきれずに残った要求もそこで打ち切られる(`http::Connection`)。
     pub async fn close(self) {
         for (_, mut connection) in self.by_server {
             let _ = connection.service.close_with_timeout(CLOSE_TIMEOUT).await;
@@ -332,7 +330,6 @@ pub struct McpFailure {
     pub waited: bool,
 }
 
-/// 接続済みのサーバーからツール一覧を取得する。
 /// `server_name`は診断に書くサーバーの名前。
 async fn list_tools_of(
     service: &ClientService,
@@ -389,8 +386,6 @@ async fn list_tool_pages(
     Ok(tools)
 }
 
-/// サーバーへ接続する。接続自体にもタイムアウトを設ける(応答しないサーバーで
-/// ターンが止まらないようにする)。
 async fn connect(server: &McpServerConfig) -> Result<http::Connection, CoreError> {
     let headers = endpoint_headers(server).await?;
     connect_with(server, headers).await
@@ -418,8 +413,7 @@ async fn connect_with(
         .map_err(|_| CoreError::Mcp("timed out connecting to MCP server".to_string()))?
 }
 
-/// サーバーへ接続し、ツール一覧を取得して切断する(設定画面からの1回限りの取得)。
-/// 成功・失敗どちらの場合も接続は残さない。
+/// 設定画面からの1回限りの取得。成功・失敗どちらでも接続は残さない。
 pub async fn list_tools(server: &McpServerConfig) -> Result<Vec<McpToolInfo>, CoreError> {
     let mut sessions = McpSessions::new();
     let result = sessions.list_tools(server).await;
@@ -513,7 +507,7 @@ pub fn validate_header_name(name: &str) -> Result<(), CoreError> {
     crate::net::validate_custom_header_name(name, MCP_HEADER_NAMES).map_err(CoreError::Mcp)
 }
 
-/// ヘッダー値を検証する。載せられる値の規則は[`crate::net::secret_header_value`]が決める。
+/// 載せられる値の規則は[`crate::net::secret_header_value`]が決める。
 pub fn validate_header_value(value: &str) -> Result<(), CoreError> {
     crate::net::secret_header_value(value)
         .map(drop)
@@ -696,7 +690,6 @@ mod tests {
         assert!(!catalog.record_failure("s"));
     }
 
-    /// 接続の途中で待つのをやめたら、サーバーとのTCPの接続も閉じる(`http::AbortableClient`)。
     #[tokio::test]
     async fn giving_up_while_connecting_closes_the_connection() {
         use std::io::Read;
@@ -814,8 +807,6 @@ mod tests {
         format!("http://{addr}/mcp")
     }
 
-    /// 一覧の取得の途中で待つのをやめても、セッションを持つサーバーには後始末の`DELETE`が届く
-    /// (待っている要求は打ち切るが、後始末は打ち切らない)。
     #[tokio::test]
     async fn giving_up_while_listing_still_ends_the_session() {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -964,7 +955,7 @@ mod tests {
         assert_eq!(names, ["a", "b", "c"]);
     }
 
-    /// ページが終わらないサーバーでも、上限のページ数で打ち切って取れた分を返す。
+    /// 取れた分は返す。
     #[tokio::test]
     async fn listing_stops_at_the_page_limit() {
         let names = listed_names(|cursor| {
@@ -975,7 +966,7 @@ mod tests {
         assert_eq!(names.len(), MAX_TOOL_PAGES);
     }
 
-    /// 前に辿ったカーソルがまた返ったら、そこで打ち切る。続けて同じものも、周回するものも。
+    /// 続けて同じものも、周回するものも。
     #[tokio::test]
     async fn listing_stops_when_a_cursor_comes_back() {
         let names =
@@ -991,7 +982,6 @@ mod tests {
         assert_eq!(names, ["first", "a", "b"]);
     }
 
-    /// 同じ名前のツールが複数のページに出たら、最初のものだけを残す。
     #[tokio::test]
     async fn a_tool_listed_twice_is_kept_once() {
         let url = fake_server(Duration::ZERO, Duration::ZERO, |cursor| {
@@ -1005,8 +995,7 @@ mod tests {
         assert_eq!(tools[0].description.as_deref(), Some("first"));
     }
 
-    /// 一覧取得のタイムアウトは、1ページごとではなく全ページの取得に掛かる。1ページずつなら
-    /// 間に合う遅さのサーバーでも、全ページでは超えて失敗する。時間を止めて進める。
+    /// 1ページずつなら間に合う遅さのサーバーでも、全ページでは超えて失敗する。時間を止めて進める。
     #[tokio::test(start_paused = true)]
     async fn the_listing_timeout_covers_all_pages() {
         let url = fake_server(Duration::ZERO, LIST_TOOLS_TIMEOUT * 2 / 3, |cursor| {
@@ -1017,7 +1006,7 @@ mod tests {
         assert!(error.to_string().contains("timed out"), "{error}");
     }
 
-    /// サーバーごとに並行して接続するので、待つのは一番遅い1台の分で済む。結果は渡した順。
+    /// 結果は渡した順。
     #[tokio::test]
     async fn listing_tools_of_several_servers_waits_only_for_the_slowest() {
         let delay = Duration::from_millis(500);
@@ -1061,9 +1050,9 @@ mod tests {
         );
     }
 
-    /// タイムアウトは、待たされた末の失敗になる。タイムアウトを実時間で待たないよう、時間を
-    /// 止めて進める(止めた時計はループバックの応答を待つ間にも進むので、どの段でタイムアウト
-    /// するかは決まらない。段によらないことは下の、タイムアウトでない遅い失敗で確かめる)。
+    /// タイムアウトを実時間で待たないよう、時間を止めて進める(止めた時計はループバックの応答を
+    /// 待つ間にも進むので、どの段でタイムアウトするかは決まらない。段によらないことは下の、
+    /// タイムアウトでない遅い失敗で確かめる)。
     #[tokio::test(start_paused = true)]
     async fn a_failure_after_a_timeout_is_marked_as_waited() {
         let hanging = server_at(
@@ -1108,8 +1097,8 @@ mod tests {
         );
     }
 
-    /// すぐ閉じられた接続は、待たされていない失敗になる。かかった時間で見るので、実時間で試す
-    /// (時間を止めると、通信を待つ間に時計が次のタイマーまで進む)。
+    /// かかった時間で見るので、実時間で試す(時間を止めると、通信を待つ間に時計が次の
+    /// タイマーまで進む)。
     #[tokio::test]
     async fn a_failure_that_comes_at_once_is_not_marked_as_waited() {
         let closing = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -9,7 +9,7 @@ use super::Run;
 use super::{IdPosition, IdTable, Segment, NO_IDS};
 
 internal_tool! {
-    /// 引数なし。メモリはどの会話にも属さないので、会話によらず同一のスキーマ。
+    /// メモリはどの会話にも属さないので、会話によらず同一のスキーマ。
     name: "get_memories",
     run: Run::Read(execute),
     ids: super::IdPositions { arguments: NO_IDS, result: MEMORY_LIST },
@@ -21,7 +21,7 @@ internal_tool! {
     }),
 }
 
-/// [`memory_list`]の形のうち、IDの入る位置。メモリの書き込み系ツールも同じ形を返す。
+/// [`memory_list`]の形のうち、IDの入る位置。
 pub(super) const MEMORY_LIST: &[IdPosition] = &[IdPosition {
     path: &[Segment::Each, Segment::Key("id")],
     table: IdTable::Memory,

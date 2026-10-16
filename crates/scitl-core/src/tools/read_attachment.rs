@@ -194,7 +194,6 @@ mod tests {
         assert_eq!(output.image_hashes, ["a".repeat(64)]);
     }
 
-    /// 記録に残した結果は、本文や画像を渡したと伝えたままにしない。
     #[test]
     fn a_recorded_result_placed_without_its_content_says_name_only() {
         let f = Fixture::new();

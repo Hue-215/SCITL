@@ -133,7 +133,6 @@ mod tests {
         assert_ne!(dialog.confirm_label, "destination_dialog.confirm");
     }
 
-    /// 解釈で落ちる改行・紛らわしい書き方は、送るときと同じ解釈の形で見せる。
     #[test]
     fn the_url_is_shown_as_it_will_be_used_and_on_one_line() {
         let dialog = |url| {

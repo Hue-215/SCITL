@@ -112,7 +112,6 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
     )
 }
 
-/// [`create_task`]の結果。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -379,8 +378,8 @@ pub async fn delete_message(
 ///
 /// 止められるのは同じプロセスの中で生成している会話だけ。生成中でなければ何もせず`false`を返す
 /// (止める指示と生成の終わりが行き違った場合を含む)。`true`は指示を出したことを表すだけで、
-/// 最後の応答を受け取り終えたあとに出した指示では、応答はそのまま保存される。発言の削除・タスクの操作も同じ集合で
-/// 生成中として扱うが、それらは指示を見ないので止まらない。
+/// 最後の応答を受け取り終えたあとに出した指示では、応答はそのまま保存される。発言の削除・
+/// タスクの操作も同じ集合で生成中として扱うが、それらは指示を見ないので止まらない。
 pub fn stop_response(generating: &InFlightSet<Chat>, chat: Chat) -> bool {
     generating.request_stop(&chat)
 }

@@ -33,7 +33,7 @@ pub(super) const DELETE_TASK_IDS: IdPositions = IdPositions {
     }],
 };
 
-/// タイトルの変更。整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
+/// 整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
 pub async fn rename_task(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,

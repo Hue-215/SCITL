@@ -91,7 +91,7 @@ mod tests {
         }
     }
 
-    /// ツールを呼ぶ前の前置きではなく、最後に書いた本文を取る。思考とツールの呼び出しは取らない。
+    /// 思考とツールの呼び出しは取らない。
     #[test]
     fn the_last_text_is_the_one_written_after_the_tools() {
         let parts = [

@@ -32,7 +32,6 @@ pub struct ProviderView {
     pub models: Vec<ModelView>,
     pub active_model: Option<String>,
     pub has_api_key: bool,
-    /// 登録したカスタムヘッダーの名前。値は秘密情報なので渡さない。
     pub header_names: Vec<String>,
     /// モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
     pub can_detect_capabilities: bool,
