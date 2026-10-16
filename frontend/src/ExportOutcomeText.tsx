@@ -1,7 +1,7 @@
 import { isolated, t } from './i18n'
 import type { ExportOutcome } from './types'
 
-// 書き出しの結果の文言。結果の種類で出し分ける。取りやめ(`cancelled`)は何も出さない。
+// 書き出しの結果の文言。取りやめ(`cancelled`)は何も出さない。
 export default function ExportOutcomeText({ outcome }: { outcome: ExportOutcome }) {
   const summary =
     outcome.status === 'written' || outcome.status === 'saved' ? outcome.summary : null

@@ -40,7 +40,6 @@ export function useDrawer(): DrawerState {
 
   const id = useId()
   const toggleId = `${id}-toggle`
-  // 閉じたあとで開くボタンへフォーカスを戻すか。
   const returnFocus = useRef(false)
 
   const cancel = useCallback(() => {

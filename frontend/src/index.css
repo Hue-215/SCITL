@@ -1495,7 +1495,7 @@ details[open] > summary > .disclosure-mark,
   flex-shrink: 0;
 }
 
-/* 一覧が空のときの一文。プロバイダー・モデル・MCPサーバー・ツールで共通。 */
+/* プロバイダー・モデル・MCPサーバー・ツールで共通。 */
 .list-empty {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
@@ -1943,7 +1943,7 @@ button.danger {
   border-color: var(--color-danger);
 }
 
-/* 受け付けなかった添付。送られない。 */
+/* 受け付けなかった添付。 */
 .chip-error {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);

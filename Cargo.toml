@@ -40,8 +40,8 @@ thiserror = "2"
 secrecy = { version = "0.10", features = ["serde"] }
 url = "2"
 # URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、Androidの選択画面が
-# 返す`content://`のURIから取る添付の名前)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
-# (`cargo tree -d -i percent-encoding`で確認)
+# 返す`content://`のURIから取る添付の名前)。同じ版が`url`の依存として既にビルドされている。
+# 上流の版が上がったら合わせて上げる(`cargo tree -d -i percent-encoding`で確認)
 percent-encoding = "2.3.2"
 # UTC日時の文字列化と、締切の日付が実在するかの確認(`scitl-core/src/db/`)、モデルへ渡す送信日時を
 # OSのタイムゾーンで表す(`scitl-core/src/llm/prompt.rs`の`SentAt`)。同じ版と`clock`(OSの
@@ -102,10 +102,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # 書くのはdeflateだけなので既定のfeatureは切る。deflateの実装(`flate2`の`rust_backend`)は`image` → `png`の
 # 依存として既にビルドされているものを使う
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
-# MCPクライアント。`default-features = false`にした上で必要なfeatureだけを明示する。
-# OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない先へ通信しうるので
-# 有効にしない。
-# `client`(素朴なクライアント)・`transport-streamable-http-client-reqwest`(streamable_http、
+# MCPクライアント。OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない
+# 先へ通信しうるので有効にしない。`client`(素朴なクライアント)・`transport-streamable-http-client-reqwest`(streamable_http、
 # 内部でreqwestを使う)のみ。サーバーを子プロセスとして起動するstdio方式は持たない
 # (`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
 rmcp = { version = "=3.4.0", default-features = false, features = [

@@ -26,7 +26,6 @@ CREATE TABLE sync_cursors (
     received_seq    INTEGER NOT NULL DEFAULT 0 CHECK (received_seq >= 0)
 );
 
--- 同期する各テーブルに`uid`と`sync_seq`。
 ALTER TABLE tasks ADD COLUMN uid TEXT NULL
     CHECK (uid IS NULL OR (typeof(uid) = 'text' AND length(uid) = 32 AND uid NOT GLOB '*[^0-9a-f]*'));
 ALTER TABLE tasks ADD COLUMN sync_seq INTEGER NOT NULL DEFAULT 0;
