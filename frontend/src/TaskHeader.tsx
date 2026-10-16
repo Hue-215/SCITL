@@ -23,10 +23,11 @@ interface TaskHeaderProps {
   onRename: (title: string) => void
   onSetArchived: (archived: boolean) => void
   onDelete: () => void
+  onExport: () => void
 }
 
 // タスクチャットのヘッダー。名前のその場での変更・締切と工程の進捗・説明の開け閉め・
-// アーカイブの切り替えと削除(︙のメニュー)。タスクを切り替えたら編集中の状態を捨てるよう、呼び出し側はタスクのidを`key`に渡す。
+// 書き出し・アーカイブの切り替え・削除(︙のメニュー)。タスクを切り替えたら編集中の状態を捨てるよう、呼び出し側はタスクのidを`key`に渡す。
 export default function TaskHeader({
   task,
   drawerToggle,
@@ -34,6 +35,7 @@ export default function TaskHeader({
   onRename,
   onSetArchived,
   onDelete,
+  onExport,
 }: TaskHeaderProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -117,6 +119,7 @@ export default function TaskHeader({
           label={t('task_header.menu_label')}
           disabled={disabled}
           items={[
+            { key: 'export', label: t('export.button'), onSelect: onExport },
             {
               key: 'archive',
               label: archived ? t('task_header.unarchive') : t('task_header.archive'),

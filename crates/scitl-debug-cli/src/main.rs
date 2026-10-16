@@ -141,6 +141,7 @@ async fn run(cli: Cli) -> Result<(), DebugError> {
                 session.db.clone(),
                 &attachments,
                 session.data.export(),
+                scitl_core::export::ExportScope::All,
             )
             .await?;
             print_json(&summary);

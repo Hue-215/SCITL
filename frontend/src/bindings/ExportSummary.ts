@@ -4,7 +4,11 @@ export type ExportSummary = {
 /**
  * 書き出したフォルダの名前(`root`の直下)。
  */
-folder: string, tasks: number, attachments: number, 
+folder: string, 
+/**
+ * 書き出したタスクの数。総合チャットだけを書き出したときは0。
+ */
+tasks: number, attachments: number, 
 /**
  * 実体を読めない・書けないために同梱できなかった添付の数。
  */
