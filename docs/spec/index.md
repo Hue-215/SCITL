@@ -8,35 +8,31 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 
 ## 文書ごとの読む場面
 
-「Opus」の列は、その文書の領域を変える差分がCLAUDE.md「Opusでレビューする条件」に当たるか。
-
-| 文書 | 読む場面 | Opus |
-|---|---|---|
-| `principles.md` | 設計判断をするとき(該当する節だけ)。コード・コメント・コミットを書くとき(5節・8節) | 節による |
-| `architecture/tech-stack.md` | 依存の追加・技術の置き換え、ライセンスの判断、依存の脆弱性 | 実行時依存の追加は当たる |
-| `architecture/cli.md` | `scitl-cli`・`scitl-debug-cli`のコマンドを触る | 秘密情報の受け取り方を変えるなら当たる |
-| `architecture/llm-adapter.md` | プロバイダーのアダプタ、モデルの能力、イベント列、失敗の種類 | 通信先・通信方式を変えるなら当たる |
-| `architecture/prompt-shape.md` | システムプロンプト、ユーザー発言の囲み、日時・状態の伝え方、操作の記録、固定文言 | 囲み・予約タグの形を変えるなら当たる |
-| `architecture/transcript.md` | 履歴の組み立て、送った形の保存、思考の送り返し、間引き | 保存の形を変えるなら当たる |
-| `architecture/concurrency.md` | 多重起動の防止、同期と非同期の境界、応答生成の停止、Androidで裏へ回ったとき(フォアグラウンドサービス、応答が終わったことの通知、通知から会話を開く)、途中経過の通知 | 2つ目の起動から届く引数を使うなら当たる。Androidのマニフェストの権限を変えるなら当たる。通知に載せるもの・通知から届く値の扱いを変えるなら当たる |
-| `architecture/network-secrets.md` | HTTPクライアント、平文http、秘密情報、資格情報ストア | 当たる |
-| `architecture/webview-boundary.md` | 画面が持つもの・持たないもの、IPCコマンド、CSP・Tauriの権限、外部リンク | 「CSP / Tauri権限設定」の見出しの内容を変えるなら当たる。IPCコマンドの引数でパス・URL等を受け取るものを足す・広げるなら当たる。「画面が持つもの・持たないもの」の持たないものを緩めるなら当たる |
-| `architecture/sanitize.md` | 外部から来た文字列・自由入力を、モデル・画面・端末・ファイルへ出す | 当たる |
-| `architecture/i18n.md` | 画面の文言、言語ファイル、表示言語 | 当たらない |
-| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 | 受け取り方(外から受け取る入力)・囲みの外に置く規則・信頼できない入力としての扱いを変えるなら当たる |
-| `architecture/export.md` | Markdownエクスポート | 書き出し先の決め方(外から受け取る入力)を変えるなら当たる |
-| `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`・`memories`、索引、PRAGMAと排他、マイグレーション | 当たる |
-| `data-model/messages.md` | `messages`、ターン境界、操作の記録、`turn_transcripts`。`architecture/transcript.md`と対で読む | 当たる |
-| `tools.md` | LLMに公開するツールのスキーマ、引数検証、履歴への載せ方、外部(MCP)ツールの公開 | 公開する操作・権限を変えるなら当たる |
-| `ui.md` | 画面を触るとき(必ず読む。`principles.md` 6節と、`architecture/webview-boundary.md`「画面が持つもの・持たないもの」も) | 描画だけの変更は当たらない。画面に持たせない処理を足すなら当たる(`architecture/webview-boundary.md`の行) |
+| 文書 | 読む場面 |
+|---|---|
+| `principles.md` | 設計判断をするとき(該当する節だけ)。コード・コメント・コミットを書くとき(5節・8節) |
+| `architecture/tech-stack.md` | 依存の追加・技術の置き換え、ライセンスの判断、依存の脆弱性 |
+| `architecture/cli.md` | `scitl-cli`・`scitl-debug-cli`のコマンドを触る |
+| `architecture/llm-adapter.md` | プロバイダーのアダプタ、モデルの能力、イベント列、失敗の種類 |
+| `architecture/prompt-shape.md` | システムプロンプト、ユーザー発言の囲み、日時・状態の伝え方、操作の記録、固定文言 |
+| `architecture/transcript.md` | 履歴の組み立て、送った形の保存、思考の送り返し、間引き |
+| `architecture/concurrency.md` | 多重起動の防止、同期と非同期の境界、応答生成の停止、Androidで裏へ回ったとき(フォアグラウンドサービス、応答が終わったことの通知、通知から会話を開く)、途中経過の通知 |
+| `architecture/network-secrets.md` | HTTPクライアント、平文http、秘密情報、資格情報ストア |
+| `architecture/webview-boundary.md` | 画面が持つもの・持たないもの、IPCコマンド、CSP・Tauriの権限、外部リンク |
+| `architecture/sanitize.md` | 外部から来た文字列・自由入力を、モデル・画面・端末・ファイルへ出す |
+| `architecture/i18n.md` | 画面の文言、言語ファイル、表示言語 |
+| `architecture/attachments.md` | 添付の受け取り・正規化・置き場所・表示・モデルへの渡し方 |
+| `architecture/export.md` | Markdownエクスポート |
+| `data-model/tables.md` | 型と形式、`tasks`・`task_steps`・`attachments`・`memories`、索引、PRAGMAと排他、マイグレーション |
+| `data-model/messages.md` | `messages`、ターン境界、操作の記録、`turn_transcripts`。`architecture/transcript.md`と対で読む |
+| `tools.md` | LLMに公開するツールのスキーマ、引数検証、履歴への載せ方、外部(MCP)ツールの公開 |
+| `ui.md` | 画面を触るとき(必ず読む。`principles.md` 6節と、`architecture/webview-boundary.md`「画面が持つもの・持たないもの」も) |
 
 ## 同期機能の仕様
 
 端末間の同期(Issue #585。段階3の差分の同期と競合(`crates/scitl-sync`)まで実装)の仕様は、本体の仕様と分けて`../sync/index.md`に置く。この索引と
 `principles.md`は本体の仕様で、同期機能には当てはめない部分がある(同期の間だけ本体が待ち受けること、
 利用者がその場で指定した相手と通信すること)。違いは`../sync/index.md` 2節に書き、本体の原則は変えない。
-同期のために本体へ入る部分(DBの列とトリガー)を触る差分と、同期のコードを触る差分は、CLAUDE.md
-「Opusでレビューする条件」に当たる。
 
 ## ファイルを跨ぐ不変条件
 

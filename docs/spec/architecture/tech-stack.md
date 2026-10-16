@@ -187,8 +187,7 @@ targetSdkを37以上へ上げるときに見直すこと:
 
 - **GitHubのDependabotアラートで知らせる**。`Cargo.lock`と`frontend/package-lock.json`の依存に既知の
   脆弱性が公開されると通知が来る。自動でPRを作る機能(security updates)は使わない。依存の更新は、
-  実行時依存の変化をOpusで見る条件(CLAUDE.md)や、版を留めている依存
-  (`concurrency.md`「多重起動の防止」のプラグイン)があり、機械的には上げられない
+  版を留めている依存(`concurrency.md`「多重起動の防止」のプラグイン)があり、機械的には上げられない
 - CIでは走らせない。PRと関係なく新しい脆弱性が公開されただけで落ち、無関係な変更を止めるため
 - リリースの前に、開いているアラートが無いことを確かめる(`.claude/skills/release-build`「リリースの流れ」)。
   上げられないもの(GTK3のRustバインディングが0.18系で止まっているため、Linuxの`glib`は0.18系に留まる等)は、
