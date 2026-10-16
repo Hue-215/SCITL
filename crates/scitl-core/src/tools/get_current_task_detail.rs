@@ -9,7 +9,7 @@ use super::Run;
 use super::{IdPosition, IdTable, Segment, NO_IDS};
 
 internal_tool! {
-        name: "get_current_task_detail",
+    name: "get_current_task_detail",
     run: Run::ReadTask(execute),
     ids: super::IdPositions { arguments: NO_IDS, result: TASK_DETAIL },
     "Get this conversation's task.",
