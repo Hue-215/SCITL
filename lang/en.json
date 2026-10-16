@@ -87,7 +87,7 @@
   "destination_dialog.title": "Confirm the server to register",
   "errors.number_too_large": "Please enter an integer of {max} or less",
   "errors.positive_integer": "Please enter an integer of 1 or more",
-  "export.button": "Export to Markdown",
+  "export.button": "Export",
   "export.done": "Exported to {folder}",
   "export.exporting": "Exporting…",
   "export.failed": "Export failed: {error}",

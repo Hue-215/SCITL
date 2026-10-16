@@ -87,7 +87,7 @@
   "destination_dialog.title": "通信先の登録の確認",
   "errors.number_too_large": "{max}以下の整数で入力してください",
   "errors.positive_integer": "1以上の整数で入力してください",
-  "export.button": "Markdownに書き出す",
+  "export.button": "エクスポート",
   "export.done": "{folder} に書き出しました",
   "export.exporting": "書き出し中…",
   "export.failed": "書き出しに失敗しました: {error}",
