@@ -28,7 +28,6 @@ use openai_compat::OpenAiCompatAdapter;
 
 pub type SharedAdapter = Arc<dyn LlmAdapter + Send + Sync>;
 
-/// [`build_active_adapter`]の結果。
 pub enum ActiveAdapter {
     Ready(SharedAdapter),
     NoProvider,
@@ -447,7 +446,6 @@ async fn load_credentials_off_thread(provider: &ProviderConfig) -> Result<Creden
 /// 会話がアシスタント発言から始まるときに、その前へ補うユーザー発言の本文。
 const PLACEHOLDER_USER_TEXT: &str = "(The earlier part of this conversation is not available.)";
 
-/// 鍵を載せるヘッダー。方言ごとに違う。
 #[derive(Clone, Copy)]
 enum KeyHeader {
     /// `Authorization: Bearer`

@@ -65,8 +65,7 @@ impl DataDirError {
     }
 }
 
-/// デスクトップのデータディレクトリ。実行ファイルと同じフォルダの`data`で、フォルダごと持ち運べる。
-/// GUIとCLIは同じフォルダに置くので、同じデータを開く。
+/// デスクトップのデータディレクトリ。
 pub fn data_dir_beside_executable() -> Result<PathBuf, DataDirError> {
     let exe = std::env::current_exe().map_err(|e| DataDirError::NoExecutable {
         reason: e.to_string(),
@@ -102,8 +101,7 @@ fn is_within(dir: &Path, temp_dir: &Path) -> bool {
     }
 }
 
-/// デスクトップのキャッシュディレクトリ。GUIとCLIの両方がこれで決めるので、同じ場所を使う。
-/// Tauriの`app_cache_dir`と同じ決め方。
+/// デスクトップのキャッシュディレクトリ。Tauriの`app_cache_dir`と同じ決め方。
 pub fn default_cache_dir() -> Result<PathBuf, NoAppDir> {
     dirs::cache_dir()
         .map(|dir| dir.join(APP_IDENTIFIER))
@@ -314,7 +312,6 @@ mod data_dir_tests {
         );
     }
 
-    /// 一時ディレクトリがルートを指していても、すべてを断らない。
     #[test]
     fn a_temporary_directory_at_the_root_refuses_nothing() {
         let temp = tempfile::tempdir().unwrap();

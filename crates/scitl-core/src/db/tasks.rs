@@ -70,7 +70,6 @@ impl TaskStatus {
 }
 
 /// サイドバーのタスク一覧表示に必要な最小限の情報。
-/// 本文(description)は一覧に出さないため含めない。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskSummary {
@@ -152,7 +151,7 @@ pub fn list_summaries(conn: &Connection) -> Result<Vec<TaskSummary>> {
     Ok(rows)
 }
 
-/// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う。
+/// タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う。
 pub fn create_task(conn: &Connection) -> Result<Task> {
     let now = now_iso8601();
     conn.execute(
@@ -220,7 +219,6 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
             .transpose()?
             .or(current.title);
         // 既にアーカイブ済みなら元の日時を保つ(`task_steps::update_step`の`done_at`と同じ)。
-        // 状態の列は現在の状態だけを表し、いつ何をしたかは会話ログのツール実行記録が持つ。
         let archived_at = match update.status {
             Some(TaskStatus::Archived) => current.archived_at.or_else(|| Some(now.clone())),
             Some(TaskStatus::Unarchived) => None,
@@ -327,8 +325,7 @@ pub(crate) fn check_description(description: &str) -> Result<()> {
     check_max_chars("description", description, MAX_DESCRIPTION_CHARS)
 }
 
-/// 画面でタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を
-/// 付け、続きがあることを示す。
+/// 画面でタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を付ける。
 const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 
 /// タイトル未設定のタスク(`only`を渡せばそのタスクだけ)の、タイトルの代わりに出す1行。

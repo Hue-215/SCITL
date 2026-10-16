@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(reveal_invisible("x\u{3164}"), "x\\u3164");
     }
 
-    /// 異体字セレクタは除かない(絵文字の表示が変わる)。
+    /// 除くと絵文字の表示が変わる。
     #[test]
     fn label_keeps_variation_selectors() {
         assert_eq!(display_label("\u{2764}\u{FE0F}", 100), "\u{2764}\u{FE0F}");

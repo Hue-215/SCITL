@@ -88,7 +88,7 @@ pub enum ExportOutcome {
     /// 選んだファイルへzipで書いた([`ExportTarget::ChosenFile`])。`summary.folder`はzipの中の
     /// フォルダの名前。
     Saved { summary: ExportSummary },
-    /// 保存画面を閉じた。何も書いていない。
+    /// 保存画面を閉じた。
     Cancelled,
     /// 選んだファイルへ書き写せなかった。選んだファイルは保存画面が作るので、書きかけ(空を含む)が
     /// 選んだ名前で残りうる。消す手段を持たないので、画面は利用者に消すよう伝える。
@@ -100,7 +100,6 @@ pub enum ExportOutcome {
 pub struct ExportSummary {
     /// 書き出したフォルダの名前(`root`の直下)。
     pub folder: String,
-    /// 書き出したタスクの数。総合チャットだけを書き出したときは0。
     pub tasks: usize,
     pub attachments: usize,
     /// 実体を読めない・書けないために同梱できなかった添付の数。
@@ -548,7 +547,7 @@ mod tests {
         assert!(read(folder.join("general-chat.md")).contains("general hello"));
     }
 
-    /// メモリは削除したものを除いて書き出す。本文はMarkdownの構造として読まれない形にする。
+    /// 本文はMarkdownの構造として読まれない形にする。
     #[test]
     fn writes_memories_except_deleted_ones() {
         let f = Fixture::new();
@@ -618,7 +617,6 @@ mod tests {
         names
     }
 
-    /// タスク1件の書き出しは、そのタスクのファイル(説明・工程を含む)と添付だけを書く。
     /// アーカイブしたタスクも書ける。
     #[test]
     fn a_task_export_writes_only_that_task() {
@@ -664,7 +662,7 @@ mod tests {
         assert!(!body.contains("other"));
     }
 
-    /// 同じ秒の同じ範囲の書き出しは番号で分かれ、範囲の違う書き出しとは名前が重ならない。
+    /// 範囲の違う書き出しとは名前が重ならない。
     #[test]
     fn exports_of_the_same_scope_get_their_own_folders() {
         let f = Fixture::new();

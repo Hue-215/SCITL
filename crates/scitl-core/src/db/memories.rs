@@ -54,7 +54,7 @@ pub(crate) fn normalize_content(raw: &str, arg_name: &str) -> Result<String> {
     Ok(content)
 }
 
-/// メモリの追加。`contents`内の重複と、既存の未削除のメモリと同じ本文は除く。空・長すぎる
+/// `contents`内の重複と、既存の未削除のメモリと同じ本文は除く。空・長すぎる
 /// 本文が1つでもあるか、追加すると[`MAX_MEMORIES`]を超えるなら、1件も追加せずにエラーを返す。
 /// 戻り値は新しく追加したメモリだけ。
 pub fn add(conn: &Connection, contents: &[String]) -> Result<Vec<Memory>> {
@@ -96,7 +96,7 @@ pub fn add(conn: &Connection, contents: &[String]) -> Result<Vec<Memory>> {
     })
 }
 
-/// メモリの本文の書き換え。`updated_at`は値が変わったかを比べずに進める。他のメモリと同じ
+/// `updated_at`は値が変わったかを比べずに進める。他のメモリと同じ
 /// 本文にする書き換えは断る(追加と同じく、同じ本文を2件持たない)。
 pub fn update(conn: &Connection, memory_id: i64, content: &str) -> Result<Memory> {
     super::in_transaction(conn, |conn| {

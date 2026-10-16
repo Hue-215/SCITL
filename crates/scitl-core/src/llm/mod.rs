@@ -178,7 +178,6 @@ impl InlineImage {
         }
     }
 
-    /// 読み出した添付の実体のハッシュ。添付から読み出したものでなければ`None`。
     pub fn source(&self) -> Option<&str> {
         self.source.as_deref()
     }

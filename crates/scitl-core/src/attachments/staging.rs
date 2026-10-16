@@ -21,7 +21,6 @@ use super::store::AttachmentStore;
 use crate::db::attachments::{AttachmentContent, AttachmentKind, NewAttachment};
 use crate::error::{CoreError, Result};
 
-/// [`Staged::stage`]の結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -32,7 +31,7 @@ pub enum StageOutcome {
         mime_type: String,
         size_bytes: i64,
     },
-    /// 受け付けなかった。画面は理由ごとの文言を出す。
+    /// 画面は理由ごとの文言を出す。
     Rejected {
         #[serde(flatten)]
         reason: Rejection,
@@ -47,10 +46,11 @@ pub enum Rejection {
         kind: AttachmentKind,
         limit_bytes: u64,
     },
-    /// 窓に落としたもの・選んだものがファイルでない(フォルダ等)。
     NotAFile,
     /// 送っていない添付が、1つの発言に付けられる数に達している。
-    TooMany { limit: usize },
+    TooMany {
+        limit: usize,
+    },
     /// 中身が「その他」(画像として扱う形式でもUTF-8のテキストでもない)。モデルが中身に何も
     /// できないので受け付けない。
     Unsupported,
@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(staged.lock().len(), 0);
     }
 
-    /// 読んでいる途中の席も数に入れ、席を持って預けるときは自分の席を除いて数える。
+    /// 席を持って預けるときは、自分の席を除いて数える。
     #[test]
     fn seats_count_toward_the_limit_until_they_are_used_or_dropped() {
         let staged = Staged::default();
@@ -433,8 +433,6 @@ mod tests {
         assert_eq!(image::load_from_memory(bytes).unwrap().width(), 1568);
     }
 
-    /// その他(画像として扱わない形式・UTF-8でないテキスト・PDF)とデコードできない画像は
-    /// 預からない。
     #[test]
     fn refuses_other_kinds_and_undecodable_images_without_staging() {
         let staged = Staged::default();

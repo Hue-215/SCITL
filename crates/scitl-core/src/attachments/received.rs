@@ -113,7 +113,6 @@ pub fn name_from_uri(uri: &str) -> String {
     }
 }
 
-/// 元のファイル名。
 pub(super) fn name_of(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -207,7 +206,7 @@ mod tests {
         );
     }
 
-    /// OSが開いて渡すものは、名前を受け取ったものにし、開いたファイルを上限まで読む。
+    /// 名前は受け取ったものにする。
     #[test]
     fn reads_opened_files_up_to_the_limit() {
         let dir = tempfile::tempdir().unwrap();
@@ -242,8 +241,7 @@ mod tests {
         assert_eq!(read_path_of(dir.path()), Err(Rejection::NotAFile));
     }
 
-    /// 上限を超えるものは読み切らずに断る。理由は先頭から見た種別で決め、受け付けない種別なら
-    /// 大きさではなくそれを理由にする。
+    /// 理由は先頭から見た種別で決め、受け付けない種別なら大きさではなくそれを理由にする。
     #[test]
     fn stops_reading_past_the_largest_limit() {
         let dir = tempfile::tempdir().unwrap();

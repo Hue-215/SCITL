@@ -58,8 +58,6 @@ impl CapabilityLayer {
         }
     }
 
-    /// この層を`below`の上に重ねる。
-    ///
     /// コンテキスト長の`0`は未設定として扱う。設定画面からは入らないが、手で編集した
     /// `config.toml`も同じ経路を通るため。
     pub fn over(&self, below: ModelCapabilities) -> ModelCapabilities {
@@ -95,7 +93,6 @@ impl DetectedCapabilities {
         }
     }
 
-    /// ツール呼び出しに対応しないと分かった。
     pub fn lacks_tools(&self) -> bool {
         self.tools == Some(false)
     }
@@ -129,7 +126,6 @@ pub fn fallback_capabilities(detected: Option<&DetectedCapabilities>) -> ModelCa
     }
 }
 
-/// 手動設定 → 自動検出 → 既定値の順に解決する。
 pub fn resolve_capabilities(
     model: &ModelConfig,
     detected: Option<&DetectedCapabilities>,
@@ -160,7 +156,7 @@ impl DetectedCatalog {
             .insert((provider_id.to_string(), model.to_string()), detected);
     }
 
-    /// プロバイダーの削除で、そのプロバイダーの結果をまとめて捨てる。
+    /// プロバイダーの削除で呼ぶ。
     pub fn forget_provider(&self, provider_id: &str) {
         self.lock().retain(|(p, _), _| p != provider_id);
     }
@@ -223,7 +219,7 @@ mod tests {
         assert_eq!(resolved.context_length, 8192);
     }
 
-    /// 警告するのは非対応と報告されたときだけ。教えないサーバーのモデルは警告しない。
+    /// 教えないサーバーのモデルは警告しない。
     #[test]
     fn only_reported_lack_of_tools_is_warned() {
         let with = |tools| DetectedCapabilities {

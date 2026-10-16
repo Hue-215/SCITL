@@ -357,7 +357,6 @@ mod tests {
         assert!(staged_files(&f.staging()).is_empty());
     }
 
-    /// 会話1つの書き出しは、勧める名前とzipの中のフォルダに範囲が付き、メモリを含めない。
     #[test]
     fn a_chat_export_names_its_scope_and_leaves_out_the_memories() {
         let f = Fixture::with_scope(ExportScope::Chat(Chat::General));

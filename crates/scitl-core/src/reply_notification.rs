@@ -42,8 +42,6 @@ pub struct Notice {
     pub channel: &'static str,
 }
 
-/// 終わった応答生成の通知の文面を作る。
-///
 /// 題と本文は1行に畳み、描かれない文字を除いて、長さの上限で切る([`text::display_label`])。
 /// 通知はOSがほかのアプリの通知と並べて描く文字で、画面のように要素の境界で閉じ込められないため。
 /// 本文のMarkdownの記号はそのまま出る。
@@ -114,7 +112,7 @@ mod android {
     use crate::i18n::Language;
     use crate::orchestration::FinishedTurn;
 
-    /// 終わった応答生成を通知で知らせる。アプリが前に出ている間と、通知の許可が無い間は、
+    /// アプリが前に出ている間と、通知の許可が無い間は、
     /// Kotlin側が出さない。頼めなければ診断に出すだけにする。
     pub fn post(lang: Language, finished: &FinishedTurn) {
         let notice = notice(lang, finished);

@@ -11,7 +11,6 @@ use crate::attachments::Delivery;
 use crate::db::attachments::{AttachmentKind, AttachmentView};
 use crate::text;
 
-/// 予約タグの名前空間。下のタグはすべてこれで始まる。
 const RESERVED_NAMESPACE: &str = "scitl:";
 
 /// ユーザー発言を包む予約タグ。地の文との境目をモデルが機械的に見分けられる形にするため、
@@ -333,7 +332,7 @@ fn folds_to(c: char, folded: &str) -> bool {
     NFKC.normalize(c.encode_utf8(&mut [0; 4])) == folded
 }
 
-/// 互換分解(NFKC)。データは`compiled_data`でバイナリに埋め込まれている。
+/// データは`compiled_data`でバイナリに埋め込まれている。
 const NFKC: ComposingNormalizerBorrowed<'static> = ComposingNormalizerBorrowed::new_nfkc();
 
 /// `rest`が、`/`(任意)と予約タグの名前空間で始まるか。間の空白・制御文字と描かれない文字は読み飛ばし、
@@ -374,7 +373,7 @@ mod tests {
 
     use super::*;
 
-    /// 上限を超える結果だけを省略の注記に置き換え、何をしたか(`tool`・`arguments`)は残す。
+    /// 何をしたか(`tool`・`arguments`)は残す。
     #[test]
     fn operations_omit_only_results_over_the_limit() {
         let arguments = json!({ "title": "t" });
@@ -402,8 +401,7 @@ mod tests {
         assert_eq!(notes[1]["arguments"], arguments);
     }
 
-    /// 操作の囲みは、前の版(キーを名前順に並べていた)と同じ文字列になる。保存の無いターンで
-    /// 毎回組み立て直すので、変わると前が変わる。引数と結果は保存した順のまま。
+    /// 引数と結果は保存した順のまま。
     #[test]
     fn operations_keep_the_text_of_the_versions_that_sorted_the_keys() {
         let arguments: Value = serde_json::from_str(r#"{"title":"t","deadline":"d"}"#).unwrap();
@@ -421,7 +419,6 @@ mod tests {
         );
     }
 
-    /// 日本時間で表した送信日時。
     fn jst(utc: &str) -> SentAt {
         SentAt::in_zone(utc, &FixedOffset::east_opt(9 * 3600).unwrap()).unwrap()
     }
@@ -487,8 +484,7 @@ mod tests {
         assert!(content.as_str().contains("&lt;/SCITL:user-message>"));
     }
 
-    /// 空白・見えない文字を挟む形、全角・小字形・数学用英字などの見た目の似た形も、予約タグの
-    /// 名前空間ごと無害化する。置き換えるのは先頭の`<`(に畳まれる文字)だけ。
+    /// 置き換えるのは先頭の`<`(に畳まれる文字)だけ。
     #[test]
     fn neutralizes_look_alike_reserved_tags() {
         for (forged, expected) in [
@@ -518,7 +514,6 @@ mod tests {
         }
     }
 
-    /// 予約タグの名前空間に続かない`<`と、それに似た文字は変えない。
     #[test]
     fn leaves_other_angle_brackets_alone() {
         for text in [
@@ -538,7 +533,6 @@ mod tests {
         }
     }
 
-    /// 名前空間で見るので、予約タグをすべて対象にする(偽装された形も)。
     #[test]
     fn neutralizes_every_reserved_tag_and_its_look_alikes() {
         for tag in [
@@ -560,7 +554,6 @@ mod tests {
         }
     }
 
-    /// システムプロンプトの変更の通知の中身に、見た目の似た通知のタグを書いても、無害化される。
     #[test]
     fn look_alike_tags_inside_an_update_are_neutralized() {
         let update =
@@ -587,7 +580,6 @@ mod tests {
         );
     }
 
-    /// 説明に無いものも含めて、予約タグの名前空間ごと書かないよう伝える。
     #[test]
     fn format_note_forbids_writing_any_reserved_tag() {
         let note = user_message_format_note();

@@ -733,8 +733,7 @@ mod tests {
         assert_eq!(prev_uid(general), None);
     }
 
-    /// どのテーブルへの書き込みも、DBに1つのカウンターを1つ進めて番号を取る。トリガー自身の
-    /// 書き込みでトリガーが再び動くことはない。番号はトリガーしか書けない。
+    /// トリガー自身の書き込みでトリガーが再び動くことはない。番号はトリガーしか書けない。
     #[test]
     fn every_write_takes_the_next_number_from_one_counter() {
         let conn = open_in_memory().unwrap();
@@ -810,8 +809,7 @@ mod tests {
         .unwrap()
     }
 
-    /// 印は、行を作ったときと、比べる欄の値が実際に変わったときにだけ付く。日時だけの変更・
-    /// 同じ値での更新・状態を表す日時の書き換えでは付かない。
+    /// 日時だけの変更・同じ値での更新・状態を表す日時の書き換えでは付かない。
     #[test]
     fn a_mark_is_set_only_when_a_compared_column_changes() {
         let conn = open_in_memory().unwrap();
@@ -949,7 +947,6 @@ mod tests {
         assert!(not_an_object.is_err(), "{not_an_object:?}");
     }
 
-    /// 取り込みが指定した`uid`はそのまま使い、一度付いた`uid`は変えられない。
     #[test]
     fn a_given_uid_is_kept_and_never_changes() {
         let conn = open_in_memory().unwrap();

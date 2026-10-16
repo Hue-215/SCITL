@@ -883,7 +883,6 @@ mod tests {
         assert!(text.contains(&format!(r#"}}]}},{thought},{call}]"#)));
     }
 
-    /// 受け取ったまま返した呼び出しにも、続く結果に呼び出しの名前を添える。
     #[test]
     fn names_the_result_of_a_replayed_call() {
         let messages = [
@@ -934,8 +933,7 @@ mod tests {
         assert!(image["data"].as_str().unwrap().starts_with("… ("));
     }
 
-    /// プレビューでは、送り返す思考の署名とツール結果の画像も縮める。ツールの引数の中は、
-    /// 同じ形の値でも縮めない(モデルに渡る値を隠さない)。
+    /// ツールの引数の中は、同じ形の値でも縮めない。
     #[test]
     fn preview_shortens_the_signature_and_the_result_image_but_not_the_arguments() {
         let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
@@ -1152,8 +1150,7 @@ mod tests {
         assert_eq!(events.len(), 2, "本文とDoneが1回ずつ");
     }
 
-    /// 送り返した思考の署名が断られたら、呼び直さずに思考の拒否として返す(外して送り直すのは
-    /// ターンの側)。
+    /// 思考を外して送り直すのはターンの側。
     #[tokio::test]
     async fn reports_a_rejected_thought_signature_without_retrying() {
         let (base_url, handle) = spawn_server(vec![(
@@ -1271,7 +1268,7 @@ mod tests {
         ));
     }
 
-    /// 無効なキーは400で返るが、`details`の`reason`で見分けて認証の失敗にする。
+    /// `details`の`reason`で見分ける。
     #[test]
     fn classifies_an_invalid_key_reported_with_400_as_auth() {
         let body = r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}"#;

@@ -53,7 +53,7 @@ pub(crate) fn normalize_description(raw: &str, arg_name: &str) -> Result<String>
     Ok(trimmed.to_string())
 }
 
-/// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は除外する。空・
+/// `descriptions`内の重複、および既存の未削除工程と同一の説明は除外する。空・
 /// 長すぎる説明が1つでもあるか、追加すると[`MAX_STEPS`]を超えるなら、1件も追加せずにエラーを
 /// 返す。`order_index`は連番で既存の最大値の続きから振る。戻り値は新規に追加された工程のみ。
 pub fn add_steps(

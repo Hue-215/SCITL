@@ -115,7 +115,6 @@ fn transcript_from_row(row: &rusqlite::Row) -> rusqlite::Result<Transcript> {
     })
 }
 
-/// 試行1つ分の保存。
 pub fn find(conn: &Connection, turn_id: &str, attempt_no: i64) -> Result<Option<Transcript>> {
     Ok(conn
         .query_row(

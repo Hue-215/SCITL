@@ -108,7 +108,7 @@ pub fn record_cursor(conn: &Connection, peer_device_id: &str, cursor: Cursor) ->
     Ok(())
 }
 
-/// 相手ごとのカーソル。初めての相手は0から(全部を送る)。
+/// 初めての相手は0から(全部を送る)。
 pub fn cursor(conn: &Connection, peer_device_id: &str) -> Result<Cursor> {
     Ok(conn
         .query_row(
@@ -609,7 +609,6 @@ struct Where {
 }
 
 impl Where {
-    /// どの表にも同じ条件。
     const fn every_table(clause: &'static str) -> Self {
         Self {
             tasks: clause,

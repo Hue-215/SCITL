@@ -196,7 +196,7 @@ fn block_index(event: &Value) -> Result<u64, LlmError> {
         .ok_or_else(|| invalid("a content block event has no index"))
 }
 
-/// 本文・思考の断片を渡す。空の断片は渡さない。
+/// 空の断片は渡さない。
 fn emit_delta(kind: &str, text: &str, on_event: &mut (dyn FnMut(ResponseEvent) + Send)) {
     if text.is_empty() {
         return;
@@ -333,8 +333,7 @@ mod tests {
         );
     }
 
-    /// 差分から組み立て直したブロックは、ストリーミングしないときに受け取るブロックと(キーの順を
-    /// 除いて)同じになる。
+    /// キーの順は比べない。
     #[tokio::test]
     async fn the_rebuilt_blocks_equal_the_blocks_received_without_streaming() {
         let (result, _, _) = send_streamed(THINKING_TEXT_AND_TOOL_USE).await;
@@ -415,7 +414,6 @@ mod tests {
         assert_eq!(events, vec![text("partial")]);
     }
 
-    /// 途中の`error`は、エラーの種類から状態コードに読み替えて分類する。
     #[tokio::test]
     async fn an_error_event_is_classified_by_its_type() {
         let (result, _, _) = send_streamed(&[
@@ -452,7 +450,6 @@ mod tests {
         assert_eq!(events, vec![text("half")]);
     }
 
-    /// `message_stop`を省いても、終了理由が届いていれば終わった応答として読む。
     #[tokio::test]
     async fn the_stop_reason_without_message_stop_completes_the_reply() {
         let (result, events, _) = send_streamed(&[
@@ -497,8 +494,6 @@ mod tests {
         );
     }
 
-    /// 終了理由が届いたら、`message_stop`を待たずに完了とする(接続を開けたままにする中継で、
-    /// 組み立て終えた応答をタイムアウトで捨てない)。
     #[tokio::test]
     async fn completes_at_the_stop_reason_even_if_the_connection_stays_open() {
         let mut pieces = now(&[

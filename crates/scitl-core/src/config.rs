@@ -25,8 +25,7 @@ impl ApiFormat {
     pub const ALL: [Self; 3] = [Self::OpenAiCompat, Self::Anthropic, Self::Gemini];
 }
 
-/// 1つのLLMプロバイダー設定。秘密情報を含まないため、そのままログに出しても
-/// TOMLファイルとして保存してもよい。
+/// 秘密情報を含まないため、そのままログに出してもTOMLファイルとして保存してもよい。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: String,
@@ -104,12 +103,11 @@ pub enum Capability {
     Thinking,
 }
 
-/// 思考の強さ。リクエストでの書き方は方言ごとにアダプタが決める。
+/// リクエストでの書き方は方言ごとにアダプタが決める。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
-    /// 思考させない。
     Off,
     Low,
     /// まだ選んでいないモデルの値。OpenAIがAPIの既定としている強さに合わせる。
@@ -236,7 +234,7 @@ pub enum McpEndpoint {
     },
 }
 
-/// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない。ツール一覧(名前・説明)は
+/// 秘密情報を含まない。ツール一覧(名前・説明)は
 /// 永続化せず、アプリ起動中だけ[`crate::mcp::ToolCatalog`]に持つ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
@@ -324,7 +322,7 @@ impl Config {
     }
 }
 
-/// 設定ファイルを読み込む。ファイルが存在しない場合は初回起動として空の設定を返す
+/// ファイルが存在しない場合は初回起動として空の設定を返す
 /// (プロバイダー未登録のまま起動し、設定画面で登録する)。
 pub fn load(path: &Path) -> Result<Config, CoreError> {
     match std::fs::read_to_string(path) {
@@ -334,7 +332,7 @@ pub fn load(path: &Path) -> Result<Config, CoreError> {
     }
 }
 
-/// 設定ファイルを保存する。呼び出し元が親ディレクトリの存在を保証する。
+/// 呼び出し元が親ディレクトリの存在を保証する。
 ///
 /// 書き込み途中で落ちても`config.toml`が壊れないように書く([`crate::files::write_durably`])。
 /// 置き換えまで同期するのは、呼び出し元が保存の直後に古い鍵を消すため(置き換えが電源断で
@@ -589,7 +587,6 @@ models = ["a"]
         assert!(toml::from_str::<Config>(text).is_err());
     }
 
-    /// 知らない表示言語は既定の言語として読み、ほかの設定を変えて保存しても書かれた値を残す。
     #[test]
     fn unknown_language_falls_back_to_the_default_and_survives_a_save() {
         let dir = tempfile::tempdir().unwrap();
@@ -611,8 +608,7 @@ models = ["a"]
         assert_eq!(known.unknown_language(), None);
     }
 
-    /// `task_chat_system_prompt`を含まないTOMLも読める。`#[serde(default)]`の無い`Option`が
-    /// 欠損時に`None`になるserde_deriveの挙動に頼っているため、その確認。
+    /// `#[serde(default)]`の無い`Option`が欠損時に`None`になるserde_deriveの挙動に頼っているため、その確認。
     #[test]
     fn load_reads_config_without_task_chat_system_prompt_key() {
         let dir = tempfile::tempdir().unwrap();

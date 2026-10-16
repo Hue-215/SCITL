@@ -169,8 +169,7 @@ pub enum RequestTimeout {
     None,
 }
 
-/// ハードニング済み`reqwest::Client`を組み立てる。通信先の検証を済ませたことを、`url`の型で
-/// 求める。
+/// 通信先の検証を済ませたことを、`url`の型で求める。
 pub fn hardened_client(
     #[cfg_attr(not(target_os = "android"), allow(unused_variables))] url: &ExternalUrl,
     timeout: RequestTimeout,

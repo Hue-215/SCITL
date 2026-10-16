@@ -85,8 +85,7 @@ fn request_preview_is_the_body_send_would_post_without_the_key() {
         .contains("sk-preview-secret"));
 }
 
-/// 縮めるのは画像を置く位置だけ。`data:`で始まる本文を縮めると、モデルに渡る文を
-/// プレビューから隠せる。
+/// `data:`で始まる本文を縮めると、モデルに渡る文をプレビューから隠せる。
 #[test]
 fn request_preview_abbreviates_only_images() {
     let adapter = OpenAiCompatAdapter::new(
@@ -133,7 +132,7 @@ async fn api_key_is_sent_as_bearer() {
     assert!(headers.contains("authorization: bearer sk-test"));
 }
 
-/// ヘッダーに載せられない鍵は、送る前に方言と同じ文言で断る(鍵は文言に載せない)。
+/// ほかの方言と同じ文言で断り、鍵は文言に載せない。
 #[tokio::test]
 async fn a_key_that_cannot_be_sent_in_a_header_is_refused_before_sending() {
     let adapter = OpenAiCompatAdapter::new(
@@ -217,7 +216,7 @@ fn null_choices_are_no_reply() {
     assert!(parsed.choices.is_empty());
 }
 
-/// 引数が`null`なら`null`として渡し、空のオブジェクトに置き換えない。
+/// 空のオブジェクトに置き換えない。
 #[test]
 fn null_tool_arguments_are_passed_up_as_null() {
     let parsed: ResponseToolCall = serde_json::from_str(
@@ -459,7 +458,6 @@ fn reasoning_effort_in_the_body_alone_does_not_mean_it_was_rejected() {
     ));
 }
 
-/// 本文で判定できなければ、状態コードによる分類に落ちる。
 #[test]
 fn other_error_bodies_fall_back_to_the_status_code() {
     assert!(matches!(
@@ -1107,7 +1105,6 @@ async fn reads_a_repeated_id_or_empty_fields_without_an_index_as_the_continuatio
     );
 }
 
-/// 引数を運ばない呼び出しは、ストリーミングしないときの`"arguments": null`と同じく`null`にする。
 #[tokio::test]
 async fn a_streamed_tool_call_without_arguments_passes_null() {
     let (result, events, _) = send_streamed(
