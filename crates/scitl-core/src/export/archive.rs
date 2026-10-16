@@ -15,7 +15,7 @@ use chrono::{Datelike, Timelike};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use super::{io_error, write, ExportOutcome, ExportSummary, Snapshot};
+use super::{io_error, write, ExportOutcome, ExportScope, ExportSummary, Snapshot};
 use crate::attachments::{AttachmentStore, Attachments};
 use crate::blocking;
 use crate::db::{with_conn, SharedConnection};
@@ -52,11 +52,12 @@ pub async fn export_to_chosen_file(
     db: SharedConnection,
     attachments: &Attachments,
     staging: PathBuf,
+    scope: ExportScope,
     choose: impl FnOnce(&str) -> Option<OpenChosen> + Send + 'static,
 ) -> Result<ExportOutcome> {
     let building = Building::begin()
         .ok_or_else(|| CoreError::Export("another export is in progress".to_string()))?;
-    let snapshot = with_conn(db, Snapshot::read).await?;
+    let snapshot = with_conn(db, move |conn| Snapshot::read(conn, scope)).await?;
     let store = attachments.store();
     blocking::run(move || {
         let _building = building;
@@ -275,7 +276,7 @@ mod tests {
                 };
                 attachments::insert(&conn, message, &new).unwrap();
             }
-            let snapshot = Snapshot::read(&conn).unwrap();
+            let snapshot = Snapshot::read(&conn, ExportScope::All).unwrap();
             Self { temp, snapshot }
         }
 

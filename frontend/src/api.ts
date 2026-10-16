@@ -157,6 +157,10 @@ export function exportMarkdown(): Promise<ExportOutcome> {
   return invoke('export_markdown')
 }
 
+export function exportChatMarkdown(chat: Chat): Promise<ExportOutcome> {
+  return invoke('export_chat_markdown', { chat })
+}
+
 export function openExportFolder(): Promise<void> {
   return invoke('open_export_folder')
 }

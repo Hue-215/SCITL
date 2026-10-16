@@ -168,6 +168,7 @@ pub fn run() {
             commands::attachments::reveal_attachment,
             commands::export::get_export_target,
             commands::export::export_markdown,
+            commands::export::export_chat_markdown,
             commands::export::open_export_folder,
             commands::settings::get_settings,
             commands::settings::update_general_settings,
