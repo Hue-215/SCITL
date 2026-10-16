@@ -30,7 +30,7 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 
 ## 同期機能の仕様
 
-端末間の同期(Issue #585。段階3の差分の同期と競合(`crates/scitl-sync`)まで実装)の仕様は、本体の仕様と分けて`../sync/index.md`に置く。この索引と
+端末間の同期の仕様は、本体の仕様と分けて`../sync/index.md`に置く。この索引と
 `principles.md`は本体の仕様で、同期機能には当てはめない部分がある(同期の間だけ本体が待ち受けること、
 利用者がその場で指定した相手と通信すること)。違いは`../sync/index.md` 2節に書き、本体の原則は変えない。
 
@@ -38,36 +38,36 @@ HTTPクライアントの設定は`architecture/network-secrets.md`)。
 
 1つの文書だけを読んで変えると壊れる条件。変えるときは、挙げた文書をすべて読む。
 
-- **前に送った部分を書き換えない**: 毎回変わるもの(日時・状態)をシステムプロンプトや直近の発言に
+- 前に送った部分を書き換えない。毎回変わるもの(日時・状態)をシステムプロンプトや直近の発言に
   添えない。`architecture/transcript.md`・`architecture/prompt-shape.md`・`architecture/llm-adapter.md`
   (Anthropic形式の思考ブロック)
-- **ユーザー発言の囲みの中には、利用者が書いたものだけを置く**: 添付・操作の記録・通知は囲みの外に置く。
+- ユーザー発言の囲みの中には、利用者が書いたものだけを置く。添付・操作の記録・通知は囲みの外に置く。
   `architecture/prompt-shape.md`・`architecture/attachments.md`・`architecture/transcript.md`(システムプロンプトの
   変更の通知)
-- **保存するデータは書き換えず、無害化は出力先へ出す直前に出力先ごとに掛ける**: 送った形の保存は
+- 保存するデータは書き換えず、無害化は出力先へ出す直前に出力先ごとに掛ける。送った形の保存は
   無害化済みのまま持つので、無害化の規則を変えたら保存の形の版を上げる。`architecture/sanitize.md`・
   `architecture/transcript.md`
-- **画面は表示に徹する**: ファイル・OSの機能・入力の検証と規則・複数の処理をまとめる手順はRust側に
+- 画面は表示に徹する。ファイル・OSの機能・入力の検証と規則・複数の処理をまとめる手順はRust側に
   置き、画面に写さない(入力欄で先に止めるための値はRust側から受け取って使う)。Rust側へ移す処理は、
   乗っ取った画面から呼ばれても困らない狭さにする。`principles.md` 4節「UI層は表示に徹する」・
   `architecture/webview-boundary.md`「画面が持つもの・持たないもの」・`ui.md`
-- **画面からファイルのパスも中身も受け取らない**: 選ばせる・読む・書く・開くはRust側で行う。
+- 画面からファイルのパスも中身も受け取らない。選ばせる・読む・書く・開くはRust側で行う。
   `architecture/attachments.md`「受け取り方」・`architecture/export.md`・`architecture/cli.md`(端末は例外)
-- **秘密情報に触れるのは`secrets.rs`だけ、HTTPは`net::hardened_client`だけを通る**:
+- 秘密情報に触れるのは`secrets.rs`だけ、HTTPは`net::hardened_client`だけを通る。
   `architecture/network-secrets.md`・`architecture/cli.md`・`architecture/llm-adapter.md`
 
 ## 用語
 
-- **総合チャット**・**タスクチャット**: 全体を見渡す会話と、個別のタスクに紐づく会話
-- **ターン**・**試行**・**ラウンド**: ターンは、ユーザー発言(または再試行・応答の生成の指示)に応える
+- 総合チャットは全体を見渡す会話、タスクチャットは個別のタスクに紐づく会話
+- ターンは、ユーザー発言(または再試行・応答の生成の指示)に応える
   応答生成の単位(`turn_id`)。試行は、同じターンを作り直したそれぞれ(`attempt_no`)。ラウンドは、
   1つの試行の中のモデル呼び出し1回で、ツールを呼ぶたびに次のラウンドへ進む(ラウンドとツールの実行の組を「往復」と呼ぶ)
-- **方言**: プロバイダーのAPIの形式(OpenAI互換・Anthropic形式・Gemini形式)
-- **囲み**・**形式の説明**: 囲みは、ユーザー発言の本文を包む`<scitl:user-message>`。形式の説明は、
+- 方言は、プロバイダーのAPIの形式(OpenAI互換・Anthropic形式・Gemini形式)
+- 囲みは、ユーザー発言の本文を包む`<scitl:user-message>`。形式の説明は、
   囲みや予約タグの読み方をモデルに伝える注記(`llm::user_message_format_note`)
-- **実行記録**・**操作の記録**: 実行記録は、ツールの実行1回分の`messages`の行。そのうち`turn_id`を
+- 実行記録は、ツールの実行1回分の`messages`の行。そのうち`turn_id`を
   持たない、応答生成の外(画面・CLI)からの操作を記録したものが操作の記録
-- **送った形**・**前が変わる**: 送った形は、返信のある試行ごとに保存した、モデルへ送った発言列
+- 送った形は、返信のある試行ごとに保存した、モデルへ送った発言列
   (`turn_transcripts`)。前が変わるとは、次のリクエストの先頭が、前に送ったリクエストと一致しなくなること
 
 ## ワークスペース構成
@@ -113,10 +113,10 @@ SCITL/
 └── migrations/                     # 0001_init.sql から番号順(data-model/tables.md 5節)
 ```
 
-- **コア** (`scitl-core`): `principles.md` 5節が「1箇所に閉じる」ことを求める判断
+- コア(`scitl-core`)には、`principles.md` 5節が「1箇所に閉じる」ことを求める判断
   (状態遷移、ツール引数検証、ターンのオーケストレーション、サニタイズ、秘密情報アクセス)を
   すべて置く
-- **GUI** (`scitl-tauri`): コマンドはロジックを持たず、coreを1つ呼ぶだけ(`architecture/webview-boundary.md`)
-- **画面** (`frontend/`): 表示に徹し、判定・規則・手順を持たない(入力欄で先に止める補助を除く。
+- GUI(`scitl-tauri`)のコマンドはロジックを持たず、coreを1つ呼ぶだけ(`architecture/webview-boundary.md`)
+- 画面(`frontend/`)は表示に徹し、判定・規則・手順を持たない(入力欄で先に止める補助を除く。
   `architecture/webview-boundary.md`「画面が持つもの・持たないもの」)
-- **CLI** (`scitl-cli`・`scitl-debug-cli`): `architecture/cli.md`
+- CLI(`scitl-cli`・`scitl-debug-cli`)は`architecture/cli.md`
