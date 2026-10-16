@@ -37,7 +37,6 @@ impl DeviceRegistry for SecretStore {
     }
 }
 
-/// 確かめた端末IDを返す。
 pub async fn confirm_device_id(
     db: SharedConnection,
     registry: Arc<dyn DeviceRegistry>,
@@ -154,7 +153,6 @@ mod tests {
         copy
     }
 
-    /// 項目があり値も同じなら端末IDはそのままで、値だけを替える。
     #[tokio::test]
     async fn a_current_device_keeps_its_id_and_gets_a_new_token() {
         let db = database();
@@ -226,7 +224,7 @@ mod tests {
         assert_ne!(confirm_device_id(db, registry).await.unwrap(), id);
     }
 
-    /// 古い項目だけが読めない(Androidで保存先の鍵が失われた)ときは、作り直して続ける。
+    /// Androidで保存先の鍵が失われた場合。
     #[tokio::test]
     async fn an_unreadable_item_is_replaced_when_a_new_one_can_be_written() {
         let db = database();
@@ -258,7 +256,6 @@ mod tests {
         assert_eq!(device_token(&db), before);
     }
 
-    /// 作り直した端末IDの項目を書けなければ、元の端末IDに戻して始めない。
     #[tokio::test]
     async fn an_unregistered_device_keeps_its_id_when_no_item_can_be_written() {
         let db = database();
@@ -274,7 +271,6 @@ mod tests {
         assert_eq!(device_token(&db), before);
     }
 
-    /// 値を替えられなければ、DBの値も替えずに始めない(替えないまま続けると、その前に写したDBを見逃す)。
     #[tokio::test]
     async fn a_token_that_cannot_be_replaced_stops_without_changing_the_database() {
         let db = database();

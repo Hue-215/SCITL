@@ -121,7 +121,7 @@ mod tests {
         assert_eq!(read.code, code);
     }
 
-    /// 候補がいくつあっても、出したQRは読める(多ければ上限まで入る)。
+    /// 候補が多ければ上限まで入る。
     #[test]
     fn what_is_shown_is_always_readable() {
         let code = PairingCode::parse("012345").unwrap();

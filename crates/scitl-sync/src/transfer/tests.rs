@@ -746,7 +746,6 @@ fn rows_from_the_peer_are_checked_like_the_apps_own() {
     assert!(rows[0].reason.contains("not replaced"), "{rows:?}");
 }
 
-/// 差分だけを運ぶので、指す先は受け取る側に既にある行でもよい。
 #[test]
 fn links_may_point_at_rows_the_receiver_already_has() {
     let device = Device::new();
@@ -869,8 +868,7 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
     assert!(b.transport().tasks.is_empty());
 }
 
-/// 同じタスクの別々の行を2台で変えたときは、競合にせず結合し、結合後のタスクの全体を
-/// 操作の記録として会話の末尾に置く。
+/// 結合後のタスクの全体を、操作の記録として会話の末尾に置く。
 #[tokio::test]
 async fn edits_to_different_rows_of_a_task_are_merged() {
     let (a, b) = (Device::new(), Device::new());
@@ -925,7 +923,7 @@ async fn edits_to_different_rows_of_a_task_are_merged() {
     assert_eq!(record["result"]["steps"].as_array().unwrap().len(), 2);
 }
 
-/// 片方だけが変えたときは記録を置かない(その側の記録が相手の会話に付く)。
+/// その側の記録が相手の会話に付く。
 #[tokio::test]
 async fn edits_on_one_side_are_taken_without_a_record() {
     let (a, b) = (Device::new(), Device::new());
@@ -949,7 +947,7 @@ async fn edits_on_one_side_are_taken_without_a_record() {
     assert_eq!(records, 0);
 }
 
-/// 同じ行を2台で別々に変えたら、タスクを丸ごと選ばせる。選ばなかった側にしか無い行は消える。
+/// タスクを丸ごと選ばせる。選ばなかった側にしか無い行は消える。
 #[tokio::test]
 async fn the_same_row_changed_on_both_sides_is_chosen_by_the_user() {
     for side in [ChosenSide::Ours, ChosenSide::Theirs] {
@@ -996,7 +994,6 @@ async fn the_same_row_changed_on_both_sides_is_chosen_by_the_user() {
     }
 }
 
-/// 2台で同じところから会話を続けたら、タスクを選ばせる。
 #[tokio::test]
 async fn a_chat_continued_on_both_sides_is_chosen_by_the_user() {
     let (a, b) = (Device::new(), Device::new());
@@ -1021,7 +1018,6 @@ async fn a_chat_continued_on_both_sides_is_chosen_by_the_user() {
     assert_eq!(alive_texts(&b, b_chat), texts);
 }
 
-/// 片方が会話を続け、もう片方が何もしていなければ、続けた側がそのまま入る。
 #[tokio::test]
 async fn a_chat_continued_on_one_side_is_taken() {
     let (a, b) = (Device::new(), Device::new());
@@ -1033,7 +1029,7 @@ async fn a_chat_continued_on_one_side_is_taken() {
     assert_eq!(alive_texts(&a, Chat::General).last().unwrap(), "続き");
 }
 
-/// 削除と、それを知らずに続けた会話は競合にする(黙ってタスクごと見えなくしない)。
+/// 黙ってタスクごと見えなくしない。
 #[tokio::test]
 async fn deleting_a_task_the_other_side_kept_using_is_chosen_by_the_user() {
     let (a, b) = (Device::new(), Device::new());
@@ -1147,7 +1143,6 @@ async fn a_sync_cut_after_the_listener_wrote_settles_when_retried() {
     assert_eq!(b.task_uid("晩ご飯"), task);
 }
 
-/// 3台目へは、2台ずつの同期を重ねて伝わる。
 #[tokio::test]
 async fn changes_travel_through_a_third_device() {
     let (a, b, c) = (Device::new(), Device::new(), Device::new());
@@ -1257,7 +1252,6 @@ async fn resolving_with_different_times_on_each_side_settles_both_sides() {
     }
 }
 
-/// 同じ競合を2組が別々に、逆の側に解いたら、両方を見た端末でもう一度選ばせる(「会話の枝と、競合の単位」)。
 #[tokio::test]
 async fn the_same_conflict_settled_both_ways_is_asked_again() {
     let (a, b, c, d) = (Device::new(), Device::new(), Device::new(), Device::new());
@@ -1334,7 +1328,6 @@ fn the_final_device_id_is_the_one_introduced() {
     }
 }
 
-/// 選んだあとに競合の中身が変われば、選び直させる。
 #[test]
 fn a_choice_is_kept_only_while_the_conflict_stays_the_same() {
     let device = Device::new();

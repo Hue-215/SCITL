@@ -50,7 +50,6 @@ pub struct Context {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Outcome {
-    /// この端末で書いた行の数。
     pub changed: Counts,
     /// 利用者が選んだ競合の数(待ち受ける側だけ)。
     pub conflicts: usize,

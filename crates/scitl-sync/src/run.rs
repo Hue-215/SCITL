@@ -104,9 +104,7 @@ impl SyncProgress {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SyncReport {
     Synced {
-        /// この端末で書いた行の数。
         changed: Counts,
-        /// 選んだ競合の数。
         conflicts: usize,
     },
     /// 確認のダイアログで取りやめたか、「やめる」で止めた。
@@ -587,7 +585,6 @@ mod tests {
         );
     }
 
-    /// 読んでいる間の「やめる」で、読み取りを捨てて取りやめにする(捨てると読み取りの画面が閉じる)。
     #[tokio::test]
     async fn stopping_while_scanning_drops_the_scan() {
         struct Dropped<'a>(&'a std::sync::atomic::AtomicBool);
@@ -719,7 +716,6 @@ mod tests {
         }
     }
 
-    /// 確かめる間(全体を押さえてから終えるまで)は、設定からの問い合わせを止める。
     #[tokio::test]
     async fn queries_are_paused_while_the_sync_holds_everything() {
         let dir = tempfile::tempdir().unwrap();
