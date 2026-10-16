@@ -60,6 +60,7 @@ export type { ConflictChoice } from './bindings/ConflictChoice'
 export type { ConflictSide } from './bindings/ConflictSide'
 export type { ConflictView } from './bindings/ConflictView'
 export type { QrModules } from './bindings/QrModules'
+export type { CameraPermission } from './bindings/CameraPermission'
 export type { SyncEvent } from './bindings/SyncEvent'
 export type { SyncReport } from './bindings/SyncReport'
 

@@ -24,7 +24,7 @@ import java.util.concurrent.Executors
 
 /**
  * カメラの映像からQRを読む画面(QrScanner)。読めたら閉じ、「戻る」で取りやめる。カメラの許可は
- * ここで初めて求める。読んだ中身はそのままRust側へ渡し、確かめるのはRust側
+ * ここで求める(画面が先に説明を出す)。読んだ中身はそのままRust側へ渡し、確かめるのはRust側
  * (scitl_sync::parse_invitation)。
  *
  * 向きを変えても作り直さない(マニフェストのconfigChanges)。作り直すと、破棄した側の映像の処理が
@@ -40,7 +40,14 @@ class ScanActivity : ComponentActivity() {
 
   private val askForCamera =
     registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      if (granted) startCamera() else deliver(QrScanner.DENIED)
+      if (granted) {
+        startCamera()
+        return@registerForActivityResult
+      }
+      if (shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
+        QrScanner.rememberDenied(this)
+      }
+      deliver(QrScanner.DENIED)
     }
 
   override fun onCreate(savedInstanceState: Bundle?) {

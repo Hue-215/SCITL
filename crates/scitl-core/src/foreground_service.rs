@@ -12,8 +12,6 @@ pub const SERVICE_CLASS: &str = "GeneratingService";
 /// 通知の文面をサービスへ渡すIntentのextraの名前。Kotlin側の定数と揃える(照合は[`SERVICE_CLASS`]と同じ)。
 pub const EXTRA_TITLE: &str = "title";
 pub const EXTRA_CHANNEL: &str = "channel";
-/// 始めるときに、応答が終わったことの通知のための許可を求めるか(応答の生成だけ)。
-pub const EXTRA_ASK_NOTIFICATIONS: &str = "ask_notifications";
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 struct Notice {
@@ -38,7 +36,7 @@ mod android {
     use jni::objects::{JObject, JValue};
     use jni::{jni_sig, jni_str, Env};
 
-    use super::{notice, EXTRA_ASK_NOTIFICATIONS, EXTRA_CHANNEL, EXTRA_TITLE, SERVICE_CLASS};
+    use super::{notice, EXTRA_CHANNEL, EXTRA_TITLE, SERVICE_CLASS};
     use crate::i18n::Language;
     use crate::in_flight::LongRunningKind;
 
@@ -60,21 +58,10 @@ mod android {
     fn request(running: Option<LongRunningKind>, lang: Language) -> Result<(), String> {
         crate::android::with_application(|env, context| {
             let intent = service_intent(env, context)?;
-            if let Some(kind) = running {
+            if running.is_some() {
                 let notice = notice(lang);
                 put_extra(env, &intent, EXTRA_TITLE, notice.title)?;
                 put_extra(env, &intent, EXTRA_CHANNEL, notice.channel)?;
-                // 同期で求めると、初めて使う端末では、待ち受けや競合の画面の上に許可のダイアログが出る。
-                let ask = env.new_string(EXTRA_ASK_NOTIFICATIONS)?;
-                env.call_method(
-                    &intent,
-                    jni_str!("putExtra"),
-                    jni_sig!("(Ljava/lang/String;Z)Landroid/content/Intent;"),
-                    &[
-                        JValue::from(&ask),
-                        JValue::Bool(kind == LongRunningKind::Each),
-                    ],
-                )?;
                 // 前に出ている間に始めるので`startForegroundService`は使わない。あちらは、サービスが
                 // 通知を出す前に止めるとアプリごと落とされる。
                 env.call_method(

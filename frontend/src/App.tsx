@@ -23,6 +23,7 @@ import ChatLog, { TypingIndicator } from './ChatLog'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
 import { Drawer, DrawerToggle } from './Drawer'
 import { t, turnErrorText } from './i18n'
+import NotificationOffer from './NotificationOffer'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
@@ -401,14 +402,21 @@ export default function App() {
     watchRequestedChats((next) => openRequestedChat.current(next)).catch(() => undefined)
   }, [])
 
+  // 通知の許可の説明は、設定画面との切り替えで作り直されても、答えるまでRust側が知らせ直す。
   if (settingsOpen) {
-    return <Settings onClose={closeSettings} />
+    return (
+      <>
+        <NotificationOffer />
+        <Settings onClose={closeSettings} />
+      </>
+    )
   }
 
   const drawerToggle = <DrawerToggle drawer={drawer} label={t('sidebar.open_tooltip')} />
 
   return (
     <div className={drawer.narrow ? 'layout narrow' : 'layout'}>
+      <NotificationOffer />
       <Drawer drawer={drawer}>
         <Sidebar
           tasks={tasks}

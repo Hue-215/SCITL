@@ -4,6 +4,7 @@ pub mod export;
 pub mod link;
 pub mod mcp;
 pub mod memories;
+pub mod notification_permission;
 pub mod requested_chat;
 pub mod settings;
 pub mod startup;

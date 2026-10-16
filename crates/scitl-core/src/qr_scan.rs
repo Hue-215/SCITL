@@ -4,6 +4,8 @@
 
 use std::time::Duration;
 
+use serde::Serialize;
+
 /// 読み取りを頼むKotlinのクラスの名前(パッケージは[`crate::APP_IDENTIFIER`])。
 pub const SCANNER_CLASS: &str = "QrScanner";
 
@@ -12,6 +14,14 @@ pub const SCANNED: &str = "S";
 pub const CANCELLED: &str = "C";
 pub const DENIED: &str = "D";
 pub const FAILED: &str = "F";
+
+/// Kotlin側が返すカメラの許可の状態のビット(`QrScanner.cameraPermission`)。照合は[`SCANNED`]等と同じ。
+pub const CAMERA_GRANTED: i32 = 1;
+/// 前に断られ、そのあとOSのダイアログでもう一度求められる状態になった。
+pub const CAMERA_DENIED_BEFORE: i32 = 2;
+/// 今、OSのダイアログでもう一度求められる(`shouldShowRequestPermissionRationale`)。1回も求めて
+/// いないときも偽。
+pub const CAMERA_CAN_ASK_AGAIN: i32 = 4;
 
 /// 結果を引き取りに行く間隔。
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -58,6 +68,59 @@ pub fn available() -> bool {
     false
 }
 
+/// QRを読むためのカメラの許可。許可が無ければ、画面は読む前に説明を出す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum CameraPermission {
+    Granted,
+    /// 説明してから、OSのダイアログで求める。
+    Ask,
+    /// OSのダイアログはもう出ない(2回断られた等)。設定アプリで許可するか、打つ。
+    Blocked,
+}
+
+impl CameraPermission {
+    /// Kotlin側のビットから決める。Androidは、1回も求めていないときと、もう求められないときの
+    /// どちらでも「もう一度求められる」を偽にするので、前に断られたかの記録と合わせて見分ける。
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn from_bits(bits: i32) -> Self {
+        if bits & CAMERA_GRANTED != 0 {
+            Self::Granted
+        } else if bits & CAMERA_DENIED_BEFORE != 0 && bits & CAMERA_CAN_ASK_AGAIN == 0 {
+            Self::Blocked
+        } else {
+            Self::Ask
+        }
+    }
+}
+
+/// QRを読むためのカメラの許可。
+#[cfg(target_os = "android")]
+pub fn camera_permission() -> CameraPermission {
+    android::camera_permission()
+}
+
+/// デスクトップでは読まないので、求める許可も無い。
+#[cfg(not(target_os = "android"))]
+pub fn camera_permission() -> CameraPermission {
+    CameraPermission::Granted
+}
+
+/// カメラを許可してもらうため、このアプリのOSの設定の画面を開く。もう求められない
+/// ([`CameraPermission::Blocked`])ときだけ開き、ほかは何もしない(画面から呼べるので、用の無いときに
+/// 設定の画面を出させない)。
+#[cfg(target_os = "android")]
+pub fn open_camera_settings() {
+    if camera_permission() == CameraPermission::Blocked {
+        android::open_app_settings();
+    }
+}
+
+/// デスクトップでは読まないので、何もしない。
+#[cfg(not(target_os = "android"))]
+pub fn open_camera_settings() {}
+
 /// Kotlin側の結果を読む。`None`は、まだ読んでいない。
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn outcome(raw: &str) -> Result<Option<String>, ScanError> {
@@ -82,8 +145,49 @@ mod android {
     use jni::{jni_sig, jni_str};
     use tokio::time::{sleep, Instant};
 
-    use super::{outcome, ScanError, GIVE_UP_AFTER, POLL_INTERVAL, SCANNER_CLASS};
+    use super::{
+        outcome, CameraPermission, ScanError, GIVE_UP_AFTER, POLL_INTERVAL, SCANNER_CLASS,
+    };
     use crate::android::{app_class, with_application};
+
+    pub(super) fn camera_permission() -> CameraPermission {
+        let bits = with_application(|env, context| {
+            let class = app_class(env, context, SCANNER_CLASS)?;
+            env.call_static_method(
+                &class,
+                jni_str!("cameraPermission"),
+                jni_sig!("(Landroid/content/Context;)I"),
+                &[JValue::from(context)],
+            )?
+            .i()
+        });
+        match bits {
+            Ok(bits) => CameraPermission::from_bits(bits),
+            // 読めなければ説明を出す。許可が無ければ、読み取りの画面がOSのダイアログで求める。
+            Err(e) => {
+                crate::diagnostics::report(format_args!(
+                    "could not check the camera permission: {e}"
+                ));
+                CameraPermission::Ask
+            }
+        }
+    }
+
+    pub(super) fn open_app_settings() {
+        let opened = with_application(|env, context| {
+            let class = app_class(env, context, SCANNER_CLASS)?;
+            env.call_static_method(
+                &class,
+                jni_str!("openAppSettings"),
+                jni_sig!("(Landroid/content/Context;)V"),
+                &[JValue::from(context)],
+            )?;
+            Ok(())
+        });
+        if let Err(e) = opened {
+            crate::diagnostics::report(format_args!("could not open the app settings: {e}"));
+        }
+    }
 
     pub(super) fn available() -> bool {
         let available = with_application(|env, context| {
@@ -190,6 +294,28 @@ mod tests {
                 matches!(outcome(raw), Err(ScanError::Unavailable(_))),
                 "{raw}"
             );
+        }
+    }
+
+    /// もう求められないのは、前に断られてから「もう一度求められる」が消えたときだけ。1回も求めて
+    /// いないとき(どちらも偽)は求める。
+    #[test]
+    fn the_camera_is_blocked_only_after_being_denied_and_no_longer_askable() {
+        for (bits, expected) in [
+            (0, CameraPermission::Ask),
+            (
+                CAMERA_DENIED_BEFORE | CAMERA_CAN_ASK_AGAIN,
+                CameraPermission::Ask,
+            ),
+            (CAMERA_CAN_ASK_AGAIN, CameraPermission::Ask),
+            (CAMERA_DENIED_BEFORE, CameraPermission::Blocked),
+            (CAMERA_GRANTED, CameraPermission::Granted),
+            (
+                CAMERA_GRANTED | CAMERA_DENIED_BEFORE,
+                CameraPermission::Granted,
+            ),
+        ] {
+            assert_eq!(CameraPermission::from_bits(bits), expected, "{bits}");
         }
     }
 }

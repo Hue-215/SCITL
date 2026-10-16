@@ -36,6 +36,11 @@ const BODY_MAX_CHARS: usize = 240;
 pub struct Notice {
     /// 会話の名前。
     pub title: String,
+    /// 返信を書いたアシスタントの名前。あればチャットの形(送り手と会話の名前)で出す。失敗は
+    /// アシスタントが言ったことではないので、送り手を付けない。
+    pub sender: Option<String>,
+    /// チャットの形で、利用者を表す名前。OSが名前を求めるが、利用者の発言は載せないので出ない。
+    pub user: &'static str,
     /// 返信の冒頭、またはエラー発言の文言。
     pub body: String,
     /// OSの設定に出る、通知のチャンネルの名前。
@@ -44,7 +49,7 @@ pub struct Notice {
 
 /// 終わった応答生成の通知の文面を作る。
 ///
-/// 題と本文は1行に畳み、描かれない文字を除いて、長さの上限で切る([`text::display_label`])。
+/// 題・送り手・本文は1行に畳み、描かれない文字を除いて、長さの上限で切る([`text::display_label`])。
 /// 通知はOSがほかのアプリの通知と並べて描く文字で、画面のように要素の境界で閉じ込められないため。
 /// 本文のMarkdownの記号はそのまま出る。
 pub fn notice(lang: Language, finished: &FinishedTurn) -> Notice {
@@ -60,9 +65,15 @@ pub fn notice(lang: Language, finished: &FinishedTurn) -> Notice {
             }
         }
     };
-    let body = match &finished.outcome {
-        TurnOutcome::Replied { text } => text::display_label(text, BODY_MAX_CHARS),
-        TurnOutcome::Failed { kind } => turn_error::localized_message(lang, kind),
+    let (sender, body) = match &finished.outcome {
+        TurnOutcome::Replied { text } => {
+            let sender = text::display_label(&finished.assistant_name, TITLE_MAX_CHARS);
+            (
+                (!sender.is_empty()).then_some(sender),
+                text::display_label(text, BODY_MAX_CHARS),
+            )
+        }
+        TurnOutcome::Failed { kind } => (None, turn_error::localized_message(lang, kind)),
     };
     let body = if body.is_empty() {
         i18n::text(lang, "reply_notice.no_text").to_string()
@@ -71,6 +82,8 @@ pub fn notice(lang: Language, finished: &FinishedTurn) -> Notice {
     };
     Notice {
         title,
+        sender,
+        user: i18n::text(lang, "reply_notice.you"),
         body,
         channel: i18n::text(lang, "reply_notice.channel"),
     }
@@ -102,17 +115,24 @@ pub fn resolve_requested_chat(conn: &Connection, code: i64) -> Option<Chat> {
 }
 
 #[cfg(target_os = "android")]
-pub use android::{post, take_requested_chat};
+pub use android::{
+    answer_permission_offer, offer_permission, permission_offered, post, take_requested_chat,
+};
 
 #[cfg(target_os = "android")]
 mod android {
-    use jni::objects::JValue;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use jni::objects::{JObject, JValue};
     use jni::{jni_sig, jni_str};
 
     use super::{chat_code, notice, ACTIVITY_CLASS, CHAT_NONE, NOTIFIER_CLASS};
     use crate::android::{app_class, with_application};
     use crate::i18n::Language;
     use crate::orchestration::FinishedTurn;
+
+    /// 通知の許可を求める前の説明を、画面が出している(出すことになった)か。
+    static OFFERED: AtomicBool = AtomicBool::new(false);
 
     /// 終わった応答生成を通知で知らせる。アプリが前に出ている間と、通知の許可が無い間は、
     /// Kotlin側が出さない。頼めなければ診断に出すだけにする。
@@ -122,18 +142,25 @@ mod android {
         let posted = with_application(|env, context| {
             let class = app_class(env, context, NOTIFIER_CLASS)?;
             let title = env.new_string(&notice.title)?;
+            let sender = match &notice.sender {
+                Some(sender) => JObject::from(env.new_string(sender)?),
+                None => JObject::null(),
+            };
+            let user = env.new_string(notice.user)?;
             let body = env.new_string(&notice.body)?;
             let channel = env.new_string(notice.channel)?;
             env.call_static_method(
                 &class,
                 jni_str!("post"),
                 jni_sig!(
-                    "(Landroid/content/Context;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
+                    "(Landroid/content/Context;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
                 ),
                 &[
                     JValue::from(context),
                     JValue::Long(chat),
                     JValue::from(&title),
+                    JValue::from(&sender),
+                    JValue::from(&user),
                     JValue::from(&body),
                     JValue::from(&channel),
                 ],
@@ -142,6 +169,68 @@ mod android {
         });
         if let Err(e) = posted {
             crate::diagnostics::report(format_args!("could not post the notification: {e}"));
+        }
+    }
+
+    /// 応答生成が終わったときに呼び、通知の許可を求める前に画面で説明するかを返す。Android 13以上で、
+    /// 許可が無く、まだ求めていなければ説明する(初めて応答を生成し終えたとき)。説明に答えるまでは
+    /// 真のまま。
+    pub fn offer_permission() -> bool {
+        if OFFERED.load(Ordering::SeqCst) {
+            return true;
+        }
+        let needed = with_application(|env, context| {
+            let class = app_class(env, context, NOTIFIER_CLASS)?;
+            env.call_static_method(
+                &class,
+                jni_str!("permissionNeeded"),
+                jni_sig!("(Landroid/content/Context;)Z"),
+                &[JValue::from(context)],
+            )?
+            .z()
+        });
+        match needed {
+            Ok(needed) => {
+                if needed {
+                    OFFERED.store(true, Ordering::SeqCst);
+                }
+                needed
+            }
+            Err(e) => {
+                crate::diagnostics::report(format_args!(
+                    "could not check the notification permission: {e}"
+                ));
+                false
+            }
+        }
+    }
+
+    /// 画面が説明を出しているはずか(読み込み直した画面へ出し直すため)。
+    pub fn permission_offered() -> bool {
+        OFFERED.load(Ordering::SeqCst)
+    }
+
+    /// 説明への答え。`accept`ならOSのダイアログで許可を求め、どちらでも以後は求めない。説明を
+    /// 出していなければ何もしない(画面から呼べるので、OSのダイアログを出せるのは説明1回につき
+    /// 1回だけにする)。
+    pub fn answer_permission_offer(accept: bool) {
+        if !OFFERED.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let answered = with_application(|env, context| {
+            let class = app_class(env, context, NOTIFIER_CLASS)?;
+            env.call_static_method(
+                &class,
+                jni_str!("answerPermissionOffer"),
+                jni_sig!("(Landroid/content/Context;Z)V"),
+                &[JValue::from(context), JValue::Bool(accept)],
+            )?;
+            Ok(())
+        });
+        if let Err(e) = answered {
+            crate::diagnostics::report(format_args!(
+                "could not ask for the notification permission: {e}"
+            ));
         }
     }
 
@@ -173,6 +262,7 @@ mod tests {
         FinishedTurn {
             chat,
             task_name: task_name.map(str::to_string),
+            assistant_name: "Hal".to_string(),
             outcome,
         }
     }
@@ -194,7 +284,23 @@ mod tests {
             ),
         );
         assert_eq!(notice.title, "Trip plan");
+        assert_eq!(notice.sender.as_deref(), Some("Hal"));
         assert_eq!(notice.body, "# Plan 1. Book the flight 2. Pack");
+    }
+
+    /// 名前はニックネームかプロバイダーの名前で、利用者が書いたもの。題と同じく通知へ出す形にする。
+    /// 出す名前が無ければ、送り手を付けない。
+    #[test]
+    fn the_sender_is_the_assistant_shown_like_the_title() {
+        let named = |name: &str| FinishedTurn {
+            assistant_name: name.to_string(),
+            ..finished(Chat::General, None, replied("ok"))
+        };
+        let sender = |name: &str| notice(Language::En, &named(name)).sender;
+        assert_eq!(sender("Ha\u{202e}l\n2").as_deref(), Some("Hal 2"));
+        for name in ["", " \u{200b} "] {
+            assert_eq!(sender(name), None, "{name:?}");
+        }
     }
 
     #[test]
@@ -230,6 +336,7 @@ mod tests {
             assert_eq!(general.body, i18n::text(lang, "reply_notice.no_text"));
             assert!(!general.body.starts_with("reply_notice."), "{lang:?}");
             assert!(!general.channel.starts_with("reply_notice."), "{lang:?}");
+            assert!(!general.user.starts_with("reply_notice."), "{lang:?}");
 
             let untitled = notice(lang, &finished(Chat::Task(1), None, replied("ok")));
             assert_eq!(untitled.title, i18n::text(lang, "task.untitled"));
@@ -258,6 +365,8 @@ mod tests {
             notice.body,
             i18n::text(Language::En, "turn_error.connection_failed")
         );
+        // アシスタントが言ったことではない。
+        assert_eq!(notice.sender, None);
     }
 
     #[test]

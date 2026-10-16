@@ -4203,6 +4203,7 @@ async fn a_finished_turn_is_reported_with_its_reply_or_failure() {
             FinishedTurn {
                 chat,
                 task_name: Some("旅行の計画".to_string()),
+                assistant_name: "Test".to_string(),
                 outcome: TurnOutcome::Replied {
                     text: "応答".to_string()
                 },
@@ -4210,6 +4211,7 @@ async fn a_finished_turn_is_reported_with_its_reply_or_failure() {
             FinishedTurn {
                 chat: Chat::General,
                 task_name: None,
+                assistant_name: "Test".to_string(),
                 outcome: TurnOutcome::Failed {
                     kind: "no_provider".to_string()
                 },
@@ -4263,6 +4265,7 @@ async fn a_retry_is_reported_once_with_the_reply_of_the_new_attempt() {
     let replied = |text: &str| FinishedTurn {
         chat,
         task_name: Some("質問".to_string()),
+        assistant_name: "Test".to_string(),
         outcome: TurnOutcome::Replied {
             text: text.to_string(),
         },

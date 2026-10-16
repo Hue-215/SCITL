@@ -1,6 +1,7 @@
 //! 端末間の同期(`docs/sync/index.md` 11節)。どちらの役も、始める前にRust側からネイティブの
 //! ダイアログで確かめる。途中経過と競合は`Channel`で知らせ、結果は失敗も含めて`SyncReport`で返す。
 
+use scitl_core::qr_scan::CameraPermission;
 use scitl_sync::{ConflictChoice, Request, SyncEvent, SyncReport};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
@@ -61,6 +62,18 @@ pub async fn sync_connect_scanned(
 #[tauri::command]
 pub fn can_scan_sync_qr() -> bool {
     scitl_core::qr_scan::available()
+}
+
+/// QRを読むためのカメラの許可(許可が無ければ、画面は読む前に説明を出す)。
+#[tauri::command]
+pub fn get_camera_permission() -> CameraPermission {
+    scitl_core::qr_scan::camera_permission()
+}
+
+/// カメラを許可してもらうため、OSの設定の画面を開く。もう求められないときだけ開く。
+#[tauri::command]
+pub fn open_camera_settings() {
+    scitl_core::qr_scan::open_camera_settings()
 }
 
 /// 進んでいる同期を止める。同期していなければ何もしない。

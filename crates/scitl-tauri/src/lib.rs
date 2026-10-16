@@ -35,6 +35,9 @@ pub struct AppState {
     pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
     /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
     pub requested_chat: Mutex<Option<Channel<Chat>>>,
+    /// 通知の許可を求める前の説明の知らせ先
+    /// (`commands::notification_permission::watch_notification_offers`)。
+    pub notification_offer: commands::notification_permission::OfferWatcher,
     /// 端末間の同期が触るもの(`commands::sync`)。
     pub sync: scitl_sync::Context,
     /// 同期の競合で、画面が選んだ側の受け口(`commands::sync::resolve_sync_conflicts`)。
@@ -123,6 +126,7 @@ pub fn run() {
             // 送って失わないようにする(渡し直されるまで引き取らない)。
             if _payload.event() == PageLoadEvent::Started {
                 commands::requested_chat::forget_watcher(_webview.app_handle());
+                commands::notification_permission::forget_watcher(_webview.app_handle());
                 // 前の画面が始めた同期は、新しい画面からは見えず止められないので止める。
                 if let Some(state) = _webview.app_handle().try_state::<AppState>() {
                     scitl_sync::cancel(&state.generating);
@@ -199,10 +203,14 @@ pub fn run() {
             commands::memories::delete_memory,
             commands::link::open_link,
             commands::requested_chat::watch_requested_chats,
+            commands::notification_permission::watch_notification_offers,
+            commands::notification_permission::answer_notification_offer,
             commands::sync::sync_listen,
             commands::sync::sync_connect,
             commands::sync::sync_connect_scanned,
             commands::sync::can_scan_sync_qr,
+            commands::sync::get_camera_permission,
+            commands::sync::open_camera_settings,
             commands::sync::cancel_sync,
             commands::sync::resolve_sync_conflicts,
         ])
@@ -283,10 +291,12 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     let attachments = Arc::new(Attachments::new(store));
 
     let settings = Arc::new(settings);
+    let notification_offer = commands::notification_permission::OfferWatcher::default();
     Ok(AppState {
         db,
         generating: generating_set(&settings),
-        finished: finished_sink(&settings),
+        finished: finished_sink(&settings, &notification_offer),
+        notification_offer,
         settings,
         attachments,
         export_dir: data.export(),
@@ -315,16 +325,27 @@ fn generating_set(_settings: &Arc<Settings>) -> InFlightSet<Chat> {
 
 /// 応答生成が終わったことの受け口。Androidでは、利用者がアプリを見ていなければ通知で知らせる
 /// (`architecture/concurrency.md`「Androidで裏へ回ったとき」)。通知の文面は表示言語で出す。
+/// 通知の許可をまだ求めていなければ、画面へ説明を出すよう知らせる。
 #[cfg(target_os = "android")]
-fn finished_sink(settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+fn finished_sink(
+    settings: &Arc<Settings>,
+    offers: &commands::notification_permission::OfferWatcher,
+) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     let settings = Arc::clone(settings);
+    let offers = Arc::clone(offers);
     Box::new(move |finished| {
-        scitl_core::reply_notification::post(settings.display_language(), &finished)
+        scitl_core::reply_notification::post(settings.display_language(), &finished);
+        if scitl_core::reply_notification::offer_permission() {
+            commands::notification_permission::send(&offers);
+        }
     })
 }
 
 #[cfg(not(target_os = "android"))]
-fn finished_sink(_settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+fn finished_sink(
+    _settings: &Arc<Settings>,
+    _offers: &commands::notification_permission::OfferWatcher,
+) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     Box::new(scitl_core::orchestration::discard_finished)
 }
 
@@ -480,10 +501,6 @@ mod tests {
                 "EXTRA_CHANNEL",
                 scitl_core::foreground_service::EXTRA_CHANNEL,
             ),
-            (
-                "EXTRA_ASK_NOTIFICATIONS",
-                scitl_core::foreground_service::EXTRA_ASK_NOTIFICATIONS,
-            ),
         ] {
             assert!(kotlin.contains(&format!("const val {name} = \"{value}\"")));
         }
@@ -500,8 +517,10 @@ mod tests {
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/ReplyNotifier.kt");
         assert!(notifier.contains(&format!("object {NOTIFIER_CLASS} {{")));
         assert!(notifier.contains(
-            "fun post(context: Context, chat: Long, title: String, body: String, channelName: String)"
+            "fun post(\n    context: Context,\n    chat: Long,\n    title: String,\n    sender: String?,\n    user: String,\n    body: String,\n    channelName: String\n  )"
         ));
+        assert!(notifier.contains("fun permissionNeeded(context: Context): Boolean"));
+        assert!(notifier.contains("fun answerPermissionOffer(context: Context, accept: Boolean)"));
         let activity =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
         assert!(activity.contains(&format!("class {ACTIVITY_CLASS} :")));
@@ -518,13 +537,18 @@ mod tests {
     /// 同期のQRの読み取りを、coreが名前と値で指せること(`scitl_core::qr_scan`)。
     #[test]
     fn core_qr_scan_names_match_kotlin() {
-        use scitl_core::qr_scan::{CANCELLED, DENIED, FAILED, SCANNED, SCANNER_CLASS};
+        use scitl_core::qr_scan::{
+            CAMERA_CAN_ASK_AGAIN, CAMERA_DENIED_BEFORE, CAMERA_GRANTED, CANCELLED, DENIED, FAILED,
+            SCANNED, SCANNER_CLASS,
+        };
         let scanner = include_str!("../gen/android/app/src/main/java/net/niigo/scitl/QrScanner.kt");
         assert!(scanner.contains(&format!("object {SCANNER_CLASS} {{")));
         assert!(scanner.contains("fun start(context: Context): Long"));
         assert!(scanner.contains("fun poll(id: Long): String?"));
         assert!(scanner.contains("fun cancel(id: Long)"));
         assert!(scanner.contains("fun available(context: Context): Boolean"));
+        assert!(scanner.contains("fun cameraPermission(context: Context): Int"));
+        assert!(scanner.contains("fun openAppSettings(context: Context)"));
         for (name, value) in [
             ("SCANNED", SCANNED),
             ("CANCELLED", CANCELLED),
@@ -532,6 +556,13 @@ mod tests {
             ("FAILED", FAILED),
         ] {
             assert!(scanner.contains(&format!("const val {name} = \"{value}\"")));
+        }
+        for (name, value) in [
+            ("CAMERA_GRANTED", CAMERA_GRANTED),
+            ("CAMERA_DENIED_BEFORE", CAMERA_DENIED_BEFORE),
+            ("CAMERA_CAN_ASK_AGAIN", CAMERA_CAN_ASK_AGAIN),
+        ] {
+            assert!(scanner.contains(&format!("const val {name} = {value}\n")));
         }
         let proguard = include_str!("../gen/android/app/proguard-rules.pro");
         assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{SCANNER_CLASS} {{")));
