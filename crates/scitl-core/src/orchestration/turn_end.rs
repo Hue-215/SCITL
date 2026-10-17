@@ -15,6 +15,8 @@ pub struct FinishedTurn {
     /// タスクチャットなら、タスクのタイトル(無ければ最初の発言から作った呼び名)。総合チャットと、
     /// どちらも無いタスクは`None`。
     pub task_name: Option<String>,
+    /// 応答したアシスタントの名前([`crate::orchestration::TurnContext::assistant_name`])。
+    pub assistant_name: String,
     pub outcome: TurnOutcome,
 }
 
@@ -40,6 +42,7 @@ pub(super) fn finished_turn(
     chat: Chat,
     turn_id: &str,
     attempt_no: i64,
+    assistant_name: &str,
 ) -> Result<Option<FinishedTurn>> {
     let Some(reply) = messages::reply_of_attempt(conn, turn_id, attempt_no)? else {
         return Ok(None);
@@ -64,6 +67,7 @@ pub(super) fn finished_turn(
     Ok(Some(FinishedTurn {
         chat,
         task_name,
+        assistant_name: assistant_name.to_string(),
         outcome,
     }))
 }

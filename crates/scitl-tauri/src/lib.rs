@@ -531,8 +531,10 @@ mod tests {
         let notifier =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/ReplyNotifier.kt");
         assert!(notifier.contains(&format!("object {NOTIFIER_CLASS} {{")));
-        assert!(notifier.contains(
-            "fun post(context: Context, chat: Long, title: String, body: String, channelName: String)"
+        // Kotlin側の折り返しに左右されないよう、空白を詰めて比べる。
+        let flat = notifier.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains(
+            "fun post( context: Context, chat: Long, title: String, sender: String?, body: String, userName: String, channelName: String )"
         ));
         let activity =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");

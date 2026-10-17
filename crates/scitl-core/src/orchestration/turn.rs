@@ -507,8 +507,15 @@ async fn respond(
 /// 知らせる中身を作れなくてもターンは失敗にしない。
 async fn report_finished(db: SharedConnection, ctx: &TurnContext<'_>, attempt: &Attempt) {
     let attempt = attempt.clone();
+    let assistant_name = ctx.assistant_name.to_string();
     let finished = with_conn(db, move |conn| {
-        turn_end::finished_turn(conn, attempt.chat, &attempt.turn_id, attempt.attempt_no)
+        turn_end::finished_turn(
+            conn,
+            attempt.chat,
+            &attempt.turn_id,
+            attempt.attempt_no,
+            &assistant_name,
+        )
     })
     .await;
     match finished {

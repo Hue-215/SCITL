@@ -26,8 +26,9 @@ pub const CHAT_GENERAL: i64 = 0;
 /// 開く会話の頼みが無いことを表す値(Kotlin側の`CHAT_NONE`)。
 pub const CHAT_NONE: i64 = -1;
 
-/// 通知の題と本文の文字数の上限。通知は折り畳んだ状態で1行、開いても数行しか出ない。
+/// 通知の題・送り手と本文の文字数の上限。通知は折り畳んだ状態で1行、開いても数行しか出ない。
 const TITLE_MAX_CHARS: usize = 60;
+const SENDER_MAX_CHARS: usize = 40;
 const BODY_MAX_CHARS: usize = 240;
 
 /// 通知の文面。モデル・利用者が書いた文字列は、通知へ出す形にしてある
@@ -36,13 +37,19 @@ const BODY_MAX_CHARS: usize = 240;
 pub struct Notice {
     /// 会話の名前。
     pub title: String,
+    /// 返信したアシスタントの名前。あればチャットの形の通知にする。失敗で終わったとき
+    /// (エラーの文言をアシスタントが言ったように見せないため)と、名前が見えない文字だけのときは`None`。
+    pub sender: Option<String>,
     /// 返信の冒頭、またはエラー発言の文言。
     pub body: String,
+    /// チャットの形の通知(`MessagingStyle`)を作るのに要る、利用者自身の名前。利用者の発言は
+    /// 載せないので画面には出ない。
+    pub user: &'static str,
     /// OSの設定に出る、通知のチャンネルの名前。
     pub channel: &'static str,
 }
 
-/// 題と本文は1行に畳み、描かれない文字を除いて、長さの上限で切る([`text::display_label`])。
+/// 題・送り手・本文は1行に畳み、描かれない文字を除いて、長さの上限で切る([`text::display_label`])。
 /// 通知はOSがほかのアプリの通知と並べて描く文字で、画面のように要素の境界で閉じ込められないため。
 /// 本文のMarkdownの記号はそのまま出る。
 pub fn notice(lang: Language, finished: &FinishedTurn) -> Notice {
@@ -58,9 +65,15 @@ pub fn notice(lang: Language, finished: &FinishedTurn) -> Notice {
             }
         }
     };
-    let body = match &finished.outcome {
-        TurnOutcome::Replied { text } => text::display_label(text, BODY_MAX_CHARS),
-        TurnOutcome::Failed { kind } => turn_error::localized_message(lang, kind),
+    let (sender, body) = match &finished.outcome {
+        TurnOutcome::Replied { text } => {
+            let sender = text::display_label(&finished.assistant_name, SENDER_MAX_CHARS);
+            (
+                Some(sender).filter(|s| !s.is_empty()),
+                text::display_label(text, BODY_MAX_CHARS),
+            )
+        }
+        TurnOutcome::Failed { kind } => (None, turn_error::localized_message(lang, kind)),
     };
     let body = if body.is_empty() {
         i18n::text(lang, "reply_notice.no_text").to_string()
@@ -69,7 +82,9 @@ pub fn notice(lang: Language, finished: &FinishedTurn) -> Notice {
     };
     Notice {
         title,
+        sender,
         body,
+        user: i18n::text(lang, "reply_notice.user"),
         channel: i18n::text(lang, "reply_notice.channel"),
     }
 }
@@ -104,7 +119,7 @@ pub use android::{post, take_requested_chat};
 
 #[cfg(target_os = "android")]
 mod android {
-    use jni::objects::JValue;
+    use jni::objects::{JObject, JValue};
     use jni::{jni_sig, jni_str};
 
     use super::{chat_code, notice, ACTIVITY_CLASS, CHAT_NONE, NOTIFIER_CLASS};
@@ -120,19 +135,26 @@ mod android {
         let posted = with_application(|env, context| {
             let class = app_class(env, context, NOTIFIER_CLASS)?;
             let title = env.new_string(&notice.title)?;
+            let sender = match &notice.sender {
+                Some(sender) => JObject::from(env.new_string(sender)?),
+                None => JObject::null(),
+            };
             let body = env.new_string(&notice.body)?;
+            let user = env.new_string(notice.user)?;
             let channel = env.new_string(notice.channel)?;
             env.call_static_method(
                 &class,
                 jni_str!("post"),
                 jni_sig!(
-                    "(Landroid/content/Context;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
+                    "(Landroid/content/Context;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
                 ),
                 &[
                     JValue::from(context),
                     JValue::Long(chat),
                     JValue::from(&title),
+                    JValue::from(&sender),
                     JValue::from(&body),
+                    JValue::from(&user),
                     JValue::from(&channel),
                 ],
             )?;
@@ -171,6 +193,7 @@ mod tests {
         FinishedTurn {
             chat,
             task_name: task_name.map(str::to_string),
+            assistant_name: "Hal".to_string(),
             outcome,
         }
     }
@@ -192,6 +215,7 @@ mod tests {
             ),
         );
         assert_eq!(notice.title, "Trip plan");
+        assert_eq!(notice.sender.as_deref(), Some("Hal"));
         assert_eq!(notice.body, "# Plan 1. Book the flight 2. Pack");
     }
 
@@ -210,14 +234,45 @@ mod tests {
     fn invisible_and_control_characters_do_not_reach_the_notification() {
         let notice = notice(
             Language::En,
-            &finished(
-                Chat::Task(1),
-                Some("na\u{202e}me\u{7}"),
-                replied("a\u{202e}b\u{200b}c\u{1b}[31md"),
-            ),
+            &FinishedTurn {
+                assistant_name: "H\u{202e}al\n".to_string(),
+                ..finished(
+                    Chat::Task(1),
+                    Some("na\u{202e}me\u{7}"),
+                    replied("a\u{202e}b\u{200b}c\u{1b}[31md"),
+                )
+            },
         );
         assert_eq!(notice.title, "name");
+        assert_eq!(notice.sender.as_deref(), Some("Hal"));
         assert_eq!(notice.body, "abc [31md");
+    }
+
+    #[test]
+    fn a_long_sender_name_is_cut_with_an_ellipsis() {
+        let notice = notice(
+            Language::En,
+            &FinishedTurn {
+                assistant_name: "あ".repeat(100),
+                ..finished(Chat::General, None, replied("ok"))
+            },
+        );
+        let sender = notice.sender.unwrap();
+        assert_eq!(sender.chars().count(), SENDER_MAX_CHARS + 1);
+        assert!(sender.ends_with('…'));
+    }
+
+    /// 見えない文字だけのニックネームでは、送り手の無い通知にする。
+    #[test]
+    fn a_reply_from_a_blank_name_has_no_sender() {
+        let notice = notice(
+            Language::En,
+            &FinishedTurn {
+                assistant_name: "\u{200b}".to_string(),
+                ..finished(Chat::General, None, replied("ok"))
+            },
+        );
+        assert_eq!(notice.sender, None);
     }
 
     #[test]
@@ -228,6 +283,7 @@ mod tests {
             assert_eq!(general.body, i18n::text(lang, "reply_notice.no_text"));
             assert!(!general.body.starts_with("reply_notice."), "{lang:?}");
             assert!(!general.channel.starts_with("reply_notice."), "{lang:?}");
+            assert!(!general.user.starts_with("reply_notice."), "{lang:?}");
 
             let untitled = notice(lang, &finished(Chat::Task(1), None, replied("ok")));
             assert_eq!(untitled.title, i18n::text(lang, "task.untitled"));
@@ -252,6 +308,7 @@ mod tests {
                 },
             ),
         );
+        assert_eq!(notice.sender, None);
         assert_eq!(
             notice.body,
             i18n::text(Language::En, "turn_error.connection_failed")
