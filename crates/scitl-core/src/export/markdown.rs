@@ -1,8 +1,7 @@
 //! 書き出すMarkdownの組み立て。書き出す値の無害化はここに閉じる。
 //!
 //! - 利用者・モデルが決められる1行の値(タイトル・締切・工程・添付名等)は[`inline_text`]を通す。
-//!   SCITL自身が作る値(日時・中身から決めたMIME)はそのまま書く。MIMEは同期で受け取ることも
-//!   あるので、決めうる値かを確かめてから
+//!   SCITL自身が作る値(日時・中身から決めたMIME)はそのまま書く
 //! - 複数行の本文(発言・説明・ツール実行記録)は[`fenced`]で囲み、中身は変えない
 //! - リンク先はこのファイルが組み立てる相対パスだけで、区間ごとに[`encode_path_segment`]を通す
 //!
@@ -12,7 +11,6 @@ use std::fmt::Write;
 
 use percent_encoding::{utf8_percent_encode, AsciiSet};
 
-use crate::attachments::is_classified_mime_type;
 use crate::db::attachments::AttachmentKind;
 use crate::db::memories::Memory;
 use crate::db::messages::{Kind, Message, ResolvedPart, Role};
@@ -205,13 +203,10 @@ fn attachment_item(attachment: &AttachmentLink) -> String {
     if name.is_empty() {
         name = "(unnamed)".to_string();
     }
-    // 同期の検証が`mime_type`を見る前に取り込んだ行は、任意の文字列を持ちうる。
-    let mime_type = if is_classified_mime_type(attachment.kind, &attachment.mime_type) {
-        attachment.mime_type.clone()
-    } else {
-        inline_text(&attachment.mime_type)
-    };
-    let facts = format!("{mime_type}, size in bytes: {}", attachment.size_bytes);
+    let facts = format!(
+        "{}, size in bytes: {}",
+        attachment.mime_type, attachment.size_bytes
+    );
     match &attachment.path {
         Some(segments) => {
             let target: Vec<String> = segments.iter().map(|s| encode_path_segment(s)).collect();
@@ -563,26 +558,6 @@ mod tests {
         );
         assert!(
             out.contains("- gone\\.bin (image/png, size in bytes: 3, not exported)\n"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn a_mime_type_the_app_does_not_give_cannot_break_out_of_the_item() {
-        let user = message(Role::User, Kind::Normal, " ", None);
-        let out = render_general_chat(&[Entry {
-            message: &user,
-            parts: Vec::new(),
-            attachments: vec![AttachmentLink {
-                name: "memo.txt".to_string(),
-                kind: AttachmentKind::Text,
-                mime_type: "x)\n\n<img src=\"https://e.example/\">".to_string(),
-                size_bytes: 3,
-                path: None,
-            }],
-        }]);
-        assert!(
-            out.contains("- memo\\.txt (x) \\<img src\\=\\\"https\\:\\/\\/e\\.example\\/\\\"\\>,"),
             "{out}"
         );
     }

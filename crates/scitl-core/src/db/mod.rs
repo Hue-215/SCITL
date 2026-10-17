@@ -44,6 +44,13 @@ macro_rules! text_column_enum {
                     $(Self::$variant => $text,)+
                 }
             }
+
+            pub fn parse(text: &str) -> Option<Self> {
+                match text {
+                    $($text => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
         }
 
         impl rusqlite::types::ToSql for $ty {
@@ -56,12 +63,12 @@ macro_rules! text_column_enum {
             fn column_result(
                 value: rusqlite::types::ValueRef<'_>,
             ) -> rusqlite::types::FromSqlResult<Self> {
-                match value.as_str()? {
-                    $($text => Ok(Self::$variant),)+
-                    other => Err(rusqlite::types::FromSqlError::Other(
-                        format!("unknown {}: {other}", stringify!($ty)).into(),
-                    )),
-                }
+                let text = value.as_str()?;
+                Self::parse(text).ok_or_else(|| {
+                    rusqlite::types::FromSqlError::Other(
+                        format!("unknown {}: {text}", stringify!($ty)).into(),
+                    )
+                })
             }
         }
     };

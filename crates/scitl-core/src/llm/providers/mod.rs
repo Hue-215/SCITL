@@ -109,23 +109,9 @@ fn endpoint(base_url: &ExternalUrl, path: &str) -> Result<reqwest::Url, CoreErro
 /// タイムアウト(`config::GeneralConfig::response_timeout`)は使わない。
 const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// モデル一覧を辿るページ数の上限。ページが終わらないサーバーでも取得を打ち切るため。1ページに
-/// 1000件を求めるので、実在のプロバイダーは1ページで収まる。
+/// モデル一覧を辿るページ数の上限。次のカーソルを返し続けるサーバーでも取得を打ち切るため。
+/// 1ページに1000件を求めるので、実在のプロバイダーは1ページで収まる。
 const MAX_MODEL_PAGES: usize = 5;
-
-fn sorted_unique(mut names: Vec<String>) -> Vec<String> {
-    names.sort();
-    names.dedup();
-    names
-}
-
-/// [`MAX_MODEL_PAGES`]に達したか、前に返したカーソルがまた返ったときに、それまでの分で打ち切った旨。
-fn report_stopped_listing(base_url: &ExternalUrl, why: &str) {
-    crate::diagnostics::report(format_args!(
-        "stopped listing models from {}: {why}",
-        server(base_url)
-    ));
-}
 
 /// 一覧・能力の問い合わせの応答を読む。失敗は状態コードだけで分類する。
 async fn read_success_json<T: DeserializeOwned>(

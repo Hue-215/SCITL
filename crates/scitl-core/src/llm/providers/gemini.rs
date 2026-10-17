@@ -1,6 +1,6 @@
 //! Gemini形式(Interactions API)のアダプタ。方言の吸収はこのファイル内に閉じる。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use reqwest::StatusCode;
@@ -122,7 +122,6 @@ pub async fn list_models(
         crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
     )?;
     let mut names = Vec::new();
-    let mut seen = HashSet::new();
     let mut page_token: Option<String> = None;
     for _ in 0..super::MAX_MODEL_PAGES {
         let mut url = super::endpoint(&base_url, MODELS)?;
@@ -146,22 +145,13 @@ pub async fn list_models(
                 .filter(|id| !id.trim().is_empty()),
         );
         match page.next_page_token.filter(|t| !t.is_empty()) {
-            Some(token) if seen.insert(token.clone()) => page_token = Some(token),
-            Some(_) => {
-                super::report_stopped_listing(
-                    &base_url,
-                    "it returned a cursor it had returned before",
-                );
-                return Ok(super::sorted_unique(names));
-            }
-            None => return Ok(super::sorted_unique(names)),
+            Some(token) if page_token.as_ref() != Some(&token) => page_token = Some(token),
+            _ => break,
         }
     }
-    super::report_stopped_listing(
-        &base_url,
-        &format!("reached {} pages", super::MAX_MODEL_PAGES),
-    );
-    Ok(super::sorted_unique(names))
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 /// `models/gemini-…`の`models/`を除く。

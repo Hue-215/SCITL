@@ -452,13 +452,13 @@ mod tests {
         }
 
         fn attach(&self, message_id: i64, name: &str, content: AttachmentContent) {
-            let (kind, mime_type) = match content {
-                AttachmentContent::Text(_) => (AttachmentKind::Text, "text/plain"),
-                AttachmentContent::File { .. } => (AttachmentKind::Image, "image/png"),
+            let kind = match content {
+                AttachmentContent::Text(_) => AttachmentKind::Text,
+                AttachmentContent::File { .. } => AttachmentKind::Image,
             };
             let new = NewAttachment {
                 original_name: name.to_string(),
-                mime_type: mime_type.to_string(),
+                mime_type: "application/octet-stream".to_string(),
                 kind,
                 size_bytes: 1,
                 content,
@@ -603,7 +603,9 @@ mod tests {
             task.contains(&format!("](attachments/{}/a%20b.png)", ids[1])),
             "{task}"
         );
-        assert!(task.contains("gone\\.png (image/png, size in bytes: 1, not exported)"));
+        assert!(
+            task.contains("gone\\.png (application/octet-stream, size in bytes: 1, not exported)")
+        );
     }
 
     fn file_names(folder: &Path) -> Vec<String> {
