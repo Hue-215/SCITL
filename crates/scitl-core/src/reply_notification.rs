@@ -37,12 +37,13 @@ const BODY_MAX_CHARS: usize = 240;
 pub struct Notice {
     /// 会話の名前。
     pub title: String,
-    /// 返信したアシスタントの名前。あればチャットの形の通知にする。失敗で終わったときは、
-    /// エラーの文言をアシスタントが言ったように見せないため`None`。
+    /// 返信したアシスタントの名前。あればチャットの形の通知にする。失敗で終わったとき
+    /// (エラーの文言をアシスタントが言ったように見せないため)と、名前が見えない文字だけのときは`None`。
     pub sender: Option<String>,
     /// 返信の冒頭、またはエラー発言の文言。
     pub body: String,
-    /// チャットの形の通知が求める、利用者自身の名前。利用者の発言は載せないので出ない。
+    /// チャットの形の通知(`MessagingStyle`)を作るのに要る、利用者自身の名前。利用者の発言は
+    /// 載せないので画面には出ない。
     pub user: &'static str,
     /// OSの設定に出る、通知のチャンネルの名前。
     pub channel: &'static str,
@@ -245,6 +246,20 @@ mod tests {
         assert_eq!(notice.title, "name");
         assert_eq!(notice.sender.as_deref(), Some("Hal"));
         assert_eq!(notice.body, "abc [31md");
+    }
+
+    #[test]
+    fn a_long_sender_name_is_cut_with_an_ellipsis() {
+        let notice = notice(
+            Language::En,
+            &FinishedTurn {
+                assistant_name: "あ".repeat(100),
+                ..finished(Chat::General, None, replied("ok"))
+            },
+        );
+        let sender = notice.sender.unwrap();
+        assert_eq!(sender.chars().count(), SENDER_MAX_CHARS + 1);
+        assert!(sender.ends_with('…'));
     }
 
     /// 見えない文字だけのニックネームでは、送り手の無い通知にする。
