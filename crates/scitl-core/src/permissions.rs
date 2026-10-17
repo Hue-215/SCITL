@@ -30,7 +30,11 @@ fn camera_permission_from(code: i32) -> CameraPermission {
     match code {
         GRANTED => CameraPermission::Granted,
         BLOCKED => CameraPermission::Blocked,
-        _ => CameraPermission::Ask,
+        ASK => CameraPermission::Ask,
+        _ => {
+            crate::diagnostics::report(format_args!("unknown camera permission code: {code}"));
+            CameraPermission::Ask
+        }
     }
 }
 
@@ -109,6 +113,7 @@ mod android {
     }
 
     /// 通知の許可を求める説明を出すか。Android 13以上で、許可が無く、まだ求めていないとき。
+    /// 引けなければ出さない(応答生成のたびに呼ぶので、失敗が続くと説明を出し続けることになる)。
     pub fn notification_prompt_due() -> bool {
         let due = with_application(|env, context| {
             let class = app_class(env, context, PERMISSIONS_CLASS)?;

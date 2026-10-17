@@ -115,7 +115,7 @@ class MainActivity : TauriActivity() {
 
     /** 許可を求めるとき(Permissions)に使う。書くのはメインスレッド、読むのはRust側のスレッドもある。 */
     @Volatile
-    var current: MainActivity? = null
+    internal var current: MainActivity? = null
       private set
 
     // 書くのはメインスレッド、引き取るのはRust側のスレッド。

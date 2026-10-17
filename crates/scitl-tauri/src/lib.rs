@@ -553,15 +553,36 @@ mod tests {
         use scitl_core::permissions::{ASK, BLOCKED, GRANTED, PERMISSIONS_CLASS};
         let kotlin =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/Permissions.kt");
+        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
         assert!(kotlin.contains(&format!("object {PERMISSIONS_CLASS} {{")));
-        assert!(kotlin.contains("fun camera(context: Context): Int"));
-        assert!(kotlin.contains("fun openSettings(context: Context)"));
-        assert!(kotlin.contains("fun notificationPromptDue(context: Context): Boolean"));
-        assert!(kotlin.contains("fun answerNotificationPrompt(context: Context, allow: Boolean)"));
+        // Rust側は静的メソッドとして呼び、配布用のビルドでは名前で引く。
+        for (kotlin_method, kept) in [
+            (
+                "camera(context: Context): Int",
+                "public static int camera(android.content.Context);",
+            ),
+            (
+                "openSettings(context: Context)",
+                "public static void openSettings(android.content.Context);",
+            ),
+            (
+                "notificationPromptDue(context: Context): Boolean",
+                "public static boolean notificationPromptDue(android.content.Context);",
+            ),
+            (
+                "answerNotificationPrompt(context: Context, allow: Boolean)",
+                "public static void answerNotificationPrompt(android.content.Context, boolean);",
+            ),
+        ] {
+            assert!(
+                kotlin.contains(&format!("@JvmStatic\n  fun {kotlin_method}")),
+                "{kotlin_method}"
+            );
+            assert!(proguard.contains(kept), "{kept}");
+        }
         for (name, value) in [("GRANTED", GRANTED), ("ASK", ASK), ("BLOCKED", BLOCKED)] {
             assert!(kotlin.contains(&format!("const val {name} = {value}\n")));
         }
-        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
         assert!(proguard.contains(&format!(
             "-keep class net.niigo.scitl.{PERMISSIONS_CLASS} {{"
         )));

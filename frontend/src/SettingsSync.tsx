@@ -424,8 +424,9 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   }
 
   const startScan = () => void start('connect', () => syncConnectScanned(onEvent))
+  // 状態を引けなければ説明を挟まずに開く(OSのダイアログは読み取りの画面が出す)。
   const scan = async () => {
-    const permission = await syncScanPermission()
+    const permission = await syncScanPermission().catch(() => 'granted' as const)
     if (permission === 'granted') startScan()
     else setCameraPrompt(permission)
   }

@@ -24,12 +24,14 @@ object Permissions {
    * カメラの許可の状態(Rust側からJNIで呼ぶ)。shouldShowRequestPermissionRationaleは、1回も求めて
    * いないときと、OSがもうダイアログを出さないときの両方でfalseを返すので、求めたかの記録と合わせる。
    * OSのダイアログを選ばずに閉じたときもfalseのままなので、BLOCKEDになる(設定アプリでは許可できる)。
+   * Activityが無くて確かめられないときは、ASKに倒す(OSのダイアログは読み取りの画面が出す)。
    */
   @JvmStatic
   fun camera(context: Context): Int {
     val camera = Manifest.permission.CAMERA
     if (context.checkSelfPermission(camera) == PackageManager.PERMISSION_GRANTED) return GRANTED
-    if (MainActivity.current?.shouldShowRequestPermissionRationale(camera) == true) return ASK
+    val activity = MainActivity.current ?: return ASK
+    if (activity.shouldShowRequestPermissionRationale(camera)) return ASK
     return if (asked(context, CAMERA_PREFERENCES)) BLOCKED else ASK
   }
 
@@ -65,14 +67,17 @@ object Permissions {
 
   /**
    * 説明への答え(Rust側からJNIで呼ぶ)。どちらでも求めたことにし、以後は説明を出さない。
-   * allowならOSのダイアログを出す。
+   * allowならOSのダイアログを出す。出せるActivityが無ければ求めたことにせず、次の機会にまた説明を出す。
    */
   @JvmStatic
   fun answerNotificationPrompt(context: Context, allow: Boolean) {
     if (!notificationPromptDue(context)) return
+    if (!allow) {
+      markAsked(context, NOTIFICATION_PREFERENCES)
+      return
+    }
+    val activity = MainActivity.current ?: throw IllegalStateException("no activity to ask from")
     markAsked(context, NOTIFICATION_PREFERENCES)
-    if (!allow) return
-    val activity = MainActivity.current ?: return
     activity.runOnUiThread {
       activity.requestPermissions(
         arrayOf(Manifest.permission.POST_NOTIFICATIONS),

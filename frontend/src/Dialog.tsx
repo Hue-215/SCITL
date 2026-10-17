@@ -112,14 +112,8 @@ export function ChoiceDialog({
   )
 }
 
-interface ConfirmDialogProps {
-  title: string
-  message: string
-  // 何をするボタンかを操作ごとに書く(「削除」「登録を解除」)。
-  confirmLabel: string
-  onConfirm: () => void
-  onCancel: () => void
-}
+// confirmLabelには、何をするボタンかを操作ごとに書く(「削除」「登録を解除」)。
+type ConfirmDialogProps = Omit<ChoiceDialogProps, 'cancelLabel' | 'confirmClass' | 'onClose'>
 
 // 破壊的操作の確認ダイアログ。「キャンセル/実行」の2択で、実行ボタンを警告色にする。
 export function ConfirmDialog(props: ConfirmDialogProps) {
