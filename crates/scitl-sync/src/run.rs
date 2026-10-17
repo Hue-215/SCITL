@@ -755,17 +755,13 @@ mod tests {
     /// 取りやめたときは入らない(サービスは前に出ている間にしか始められないので、承認の前には入らない)。
     #[tokio::test]
     async fn the_sync_runs_long_only_after_it_is_confirmed() {
-        use scitl_core::in_flight::LongRunningKind;
         let dir = tempfile::tempdir().unwrap();
         let ctx = context(&dir);
-        for (confirmed, expected) in [
-            (false, vec![]),
-            (true, vec![Some(LongRunningKind::All), None]),
-        ] {
+        for (confirmed, expected) in [(false, vec![]), (true, vec![true, false])] {
             let reported = Arc::new(Mutex::new(Vec::new()));
             let generating = InFlightSet::watching_long_running({
                 let reported = reported.clone();
-                move |kind| reported.lock().unwrap().push(kind)
+                move |running| reported.lock().unwrap().push(running)
             });
             let request = Request {
                 ctx: &ctx,

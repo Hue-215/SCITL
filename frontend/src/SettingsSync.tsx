@@ -27,7 +27,7 @@ import type {
   WritePlan,
 } from './types'
 import { SYNC_ERROR_KEY_PREFIX } from './bindings/SyncConstants'
-import Dialog from './Dialog'
+import Dialog, { ChoiceDialog } from './Dialog'
 import { isolated, type MessageKey, t } from './i18n'
 import { DisclosureMark } from './Icon'
 import { NumberField } from './settingsFields'
@@ -711,50 +711,32 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
         </div>
       </form>
       {cameraPrompt === 'ask' && (
-        <Dialog
+        <ChoiceDialog
           title={t('settings.sync.camera_prompt_title')}
-          onClose={() => setCameraPrompt(null)}
-        >
-          <p>{t('settings.sync.camera_prompt')}</p>
-          <div className="button-row dialog-actions">
-            <button type="button" onClick={() => setCameraPrompt(null)}>
-              {t('common.cancel')}
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => {
-                setCameraPrompt(null)
-                startScan()
-              }}
-            >
-              {t('common.continue')}
-            </button>
-          </div>
-        </Dialog>
+          message={t('settings.sync.camera_prompt')}
+          cancelLabel={t('common.cancel')}
+          confirmLabel={t('common.continue')}
+          confirmClass="primary"
+          onCancel={() => setCameraPrompt(null)}
+          onConfirm={() => {
+            setCameraPrompt(null)
+            startScan()
+          }}
+        />
       )}
       {cameraPrompt === 'blocked' && (
-        <Dialog
+        <ChoiceDialog
           title={t('settings.sync.camera_blocked_title')}
-          onClose={() => setCameraPrompt(null)}
-        >
-          <p>{t('settings.sync.camera_blocked')}</p>
-          <div className="button-row dialog-actions">
-            <button type="button" onClick={() => setCameraPrompt(null)}>
-              {t('common.close')}
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => {
-                setCameraPrompt(null)
-                void openCameraSettings()
-              }}
-            >
-              {t('settings.sync.open_app_settings')}
-            </button>
-          </div>
-        </Dialog>
+          message={t('settings.sync.camera_blocked')}
+          cancelLabel={t('common.close')}
+          confirmLabel={t('settings.sync.open_app_settings')}
+          confirmClass="primary"
+          onCancel={() => setCameraPrompt(null)}
+          onConfirm={() => {
+            setCameraPrompt(null)
+            void openCameraSettings()
+          }}
+        />
       )}
     </SyncPage>
   )

@@ -343,14 +343,14 @@ fn finished_sink(
     let prompt = Arc::clone(prompt);
     Box::new(move |finished| {
         scitl_core::reply_notification::post(settings.display_language(), &finished);
-        if !scitl_core::permissions::notification_prompt_due() {
-            return;
-        }
-        if let Some(channel) = prompt
+        let Some(channel) = prompt
             .lock()
             .expect("notification prompt mutex poisoned")
-            .as_ref()
-        {
+            .clone()
+        else {
+            return;
+        };
+        if scitl_core::permissions::notification_prompt_due() {
             let _ = channel.send(());
         }
     })

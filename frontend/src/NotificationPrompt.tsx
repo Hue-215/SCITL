@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { answerNotificationPrompt, watchNotificationPrompt } from './api'
-import Dialog from './Dialog'
+import { ChoiceDialog } from './Dialog'
 import { t } from './i18n'
 
 // 通知の許可を求める前の説明。Rust側が応答生成の終わりに知らせてきたら出す。ボタンを押さずに
@@ -17,16 +17,15 @@ export default function NotificationPrompt() {
     answerNotificationPrompt(allow).catch(() => undefined)
   }
   return (
-    <Dialog title={t('notification_prompt.title')} onClose={() => setOpen(false)}>
-      <p>{t('notification_prompt.message')}</p>
-      <div className="button-row dialog-actions">
-        <button type="button" onClick={() => answer(false)}>
-          {t('notification_prompt.deny')}
-        </button>
-        <button type="button" className="primary" onClick={() => answer(true)}>
-          {t('common.continue')}
-        </button>
-      </div>
-    </Dialog>
+    <ChoiceDialog
+      title={t('notification_prompt.title')}
+      message={t('notification_prompt.message')}
+      cancelLabel={t('notification_prompt.deny')}
+      confirmLabel={t('common.continue')}
+      confirmClass="primary"
+      onConfirm={() => answer(true)}
+      onCancel={() => answer(false)}
+      onClose={() => setOpen(false)}
+    />
   )
 }

@@ -35,7 +35,9 @@ fn camera_permission_from(code: i32) -> CameraPermission {
 }
 
 #[cfg(target_os = "android")]
-pub use android::{answer_notification_prompt, camera, notification_prompt_due, open_settings};
+pub use android::{
+    answer_notification_prompt, camera, notification_prompt_due, open_camera_settings,
+};
 
 /// デスクトップではQRを読まない(読むボタンを出さない)ので、説明も挟まない。
 #[cfg(not(target_os = "android"))]
@@ -44,7 +46,7 @@ pub fn camera() -> CameraPermission {
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn open_settings() {}
+pub fn open_camera_settings() {}
 
 /// デスクトップでは通知を出さない。
 #[cfg(not(target_os = "android"))]
@@ -86,8 +88,8 @@ mod android {
         }
     }
 
-    /// OSがもうダイアログを出さないときだけ、このアプリの設定画面を開く。
-    pub fn open_settings() {
+    /// カメラの許可を、OSがもうダイアログで求めないときだけ、このアプリの設定画面を開く。
+    pub fn open_camera_settings() {
         if camera() != CameraPermission::Blocked {
             return;
         }

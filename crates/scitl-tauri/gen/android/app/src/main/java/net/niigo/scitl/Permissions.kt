@@ -55,10 +55,13 @@ object Permissions {
    */
   @JvmStatic
   fun notificationPromptDue(context: Context): Boolean =
-    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-      context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-      PackageManager.PERMISSION_GRANTED &&
-      !asked(context, NOTIFICATION_PREFERENCES)
+    !notificationsAllowed(context) && !asked(context, NOTIFICATION_PREFERENCES)
+
+  /** 通知を出せるか(Android 12以下は許可が要らない)。 */
+  fun notificationsAllowed(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+      context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
 
   /**
    * 説明への答え(Rust側からJNIで呼ぶ)。どちらでも求めたことにし、以後は説明を出さない。

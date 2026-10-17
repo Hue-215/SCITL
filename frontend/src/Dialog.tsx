@@ -74,6 +74,44 @@ export default function Dialog({ title, onClose, children, width }: DialogProps)
   )
 }
 
+interface ChoiceDialogProps {
+  title: string
+  message: string
+  cancelLabel: string
+  confirmLabel: string
+  confirmClass: 'primary' | 'danger'
+  onConfirm: () => void
+  onCancel: () => void
+  // ボタンを押さずに閉じたとき(Esc・暗幕・「戻る」)。無ければ`onCancel`。
+  onClose?: () => void
+}
+
+// 本文と「取りやめる/進める」の2つのボタンを持つダイアログ。
+export function ChoiceDialog({
+  title,
+  message,
+  cancelLabel,
+  confirmLabel,
+  confirmClass,
+  onConfirm,
+  onCancel,
+  onClose = onCancel,
+}: ChoiceDialogProps) {
+  return (
+    <Dialog title={title} onClose={onClose}>
+      <p>{message}</p>
+      <div className="button-row dialog-actions">
+        <button type="button" onClick={onCancel}>
+          {cancelLabel}
+        </button>
+        <button type="button" className={confirmClass} onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+      </div>
+    </Dialog>
+  )
+}
+
 interface ConfirmDialogProps {
   title: string
   message: string
@@ -84,26 +122,8 @@ interface ConfirmDialogProps {
 }
 
 // 破壊的操作の確認ダイアログ。「キャンセル/実行」の2択で、実行ボタンを警告色にする。
-export function ConfirmDialog({
-  title,
-  message,
-  confirmLabel,
-  onConfirm,
-  onCancel,
-}: ConfirmDialogProps) {
-  return (
-    <Dialog title={title} onClose={onCancel}>
-      <p>{message}</p>
-      <div className="button-row dialog-actions">
-        <button type="button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-        <button type="button" className="danger" onClick={onConfirm}>
-          {confirmLabel}
-        </button>
-      </div>
-    </Dialog>
-  )
+export function ConfirmDialog(props: ConfirmDialogProps) {
+  return <ChoiceDialog {...props} cancelLabel={t('common.cancel')} confirmClass="danger" />
 }
 
 interface NoticeDialogProps {

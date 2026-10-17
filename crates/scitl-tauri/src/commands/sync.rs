@@ -71,10 +71,10 @@ pub fn sync_scan_permission() -> scitl_core::permissions::CameraPermission {
 }
 
 /// カメラの許可を、OSがもう求めない状態のときだけ、このアプリの設定画面を開く
-/// ([`scitl_core::permissions::open_settings`])。
+/// ([`scitl_core::permissions::open_camera_settings`])。
 #[tauri::command]
 pub fn open_camera_settings() {
-    scitl_core::permissions::open_settings();
+    scitl_core::permissions::open_camera_settings();
 }
 
 /// 進んでいる同期を止める([`scitl_sync::cancel`])。
