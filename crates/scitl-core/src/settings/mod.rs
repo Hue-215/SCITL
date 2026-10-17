@@ -443,7 +443,7 @@ impl Settings {
 
     /// 同期で待ち受けるポート。未設定はOSに選ばせる。
     pub fn sync_listen_port(&self) -> Option<u16> {
-        self.current().config.sync.listen_port()
+        self.current().config.sync.listen_port
     }
 
     /// 空欄は未設定に戻す。

@@ -328,7 +328,7 @@ pub(super) fn build(
             default_total_timeout_secs: DEFAULT_TOTAL_TIMEOUT_SECS,
         },
         sync: SyncSettingsView {
-            listen_port: config.sync.listen_port(),
+            listen_port: config.sync.listen_port,
         },
         providers: config
             .providers

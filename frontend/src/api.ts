@@ -255,7 +255,7 @@ export function updateToolSettings(args: {
   return invoke('update_tool_settings', args)
 }
 
-// 数値の欄の扱いはupdateGeneralSettingsと同じ。
+// 欄の文字列のまま送る。空欄は未設定に戻す。
 export function updateSyncSettings(listenPort: string): Promise<FormOutcome<SettingsView>> {
   return invoke('update_sync_settings', { listenPort })
 }

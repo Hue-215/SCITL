@@ -1,10 +1,11 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use tokio::io::AsyncWriteExt;
 
 use super::*;
 
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+const LOOPBACK_V6: IpAddr = IpAddr::V6(Ipv6Addr::LOCALHOST);
 const LOCAL: LocalVersions = LocalVersions { db_version: 11 };
 
 fn limits() -> Limits {
@@ -242,6 +243,34 @@ async fn a_given_port_in_use_is_refused_instead_of_moving_to_another() {
     let port = held.local_addr().unwrap().port();
     assert!(matches!(
         Listener::bind(&[LOOPBACK], Some(port), limits()).await,
+        Err(SyncError::PortInUse(p)) if p == port
+    ));
+}
+
+#[tokio::test]
+async fn a_given_port_is_used_on_every_address() {
+    // IPv6のループバックが使えない環境では飛ばす。
+    let Ok(probe) = TcpListener::bind((LOOPBACK_V6, 0)).await else {
+        return;
+    };
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let listener = Listener::bind(&[LOOPBACK, LOOPBACK_V6], Some(port), limits())
+        .await
+        .unwrap();
+    assert_eq!(listener.addresses().len(), 2);
+    assert!(listener.addresses().iter().all(|a| a.port() == port));
+}
+
+#[tokio::test]
+async fn a_given_port_held_on_ipv6_is_refused_instead_of_moving_to_another() {
+    // IPv6のループバックが使えない環境では飛ばす。
+    let Ok(held) = TcpListener::bind((LOOPBACK_V6, 0)).await else {
+        return;
+    };
+    let port = held.local_addr().unwrap().port();
+    assert!(matches!(
+        Listener::bind(&[LOOPBACK, LOOPBACK_V6], Some(port), limits()).await,
         Err(SyncError::PortInUse(p)) if p == port
     ));
 }

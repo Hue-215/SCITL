@@ -81,8 +81,8 @@ pub struct Listener {
 impl Listener {
     /// 渡したアドレスにだけバインドする(全インターフェースでは待たない)。`fixed`が無ければ、OSが
     /// 選んだ番号に揃えられれば揃える(利用者が打つのは1つだけでも、出す候補が読みやすい)。
-    /// `fixed`を指定したときは、どのアドレスでも取れなければ断る(ファイアウォールで開けた番号から
-    /// 外れないように)。
+    /// `Some(0)`は`None`と同じ。`fixed`を指定したときは、1つのアドレスでも取れなければ断る
+    /// (ファイアウォールで開けた番号から外れないように)。
     pub async fn bind(
         ips: &[IpAddr],
         fixed: Option<u16>,
@@ -95,6 +95,7 @@ impl Listener {
             return Err(SyncError::AddressNotAllowed(ip.to_string()));
         }
         let mut listeners = Vec::with_capacity(ips.len());
+        let fixed = fixed.filter(|p| *p != 0);
         let mut port = fixed.unwrap_or(0);
         for &ip in ips {
             let listener = match TcpListener::bind((ip, port)).await {

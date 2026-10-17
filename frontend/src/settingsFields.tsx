@@ -4,7 +4,7 @@ import { useNumberInput } from './settingsInput'
 
 interface NumberFieldProps {
   label: string
-  // 保存済みの値。nullは未設定(既定値を使う)。
+  // 保存済みの値。nullは未設定。
   value: number | null
   // 未設定のときに使われる値。プレースホルダに出す。無ければプレースホルダを出さない。
   defaultValue?: number

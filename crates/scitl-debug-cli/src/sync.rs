@@ -173,7 +173,7 @@ pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugErr
                     blocking::run(move || config::load(&path))
                         .await?
                         .sync
-                        .listen_port()
+                        .listen_port
                 }
             };
             let listener = Listener::bind(&ips, port, Limits::default()).await?;

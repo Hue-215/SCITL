@@ -75,7 +75,7 @@ where
     }
 }
 
-/// 待ち受けるポートの欄の文字列を解釈する。空欄は未設定(`None`)。
+/// 待ち受けるポートの欄の文字列を解釈する。空欄は未設定。
 pub(super) fn listen_port(text: &str) -> Result<Option<u16>> {
     let digits = ascii_digits(text);
     if digits.is_empty() {

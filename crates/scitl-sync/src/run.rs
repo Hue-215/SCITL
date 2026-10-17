@@ -230,7 +230,7 @@ impl<E: Fn(SyncEvent) + Sync> Confirmer for ConfirmAsk<'_, E> {
     }
 }
 
-/// 待ち受けて、つないできた相手と同期する。`port`は[`Listener::bind`]。
+/// 待ち受けて、つないできた相手と同期する。`port`は[`Listener::bind`]の`fixed`。
 pub async fn listen(
     request: Request<'_>,
     port: Option<u16>,
