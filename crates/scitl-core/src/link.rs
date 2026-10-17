@@ -218,7 +218,10 @@ fn os_safe(url: &Url) -> String {
 
 /// mailtoのクエリを、宛先・件名・本文に関わる標準の項目(RFC 6068)だけに絞る。
 /// メールソフトによっては`attach`等でローカルのファイルを添付した下書きを作れるため。
+/// フラグメントは落とす。`#`を区切りとみなさず、最初の`?`から項目を読むメールソフト
+/// (Evolution・KMail)があり、`mailto:a@b.com#?attach=…`の`attach`が素通りするため。
 fn keep_standard_mailto_fields(url: &mut Url) {
+    url.set_fragment(None);
     let Some(query) = url.query() else { return };
     let kept: Vec<&str> = query
         .split('&')
@@ -448,6 +451,13 @@ mod tests {
         let mut url = Url::parse("mailto:a@b.com?attach=/etc/passwd").unwrap();
         keep_standard_mailto_fields(&mut url);
         assert_eq!(url.as_str(), "mailto:a@b.com");
+        for hidden in [
+            "mailto:a@b.com#?attach=/etc/passwd",
+            "mailto:a@b.com?subject=hi#&attach=/etc/passwd",
+        ] {
+            let target = confirmed_target(hidden).unwrap();
+            assert!(!target.contains("attach"), "{hidden} -> {target}");
+        }
     }
 
     #[test]
