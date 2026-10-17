@@ -316,6 +316,7 @@
   "settings.tools.add_server_heading": "サーバーを追加",
   "settings.tools.delete_server_dialog_message": "「{id}」の登録を削除します。この操作は取り消すことができません。",
   "settings.tools.delete_server_dialog_title": "このMCPサーバーの登録を削除しますか?",
+  "settings.tools.description_toggle": "説明",
   "settings.tools.endpoint_http": "streamable HTTP: {url}",
   "settings.tools.fetch_tools_button": "ツール一覧を取得",
   "settings.tools.header_names_label": "ヘッダー",

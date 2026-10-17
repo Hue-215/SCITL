@@ -261,6 +261,8 @@ input[type='checkbox'] {
   display: inline-grid;
   place-content: center;
   vertical-align: middle;
+  /* 選択行(.choice)の名前が長くても箱を潰さない。 */
+  flex-shrink: 0;
   cursor: pointer;
 }
 
@@ -346,7 +348,8 @@ option {
   .entry-actions button,
   .code-block button,
   .chat-model-toggle,
-  .chat-header-description-toggle
+  .chat-header-description-toggle,
+  .tool-description-toggle
 ) {
   background-color: transparent;
   --elevation: initial;
@@ -373,6 +376,7 @@ option {
   .code-block button,
   .chat-model-toggle,
   .chat-header-description-toggle,
+  .tool-description-toggle,
   .chip,
   .choice {
     min-height: var(--control-size-md);
@@ -1493,6 +1497,34 @@ details[open] > summary > .disclosure-mark,
 
 .model-row > :not(.choice) {
   flex-shrink: 0;
+}
+
+.tool-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* 説明の開閉は名前の直後に置き(右端だと名前から離れて読みにくい)、注記(非対応)だけを右端に寄せる。 */
+.tool-row > .model-row {
+  justify-content: flex-start;
+}
+
+.tool-row .provider-card-meta {
+  margin-left: auto;
+}
+
+.tool-description-toggle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* サーバーが書いた説明は改行で段落や引数の一覧を書くことが多いので、改行を残す。 */
+.tool-description {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 /* プロバイダー・モデル・MCPサーバー・ツールで共通。 */

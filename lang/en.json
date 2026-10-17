@@ -316,6 +316,7 @@
   "settings.tools.add_server_heading": "Add server",
   "settings.tools.delete_server_dialog_message": "This removes \"{id}\". This can't be undone.",
   "settings.tools.delete_server_dialog_title": "Remove this MCP server?",
+  "settings.tools.description_toggle": "Description",
   "settings.tools.endpoint_http": "streamable HTTP: {url}",
   "settings.tools.fetch_tools_button": "Fetch tool list",
   "settings.tools.header_names_label": "Headers",
