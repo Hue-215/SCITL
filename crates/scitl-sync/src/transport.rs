@@ -195,6 +195,8 @@ pub(crate) enum Message {
     FilesEnd,
     /// Aが、競合を利用者に選ばせている。
     Choosing,
+    /// Aが、書き込む前の確認を見せている(その間、Bは待って出る)。
+    Confirming,
     /// Aの結果の終わり。`counter`はAが書き終えた時点のカウンター、`digest`は照合の値。
     Merged {
         counter: i64,

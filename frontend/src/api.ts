@@ -426,3 +426,8 @@ export function cancelSync(): Promise<void> {
 export function resolveSyncConflicts(choices: ConflictChoice[]): Promise<boolean> {
   return invoke('resolve_sync_conflicts', { choices })
 }
+
+// 書き込む前の確認の答えを渡す。真なら書き込む。偽は、競合があれば選択に戻り、無ければ止まる。
+export function approveSyncWrite(write: boolean): Promise<boolean> {
+  return invoke('approve_sync_write', { write })
+}

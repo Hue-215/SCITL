@@ -4,6 +4,7 @@
 // 待ち受け・接続・結合の順序と、始める前の確認はRust側が持つ(`scitl_sync::listen`)。
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import {
+  approveSyncWrite,
   canScanSyncQr,
   cancelSync,
   resolveSyncConflicts,
@@ -18,6 +19,8 @@ import type {
   QrModules,
   SyncEvent,
   SyncReport,
+  WriteCounts,
+  WritePlan,
 } from './types'
 import { SYNC_ERROR_KEY_PREFIX } from './bindings/SyncConstants'
 import Dialog from './Dialog'
@@ -25,7 +28,7 @@ import { isolated, type MessageKey, t } from './i18n'
 import { useCloseOnBack } from './useCloseOnBack'
 
 type Running = 'listen' | 'connect'
-type Stage = 'syncing' | 'peer_choosing' | 'finishing'
+type Stage = 'syncing' | 'peer_choosing' | 'peer_confirming' | 'finishing'
 type Failure = Extract<SyncReport, { status: 'failed' }>
 
 // 入力の画面に留めて出す失敗(打ち直すか読み直せば済むもの)。ほかは結果の画面へ移る。
@@ -160,6 +163,32 @@ function SyncPage({
   )
 }
 
+// 書き込む前の確認の、1つの端末分の件数。変わらない側は1行で示す。分類は結果の画面と同じ。
+function ConfirmCounts({ label, counts }: { label: string; counts: WriteCounts }) {
+  const rows = [
+    ['settings.sync.count_tasks', counts.tasks],
+    ['settings.sync.count_conversations', counts.conversations],
+    ['settings.sync.count_memories', counts.memories],
+  ] as const
+  return (
+    <div>
+      <p>{label}</p>
+      {rows.every(([, count]) => count === 0) ? (
+        <p>{t('settings.sync.confirm_nothing')}</p>
+      ) : (
+        <dl className="sync-counts">
+          {rows.map(([key, count]) => (
+            <div key={key} className="sync-count">
+              <dt>{t(key)}</dt>
+              <dd>{t('settings.sync.count', { count })}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  )
+}
+
 // 競合を1件ずつ選ばせ、最後の1件で選んだ側をまとめて返す。2件目からの「戻る」(画面とAndroid)は
 // 前の件へ戻り、同期を止めるのは1件目の「戻る」だけにする。
 function ConflictChooser({
@@ -279,6 +308,8 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   const [canScan, setCanScan] = useState(false)
   // 相手を確かめたあとの段。
   const [stage, setStage] = useState<Stage | null>(null)
+  // 書き込む前の確認。`null`の間は見せない。
+  const [confirm, setConfirm] = useState<WritePlan | null>(null)
   // 止められるか(Rust側が途中経過に載せて知らせる)。最初の途中経過が届くまでは止められる。
   const [stoppable, setStoppable] = useState(true)
   const [conflicts, setConflicts] = useState<ConflictView[] | null>(null)
@@ -314,12 +345,21 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       case 'conflicts':
         latestConflicts.current = event.conflicts
         setConflicts(event.conflicts)
+        setConfirm(null)
         setConflictRound((n) => n + 1)
+        break
+      case 'confirm':
+        setListening(null)
+        latestConflicts.current = null
+        setConflicts(null)
+        setStage(null)
+        setConfirm(event.plan)
         break
       default:
         setListening(null)
         latestConflicts.current = null
         setConflicts(null)
+        setConfirm(null)
         setStage(event.type)
     }
   }
@@ -339,6 +379,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       setRunning(null)
       setListening(null)
       setStage(null)
+      setConfirm(null)
       latestConflicts.current = null
       setConflicts(null)
     }
@@ -364,8 +405,10 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   }
 
   // Androidの「戻る」は、画面の「戻る」「閉じる」と同じ。止められない間は何もしない。
+  // 書き込む前の確認では、確認の「戻る」の答えになる(競合があれば選択へ、無ければ止める)。
   useCloseOnBack(true, () => {
     if (running === null) onClose()
+    else if (confirm !== null) void approveSyncWrite(false)
     else if (stoppable) void cancelSync()
   })
 
@@ -452,6 +495,29 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     )
   }
 
+  // 書き込む前の確認。「戻る」は競合の選択に戻り(無ければ同期を止め)、書き込むかを決める。
+  if (running !== null && confirm !== null) {
+    return (
+      <SyncPage
+        title={t('settings.sync.confirm_heading')}
+        layout="centered"
+        actions={
+          <>
+            <button type="button" onClick={() => void approveSyncWrite(false)}>
+              {t('settings.sync.back')}
+            </button>
+            <button type="button" className="primary" onClick={() => void approveSyncWrite(true)}>
+              {t('settings.sync.confirm_write')}
+            </button>
+          </>
+        }
+      >
+        <ConfirmCounts label={t('settings.sync.ours')} counts={confirm.ours} />
+        <ConfirmCounts label={t('settings.sync.theirs')} counts={confirm.theirs} />
+      </SyncPage>
+    )
+  }
+
   if (running !== null && stage === 'finishing') {
     return (
       <SyncPage title={t('settings.sync.progress_heading')} layout="centered">
@@ -459,6 +525,14 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
           <p>{t('settings.sync.writing_message')}</p>
           <p className="settings-hint">{t('settings.sync.writing_hint')}</p>
         </div>
+      </SyncPage>
+    )
+  }
+
+  if (running !== null && stage === 'peer_confirming') {
+    return (
+      <SyncPage title={t('settings.sync.progress_heading')} layout="centered" actions={stopButton}>
+        <p>{t('settings.sync.peer_confirming')}</p>
       </SyncPage>
     )
   }
