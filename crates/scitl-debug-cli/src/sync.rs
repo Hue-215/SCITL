@@ -13,8 +13,9 @@ use serde::Serialize;
 use scitl_cli::terminal::{self, print_json, print_json_line};
 use scitl_cli::Session;
 use scitl_core::attachments::AttachmentStore;
+use scitl_core::config;
 use scitl_core::in_flight::InFlightSet;
-use scitl_core::{db, paths};
+use scitl_core::{blocking, db, paths};
 use scitl_sync::{
     ChosenSide, Confirmer, ConflictChoice, ConflictView, Context, DeviceRegistry, Limits, Listener,
     LocalVersions, PairingCode, Resolver, SecretStore, SyncError, WriteAnswer, WritePlan,
@@ -35,6 +36,10 @@ pub enum SyncCommand {
         /// Settle every conflict with this side without asking.
         #[arg(long, value_enum)]
         prefer: Option<Prefer>,
+        /// Port to listen on (1024 to 65535). Without it, the `sync.listen_port` of config.toml,
+        /// and without that too, a port the OS chooses.
+        #[arg(long, value_name = "PORT", value_parser = clap::value_parser!(u16).range(i64::from(config::MIN_LISTEN_PORT)..))]
+        port: Option<u16>,
     },
     /// Connect to a device that is listening, then sync the two. Reads the code from standard
     /// input.
@@ -153,14 +158,25 @@ pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugErr
         .try_begin_all()
         .expect("nothing else runs in this process");
     match command {
-        SyncCommand::Listen { bind, prefer } => {
+        SyncCommand::Listen { bind, prefer, port } => {
             let device_id = scitl_sync::confirm_device_id(ctx.db.clone(), registry).await?;
             let ips = if bind.is_empty() {
                 scitl_sync::local_addresses()?
             } else {
                 bind
             };
-            let listener = Listener::bind(&ips, Limits::default()).await?;
+            let port = match port {
+                Some(_) => port,
+                // 設定ファイルだけを読む。`load_settings`は資格情報ストアから鍵も読んでしまう。
+                None => {
+                    let path = session.data.config();
+                    blocking::run(move || config::load(&path))
+                        .await?
+                        .sync
+                        .listen_port()
+                }
+            };
+            let listener = Listener::bind(&ips, port, Limits::default()).await?;
             print_json_line(&Listening {
                 addresses: listener
                     .addresses()

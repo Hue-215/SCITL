@@ -15,6 +15,7 @@ pub async fn sync_listen(
 ) -> Result<SyncReport, ()> {
     Ok(scitl_sync::listen(
         request(&state),
+        state.settings.sync_listen_port(),
         dialog::confirm_sync(&app),
         forward(on_event),
     )

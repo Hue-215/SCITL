@@ -762,6 +762,29 @@ fn unknown_language_is_reported_until_a_language_is_chosen() {
 }
 
 #[test]
+fn listen_port_is_saved_and_blank_goes_back_to_unset() {
+    let (settings, path, _dir) = temp_settings();
+    assert_eq!(settings.sync_listen_port(), None);
+
+    let view = settings.update_sync("２０００").unwrap();
+    assert_eq!(view.sync.listen_port, Some(2000));
+    assert_eq!(settings.sync_listen_port(), Some(2000));
+    assert_eq!(Settings::load(path).sync_listen_port(), Some(2000));
+
+    // 断られた値は保存しない。
+    assert!(settings.update_sync("1023").is_err());
+    assert_eq!(settings.sync_listen_port(), Some(2000));
+
+    // ほかの欄の保存では変えない。
+    settings.update_language(Language::En).unwrap();
+    assert_eq!(settings.sync_listen_port(), Some(2000));
+
+    let view = settings.update_sync(" ").unwrap();
+    assert_eq!(view.sync.listen_port, None);
+    assert_eq!(settings.sync_listen_port(), None);
+}
+
+#[test]
 fn failed_save_leaves_current_settings_unchanged() {
     let (settings, path, _dir) = temp_settings();
     // 保存先をディレクトリにして書き込みを失敗させる。

@@ -81,6 +81,18 @@ pub async fn update_tool_settings(
     .await
 }
 
+/// 数値の欄は文字列のまま受け取る(`update_general_settings`と同じ)。
+#[tauri::command]
+pub async fn update_sync_settings(
+    state: State<'_, AppState>,
+    listen_port: String,
+) -> CommandResult<FormOutcome<SettingsView>> {
+    with_settings(&state, move |s| {
+        FormOutcome::from_result(s.update_sync(&listen_port))
+    })
+    .await
+}
+
 /// ヘッダーの欄は文字列のまま、秘密情報として受け取る(分けるのはcore)。保存の前に、通信先を
 /// ネイティブのダイアログで利用者に確かめる(取りやめたら`FormOutcome::Cancelled`)。
 #[tauri::command]

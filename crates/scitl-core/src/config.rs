@@ -213,6 +213,24 @@ pub struct ToolConfig {
     pub total_timeout_secs: Option<u64>,
 }
 
+/// 端末間の同期(設定画面「同期」タブ)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// 待ち受けるポート。未設定はOSが空いている番号を選ぶ。値の解釈は[`Self::listen_port`]に閉じる。
+    pub listen_port: Option<u16>,
+}
+
+/// 待ち受けるポートの下限。1024未満は特権が要る(Android・Linux)。
+pub const MIN_LISTEN_PORT: u16 = 1024;
+
+impl SyncConfig {
+    /// 下限未満は未設定と同じ。更新時にも弾くが、手で編集した`config.toml`もここを通るため、
+    /// ここでも受け止める。
+    pub fn listen_port(&self) -> Option<u16> {
+        self.listen_port.filter(|p| *p >= MIN_LISTEN_PORT)
+    }
+}
+
 /// [`crate::secrets`]に保存した1つの値(HTTPヘッダーの値)を指す参照。
 /// `key_ref`はULIDで払い出し、`name`からは組み立てない(`name`はユーザー入力で、`:`等を
 /// 含んで衝突しうるため)。
@@ -289,6 +307,8 @@ pub struct Config {
     #[serde(default)]
     pub tools: ToolConfig,
     #[serde(default)]
+    pub sync: SyncConfig,
+    #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -347,6 +367,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_hand_written_listen_port_below_the_minimum_is_unset() {
+        let config: Config = toml::from_str("[sync]\nlisten_port = 80\n").unwrap();
+        assert_eq!(config.sync.listen_port(), None);
+        let config: Config = toml::from_str("[sync]\nlisten_port = 1024\n").unwrap();
+        assert_eq!(config.sync.listen_port(), Some(1024));
+    }
+
+    #[test]
     fn streaming_is_on_unless_the_file_turns_it_off() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.general.streaming());
@@ -400,6 +428,9 @@ mod tests {
             tools: ToolConfig {
                 max_rounds_per_turn: Some(8),
                 total_timeout_secs: Some(90),
+            },
+            sync: SyncConfig {
+                listen_port: Some(2000),
             },
             mcp_servers: vec![McpServerConfig {
                 id: "srv".to_string(),

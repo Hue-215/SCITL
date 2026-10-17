@@ -6,19 +6,28 @@ interface NumberFieldProps {
   label: string
   // 保存済みの値。nullは未設定(既定値を使う)。
   value: number | null
-  // 未設定のときに使われる値。プレースホルダに出す。
-  defaultValue: number
+  // 未設定のときに使われる値。プレースホルダに出す。無ければプレースホルダを出さない。
+  defaultValue?: number
+  hint?: string
   // 欄の文字列のまま保存する。断られたら理由の文言を返す(`useNumberInput`)。
   onSave: (text: string) => Promise<string[]>
 }
 
-export function NumberField({ label, value, defaultValue, onSave }: NumberFieldProps) {
+export function NumberField({ label, value, defaultValue, hint, onSave }: NumberFieldProps) {
   const { errors, inputProps } = useNumberInput(value, onSave)
 
   return (
     <label className="settings-field">
       <span>{label}</span>
-      <input {...inputProps} placeholder={t('settings.unset_default_hint', { value: defaultValue })} />
+      <input
+        {...inputProps}
+        placeholder={
+          defaultValue === undefined
+            ? undefined
+            : t('settings.unset_default_hint', { value: defaultValue })
+        }
+      />
+      {hint && <p className="settings-hint">{hint}</p>}
       {errors.map((e) => (
         <p key={e} className="error">
           {e}

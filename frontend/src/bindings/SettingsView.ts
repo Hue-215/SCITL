@@ -3,13 +3,14 @@ import type { ApiFormatChoice } from "./ApiFormatChoice";
 import type { GeneralSettingsView } from "./GeneralSettingsView";
 import type { McpServerView } from "./McpServerView";
 import type { ProviderView } from "./ProviderView";
+import type { SyncSettingsView } from "./SyncSettingsView";
 import type { ToolSettingsView } from "./ToolSettingsView";
 
 export type SettingsView = { 
 /**
  * 起動時に設定ファイルを読めなかった理由。あれば設定は保存されない。
  */
-config_error: string | null, general: GeneralSettingsView, tools: ToolSettingsView, providers: Array<ProviderView>, active_provider_id: string | null, mcp_servers: Array<McpServerView>, 
+config_error: string | null, general: GeneralSettingsView, tools: ToolSettingsView, sync: SyncSettingsView, providers: Array<ProviderView>, active_provider_id: string | null, mcp_servers: Array<McpServerView>, 
 /**
  * サーバー識別子の長さの上限。画面は入力欄の上限と案内文に使い、値を写さない。
  */

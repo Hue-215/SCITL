@@ -22,7 +22,7 @@ async fn listen() -> (
     PairingCode,
     tokio::task::JoinHandle<Result<Session, SyncError>>,
 ) {
-    let listener = Listener::bind(&[LOOPBACK], limits()).await.unwrap();
+    let listener = Listener::bind(&[LOOPBACK], None, limits()).await.unwrap();
     let addr = listener.addresses()[0];
     let code = listener.code().clone();
     (addr, code, tokio::spawn(listener.accept(LOCAL)))
@@ -210,6 +210,7 @@ async fn a_mismatch_after_sending_the_pake_message_does_not_move_on_to_the_next_
 async fn listening_ends_when_no_peer_comes() {
     let listener = Listener::bind(
         &[LOOPBACK],
+        None,
         Limits {
             listen_window: Duration::from_millis(100),
             ..limits()
@@ -224,14 +225,36 @@ async fn listening_ends_when_no_peer_comes() {
 }
 
 #[tokio::test]
+async fn a_given_port_is_used_on_the_address() {
+    let port = {
+        let l = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let listener = Listener::bind(&[LOOPBACK], Some(port), limits())
+        .await
+        .unwrap();
+    assert_eq!(listener.addresses()[0].port(), port);
+}
+
+#[tokio::test]
+async fn a_given_port_in_use_is_refused_instead_of_moving_to_another() {
+    let held = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let port = held.local_addr().unwrap().port();
+    assert!(matches!(
+        Listener::bind(&[LOOPBACK], Some(port), limits()).await,
+        Err(SyncError::PortInUse(p)) if p == port
+    ));
+}
+
+#[tokio::test]
 async fn public_addresses_are_refused_on_both_sides() {
     let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
     assert!(matches!(
-        Listener::bind(&[public], limits()).await,
+        Listener::bind(&[public], None, limits()).await,
         Err(SyncError::AddressNotAllowed(_))
     ));
     assert!(matches!(
-        Listener::bind(&[], limits()).await,
+        Listener::bind(&[], None, limits()).await,
         Err(SyncError::NoLocalAddress)
     ));
     assert!(matches!(
