@@ -1,6 +1,6 @@
 //! Anthropic形式(Messages API)のアダプタ。方言の吸収はこのファイル内に閉じる。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use reqwest::StatusCode;
@@ -125,8 +125,9 @@ pub async fn list_models(
         crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
     )?;
     let mut names = Vec::new();
+    let mut seen = HashSet::new();
     let mut after: Option<String> = None;
-    loop {
+    for _ in 0..super::MAX_MODEL_PAGES {
         let mut url = super::endpoint(&base_url, MODELS)?;
         url.query_pairs_mut().append_pair("limit", "1000");
         if let Some(after) = &after {
@@ -141,13 +142,22 @@ pub async fn list_models(
                 .filter(|id| !id.trim().is_empty()),
         );
         match (page.has_more, page.last_id) {
-            (true, Some(last)) if after.as_ref() != Some(&last) => after = Some(last),
-            _ => break,
+            (true, Some(last)) if seen.insert(last.clone()) => after = Some(last),
+            (true, Some(_)) => {
+                super::report_stopped_listing(
+                    &base_url,
+                    "it returned a cursor it had returned before",
+                );
+                return Ok(super::sorted_unique(names));
+            }
+            _ => return Ok(super::sorted_unique(names)),
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    super::report_stopped_listing(
+        &base_url,
+        &format!("reached {} pages", super::MAX_MODEL_PAGES),
+    );
+    Ok(super::sorted_unique(names))
 }
 
 /// `models`の能力を`GET /v1/models/{id}`で問い合わせる。知らないモデル(404)は結果に含めない。
@@ -1334,5 +1344,32 @@ mod tests {
         assert_eq!(names, ["claude-a", "claude-b"]);
         assert!(received[1].headers.contains("after_id=claude-b"));
         assert!(received[0].headers.contains("x-api-key: sk-test"));
+    }
+
+    #[tokio::test]
+    async fn stops_listing_when_the_cursors_go_round() {
+        let (base_url, handle) = spawn_server(vec![
+            (
+                200,
+                r#"{"data":[{"id":"a"}],"has_more":true,"last_id":"a"}"#,
+            ),
+            (
+                200,
+                r#"{"data":[{"id":"b"}],"has_more":true,"last_id":"b"}"#,
+            ),
+            (
+                200,
+                r#"{"data":[{"id":"c"}],"has_more":true,"last_id":"a"}"#,
+            ),
+        ]);
+        let names = list_models(
+            &base_url,
+            &Credentials::key_only(SecretString::from("sk-test".to_string())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(names, ["a", "b", "c"]);
+        assert_eq!(handle.join().unwrap().len(), 3);
     }
 }

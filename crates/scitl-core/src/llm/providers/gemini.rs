@@ -1,6 +1,6 @@
 //! Gemini形式(Interactions API)のアダプタ。方言の吸収はこのファイル内に閉じる。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use reqwest::StatusCode;
@@ -122,8 +122,9 @@ pub async fn list_models(
         crate::net::RequestTimeout::Total(super::METADATA_TIMEOUT),
     )?;
     let mut names = Vec::new();
+    let mut seen = HashSet::new();
     let mut page_token: Option<String> = None;
-    loop {
+    for _ in 0..super::MAX_MODEL_PAGES {
         let mut url = super::endpoint(&base_url, MODELS)?;
         url.query_pairs_mut().append_pair("pageSize", "1000");
         if let Some(token) = &page_token {
@@ -145,13 +146,22 @@ pub async fn list_models(
                 .filter(|id| !id.trim().is_empty()),
         );
         match page.next_page_token.filter(|t| !t.is_empty()) {
-            Some(token) if page_token.as_ref() != Some(&token) => page_token = Some(token),
-            _ => break,
+            Some(token) if seen.insert(token.clone()) => page_token = Some(token),
+            Some(_) => {
+                super::report_stopped_listing(
+                    &base_url,
+                    "it returned a cursor it had returned before",
+                );
+                return Ok(super::sorted_unique(names));
+            }
+            None => return Ok(super::sorted_unique(names)),
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    super::report_stopped_listing(
+        &base_url,
+        &format!("reached {} pages", super::MAX_MODEL_PAGES),
+    );
+    Ok(super::sorted_unique(names))
 }
 
 /// `models/gemini-…`の`models/`を除く。
@@ -1317,6 +1327,28 @@ mod tests {
         assert_eq!(names, ["gemini-a", "gemini-b"]);
         assert!(received[0].headers.starts_with("get /v1beta/models?"));
         assert!(received[1].headers.contains("pagetoken=p2"));
+    }
+
+    #[tokio::test]
+    async fn stops_listing_after_the_page_limit() {
+        let pages = (0..super::super::MAX_MODEL_PAGES)
+            .map(|i| {
+                let page = format!(
+                    r#"{{"models":[{{"name":"models/m{i}","supportedGenerationMethods":["generateContent"]}}],"nextPageToken":"p{i}"}}"#
+                );
+                (200, &*Box::leak(page.into_boxed_str()))
+            })
+            .collect();
+        let (base_url, handle) = spawn_server(pages);
+        let names = list_models(
+            &base_url,
+            &Credentials::key_only(SecretString::from("key-test".to_string())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(names.len(), super::super::MAX_MODEL_PAGES);
+        assert_eq!(handle.join().unwrap().len(), super::super::MAX_MODEL_PAGES);
     }
 
     #[tokio::test]
