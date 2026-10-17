@@ -55,7 +55,24 @@ const IMAGE_SIGNATURES: &[(&[u8], &str)] = &[
     (b"GIF89a", "image/gif"),
 ];
 
+const WEBP: &str = "image/webp";
+const PDF: &str = "application/pdf";
+const TEXT: &str = "text/plain";
+const BINARY: &str = "application/octet-stream";
+
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
+
+/// [`classify`]がその種別に付けうるMIMEか。同期で受け取った行のように、中身から決めていない
+/// 値を確かめるのに使う。エクスポート等は、この値を加工せずに書いてよい形とみなしている。
+pub fn is_classified_mime_type(kind: AttachmentKind, mime_type: &str) -> bool {
+    let image = mime_type == WEBP || IMAGE_SIGNATURES.iter().any(|(_, m)| *m == mime_type);
+    match kind {
+        AttachmentKind::Text => mime_type == TEXT,
+        AttachmentKind::Image => image,
+        // 受け付けていた頃は、デコードできない画像も「その他」として預かっていた。
+        AttachmentKind::Other => image || mime_type == PDF || mime_type == BINARY,
+    }
+}
 
 pub fn classify(bytes: &[u8]) -> Classified {
     if let Some(mime_type) = image_mime_type(bytes) {
@@ -68,19 +85,19 @@ pub fn classify(bytes: &[u8]) -> Classified {
     if bytes.starts_with(PDF_SIGNATURE) {
         return Classified {
             kind: AttachmentKind::Other,
-            mime_type: "application/pdf",
+            mime_type: PDF,
         };
     }
     // UTF-8として読めても、NULを含むものはバイナリの形式とみなす。
     if !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok() {
         return Classified {
             kind: AttachmentKind::Text,
-            mime_type: "text/plain",
+            mime_type: TEXT,
         };
     }
     Classified {
         kind: AttachmentKind::Other,
-        mime_type: "application/octet-stream",
+        mime_type: BINARY,
     }
 }
 
@@ -96,7 +113,7 @@ pub fn classify_prefix(bytes: &[u8]) -> Classified {
         // 末尾で文字が途切れただけ(不正なバイトではない)。
         Err(e) if e.error_len().is_none() && !bytes.starts_with(PDF_SIGNATURE) => Classified {
             kind: AttachmentKind::Text,
-            mime_type: "text/plain",
+            mime_type: TEXT,
         },
         _ => classified,
     }
@@ -111,8 +128,7 @@ pub fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
         return Some(mime_type);
     }
     // WebPはRIFFコンテナで、形式の印は8バイト目から。
-    (bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
-        .then_some("image/webp")
+    (bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP").then_some(WEBP)
 }
 
 #[cfg(test)]
@@ -161,6 +177,21 @@ mod tests {
         assert_eq!(pdf.mime_type, "application/pdf");
         assert_eq!(classify(b"%PDF-1.4\n1 0 obj").mime_type, "application/pdf");
         assert_eq!(classify(b"\x00\x01").mime_type, "application/octet-stream");
+    }
+
+    #[test]
+    fn accepts_only_the_mime_types_classify_gives_the_kind() {
+        use AttachmentKind::{Image, Other, Text};
+        assert!(is_classified_mime_type(Text, "text/plain"));
+        assert!(is_classified_mime_type(Image, "image/webp"));
+        assert!(is_classified_mime_type(Image, "image/gif"));
+        assert!(is_classified_mime_type(Other, "application/pdf"));
+        assert!(is_classified_mime_type(Other, "image/png"));
+        assert!(!is_classified_mime_type(Text, "application/pdf"));
+        assert!(!is_classified_mime_type(Image, "application/octet-stream"));
+        assert!(!is_classified_mime_type(Other, "text/plain"));
+        assert!(!is_classified_mime_type(Text, "text/plain\n<img src=x>"));
+        assert!(!is_classified_mime_type(Image, "image/svg+xml"));
     }
 
     #[test]

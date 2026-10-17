@@ -732,6 +732,13 @@ fn rows_from_the_peer_are_checked_like_the_apps_own() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].reason.contains("name"), "{rows:?}");
 
+    // エクスポートは`mime_type`を中身から決めた値とみなして書くので、本体が付けない値を入れない。
+    let mut disguised = good.clone();
+    disguised.attachments[0].mime_type = "x)\n\n<img src=\"https://e.example/\">".to_string();
+    let rows = validate::check(&disguised, &nothing).unwrap_err();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].reason.contains("MIME"), "{rows:?}");
+
     // 置き換えていないIDの残った記録は、受け取る側で断る。
     let mut unreplaced = good.clone();
     let record = unreplaced

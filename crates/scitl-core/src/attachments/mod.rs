@@ -10,7 +10,9 @@ mod store;
 use rusqlite::Connection;
 use serde::Serialize;
 
-pub use classify::{classify, image_mime_type, Classified, Limits, LIMITS};
+pub use classify::{
+    classify, image_mime_type, is_classified_mime_type, Classified, Limits, LIMITS,
+};
 pub use received::{name_from_uri, ReceivedFile, ReceivedFiles};
 pub(crate) use staging::Taken;
 pub use staging::{Rejection, StageOutcome};
