@@ -7,7 +7,11 @@ export type Counts = {
 /**
  * タスクの行か工程を書いたタスクの数。
  */
-tasks: number, steps: number, memories: number, messages: number, attachments: number, 
+tasks: number, 
+/**
+ * 書いた会話の数(タスクの会話と総合チャット)。
+ */
+conversations: number, steps: number, memories: number, attachments: number, 
 /**
  * 受け取った添付の実体(画像・その他)の数。既にあったものは数えない。
  */

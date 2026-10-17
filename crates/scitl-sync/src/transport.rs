@@ -120,9 +120,10 @@ pub(crate) struct Transport {
 pub struct Counts {
     /// タスクの行か工程を書いたタスクの数。
     pub tasks: usize,
+    /// 書いた会話の数(タスクの会話と総合チャット)。
+    pub conversations: usize,
     pub steps: usize,
     pub memories: usize,
-    pub messages: usize,
     pub attachments: usize,
     /// 受け取った添付の実体(画像・その他)の数。既にあったものは数えない。
     pub files: usize,
