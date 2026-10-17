@@ -373,6 +373,8 @@ pub(crate) struct Writer<'t, 'c> {
     pending: Vec<(i64, transport::MessageRow)>,
     counts: Counts,
     touched_tasks: HashSet<String>,
+    /// 書いた会話(タスクの会話はタスクの`uid`、総合チャットは`None`)。
+    conversations: HashSet<Option<String>>,
 }
 
 impl<'t, 'c> Writer<'t, 'c> {
@@ -391,6 +393,7 @@ impl<'t, 'c> Writer<'t, 'c> {
             pending: Vec::new(),
             counts: Counts::default(),
             touched_tasks: HashSet::new(),
+            conversations: HashSet::new(),
         }
     }
 
@@ -480,7 +483,7 @@ impl<'t, 'c> Writer<'t, 'c> {
 
     /// 既にある発言は、`deleted_at`と版だけを書き直す(ほかの列は書いたあと変わらない)。
     pub(crate) fn message(&mut self, r: &transport::MessageRow) -> CoreResult<()> {
-        self.counts.messages += 1;
+        self.conversations.insert(r.task.clone());
         if let Some(&id) = self.ids.messages.get(&r.uid) {
             return self.tx.update_message(&db_sync::MessageRow {
                 id,
@@ -581,7 +584,7 @@ impl<'t, 'c> Writer<'t, 'c> {
         let task_id = Self::id(&self.ids.tasks, "task", task)?;
         let id = self.tx.insert_task_state_record(task_id, uid, created_at)?;
         self.ids.messages.insert(uid.to_string(), id);
-        self.counts.messages += 1;
+        self.conversations.insert(Some(task.to_string()));
         Ok(())
     }
 
@@ -603,6 +606,7 @@ impl<'t, 'c> Writer<'t, 'c> {
         }
         Ok(Counts {
             tasks: self.touched_tasks.len(),
+            conversations: self.conversations.len(),
             ..self.counts
         })
     }

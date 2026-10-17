@@ -380,7 +380,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     if (report.status === 'synced') {
       const counts = [
         ['settings.sync.count_tasks', report.changed.tasks],
-        ['settings.sync.count_messages', report.changed.messages],
+        ['settings.sync.count_conversations', report.changed.conversations],
         ['settings.sync.count_memories', report.changed.memories],
       ] as const
       return (
@@ -394,14 +394,18 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
           }
         >
           <p>{t('settings.sync.synced_changed')}</p>
-          <dl className="sync-counts">
-            {counts.map(([label, count]) => (
-              <div key={label} className="sync-count">
-                <dt>{t(label)}</dt>
-                <dd>{t('settings.sync.count', { count })}</dd>
-              </div>
-            ))}
-          </dl>
+          {counts.every(([, count]) => count === 0) ? (
+            <p>{t('settings.sync.synced_nothing')}</p>
+          ) : (
+            <dl className="sync-counts">
+              {counts.map(([label, count]) => (
+                <div key={label} className="sync-count">
+                  <dt>{t(label)}</dt>
+                  <dd>{t('settings.sync.count', { count })}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
         </SyncPage>
       )
     }

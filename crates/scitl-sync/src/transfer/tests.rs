@@ -540,10 +540,11 @@ async fn everything_reaches_the_empty_device_either_way() {
         assert_eq!(
             (
                 received.changed.tasks,
+                received.changed.conversations,
                 received.changed.memories,
                 received.changed.attachments
             ),
-            (2, 2, 2)
+            (2, 2, 2, 2)
         );
 
         // 連番によらない形で同じ。版も、実行記録の中のIDの指す先も揃う。
