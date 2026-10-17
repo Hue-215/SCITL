@@ -75,6 +75,12 @@ pub fn resolve_sync_conflicts(state: State<'_, AppState>, choices: Vec<ConflictC
     scitl_sync::answer(&state.sync_answers, choices)
 }
 
+/// 書き込む前の確認で、書き込むか戻るかを渡す([`scitl_sync::approve_write`])。
+#[tauri::command]
+pub fn approve_sync_write(state: State<'_, AppState>, write: bool) -> bool {
+    scitl_sync::approve_write(&state.write_answers, write)
+}
+
 /// 途中経過を画面へ流す。画面が閉じていて届かなくても、同期は続ける。
 fn forward(on_event: Channel<SyncEvent>) -> impl Fn(SyncEvent) + Sync {
     move |event| {
@@ -88,6 +94,7 @@ fn request<'a>(state: &'a State<'_, AppState>) -> Request<'a> {
         generating: &state.generating,
         queries: state.settings.query_pause(),
         answers: &state.sync_answers,
+        write_answers: &state.write_answers,
         lang: state.settings.display_language(),
     }
 }

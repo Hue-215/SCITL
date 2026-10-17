@@ -18,6 +18,7 @@ mod tls;
 mod transfer;
 mod transport;
 mod validate;
+mod write_plan;
 
 pub use address::{local_addresses, parse_peer_address};
 pub use code::PairingCode;
@@ -29,12 +30,13 @@ pub use device::{confirm_device_id, renew_device_id, DeviceRegistry, SecretStore
 pub use error::{InvalidRow, SyncError, MESSAGE_KEY_PREFIX};
 pub use invitation::{parse_invitation, Invitation, QrModules};
 pub use run::{
-    answer, cancel, connect_scanned, connect_to, listen, ConflictAnswers, DialogAnswer, Request,
-    SyncDialog, SyncEvent, SyncProgress, SyncReport,
+    answer, approve_write, cancel, connect_scanned, connect_to, listen, ConflictAnswers,
+    DialogAnswer, Request, SyncDialog, SyncEvent, SyncProgress, SyncReport, WriteAnswers,
 };
 pub use session::{connect, Limits, Listener, LocalVersions, Session};
-pub use transfer::{sync, Context, Outcome, Resolver, Side, Stage};
+pub use transfer::{sync, Confirmer, Context, Outcome, Resolver, Side, Stage, WriteAnswer};
 pub use transport::{AbortReason, Counts};
+pub use write_plan::{WriteCounts, WritePlan};
 
 /// プロトコルの版。運ぶ形・IDの宣言・取り込む行の検証・照合の値のどれかを変えたら上げる
 /// (`docs/sync/index.md`「接続」)。

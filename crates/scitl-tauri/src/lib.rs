@@ -39,6 +39,8 @@ pub struct AppState {
     pub sync: scitl_sync::Context,
     /// 同期の競合で、画面が選んだ側の受け口(`commands::sync::resolve_sync_conflicts`)。
     pub sync_answers: scitl_sync::ConflictAnswers,
+    /// 書き込む前の確認で、書き込むか戻るかの受け口(`commands::sync::approve_sync_write`)。
+    pub write_answers: scitl_sync::WriteAnswers,
 }
 
 impl AppState {
@@ -206,6 +208,7 @@ pub fn run() {
             commands::sync::can_scan_sync_qr,
             commands::sync::cancel_sync,
             commands::sync::resolve_sync_conflicts,
+            commands::sync::approve_sync_write,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -296,6 +299,7 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
         requested_chat: Mutex::new(None),
         sync,
         sync_answers: scitl_sync::ConflictAnswers::default(),
+        write_answers: scitl_sync::WriteAnswers::default(),
     })
 }
 
