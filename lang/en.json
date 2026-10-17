@@ -121,6 +121,7 @@
   "notification_prompt.title": "Allow notifications?",
   "reply_notice.channel": "Finished responses",
   "reply_notice.no_text": "New message",
+  "reply_notice.user": "You",
   "select.effort.high": "High",
   "select.effort.low": "Low",
   "select.effort.medium": "Medium",

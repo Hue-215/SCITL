@@ -121,6 +121,7 @@
   "notification_prompt.title": "通知を許可しますか?",
   "reply_notice.channel": "応答の完了",
   "reply_notice.no_text": "新着メッセージ",
+  "reply_notice.user": "あなた",
   "select.effort.high": "高",
   "select.effort.low": "低",
   "select.effort.medium": "中",

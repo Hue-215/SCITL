@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Person
 import android.content.Context
 import android.content.Intent
 
@@ -18,10 +19,19 @@ import android.content.Intent
 object ReplyNotifier {
   /**
    * Rust側からJNIで呼ぶ。chatは通知を押したときに開く会話で、MainActivityのCHAT_GENERALか
-   * タスクのID。同じ会話の通知は1つにまとめ、新しいもので置き換える。
+   * タスクのID。同じ会話の通知は1つにまとめ、新しいもので置き換える。senderがあれば、
+   * メッセージアプリと同じチャットの形にして、送り手と会話の名前(title)を両方出す。
    */
   @JvmStatic
-  fun post(context: Context, chat: Long, title: String, body: String, channelName: String) {
+  fun post(
+    context: Context,
+    chat: Long,
+    title: String,
+    sender: String?,
+    body: String,
+    userName: String,
+    channelName: String
+  ) {
     if (MainActivity.visible) return
     // 許可が無い間は、頼んでも捨てられる。チャンネルも作らないでおく。
     if (!Permissions.notificationsAllowed(context)) return
@@ -35,11 +45,28 @@ object ReplyNotifier {
       .putExtra(MainActivity.EXTRA_CHAT, chat)
       // extraだけが違うIntentは同じPendingIntentにまとめられ、後の会話で上書きされる。
       .setIdentifier(chat.toString())
-    val notification = Notification.Builder(context, CHANNEL_ID)
+    val builder = Notification.Builder(context, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_stat_generating)
-      .setContentTitle(title)
-      .setContentText(body)
-      .setStyle(Notification.BigTextStyle().bigText(body))
+    if (sender == null) {
+      builder
+        .setContentTitle(title)
+        .setContentText(body)
+        .setStyle(Notification.BigTextStyle().bigText(body))
+    } else {
+      // 1対1でも会話の名前を出すには、グループの会話にする必要がある。
+      val style = Notification.MessagingStyle(Person.Builder().setName(userName).build())
+        .setConversationTitle(title)
+        .setGroupConversation(true)
+        .addMessage(
+          Notification.MessagingStyle.Message(
+            body,
+            System.currentTimeMillis(),
+            Person.Builder().setName(sender).build()
+          )
+        )
+      builder.setStyle(style)
+    }
+    val notification = builder
       .setContentIntent(
         PendingIntent.getActivity(
           context,
