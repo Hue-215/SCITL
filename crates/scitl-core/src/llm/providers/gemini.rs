@@ -146,12 +146,11 @@ pub async fn list_models(
         );
         match page.next_page_token.filter(|t| !t.is_empty()) {
             Some(token) if page_token.as_ref() != Some(&token) => page_token = Some(token),
-            _ => break,
+            _ => return Ok(super::sorted_unique(names)),
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    super::report_model_page_limit(&base_url);
+    Ok(super::sorted_unique(names))
 }
 
 /// `models/gemini-…`の`models/`を除く。

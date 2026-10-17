@@ -62,8 +62,8 @@ const BINARY: &str = "application/octet-stream";
 
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
 
-/// [`classify`]がその種別に付けうるMIMEか。同期で受け取った行のように、中身から決めていない
-/// 値を確かめるのに使う。エクスポート等は、この値を加工せずに書いてよい形とみなしている。
+/// 本体がその種別の添付に保存しうるMIMEか。同期で受け取った行のように、中身から決めていない
+/// 値を確かめるのに使う。Markdownのエクスポートはこの値を加工せずに書く。
 pub fn is_classified_mime_type(kind: AttachmentKind, mime_type: &str) -> bool {
     let image = mime_type == WEBP || IMAGE_SIGNATURES.iter().any(|(_, m)| *m == mime_type);
     match kind {
@@ -192,6 +192,19 @@ mod tests {
         assert!(!is_classified_mime_type(Other, "text/plain"));
         assert!(!is_classified_mime_type(Text, "text/plain\n<img src=x>"));
         assert!(!is_classified_mime_type(Image, "image/svg+xml"));
+
+        for bytes in [
+            &b"\x89PNG\r\n\x1a\n"[..],
+            b"\xff\xd8\xff",
+            b"GIF87a",
+            b"RIFF\0\0\0\0WEBPVP8 ",
+            b"%PDF-1.7",
+            b"text",
+            b"\x00\x01",
+        ] {
+            let c = classify(bytes);
+            assert!(is_classified_mime_type(c.kind, c.mime_type), "{c:?}");
+        }
     }
 
     #[test]

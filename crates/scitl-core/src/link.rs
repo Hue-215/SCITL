@@ -458,6 +458,10 @@ mod tests {
             let target = confirmed_target(hidden).unwrap();
             assert!(!target.contains("attach"), "{hidden} -> {target}");
         }
+        assert_eq!(
+            confirmed_target("mailto:a@b.com?subject=hi#&attach=/etc/passwd").unwrap(),
+            "mailto:a@b.com?subject=hi"
+        );
     }
 
     #[test]

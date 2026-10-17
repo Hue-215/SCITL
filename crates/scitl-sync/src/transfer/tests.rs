@@ -739,6 +739,11 @@ fn rows_from_the_peer_are_checked_like_the_apps_own() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].reason.contains("MIME"), "{rows:?}");
 
+    let mut unknown = good.clone();
+    unknown.attachments[0].kind = "video".to_string();
+    let rows = validate::check(&unknown, &nothing).unwrap_err();
+    assert!(rows[0].reason.contains("unknown kind"), "{rows:?}");
+
     // 置き換えていないIDの残った記録は、受け取る側で断る。
     let mut unreplaced = good.clone();
     let record = unreplaced

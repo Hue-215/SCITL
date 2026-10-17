@@ -206,8 +206,7 @@ pub(crate) fn check(t: &Transport, known: &Known) -> Result<(), Vec<InvalidRow>>
             if r.original_name.trim().is_empty() {
                 return Err("the name is empty".to_string());
             }
-            let kind_mismatch = || "kind does not match the content".to_string();
-            let kind = AttachmentKind::parse(&r.kind).ok_or_else(kind_mismatch)?;
+            let kind = AttachmentKind::parse(&r.kind).ok_or_else(|| "unknown kind".to_string())?;
             match (kind, &r.content_text, &r.file_hash) {
                 (AttachmentKind::Text, Some(text), None) => {
                     if usize::try_from(r.size_bytes) != Ok(text.len()) {
@@ -230,7 +229,7 @@ pub(crate) fn check(t: &Transport, known: &Known) -> Result<(), Vec<InvalidRow>>
                         );
                     }
                 }
-                _ => return Err(kind_mismatch()),
+                _ => return Err("kind does not match the content".to_string()),
             }
             if !is_classified_mime_type(kind, &r.mime_type) {
                 return Err("the MIME type is not one the app gives this kind".to_string());
