@@ -2,13 +2,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use tauri::ipc::{Channel, IpcResponse};
 
-/// 画面が起動時に渡す知らせ先。渡し直したら置き換え、画面を読み込み直すときに捨てる
+/// 画面が起動時に渡す知らせ先。知らせ先は、渡し直したら置き換え、画面を読み込み直すときに捨てる
 /// (`AppState::forget_watchers`)。複製は同じ知らせ先を指す。
 pub struct Watcher<T>(Arc<Mutex<State<T>>>);
 
 struct State<T> {
     channel: Option<Channel<T>>,
-    /// `send_or_keep`で送れなかったもの。知らせ先が渡されたら送る。読み込み直しでは捨てない。
+    /// `send_or_keep`の時点で知らせ先が無かったもの。読み込み直しでは捨てない。
     unsent: Option<T>,
 }
 
@@ -116,6 +116,7 @@ mod tests {
         watcher.forget();
         watcher.send_or_keep(1);
         watcher.send_or_keep(2);
+        watcher.forget();
         assert!(first_received.lock().unwrap().is_empty());
 
         let (second, second_received) = recording();
