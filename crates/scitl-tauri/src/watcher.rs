@@ -15,7 +15,6 @@ impl<T> Watcher<T> {
         *self.lock() = None;
     }
 
-    /// 送る前に、送るものを用意するか決めるために使う(渡される前の頼みを引き取らないなど)。
     pub fn current(&self) -> Option<Channel<T>> {
         self.lock().clone()
     }
@@ -34,5 +33,37 @@ impl<T> Default for Watcher<T> {
 impl<T> Clone for Watcher<T> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel() -> Channel<()> {
+        Channel::new(|_| Ok(()))
+    }
+
+    #[test]
+    fn set_replaces_and_forget_clears() {
+        let watcher = Watcher::default();
+        let first = channel();
+        let second = channel();
+        watcher.set(first);
+        watcher.set(second.clone());
+        assert_eq!(watcher.current().map(|c| c.id()), Some(second.id()));
+        watcher.forget();
+        assert!(watcher.current().is_none());
+    }
+
+    /// `finished_sink`が持つ複製にも、読み込み直したときに捨てたことが届く。
+    #[test]
+    fn clones_share_the_channel() {
+        let watcher = Watcher::default();
+        let held = watcher.clone();
+        watcher.set(channel());
+        assert!(held.current().is_some());
+        watcher.forget();
+        assert!(held.current().is_none());
     }
 }

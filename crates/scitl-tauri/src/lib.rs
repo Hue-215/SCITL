@@ -134,8 +134,6 @@ pub fn run() {
             init_jni_users(_webview);
             if _payload.event() == PageLoadEvent::Started {
                 if let Some(state) = _webview.app_handle().try_state::<AppState>() {
-                    // 渡し直されるまでに届いた頼みを、前の画面の知らせ先へ送って失わないようにする
-                    // (渡し直されるまで引き取らない)。
                     state.forget_watchers();
                     // 前の画面が始めた同期は、新しい画面からは見えず止められないので止める。
                     scitl_sync::cancel(&state.generating);
