@@ -7,7 +7,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use scitl_core::attachments::LIMITS;
+use scitl_core::attachments::{is_classified_mime_type, LIMITS};
+use scitl_core::db::attachments::AttachmentKind;
 use scitl_core::db::sync::{rules, Tx};
 use scitl_core::error::Result as CoreResult;
 use scitl_core::tools::IdTable;
@@ -205,8 +206,9 @@ pub(crate) fn check(t: &Transport, known: &Known) -> Result<(), Vec<InvalidRow>>
             if r.original_name.trim().is_empty() {
                 return Err("the name is empty".to_string());
             }
-            match (r.kind.as_str(), &r.content_text, &r.file_hash) {
-                ("text", Some(text), None) => {
+            let kind = AttachmentKind::parse(&r.kind).ok_or_else(|| "unknown kind".to_string())?;
+            match (kind, &r.content_text, &r.file_hash) {
+                (AttachmentKind::Text, Some(text), None) => {
                     if usize::try_from(r.size_bytes) != Ok(text.len()) {
                         return Err("the size does not match the text".to_string());
                     }
@@ -214,7 +216,7 @@ pub(crate) fn check(t: &Transport, known: &Known) -> Result<(), Vec<InvalidRow>>
                         return Err("the text is larger than an attachment can be".to_string());
                     }
                 }
-                ("image" | "other", None, Some(hash)) => {
+                (AttachmentKind::Image | AttachmentKind::Other, None, Some(hash)) => {
                     if !is_hex(hash, 64) {
                         return Err("malformed file hash".to_string());
                     }
@@ -228,6 +230,9 @@ pub(crate) fn check(t: &Transport, known: &Known) -> Result<(), Vec<InvalidRow>>
                     }
                 }
                 _ => return Err("kind does not match the content".to_string()),
+            }
+            if !is_classified_mime_type(kind, &r.mime_type) {
+                return Err("the MIME type is not one the app gives this kind".to_string());
             }
             timestamps([Some(&r.created_at)])
         })();

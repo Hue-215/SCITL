@@ -123,7 +123,7 @@ pub async fn list_models(
     )?;
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
-    loop {
+    for _ in 0..super::MAX_MODEL_PAGES {
         let mut url = super::endpoint(&base_url, MODELS)?;
         url.query_pairs_mut().append_pair("pageSize", "1000");
         if let Some(token) = &page_token {
@@ -146,12 +146,11 @@ pub async fn list_models(
         );
         match page.next_page_token.filter(|t| !t.is_empty()) {
             Some(token) if page_token.as_ref() != Some(&token) => page_token = Some(token),
-            _ => break,
+            _ => return Ok(super::sorted_unique(names)),
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    super::report_model_page_limit(&base_url);
+    Ok(super::sorted_unique(names))
 }
 
 /// `models/gemini-…`の`models/`を除く。
@@ -1317,6 +1316,28 @@ mod tests {
         assert_eq!(names, ["gemini-a", "gemini-b"]);
         assert!(received[0].headers.starts_with("get /v1beta/models?"));
         assert!(received[1].headers.contains("pagetoken=p2"));
+    }
+
+    #[tokio::test]
+    async fn stops_listing_after_the_page_limit() {
+        let pages = (0..super::super::MAX_MODEL_PAGES)
+            .map(|i| {
+                let page = format!(
+                    r#"{{"models":[{{"name":"models/m{i}","supportedGenerationMethods":["generateContent"]}}],"nextPageToken":"p{i}"}}"#
+                );
+                (200, &*Box::leak(page.into_boxed_str()))
+            })
+            .collect();
+        let (base_url, handle) = spawn_server(pages);
+        let names = list_models(
+            &base_url,
+            &Credentials::key_only(SecretString::from("key-test".to_string())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(names.len(), super::super::MAX_MODEL_PAGES);
+        assert_eq!(handle.join().unwrap().len(), super::super::MAX_MODEL_PAGES);
     }
 
     #[tokio::test]

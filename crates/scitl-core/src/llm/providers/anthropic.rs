@@ -126,7 +126,7 @@ pub async fn list_models(
     )?;
     let mut names = Vec::new();
     let mut after: Option<String> = None;
-    loop {
+    for _ in 0..super::MAX_MODEL_PAGES {
         let mut url = super::endpoint(&base_url, MODELS)?;
         url.query_pairs_mut().append_pair("limit", "1000");
         if let Some(after) = &after {
@@ -142,12 +142,11 @@ pub async fn list_models(
         );
         match (page.has_more, page.last_id) {
             (true, Some(last)) if after.as_ref() != Some(&last) => after = Some(last),
-            _ => break,
+            _ => return Ok(super::sorted_unique(names)),
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    super::report_model_page_limit(&base_url);
+    Ok(super::sorted_unique(names))
 }
 
 /// `models`の能力を`GET /v1/models/{id}`で問い合わせる。知らないモデル(404)は結果に含めない。
@@ -1334,5 +1333,26 @@ mod tests {
         assert_eq!(names, ["claude-a", "claude-b"]);
         assert!(received[1].headers.contains("after_id=claude-b"));
         assert!(received[0].headers.contains("x-api-key: sk-test"));
+    }
+
+    #[tokio::test]
+    async fn stops_listing_after_the_page_limit() {
+        let pages = (0..super::super::MAX_MODEL_PAGES)
+            .map(|i| {
+                let page =
+                    format!(r#"{{"data":[{{"id":"m{i}"}}],"has_more":true,"last_id":"m{i}"}}"#);
+                (200, &*Box::leak(page.into_boxed_str()))
+            })
+            .collect();
+        let (base_url, handle) = spawn_server(pages);
+        let names = list_models(
+            &base_url,
+            &Credentials::key_only(SecretString::from("sk-test".to_string())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(names.len(), super::super::MAX_MODEL_PAGES);
+        assert_eq!(handle.join().unwrap().len(), super::super::MAX_MODEL_PAGES);
     }
 }
