@@ -30,7 +30,7 @@ pub fn discard_all_staged_attachments(state: State<'_, AppState>) {
 /// 置き換える。受け取るのは知らせ先だけで、パスは受け取らない。
 #[tauri::command]
 pub fn watch_dropped_files(state: State<'_, AppState>, on_drop: Channel<ReceivedFiles>) {
-    *state.dropped.lock().expect("dropped files mutex poisoned") = Some(on_drop);
+    state.dropped.set(on_drop);
 }
 
 /// 窓に落とされたファイルを受け取り、名前だけを画面へ知らせる。ここでは読まない。受け付けるか
@@ -40,12 +40,7 @@ pub fn receive_drop(app: &AppHandle, paths: Vec<PathBuf>) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    let Some(channel) = state
-        .dropped
-        .lock()
-        .expect("dropped files mutex poisoned")
-        .clone()
-    else {
+    let Some(channel) = state.dropped.current() else {
         return;
     };
     let files = paths.into_iter().map(ReceivedFile::Path).collect();

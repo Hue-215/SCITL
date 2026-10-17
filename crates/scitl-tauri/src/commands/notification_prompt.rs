@@ -1,5 +1,5 @@
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::State;
 
 use crate::AppState;
 
@@ -7,20 +7,7 @@ use crate::AppState;
 /// 知らせるのは応答生成が終わったとき(`lib.rs`の`finished_sink`)。
 #[tauri::command]
 pub fn watch_notification_prompt(state: State<'_, AppState>, on_prompt: Channel<()>) {
-    *state
-        .notification_prompt
-        .lock()
-        .expect("notification prompt mutex poisoned") = Some(on_prompt);
-}
-
-/// 画面が読み込み直されるときに、前の画面の知らせ先を捨てる。
-pub fn forget_watcher(app: &AppHandle) {
-    if let Some(state) = app.try_state::<AppState>() {
-        *state
-            .notification_prompt
-            .lock()
-            .expect("notification prompt mutex poisoned") = None;
-    }
+    state.notification_prompt.set(on_prompt);
 }
 
 /// 説明への答え([`scitl_core::permissions::answer_notification_prompt`])。
