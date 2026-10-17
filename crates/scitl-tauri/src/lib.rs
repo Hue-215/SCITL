@@ -1,6 +1,7 @@
 mod commands;
 mod dialog;
 mod navigation;
+mod watcher;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,9 +13,9 @@ use scitl_core::in_flight::InFlightSet;
 use scitl_core::orchestration::{FinishedTurn, TurnContext, TurnEvents};
 use scitl_core::paths::{self, DataDirError, DataLayout};
 use scitl_core::settings::{Settings, Snapshot};
-use tauri::ipc::Channel;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
+use watcher::Watcher;
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
 /// (DBは`db::with_conn`、設定は`settings::Settings`、生成中の会話は`in_flight`)。
@@ -30,14 +31,14 @@ pub struct AppState {
     /// 利用者が選んだファイルへ書き写す前に、エクスポートのzipを作る場所(キャッシュの中)。
     pub export_staging: PathBuf,
     /// 窓にファイルが落とされたことの知らせ先(`commands::attachments::watch_dropped_files`)。
-    pub dropped: Mutex<Option<Channel<ReceivedFiles>>>,
+    pub dropped: Watcher<ReceivedFiles>,
     /// 応答生成が終わったことの受け口(`orchestration::TurnContext::finished`)。
     pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
     /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
-    pub requested_chat: Mutex<Option<Channel<Chat>>>,
+    pub requested_chat: Watcher<Chat>,
     /// 通知の許可を求める説明を出す知らせ先(`commands::notification_prompt::watch_notification_prompt`)。
     /// 応答生成が終わったことの受け口と分け持つ。
-    pub notification_prompt: NotificationPrompt,
+    pub notification_prompt: Watcher<()>,
     /// 端末間の同期が触るもの(`commands::sync`)。
     pub sync: scitl_sync::Context,
     /// 同期の競合で、画面が選んだ側の受け口(`commands::sync::resolve_sync_conflicts`)。
@@ -61,9 +62,14 @@ impl AppState {
             self.finished.as_ref(),
         )
     }
-}
 
-pub type NotificationPrompt = Arc<Mutex<Option<Channel<()>>>>;
+    /// 読み込み直した画面は知らせ先を渡し直すので、前の画面の知らせ先をすべて捨てる。
+    fn forget_watchers(&self) {
+        self.dropped.forget();
+        self.requested_chat.forget();
+        self.notification_prompt.forget();
+    }
+}
 
 /// データディレクトリを開けなかった理由。このときは`AppState`を置かず、画面はこれだけを表示する
 /// (`commands::startup::get_startup_failure`)。
@@ -126,13 +132,12 @@ pub fn run() {
         .on_page_load(|_webview, _payload| {
             #[cfg(target_os = "android")]
             init_jni_users(_webview);
-            // 読み込み直した画面は知らせ先を渡し直す。それまでに届いた頼みを、前の画面の知らせ先へ
-            // 送って失わないようにする(渡し直されるまで引き取らない)。
             if _payload.event() == PageLoadEvent::Started {
-                commands::requested_chat::forget_watcher(_webview.app_handle());
-                commands::notification_prompt::forget_watcher(_webview.app_handle());
-                // 前の画面が始めた同期は、新しい画面からは見えず止められないので止める。
                 if let Some(state) = _webview.app_handle().try_state::<AppState>() {
+                    // 渡し直されるまでに届いた頼みを、前の画面の知らせ先へ送って失わないようにする
+                    // (渡し直されるまで引き取らない)。
+                    state.forget_watchers();
+                    // 前の画面が始めた同期は、新しい画面からは見えず止められないので止める。
                     scitl_sync::cancel(&state.generating);
                 }
             }
@@ -298,7 +303,7 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     let attachments = Arc::new(Attachments::new(store));
 
     let settings = Arc::new(settings);
-    let notification_prompt = NotificationPrompt::default();
+    let notification_prompt = Watcher::default();
     Ok(AppState {
         db,
         generating: generating_set(&settings),
@@ -308,8 +313,8 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
         attachments,
         export_dir: data.export(),
         export_staging: paths::export_staging(cache),
-        dropped: Mutex::new(None),
-        requested_chat: Mutex::new(None),
+        dropped: Watcher::default(),
+        requested_chat: Watcher::default(),
         sync,
         sync_answers: scitl_sync::ConflictAnswers::default(),
         write_answers: scitl_sync::WriteAnswers::default(),
@@ -337,17 +342,13 @@ fn generating_set(_settings: &Arc<Settings>) -> InFlightSet<Chat> {
 #[cfg(target_os = "android")]
 fn finished_sink(
     settings: &Arc<Settings>,
-    prompt: &NotificationPrompt,
+    prompt: &Watcher<()>,
 ) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     let settings = Arc::clone(settings);
-    let prompt = Arc::clone(prompt);
+    let prompt = prompt.clone();
     Box::new(move |finished| {
         scitl_core::reply_notification::post(settings.display_language(), &finished);
-        let Some(channel) = prompt
-            .lock()
-            .expect("notification prompt mutex poisoned")
-            .clone()
-        else {
+        let Some(channel) = prompt.current() else {
             return;
         };
         if scitl_core::permissions::notification_prompt_due() {
@@ -359,7 +360,7 @@ fn finished_sink(
 #[cfg(not(target_os = "android"))]
 fn finished_sink(
     _settings: &Arc<Settings>,
-    _prompt: &NotificationPrompt,
+    _prompt: &Watcher<()>,
 ) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     Box::new(scitl_core::orchestration::discard_finished)
 }
