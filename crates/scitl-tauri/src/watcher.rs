@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use tauri::ipc::Channel;
 
@@ -20,7 +20,7 @@ impl<T> Watcher<T> {
         self.lock().clone()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Channel<T>>> {
+    fn lock(&self) -> MutexGuard<'_, Option<Channel<T>>> {
         self.0.lock().expect("watcher mutex poisoned")
     }
 }
