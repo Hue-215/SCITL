@@ -40,3 +40,11 @@
     public static java.lang.String poll(long);
     public static void cancel(long);
 }
+
+# カメラと通知の許可の状態を引き、求める・設定アプリを開く(`scitl_core::permissions`)。
+-keep class net.niigo.scitl.Permissions {
+    public static int camera(android.content.Context);
+    public static void openSettings(android.content.Context);
+    public static boolean notificationPromptDue(android.content.Context);
+    public static void answerNotificationPrompt(android.content.Context, boolean);
+}

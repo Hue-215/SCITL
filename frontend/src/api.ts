@@ -4,6 +4,7 @@ import type {
   ApiFormat,
   BaseUrlHint,
   AvailableModel,
+  CameraPermission,
   Capability,
   Chat,
   ChatModelsView,
@@ -117,6 +118,16 @@ export function watchDroppedFiles(onDrop: (files: ReceivedFiles) => void): Promi
 // 開くかはRust側が確かめて決め、画面はそれを表示するだけ。
 export function watchRequestedChats(onRequest: (chat: Chat) => void): Promise<void> {
   return invoke('watch_requested_chats', { onRequest: new Channel(onRequest) })
+}
+
+// 通知の許可を求める前の説明を出す知らせを受ける。出すかはRust側が決める。
+export function watchNotificationPrompt(onPrompt: () => void): Promise<void> {
+  return invoke('watch_notification_prompt', { onPrompt: new Channel<null>(onPrompt) })
+}
+
+// 説明への答え。真ならOSのダイアログが出る。
+export function answerNotificationPrompt(allow: boolean): Promise<void> {
+  return invoke('answer_notification_prompt', { allow })
 }
 
 // OSの選択画面で選ばせる。取りやめたらnull。
@@ -421,6 +432,16 @@ export function syncConnectScanned(onEvent: (event: SyncEvent) => void): Promise
 
 export function canScanSyncQr(): Promise<boolean> {
   return invoke('can_scan_sync_qr')
+}
+
+// QRを読む前に説明を挟むか。
+export function syncScanPermission(): Promise<CameraPermission> {
+  return invoke('sync_scan_permission')
+}
+
+// カメラの許可をOSがもう求めない状態のときだけ、アプリの設定画面が開く。
+export function openCameraSettings(): Promise<void> {
+  return invoke('open_camera_settings')
 }
 
 export function cancelSync(): Promise<void> {

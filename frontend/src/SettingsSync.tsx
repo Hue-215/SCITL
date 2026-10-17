@@ -7,12 +7,15 @@ import {
   approveSyncWrite,
   canScanSyncQr,
   cancelSync,
+  openCameraSettings,
   resolveSyncConflicts,
   syncConnect,
   syncConnectScanned,
   syncListen,
+  syncScanPermission,
 } from './api'
 import type {
+  CameraPermission,
   ChosenSide,
   ConflictSide,
   ConflictView,
@@ -330,6 +333,10 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   } | null>(null)
   const [showCodes, setShowCodes] = useState(false)
   const [canScan, setCanScan] = useState(false)
+  // QRを読む前の説明。許可済みなら出さない。
+  const [cameraPrompt, setCameraPrompt] = useState<Exclude<CameraPermission, 'granted'> | null>(
+    null,
+  )
   // 相手を確かめたあとの段。
   const [stage, setStage] = useState<Stage | null>(null)
   // 書き込む前の確認。`null`の間は見せない。
@@ -414,6 +421,13 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       return
     }
     setResult(report)
+  }
+
+  const startScan = () => void start('connect', () => syncConnectScanned(onEvent))
+  const scan = async () => {
+    const permission = await syncScanPermission()
+    if (permission === 'granted') startScan()
+    else setCameraPrompt(permission)
   }
 
   const connect = (e: React.FormEvent) => {
@@ -690,15 +704,58 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
             {t('settings.sync.listen')}
           </button>
           {canScan && (
-            <button
-              type="button"
-              onClick={() => void start('connect', () => syncConnectScanned(onEvent))}
-            >
+            <button type="button" onClick={() => void scan()}>
               {t('settings.sync.scan')}
             </button>
           )}
         </div>
       </form>
+      {cameraPrompt === 'ask' && (
+        <Dialog
+          title={t('settings.sync.camera_prompt_title')}
+          onClose={() => setCameraPrompt(null)}
+        >
+          <p>{t('settings.sync.camera_prompt')}</p>
+          <div className="button-row dialog-actions">
+            <button type="button" onClick={() => setCameraPrompt(null)}>
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                setCameraPrompt(null)
+                startScan()
+              }}
+            >
+              {t('common.continue')}
+            </button>
+          </div>
+        </Dialog>
+      )}
+      {cameraPrompt === 'blocked' && (
+        <Dialog
+          title={t('settings.sync.camera_blocked_title')}
+          onClose={() => setCameraPrompt(null)}
+        >
+          <p>{t('settings.sync.camera_blocked')}</p>
+          <div className="button-row dialog-actions">
+            <button type="button" onClick={() => setCameraPrompt(null)}>
+              {t('common.close')}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                setCameraPrompt(null)
+                void openCameraSettings()
+              }}
+            >
+              {t('settings.sync.open_app_settings')}
+            </button>
+          </div>
+        </Dialog>
+      )}
     </SyncPage>
   )
 }

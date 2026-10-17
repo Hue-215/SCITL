@@ -35,6 +35,9 @@ pub struct AppState {
     pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
     /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
     pub requested_chat: Mutex<Option<Channel<Chat>>>,
+    /// 通知の許可を求める説明を出す知らせ先(`commands::notification_prompt::watch_notification_prompt`)。
+    /// 応答生成が終わったことの受け口と分け持つ。
+    pub notification_prompt: NotificationPrompt,
     /// 端末間の同期が触るもの(`commands::sync`)。
     pub sync: scitl_sync::Context,
     /// 同期の競合で、画面が選んだ側の受け口(`commands::sync::resolve_sync_conflicts`)。
@@ -59,6 +62,8 @@ impl AppState {
         )
     }
 }
+
+pub type NotificationPrompt = Arc<Mutex<Option<Channel<()>>>>;
 
 /// データディレクトリを開けなかった理由。このときは`AppState`を置かず、画面はこれだけを表示する
 /// (`commands::startup::get_startup_failure`)。
@@ -125,6 +130,7 @@ pub fn run() {
             // 送って失わないようにする(渡し直されるまで引き取らない)。
             if _payload.event() == PageLoadEvent::Started {
                 commands::requested_chat::forget_watcher(_webview.app_handle());
+                commands::notification_prompt::forget_watcher(_webview.app_handle());
                 // 前の画面が始めた同期は、新しい画面からは見えず止められないので止める。
                 if let Some(state) = _webview.app_handle().try_state::<AppState>() {
                     scitl_sync::cancel(&state.generating);
@@ -203,10 +209,14 @@ pub fn run() {
             commands::memories::delete_memory,
             commands::link::open_link,
             commands::requested_chat::watch_requested_chats,
+            commands::notification_prompt::watch_notification_prompt,
+            commands::notification_prompt::answer_notification_prompt,
             commands::sync::sync_listen,
             commands::sync::sync_connect,
             commands::sync::sync_connect_scanned,
             commands::sync::can_scan_sync_qr,
+            commands::sync::sync_scan_permission,
+            commands::sync::open_camera_settings,
             commands::sync::cancel_sync,
             commands::sync::resolve_sync_conflicts,
             commands::sync::approve_sync_write,
@@ -288,10 +298,12 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     let attachments = Arc::new(Attachments::new(store));
 
     let settings = Arc::new(settings);
+    let notification_prompt = NotificationPrompt::default();
     Ok(AppState {
         db,
         generating: generating_set(&settings),
-        finished: finished_sink(&settings),
+        finished: finished_sink(&settings, &notification_prompt),
+        notification_prompt,
         settings,
         attachments,
         export_dir: data.export(),
@@ -321,16 +333,34 @@ fn generating_set(_settings: &Arc<Settings>) -> InFlightSet<Chat> {
 
 /// 応答生成が終わったことの受け口。Androidでは、利用者がアプリを見ていなければ通知で知らせる
 /// (`architecture/concurrency.md`「Androidで裏へ回ったとき」)。通知の文面は表示言語で出す。
+/// 通知の許可をまだ求めていなければ、求める前の説明を画面に出させる。
 #[cfg(target_os = "android")]
-fn finished_sink(settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+fn finished_sink(
+    settings: &Arc<Settings>,
+    prompt: &NotificationPrompt,
+) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     let settings = Arc::clone(settings);
+    let prompt = Arc::clone(prompt);
     Box::new(move |finished| {
-        scitl_core::reply_notification::post(settings.display_language(), &finished)
+        scitl_core::reply_notification::post(settings.display_language(), &finished);
+        if !scitl_core::permissions::notification_prompt_due() {
+            return;
+        }
+        if let Some(channel) = prompt
+            .lock()
+            .expect("notification prompt mutex poisoned")
+            .as_ref()
+        {
+            let _ = channel.send(());
+        }
     })
 }
 
 #[cfg(not(target_os = "android"))]
-fn finished_sink(_settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+fn finished_sink(
+    _settings: &Arc<Settings>,
+    _prompt: &NotificationPrompt,
+) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     Box::new(scitl_core::orchestration::discard_finished)
 }
 
@@ -486,10 +516,6 @@ mod tests {
                 "EXTRA_CHANNEL",
                 scitl_core::foreground_service::EXTRA_CHANNEL,
             ),
-            (
-                "EXTRA_ASK_NOTIFICATIONS",
-                scitl_core::foreground_service::EXTRA_ASK_NOTIFICATIONS,
-            ),
         ] {
             assert!(kotlin.contains(&format!("const val {name} = \"{value}\"")));
         }
@@ -519,6 +545,26 @@ mod tests {
         for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
             assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
         }
+    }
+
+    /// 許可の状態の問い合わせと求め方を、coreが名前と値で指せること(`scitl_core::permissions`)。
+    #[test]
+    fn core_permissions_names_match_kotlin() {
+        use scitl_core::permissions::{ASK, BLOCKED, GRANTED, PERMISSIONS_CLASS};
+        let kotlin =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/Permissions.kt");
+        assert!(kotlin.contains(&format!("object {PERMISSIONS_CLASS} {{")));
+        assert!(kotlin.contains("fun camera(context: Context): Int"));
+        assert!(kotlin.contains("fun openSettings(context: Context)"));
+        assert!(kotlin.contains("fun notificationPromptDue(context: Context): Boolean"));
+        assert!(kotlin.contains("fun answerNotificationPrompt(context: Context, allow: Boolean)"));
+        for (name, value) in [("GRANTED", GRANTED), ("ASK", ASK), ("BLOCKED", BLOCKED)] {
+            assert!(kotlin.contains(&format!("const val {name} = {value}\n")));
+        }
+        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
+        assert!(proguard.contains(&format!(
+            "-keep class net.niigo.scitl.{PERMISSIONS_CLASS} {{"
+        )));
     }
 
     /// 同期のQRの読み取りを、coreが名前と値で指せること(`scitl_core::qr_scan`)。

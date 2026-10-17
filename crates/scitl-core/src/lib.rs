@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod net;
 pub mod orchestration;
 pub mod paths;
+pub mod permissions;
 pub mod qr_scan;
 pub mod reply_notification;
 pub mod secrets;

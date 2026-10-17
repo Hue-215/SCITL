@@ -6,6 +6,7 @@ import App from './App.tsx'
 import { ComposeProvider } from './ChatCompose'
 import { getDisplayLanguage, getStartupFailure } from './api'
 import { DEFAULT_LANGUAGE, initI18n } from './i18n'
+import NotificationPrompt from './NotificationPrompt'
 import StartupFailure from './StartupFailure'
 import { applyTheme } from './theme.ts'
 import { followVisualViewport } from './viewport'
@@ -28,6 +29,7 @@ createRoot(document.getElementById('root')!).render(
     ) : (
       <ComposeProvider>
         <App />
+        <NotificationPrompt />
       </ComposeProvider>
     )}
   </StrictMode>,

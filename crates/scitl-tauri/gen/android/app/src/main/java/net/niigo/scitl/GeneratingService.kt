@@ -33,10 +33,6 @@ class GeneratingService : Service() {
       Log.w(TAG, "could not enter the foreground", e)
       stopSelf()
     }
-    // 初めて応答を生成するときに、応答が終わったことの通知(ReplyNotifier)のための許可を求める。
-    if (intent?.getBooleanExtra(EXTRA_ASK_NOTIFICATIONS, false) == true) {
-      MainActivity.requestNotificationPermissionOnce()
-    }
     // プロセスごと終わらされたら、生成も同期も終わっている。サービスだけを作り直させない。
     return START_NOT_STICKY
   }
@@ -78,6 +74,5 @@ class GeneratingService : Service() {
     // scitl_core::foreground_serviceが付ける名前と揃える(scitl-tauriのテストが照合する)。
     const val EXTRA_TITLE = "title"
     const val EXTRA_CHANNEL = "channel"
-    const val EXTRA_ASK_NOTIFICATIONS = "ask_notifications"
   }
 }
