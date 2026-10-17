@@ -7,12 +7,15 @@ import {
   approveSyncWrite,
   canScanSyncQr,
   cancelSync,
+  openCameraSettings,
   resolveSyncConflicts,
   syncConnect,
   syncConnectScanned,
   syncListen,
+  syncScanPermission,
 } from './api'
 import type {
+  CameraPermission,
   ChosenSide,
   ConflictSide,
   ConflictView,
@@ -24,7 +27,7 @@ import type {
   WritePlan,
 } from './types'
 import { SYNC_ERROR_KEY_PREFIX } from './bindings/SyncConstants'
-import Dialog from './Dialog'
+import Dialog, { ChoiceDialog } from './Dialog'
 import { isolated, type MessageKey, t } from './i18n'
 import { DisclosureMark } from './Icon'
 import { NumberField } from './settingsFields'
@@ -330,6 +333,10 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
   } | null>(null)
   const [showCodes, setShowCodes] = useState(false)
   const [canScan, setCanScan] = useState(false)
+  // QRを読む前の説明。許可済みなら出さない。
+  const [cameraPrompt, setCameraPrompt] = useState<Exclude<CameraPermission, 'granted'> | null>(
+    null,
+  )
   // 相手を確かめたあとの段。
   const [stage, setStage] = useState<Stage | null>(null)
   // 書き込む前の確認。`null`の間は見せない。
@@ -414,6 +421,14 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
       return
     }
     setResult(report)
+  }
+
+  const startScan = () => void start('connect', () => syncConnectScanned(onEvent))
+  // 状態を引けなければ説明を挟まずに開く(OSのダイアログは読み取りの画面が出す)。
+  const scan = async () => {
+    const permission = await syncScanPermission().catch(() => 'granted' as const)
+    if (permission === 'granted') startScan()
+    else setCameraPrompt(permission)
   }
 
   const connect = (e: React.FormEvent) => {
@@ -690,15 +705,40 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
             {t('settings.sync.listen')}
           </button>
           {canScan && (
-            <button
-              type="button"
-              onClick={() => void start('connect', () => syncConnectScanned(onEvent))}
-            >
+            <button type="button" onClick={() => void scan()}>
               {t('settings.sync.scan')}
             </button>
           )}
         </div>
       </form>
+      {cameraPrompt === 'ask' && (
+        <ChoiceDialog
+          title={t('settings.sync.camera_prompt_title')}
+          message={t('settings.sync.camera_prompt')}
+          cancelLabel={t('common.cancel')}
+          confirmLabel={t('common.continue')}
+          confirmClass="primary"
+          onCancel={() => setCameraPrompt(null)}
+          onConfirm={() => {
+            setCameraPrompt(null)
+            startScan()
+          }}
+        />
+      )}
+      {cameraPrompt === 'blocked' && (
+        <ChoiceDialog
+          title={t('settings.sync.camera_blocked_title')}
+          message={t('settings.sync.camera_blocked')}
+          cancelLabel={t('common.close')}
+          confirmLabel={t('settings.sync.open_app_settings')}
+          confirmClass="primary"
+          onCancel={() => setCameraPrompt(null)}
+          onConfirm={() => {
+            setCameraPrompt(null)
+            void openCameraSettings()
+          }}
+        />
+      )}
     </SyncPage>
   )
 }

@@ -1,6 +1,6 @@
 //! Androidで、JNIの参照を受け取る部品(証明書の検証の[`crate::net::android`]、秘密情報の保存先の
 //! [`crate::secrets::android`])と、JNIでアプリのKotlinを呼ぶ部品([`crate::foreground_service`]・
-//! [`crate::reply_notification`])が共通に使う処理。
+//! [`crate::reply_notification`]等)が共通に使う処理。
 
 use jni::objects::{JClass, JObject, JValue};
 use jni::{jni_sig, jni_str, Env, JavaVM};

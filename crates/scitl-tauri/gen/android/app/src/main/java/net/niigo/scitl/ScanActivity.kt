@@ -24,8 +24,8 @@ import java.util.concurrent.Executors
 
 /**
  * カメラの映像からQRを読む画面(QrScanner)。読めたら閉じ、「戻る」で取りやめる。カメラの許可は
- * ここで初めて求める。読んだ中身はそのままRust側へ渡し、確かめるのはRust側
- * (scitl_sync::parse_invitation)。
+ * ここで求める(説明は画面が先に出している。scitl_core::permissions)。読んだ中身はそのままRust側へ
+ * 渡し、確かめるのはRust側(scitl_sync::parse_invitation)。
  *
  * 向きを変えても作り直さない(マニフェストのconfigChanges)。作り直すと、破棄した側の映像の処理が
  * 結果を置き、前に残った新しい側の読み取りが無視される。
@@ -58,6 +58,7 @@ class ScanActivity : ComponentActivity() {
     if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
       startCamera()
     } else if (savedInstanceState == null) {
+      Permissions.markCameraAsked(this)
       askForCamera.launch(Manifest.permission.CAMERA)
     }
   }

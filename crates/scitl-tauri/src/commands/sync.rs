@@ -64,6 +64,19 @@ pub fn can_scan_sync_qr() -> bool {
     scitl_core::qr_scan::available()
 }
 
+/// 読む前に説明を挟むかの判定([`scitl_core::permissions::camera`])。
+#[tauri::command]
+pub fn sync_scan_permission() -> scitl_core::permissions::CameraPermission {
+    scitl_core::permissions::camera()
+}
+
+/// カメラの許可を、OSがもう求めない状態のときだけ、このアプリの設定画面を開く
+/// ([`scitl_core::permissions::open_camera_settings`])。
+#[tauri::command]
+pub fn open_camera_settings() {
+    scitl_core::permissions::open_camera_settings();
+}
+
 /// 進んでいる同期を止める([`scitl_sync::cancel`])。
 #[tauri::command]
 pub fn cancel_sync(state: State<'_, AppState>) {

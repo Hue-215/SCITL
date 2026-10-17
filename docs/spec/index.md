@@ -98,6 +98,7 @@ SCITL/
 │   │       ├── in_flight.rs        # 同じ対象への処理を同時に1本に絞る(タスクごとの応答生成)
 │   │       ├── foreground_service.rs # Androidで、応答の生成中だけフォアグラウンドサービスにする(architecture/concurrency.md)
 │   │       ├── reply_notification.rs # Androidで、応答が終わったことの通知と、通知を押して開く会話(architecture/concurrency.md)
+│   │       ├── permissions.rs      # Androidで、カメラと通知の許可を求める前に説明を挟むかの判定(architecture/concurrency.md・../sync/index.md)
 │   │       ├── link.rs             # 本文中のリンクを開く前の判定とOSへの委譲(architecture/webview-boundary.md)
 │   │       ├── text.rs             # 出力先を知らない文字単位の部品(architecture/sanitize.md)
 │   │       └── i18n.rs             # 言語ファイルを引く入口と表示言語の一覧(architecture/i18n.md)

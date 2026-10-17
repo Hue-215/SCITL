@@ -12,8 +12,6 @@ pub const SERVICE_CLASS: &str = "GeneratingService";
 /// 通知の文面をサービスへ渡すIntentのextraの名前。Kotlin側の定数と揃える(照合は[`SERVICE_CLASS`]と同じ)。
 pub const EXTRA_TITLE: &str = "title";
 pub const EXTRA_CHANNEL: &str = "channel";
-/// 始めるときに、応答が終わったことの通知のための許可を求めるか(応答の生成だけ)。
-pub const EXTRA_ASK_NOTIFICATIONS: &str = "ask_notifications";
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 struct Notice {
@@ -38,43 +36,31 @@ mod android {
     use jni::objects::{JObject, JValue};
     use jni::{jni_sig, jni_str, Env};
 
-    use super::{notice, EXTRA_ASK_NOTIFICATIONS, EXTRA_CHANNEL, EXTRA_TITLE, SERVICE_CLASS};
+    use super::{notice, EXTRA_CHANNEL, EXTRA_TITLE, SERVICE_CLASS};
     use crate::i18n::Language;
-    use crate::in_flight::LongRunningKind;
 
-    /// 長く掛かる処理が在れば(`running`が`Some`)サービスを始め、無ければ止める。通知の文面は
+    /// 長く掛かる処理が在れば(`running`)サービスを始め、無ければ止める。通知の文面は
     /// `lang`で引いて渡す。
     ///
     /// 頼めなくても応答の生成や同期は続けるので、失敗は診断に出すだけにする(裏へ回ると止まりうる、
     /// サービスが無いときと同じ状態になる)。アプリが前に出ていないときに始めようとすると、
     /// OSが断る。
-    pub fn set_running(running: Option<LongRunningKind>, lang: Language) {
+    pub fn set_running(running: bool, lang: Language) {
         if let Err(e) = request(running, lang) {
-            let action = if running.is_some() { "start" } else { "stop" };
+            let action = if running { "start" } else { "stop" };
             crate::diagnostics::report(format_args!(
                 "could not {action} the foreground service: {e}"
             ));
         }
     }
 
-    fn request(running: Option<LongRunningKind>, lang: Language) -> Result<(), String> {
+    fn request(running: bool, lang: Language) -> Result<(), String> {
         crate::android::with_application(|env, context| {
             let intent = service_intent(env, context)?;
-            if let Some(kind) = running {
+            if running {
                 let notice = notice(lang);
                 put_extra(env, &intent, EXTRA_TITLE, notice.title)?;
                 put_extra(env, &intent, EXTRA_CHANNEL, notice.channel)?;
-                // 同期で求めると、初めて使う端末では、待ち受けや競合の画面の上に許可のダイアログが出る。
-                let ask = env.new_string(EXTRA_ASK_NOTIFICATIONS)?;
-                env.call_method(
-                    &intent,
-                    jni_str!("putExtra"),
-                    jni_sig!("(Ljava/lang/String;Z)Landroid/content/Intent;"),
-                    &[
-                        JValue::from(&ask),
-                        JValue::Bool(kind == LongRunningKind::Each),
-                    ],
-                )?;
                 // 前に出ている間に始めるので`startForegroundService`は使わない。あちらは、サービスが
                 // 通知を出す前に止めるとアプリごと落とされる。
                 env.call_method(
