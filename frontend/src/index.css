@@ -348,8 +348,7 @@ option {
   .entry-actions button,
   .code-block button,
   .chat-model-toggle,
-  .chat-header-description-toggle,
-  .tool-description-toggle
+  .description-toggle
 ) {
   background-color: transparent;
   --elevation: initial;
@@ -375,8 +374,7 @@ option {
   .entry-actions button,
   .code-block button,
   .chat-model-toggle,
-  .chat-header-description-toggle,
-  .tool-description-toggle,
+  .description-toggle,
   .chip,
   .choice {
     min-height: var(--control-size-md);
@@ -532,11 +530,15 @@ option {
   color: var(--color-text-secondary);
 }
 
-/* 締切と進捗の文に続けて置く。間隔はボタンの内側の余白が作る。 */
-.chat-header-description-toggle {
-  flex-shrink: 0;
+/* タスクの見出しと外部ツールの行で共通。 */
+.description-toggle {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+/* 締切と進捗の文に続けて置く。間隔はボタンの内側の余白が作る。 */
+.chat-header-meta > .description-toggle {
+  flex-shrink: 0;
 }
 
 /* 取り消せない操作のメニュー項目。 */
@@ -1483,9 +1485,13 @@ details[open] > summary > .disclosure-mark,
 
 .model-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* 注記(非対応)だけを右端に寄せる。ツールの説明の開閉は名前の直後に置く(右端だと名前から離れる)。 */
+.model-row > .provider-card-meta {
+  margin-left: auto;
 }
 
 /* 名前(モデル名・ツール名)は区切りの無い英数字の連続でも折り返し、右側の操作や注記を
@@ -1505,26 +1511,10 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-1);
 }
 
-/* 説明の開閉は名前の直後に置き(右端だと名前から離れて読みにくい)、注記(非対応)だけを右端に寄せる。 */
-.tool-row > .model-row {
-  justify-content: flex-start;
-}
-
-.tool-row .provider-card-meta {
-  margin-left: auto;
-}
-
-.tool-description-toggle {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-
 /* サーバーが書いた説明は改行で段落や引数の一覧を書くことが多いので、改行を残す。 */
 .tool-description {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
 }
 
 /* プロバイダー・モデル・MCPサーバー・ツールで共通。 */

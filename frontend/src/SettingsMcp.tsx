@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { McpServerView, McpToolView, NewMcpEndpoint, SettingsView } from './types'
+import { DescriptionToggle } from './DescriptionToggle'
 import { ConfirmButton } from './Dialog'
-import { DisclosureMark } from './Icon'
 import { isolated, t } from './i18n'
 import type { AddResult } from './rejection'
 import { CollapseToggle, NumberField, ServerNotice } from './settingsFields'
@@ -210,22 +210,17 @@ function ToolRow({ tool, checked, onSetEnabled }: ToolRowProps) {
           {tool.label}
         </label>
         {tool.description && (
-          <button
-            type="button"
-            className="tool-description-toggle"
-            aria-expanded={descriptionOpen}
-            onClick={() => setDescriptionOpen((open) => !open)}
-          >
-            <DisclosureMark />
-            {t('settings.tools.description_toggle')}
-          </button>
+          <DescriptionToggle
+            open={descriptionOpen}
+            onToggle={() => setDescriptionOpen((open) => !open)}
+          />
         )}
         {!tool.exposable && (
           <span className="provider-card-meta">{t('settings.tools.not_exposable')}</span>
         )}
       </div>
       {tool.description && descriptionOpen && (
-        <p className="tool-description">{tool.description}</p>
+        <p className="settings-hint tool-description">{tool.description}</p>
       )}
     </li>
   )
