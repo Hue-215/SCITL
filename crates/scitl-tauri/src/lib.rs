@@ -36,6 +36,9 @@ pub struct AppState {
     pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
     /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
     pub requested_chat: Watcher<Chat>,
+    /// 引き取って確かめたが、その間に画面が読み込み直されて送れなかった会話。画面が知らせ先を
+    /// 渡し直したら送る。
+    pub unsent_requested_chat: Mutex<Option<Chat>>,
     /// 通知の許可を求める説明を出す知らせ先(`commands::notification_prompt::watch_notification_prompt`)。
     /// 応答生成が終わったことの受け口と分け持つ。
     pub notification_prompt: Watcher<()>,
@@ -313,6 +316,7 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
         export_staging: paths::export_staging(cache),
         dropped: Watcher::default(),
         requested_chat: Watcher::default(),
+        unsent_requested_chat: Mutex::default(),
         sync,
         sync_answers: scitl_sync::ConflictAnswers::default(),
         write_answers: scitl_sync::WriteAnswers::default(),
