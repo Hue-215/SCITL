@@ -114,7 +114,7 @@ pub(crate) struct Transport {
     pub attachments: Vec<AttachmentRow>,
 }
 
-/// この端末で書いた(足した・変えた)行の数。
+/// この端末で書いた(足した・変えた)ものの数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct Counts {
