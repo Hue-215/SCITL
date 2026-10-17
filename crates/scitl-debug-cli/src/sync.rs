@@ -111,7 +111,8 @@ impl Confirmer for Ask {
 }
 
 /// `ours`か`theirs`を読む。入力が終われば取りやめ(`None`)。
-fn ask_side(id: &str) -> Option<ChosenSide> {    loop {
+fn ask_side(id: &str) -> Option<ChosenSide> {
+    loop {
         terminal::print_prompt(&format!("{id} (ours/theirs): "));
         let mut line = String::new();
         if std::io::stdin().lock().read_line(&mut line).ok()? == 0 {

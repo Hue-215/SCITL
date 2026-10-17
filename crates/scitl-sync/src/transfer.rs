@@ -575,8 +575,6 @@ async fn listener(
     let mut checked_files: HashSet<String> = HashSet::new();
     let mut files_received = 0;
     let mut finishing = false;
-    // 確認は、書き込む前の一度だけ。競合を選び直したときは、選び直した結果でもう一度。
-    let mut confirmed = false;
     let send_from = agreed.send_from;
 
     let (mut changed, merged_counter, back, digest) = loop {
@@ -607,8 +605,12 @@ async fn listener(
                     .into_iter()
                     .map(|m| (m.uid, m.content))
                     .collect();
-                let message_uids: HashSet<String> =
-                    tx.uids()?.messages.iter().map(|(_, uid)| uid.clone()).collect();
+                let message_uids: HashSet<String> = tx
+                    .uids()?
+                    .messages
+                    .iter()
+                    .map(|(_, uid)| uid.clone())
+                    .collect();
                 Ok(LocalView {
                     counter: state.counter,
                     device_id: state.device_id,
@@ -715,47 +717,42 @@ async fn listener(
             }
         }
 
-        // 書き込む前に、書き込む行の件数を確かめさせる(4節の6の前)。確認中に別の書き込みが
-        // あったら、確定のときに比べて版を振るところからやり直し、その計画でもう一度確認する。
+        // 書き込む前に、書き込む行の件数を確かめさせる(4節の6の前)。書き込む計画が空なら省く。
+        // 確認のあとに別の書き込みがあったら、確定のときに比べて版を振るところからやり直し、
+        // やり直した計画でもう一度確認する。
         let picks: HashMap<String, Pick> = choices
             .iter()
             .map(|(id, chosen)| (id.clone(), chosen.pick))
             .collect();
-        if !confirmed {
-            let counts = write_plan::counts(
-                &plan.rows,
-                &plan,
-                &picks,
-                &view.changed,
-                &incoming,
-                &view.alive,
-                &view.message_uids,
-            )?;
-            if counts.empty() {
-                confirmed = true;
-            } else {
-                // 待っていることをBにも知らせる。
-                session.send(&Message::Confirming).await?;
-                let answer = cancellable(stop, async {
-                    tokio::select! {
-                        answer = confirmer.confirm(counts) => Ok(answer),
-                        message = session.recv::<Message>() => Err(match message {
-                            Ok(message) => unexpected(&message),
-                            Err(e) => e,
-                        }),
-                    }
-                })
-                .await?;
-                match answer.ok_or(SyncError::Cancelled)? {
-                    WriteAnswer::Write => confirmed = true,
-                    // 「戻る」は競合の選択に戻る。競合が無いときは、戻る先が無いので止める。
-                    WriteAnswer::Back if plan.conflicts.is_empty() => {
-                        return Err(SyncError::Cancelled)
-                    }
-                    WriteAnswer::Back => {
-                        choices.clear();
-                        continue;
-                    }
+        let counts = write_plan::counts(
+            &plan.rows,
+            &plan,
+            &picks,
+            &view.changed,
+            &incoming,
+            &view.alive,
+            &view.message_uids,
+        )?;
+        if !counts.empty() {
+            // 待っていることをBにも知らせる。
+            session.send(&Message::Confirming).await?;
+            let answer = cancellable(stop, async {
+                tokio::select! {
+                    answer = confirmer.confirm(counts) => Ok(answer),
+                    message = session.recv::<Message>() => Err(match message {
+                        Ok(message) => unexpected(&message),
+                        Err(e) => e,
+                    }),
+                }
+            })
+            .await?;
+            match answer.ok_or(SyncError::Cancelled)? {
+                WriteAnswer::Write => {}
+                // 「戻る」は競合の選択に戻る。競合が無いときは、戻る先が無いので止める。
+                WriteAnswer::Back if plan.conflicts.is_empty() => return Err(SyncError::Cancelled),
+                WriteAnswer::Back => {
+                    choices.clear();
+                    continue;
                 }
             }
         }
@@ -779,6 +776,7 @@ async fn listener(
         if let Some(committed) = committed {
             break committed;
         }
+        // 確定できなかった(別プロセスが書いた)。版を振るところからやり直す。
     };
 
     // 7: Bに結果と照合の値を返し、Bが求める実体を送る。
@@ -950,7 +948,6 @@ fn commit(
     let digest = digest_of(tx, uids, &snapshot.ids)?;
     Ok((changed, counter, back, digest))
 }
-
 
 /// 照合の値(「同期1回の流れ」)。今回やり取りした行の、確定後の状態を、運ぶ形で`uid`の順に並べたもののハッシュ。
 /// 試行は入れない。`ids`は書いたあとに読んだもの。

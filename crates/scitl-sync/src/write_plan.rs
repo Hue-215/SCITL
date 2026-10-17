@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use scitl_core::CoreError;
 
-use crate::merge::{duplicate_memories, Plan, Pick};
+use crate::merge::{duplicate_memories, Pick, Plan};
 use crate::transport::{self, Transport};
 
 /// 確認に出す数字。分類と集め方は、書き込んだあとの結果の画面の`Counts`と同じ。
@@ -158,8 +158,18 @@ pub(crate) fn without_echo(mut written: Transport, incoming: &Transport) -> Tran
         let sent: HashMap<&str, &R> = incoming.iter().map(|r| (uid(r), r)).collect();
         rows.retain(|r| !sent.get(uid(r)).is_some_and(|s| same(s, r)));
     }
-    keep(&mut written.tasks, &incoming.tasks, |r| &r.uid, PartialEq::eq);
-    keep(&mut written.steps, &incoming.steps, |r| &r.uid, PartialEq::eq);
+    keep(
+        &mut written.tasks,
+        &incoming.tasks,
+        |r| &r.uid,
+        PartialEq::eq,
+    );
+    keep(
+        &mut written.steps,
+        &incoming.steps,
+        |r| &r.uid,
+        PartialEq::eq,
+    );
     keep(
         &mut written.memories,
         &incoming.memories,

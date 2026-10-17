@@ -9,8 +9,8 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use sha2::{Digest, Sha256};
 use scitl_core::CoreError;
+use sha2::{Digest, Sha256};
 
 use crate::transport::{
     AttachmentRow, MemoryRow, MessageRow, StepRow, TaskRow, Transport, Version,

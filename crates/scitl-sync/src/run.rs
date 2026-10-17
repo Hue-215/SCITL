@@ -279,7 +279,16 @@ pub async fn listen(
                 Ok((device_id, listener.accept(local_versions()).await?))
             })
             .await?;
-            sync_over(session, ctx, &device_id, &stop, answers, write_answers, &events).await
+            sync_over(
+                session,
+                ctx,
+                &device_id,
+                &stop,
+                answers,
+                write_answers,
+                &events,
+            )
+            .await
         },
     )
     .await
@@ -361,7 +370,16 @@ async fn connect_with(
                 Ok((device_id, session))
             })
             .await?;
-            sync_over(session, ctx, &device_id, &stop, answers, write_answers, &events).await
+            sync_over(
+                session,
+                ctx,
+                &device_id,
+                &stop,
+                answers,
+                write_answers,
+                &events,
+            )
+            .await
         },
     )
     .await
@@ -614,7 +632,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, no_dialog, |_| {}).await;
@@ -635,7 +653,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let scan = async { panic!("the scanner must not be opened") };
@@ -663,7 +681,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let scan = async {
@@ -691,7 +709,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let scan = async { Ok(Some("scitl-sync;1;012345;example.com:443".to_string())) };
@@ -715,7 +733,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(
@@ -792,7 +810,7 @@ mod tests {
             generating: &generating,
             queries,
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -822,7 +840,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, |_| DialogAnswer::NotShown, |_| {}).await;
@@ -844,7 +862,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
-                write_answers: &WriteAnswers::default(),
+            write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, no_dialog, |_| {}).await;

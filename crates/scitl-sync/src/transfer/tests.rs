@@ -409,7 +409,15 @@ async fn sync_with_stages(
     on_listener_stage: impl Fn(Stage) + Sync,
     on_connector_stage: impl Fn(Stage) + Sync,
 ) -> (Result<Outcome, SyncError>, Result<Outcome, SyncError>) {
-    sync_with_confirmed(listener, connector, resolver, &AutoWrite, on_listener_stage, on_connector_stage).await
+    sync_with_confirmed(
+        listener,
+        connector,
+        resolver,
+        &AutoWrite,
+        on_listener_stage,
+        on_connector_stage,
+    )
+    .await
 }
 
 async fn sync_with_confirmed(
@@ -1610,5 +1618,46 @@ async fn back_from_the_confirm_returns_to_the_conflicts() {
     assert_eq!(plans[1].ours.conversations, 1);
     assert_eq!(plans[1].ours.memories, 0);
     assert_eq!(plans[1].theirs.tasks, 1);
+    assert_same(&a, &b);
+}
+
+/// 確認を見せている間に別のプロセスが書くと、確定をやり直す。その計画でもう一度確認に出す。
+struct WriteWhileConfirming<'a> {
+    write: Box<dyn Fn() + Sync + 'a>,
+    calls: Mutex<usize>,
+    plans: Mutex<Vec<WritePlan>>,
+}
+
+impl Confirmer for WriteWhileConfirming<'_> {
+    fn confirm(&self, plan: WritePlan) -> BoxFuture<'_, Option<WriteAnswer>> {
+        let mut calls = self.calls.lock().unwrap();
+        if *calls == 0 {
+            (self.write)();
+        }
+        *calls += 1;
+        self.plans.lock().unwrap().push(plan);
+        Box::pin(async { Some(WriteAnswer::Write) })
+    }
+}
+
+#[tokio::test]
+async fn a_write_during_the_confirm_asks_again() {
+    let (a, b) = (Device::new(), Device::new());
+    populate(&b).await;
+    let confirmer = WriteWhileConfirming {
+        write: Box::new(|| {
+            memories::add(&a.conn(), &["別のプロセス".to_string()]).unwrap();
+        }),
+        calls: Mutex::new(0),
+        plans: Mutex::new(Vec::new()),
+    };
+    let (ra, rb) = sync_with_confirmed(&a, &b, &NoConflicts, &confirmer, |_| {}, |_| {}).await;
+    ra.unwrap();
+    rb.unwrap();
+    assert_eq!(*confirmer.calls.lock().unwrap(), 2);
+    // 確認のあとに書かれた行は、この端末では書かず、相手へ送る。
+    let plans = confirmer.plans.lock().unwrap();
+    assert_eq!(plans[0].theirs.memories, 0);
+    assert_eq!(plans[1].theirs.memories, 1);
     assert_same(&a, &b);
 }
