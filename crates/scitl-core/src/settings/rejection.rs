@@ -42,6 +42,10 @@ pub enum InputRejection {
         #[cfg_attr(test, ts(type = "number"))]
         max: u64,
     },
+    PortOutOfRange {
+        min: u16,
+        max: u16,
+    },
     McpServerNameRequired,
     /// MCPサーバーの識別子に使えない文字・並びがあるか、長すぎる
     /// (`config::validate_mcp_server_name`)。
@@ -67,6 +71,9 @@ impl fmt::Display for InputRejection {
             }
             Self::NumberTooLarge { field, max } => {
                 write!(f, "{} must be at most {max}", field.name())
+            }
+            Self::PortOutOfRange { min, max } => {
+                write!(f, "listen port must be an integer from {min} to {max}")
             }
             Self::McpServerNameRequired => f.write_str("MCP server name must not be empty"),
             Self::McpServerNameInvalid { max_chars } => write!(

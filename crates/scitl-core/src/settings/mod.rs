@@ -440,6 +440,19 @@ impl Settings {
         }
         draft.commit()
     }
+
+    /// 同期で待ち受けるポート。未設定はOSに選ばせる。
+    pub fn sync_listen_port(&self) -> Option<u16> {
+        self.current().config.sync.listen_port
+    }
+
+    /// 空欄は未設定に戻す。
+    pub fn update_sync(&self, listen_port: &str) -> Result<SettingsView> {
+        let listen_port = input::listen_port(listen_port)?;
+        let mut draft = self.edit();
+        draft.config.sync.listen_port = listen_port;
+        draft.commit()
+    }
 }
 
 /// 書き込みロックを持った設定の複製。[`Self::commit`]せずに落とせば何も変わらない。

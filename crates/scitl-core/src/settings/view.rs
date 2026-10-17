@@ -148,11 +148,18 @@ pub struct ToolSettingsView {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
+pub struct SyncSettingsView {
+    pub listen_port: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct SettingsView {
     /// 起動時に設定ファイルを読めなかった理由。あれば設定は保存されない。
     pub config_error: Option<String>,
     pub general: GeneralSettingsView,
     pub tools: ToolSettingsView,
+    pub sync: SyncSettingsView,
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
     pub mcp_servers: Vec<McpServerView>,
@@ -319,6 +326,9 @@ pub(super) fn build(
             total_timeout_secs: config.tools.total_timeout_secs,
             default_max_rounds_per_turn: DEFAULT_MAX_ROUNDS_PER_TURN,
             default_total_timeout_secs: DEFAULT_TOTAL_TIMEOUT_SECS,
+        },
+        sync: SyncSettingsView {
+            listen_port: config.sync.listen_port,
         },
         providers: config
             .providers

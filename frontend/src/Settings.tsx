@@ -11,6 +11,7 @@ import {
   setMcpToolEnabled,
   updateGeneralSettings,
   updateLanguage,
+  updateSyncSettings,
   updateToolSettings,
 } from './api'
 import { type AddResult, rejectionText } from './rejection'
@@ -266,7 +267,11 @@ export default function Settings({ onClose }: SettingsProps) {
                 ) : tab === 'memory' ? (
                   <MemoryTab />
                 ) : tab === 'sync' ? (
-                  <SyncTab onStart={() => setSyncOpen(true)} />
+                  <SyncTab
+                    settings={settings}
+                    onStart={() => setSyncOpen(true)}
+                    onSaveListenPort={(text) => saveField(() => updateSyncSettings(text))}
+                  />
                 ) : tab === 'providers' ? (
                   <ProvidersTab
                     settings={settings}

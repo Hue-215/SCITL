@@ -230,9 +230,10 @@ impl<E: Fn(SyncEvent) + Sync> Confirmer for ConfirmAsk<'_, E> {
     }
 }
 
-/// 待ち受けて、つないできた相手と同期する。
+/// 待ち受けて、つないできた相手と同期する。`port`は[`Listener::bind`]の`fixed`。
 pub async fn listen(
     request: Request<'_>,
+    port: Option<u16>,
     confirm: impl FnOnce(&SyncDialog) -> DialogAnswer + Send + 'static,
     events: impl Fn(SyncEvent) + Sync,
 ) -> SyncReport {
@@ -260,7 +261,7 @@ pub async fn listen(
         |ctx, stop, ()| async move {
             let (device_id, session) = cancellable(&stop, async {
                 let device_id = confirm_device_id(ctx.db.clone(), ctx.registry.clone()).await?;
-                let listener = Listener::bind(&local_addresses()?, Limits::default()).await?;
+                let listener = Listener::bind(&local_addresses()?, port, Limits::default()).await?;
                 events(
                     SyncProgress::Listening {
                         addresses: listener
@@ -512,6 +513,7 @@ mod tests {
             SyncError::AddressNotAllowed(String::new()),
             SyncError::NoLocalAddress,
             SyncError::Bind(io()),
+            SyncError::PortInUse(0),
             SyncError::Connect(io()),
             SyncError::Io(io()),
             SyncError::Tls(rustls::Error::DecryptError),
@@ -548,6 +550,7 @@ mod tests {
                 SyncError::AddressNotAllowed(_)
                 | SyncError::NoLocalAddress
                 | SyncError::Bind(_)
+                | SyncError::PortInUse(_)
                 | SyncError::Connect(_)
                 | SyncError::Io(_)
                 | SyncError::Tls(_)
@@ -635,7 +638,7 @@ mod tests {
             write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
-        let report = listen(request, no_dialog, |_| {}).await;
+        let report = listen(request, None, no_dialog, |_| {}).await;
         assert!(
             matches!(&report, SyncReport::Failed { kind, .. } if kind == "generating"),
             "{report:?}"
@@ -738,6 +741,7 @@ mod tests {
         };
         let report = listen(
             request,
+            None,
             |_| DialogAnswer::Declined,
             |e| events.lock().unwrap().push(e),
         )
@@ -817,6 +821,7 @@ mod tests {
         let seen = std::sync::Arc::clone(&paused);
         let report = listen(
             request,
+            None,
             move |_| {
                 seen.store(queries.is_paused(), std::sync::atomic::Ordering::SeqCst);
                 DialogAnswer::Declined
@@ -843,7 +848,7 @@ mod tests {
             write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
-        let report = listen(request, |_| DialogAnswer::NotShown, |_| {}).await;
+        let report = listen(request, None, |_| DialogAnswer::NotShown, |_| {}).await;
         assert!(
             matches!(&report, SyncReport::Failed { kind, .. } if kind == "dialog_unavailable"),
             "{report:?}"
@@ -865,7 +870,7 @@ mod tests {
             write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
-        let report = listen(request, no_dialog, |_| {}).await;
+        let report = listen(request, None, no_dialog, |_| {}).await;
         assert!(
             matches!(&report, SyncReport::Failed { kind, .. } if kind == "already_syncing"),
             "{report:?}"

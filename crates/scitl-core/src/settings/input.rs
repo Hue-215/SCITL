@@ -6,7 +6,8 @@ use std::collections::HashSet;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::invalid;
-use super::rejection::{refuse_if_any, InputRejection, NumberField};
+use super::rejection::{refuse_if_any, rejected, InputRejection, NumberField};
+use crate::config::MIN_LISTEN_PORT;
 use crate::error::Result;
 use crate::text;
 
@@ -54,14 +55,7 @@ pub(super) fn positive_integer<T>(text: &str, max: T, field: NumberField) -> Res
 where
     T: Copy + Into<u64> + TryFrom<u64>,
 {
-    let digits: String = text
-        .trim()
-        .chars()
-        .map(|c| match c {
-            '０'..='９' => char::from(b'0' + (c as u32 - '０' as u32) as u8),
-            c => c,
-        })
-        .collect();
+    let digits = ascii_digits(text);
     if digits.is_empty() {
         return Ok(None);
     }
@@ -79,6 +73,38 @@ where
             max: max_value,
         }),
     }
+}
+
+/// 待ち受けるポートの欄の文字列を解釈する。空欄は未設定。
+pub(super) fn listen_port(text: &str) -> Result<Option<u16>> {
+    let digits = ascii_digits(text);
+    if digits.is_empty() {
+        return Ok(None);
+    }
+    let out_of_range = || {
+        rejected(vec![InputRejection::PortOutOfRange {
+            min: MIN_LISTEN_PORT,
+            max: u16::MAX,
+        }])
+    };
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(out_of_range());
+    }
+    match digits.parse::<u16>() {
+        Ok(port) if port >= MIN_LISTEN_PORT => Ok(Some(port)),
+        _ => Err(out_of_range()),
+    }
+}
+
+/// 前後の空白を除き、IMEを切り忘れて打った全角の数字を半角にする。
+fn ascii_digits(text: &str) -> String {
+    text.trim()
+        .chars()
+        .map(|c| match c {
+            '０'..='９' => char::from(b'0' + (c as u32 - '０' as u32) as u8),
+            c => c,
+        })
+        .collect()
 }
 
 /// HTTPヘッダーの入力。画面はヘッダーの欄の文字列(1行1件、`NAME=VALUE`)のまま送り、ここで
@@ -226,6 +252,35 @@ mod tests {
                     max: 10
                 },
                 "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn listen_port_reads_blank_as_unset_and_only_1024_to_65535() {
+        assert_eq!(listen_port("").unwrap(), None);
+        assert_eq!(listen_port(" \u{3000}").unwrap(), None);
+        assert_eq!(listen_port("1024").unwrap(), Some(1024));
+        assert_eq!(listen_port("１０２４").unwrap(), Some(1024));
+        assert_eq!(listen_port(" 65535 ").unwrap(), Some(65535));
+        for text in [
+            "1023",
+            "0",
+            "65536",
+            "99999999999",
+            "abc",
+            "+2000",
+            "-2000",
+            "20 00",
+        ] {
+            let err = listen_port(text).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    crate::error::CoreError::Rejected(ref r)
+                        if r.0 == [InputRejection::PortOutOfRange { min: 1024, max: 65535 }]
+                ),
+                "{text:?}: {err:?}"
             );
         }
     }

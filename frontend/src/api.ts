@@ -255,6 +255,11 @@ export function updateToolSettings(args: {
   return invoke('update_tool_settings', args)
 }
 
+// 欄の文字列のまま送る。空欄は未設定に戻す。
+export function updateSyncSettings(listenPort: string): Promise<FormOutcome<SettingsView>> {
+  return invoke('update_sync_settings', { listenPort })
+}
+
 // `headers`はヘッダーの欄の文字列のまま送る(1行1件の解釈はRust側)。
 export function addProvider(
   name: string,

@@ -15,6 +15,9 @@ pub enum SyncError {
     NoLocalAddress,
     #[error("failed to listen: {0}")]
     Bind(io::Error),
+    /// 指定した待ち受けのポートが、既に使われている。
+    #[error("port {0} is already in use")]
+    PortInUse(u16),
     /// どの候補にもつながらなかった。最後の候補の失敗を持つ。
     #[error("failed to connect: {0}")]
     Connect(io::Error),
@@ -98,6 +101,7 @@ impl SyncError {
             Self::Scan(ScanError::Unavailable(_)) => "scan_failed",
             Self::NoLocalAddress => "no_local_address",
             Self::Bind(_) => "listen_failed",
+            Self::PortInUse(_) => "port_in_use",
             Self::Connect(_) => "connect_failed",
             Self::Io(_)
             | Self::Tls(_)

@@ -431,7 +431,7 @@ async fn sync_with_confirmed(
     let local = LocalVersions {
         db_version: db::schema_version(),
     };
-    let bound = Listener::bind(&[IpAddr::V4(Ipv4Addr::LOCALHOST)], limits())
+    let bound = Listener::bind(&[IpAddr::V4(Ipv4Addr::LOCALHOST)], None, limits())
         .await
         .unwrap();
     let addr = bound.addresses()[0];
@@ -891,7 +891,7 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
     let local = LocalVersions {
         db_version: db::schema_version(),
     };
-    let bound = Listener::bind(&[IpAddr::V4(Ipv4Addr::LOCALHOST)], limits())
+    let bound = Listener::bind(&[IpAddr::V4(Ipv4Addr::LOCALHOST)], None, limits())
         .await
         .unwrap();
     let (addr, code) = (bound.addresses()[0], bound.code().clone());

@@ -177,6 +177,7 @@ pub fn run() {
             commands::settings::get_display_language,
             commands::settings::update_language,
             commands::settings::update_tool_settings,
+            commands::settings::update_sync_settings,
             commands::settings::add_provider,
             commands::settings::get_base_url_hint,
             commands::settings::delete_provider,

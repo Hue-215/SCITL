@@ -17,6 +17,7 @@ import type {
   ConflictSide,
   ConflictView,
   QrModules,
+  SettingsView,
   SyncEvent,
   SyncReport,
   WriteCounts,
@@ -25,6 +26,8 @@ import type {
 import { SYNC_ERROR_KEY_PREFIX } from './bindings/SyncConstants'
 import Dialog from './Dialog'
 import { isolated, type MessageKey, t } from './i18n'
+import { DisclosureMark } from './Icon'
+import { NumberField } from './settingsFields'
 import { useCloseOnBack } from './useCloseOnBack'
 
 type Running = 'listen' | 'connect'
@@ -280,8 +283,14 @@ function ConflictChooser({
   )
 }
 
-// 設定画面の「同期」タブ。同期の画面を開くボタンだけを置く。
-export function SyncTab({ onStart }: { onStart: () => void }) {
+interface SyncTabProps {
+  settings: SettingsView
+  onStart: () => void
+  onSaveListenPort: (text: string) => Promise<string[]>
+}
+
+// 設定画面の「同期」タブ。同期の画面を開くボタンと、待ち受けの設定を置く。
+export function SyncTab({ settings, onStart, onSaveListenPort }: SyncTabProps) {
   return (
     <div className="settings-panel">
       <div className="settings-field">
@@ -293,6 +302,21 @@ export function SyncTab({ onStart }: { onStart: () => void }) {
           {t('settings.sync.start')}
         </button>
       </div>
+
+      <details className="settings-advanced">
+        <summary>
+          <DisclosureMark />
+          {t('settings.sync.advanced_settings')}
+        </summary>
+        <div className="settings-section">
+          <NumberField
+            label={t('settings.sync.listen_port_label')}
+            value={settings.sync.listen_port}
+            hint={t('settings.sync.listen_port_hint')}
+            onSave={onSaveListenPort}
+          />
+        </div>
+      </details>
     </div>
   )
 }
