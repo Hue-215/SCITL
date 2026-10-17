@@ -512,8 +512,8 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
           </>
         }
       >
-        <ConfirmCounts label={t('settings.sync.confirm_this')} counts={confirm.ours} />
-        <ConfirmCounts label={t('settings.sync.confirm_peer')} counts={confirm.theirs} />
+        <ConfirmCounts label={t('settings.sync.ours')} counts={confirm.ours} />
+        <ConfirmCounts label={t('settings.sync.theirs')} counts={confirm.theirs} />
       </SyncPage>
     )
   }

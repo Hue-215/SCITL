@@ -66,7 +66,7 @@ pub enum Stage {
     Finishing,
 }
 
-/// 選んだ競合を利用者に選ばせる(待ち受ける側)。取りやめたら`None`。
+/// 競合を利用者に選ばせる(待ち受ける側)。取りやめたら`None`。
 pub trait Resolver: Sync {
     fn choose(&self, conflicts: Vec<ConflictView>) -> BoxFuture<'_, Option<Vec<ConflictChoice>>>;
 }
@@ -733,7 +733,8 @@ async fn listener(
             &view.alive,
             &view.message_uids,
         )?;
-        if !counts.empty() {
+        let confirmed = !counts.empty();
+        if confirmed {
             // 待っていることをBにも知らせる。
             session.send(&Message::Confirming).await?;
             let answer = cancellable(stop, async {
@@ -758,8 +759,8 @@ async fn listener(
         }
 
         // 6: 確定する。版を振ってから別の書き込みがあれば、振るところからやり直す。
-        // 確定をやり直す間に選び直したときも、止められない段へ戻ったことを知らせ直す。
-        if !finishing || chose {
+        // 確定をやり直す間に選び直した・確認を出し直したときも、止められない段へ戻ったことを知らせ直す。
+        if !finishing || chose || confirmed {
             if !finishing && stop.is_requested() {
                 return Err(SyncError::Cancelled);
             }

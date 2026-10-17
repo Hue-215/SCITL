@@ -1441,8 +1441,8 @@ impl Resolver for WriteWhileChoosing<'_> {
 }
 
 /// 選んでいる間に別のプロセスが書くと、確定をやり直す。そのとき、選んだ競合の中身が変わっていれば
-/// 選び直させ、変わっていなければ聞き直さない。選び直したあとは、書き込みの段を知らせ直す(画面は
-/// 選んでいる間だけ止められる)。
+/// 選び直させ、変わっていなければ聞き直さない。確定をやり直すと確認を出し直すので、どちらでも
+/// 書き込みの段を知らせ直す(画面は選んでいる間と確認の間だけ止められる)。
 #[tokio::test]
 async fn a_conflict_that_changed_after_it_was_chosen_is_asked_again() {
     for (touches_the_conflict, asked) in [(true, 2), (false, 1)] {
@@ -1491,7 +1491,7 @@ async fn a_conflict_that_changed_after_it_was_chosen_is_asked_again() {
         );
         assert_eq!(
             *stages.lock().unwrap(),
-            vec![Stage::Finishing; asked],
+            vec![Stage::Finishing; 2],
             "touches_the_conflict: {touches_the_conflict}"
         );
         assert_same(&a, &b);
@@ -1651,10 +1651,21 @@ async fn a_write_during_the_confirm_asks_again() {
         calls: Mutex::new(0),
         plans: Mutex::new(Vec::new()),
     };
-    let (ra, rb) = sync_with_confirmed(&a, &b, &NoConflicts, &confirmer, |_| {}, |_| {}).await;
+    let stages = Mutex::new(Vec::new());
+    let (ra, rb) = sync_with_confirmed(
+        &a,
+        &b,
+        &NoConflicts,
+        &confirmer,
+        |stage| stages.lock().unwrap().push(stage),
+        |_| {},
+    )
+    .await;
     ra.unwrap();
     rb.unwrap();
     assert_eq!(*confirmer.calls.lock().unwrap(), 2);
+    // 確認を出し直したあとも、書き込みの段に入ったことを知らせ直す(画面が確認のまま残らない)。
+    assert_eq!(*stages.lock().unwrap(), vec![Stage::Finishing; 2]);
     // 確認のあとに書かれた行は、この端末では書かず、相手へ送る。
     let plans = confirmer.plans.lock().unwrap();
     assert_eq!(plans[0].theirs.memories, 0);

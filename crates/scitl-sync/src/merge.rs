@@ -439,8 +439,8 @@ pub(crate) struct Plan {
 }
 
 /// 選んだ単位の解決の行(選んだ側の値、版は両方の最大に自分の分を進める。8節・9節)。
-/// 書き込むときは`number`に確定の番号、`now`にそのときの日時を渡す。書き込む前の件数は
-/// (`write_plan`集め方に現れない)番号と日時を受け取らない。
+/// 書き込むときは`number`に確定の番号、`now`にそのときの日時を渡す。書き込む前の件数には
+/// 現れないので、`write_plan`は仮の値を渡す。
 pub(crate) fn resolution_rows(
     plan: &Plan,
     picks: &HashMap<String, Pick>,
