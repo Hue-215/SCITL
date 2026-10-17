@@ -16,8 +16,8 @@ use scitl_core::attachments::AttachmentStore;
 use scitl_core::in_flight::InFlightSet;
 use scitl_core::{db, paths};
 use scitl_sync::{
-    ChosenSide, ConflictChoice, ConflictView, Context, DeviceRegistry, Limits, Listener,
-    LocalVersions, PairingCode, Resolver, SecretStore, SyncError,
+    ChosenSide, Confirmer, ConflictChoice, ConflictView, Context, DeviceRegistry, Limits, Listener,
+    LocalVersions, PairingCode, Resolver, SecretStore, SyncError, WriteAnswer, WritePlan,
 };
 
 use crate::DebugError;
@@ -99,9 +99,19 @@ impl Resolver for Ask {
     }
 }
 
+/// 書き込む前に、件数の計画をJSONの1行で出し、書き込む。
+impl Confirmer for Ask {
+    fn confirm(
+        &self,
+        plan: WritePlan,
+    ) -> Pin<Box<dyn Future<Output = Option<WriteAnswer>> + Send + '_>> {
+        print_json_line(&plan);
+        Box::pin(async { Some(WriteAnswer::Write) })
+    }
+}
+
 /// `ours`か`theirs`を読む。入力が終われば取りやめ(`None`)。
-fn ask_side(id: &str) -> Option<ChosenSide> {
-    loop {
+fn ask_side(id: &str) -> Option<ChosenSide> {    loop {
         terminal::print_prompt(&format!("{id} (ours/theirs): "));
         let mut line = String::new();
         if std::io::stdin().lock().read_line(&mut line).ok()? == 0 {
@@ -166,6 +176,7 @@ pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugErr
                 held.stop_signal(),
                 |_| {},
                 &Ask { prefer },
+                &Ask { prefer },
             )
             .await;
             sync.close().await;
@@ -186,6 +197,9 @@ pub async fn run(session: &Session, command: SyncCommand) -> Result<(), DebugErr
                 &device_id,
                 held.stop_signal(),
                 |_| {},
+                &Ask {
+                    prefer: Some(Prefer::Ours),
+                },
                 &Ask {
                     prefer: Some(Prefer::Ours),
                 },

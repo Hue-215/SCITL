@@ -19,8 +19,9 @@ use scitl_core::{blocking, db, text};
 
 use crate::conflict::{ConflictChoice, ConflictView};
 use crate::invitation::{self, QrModules};
-use crate::transfer::{cancellable, Resolver, Stage};
+use crate::transfer::{cancellable, Confirmer, Resolver, Stage, WriteAnswer};
 use crate::transport::Counts;
+use crate::write_plan::WritePlan;
 use crate::{
     confirm_device_id, connect, local_addresses, parse_invitation, parse_peer_address, sync,
     Context, Invitation, Limits, Listener, LocalVersions, Outcome, PairingCode, Session, SyncError,
@@ -78,21 +79,27 @@ pub enum SyncProgress {
     Syncing,
     /// 待ち受ける側が、利用者に競合を選ばせている(つなぐ側で知らせる)。
     PeerChoosing,
+    /// 待ち受ける側が、書き込む前に確認を見せている(つなぐ側で知らせる)。
+    PeerConfirming,
     /// 競合。単位ごとにどちらを取るかを[`answer`]で返す。
     Conflicts { conflicts: Vec<ConflictView> },
+    /// 書き込む前の確認。件数を見せて、書き込むか戻るかを[`approve_write`]で返す。
+    Confirm { plan: WritePlan },
     /// 書き始める段に入った。ここからは止められない。
     Finishing,
 }
 
 impl SyncProgress {
     /// 止める指示を受け付けるか。書き始めたあとに止めると、書き終えたのに止めたように見えるので、
-    /// 止めない(`transfer::sync`)。
+    /// 止めない(`transfer::sync`)。確認中の「戻る」は、書き込む前の確認の答えになり、止めない。
     fn stoppable(&self) -> bool {
         match self {
             Self::Listening { .. }
             | Self::Syncing
             | Self::PeerChoosing
-            | Self::Conflicts { .. } => true,
+            | Self::PeerConfirming
+            | Self::Conflicts { .. }
+            | Self::Confirm { .. } => true,
             Self::Finishing => false,
         }
     }
@@ -138,6 +145,8 @@ pub struct Request<'a> {
     /// 数字をモデル名等に入れてLANの上へ送らせない。「画面とCLI」)。
     pub queries: &'a QueryPause,
     pub answers: &'a ConflictAnswers,
+    /// 書き込む前の確認の答え(`ConfirmAsk`)。
+    pub write_answers: &'a WriteAnswers,
     pub lang: Language,
 }
 
@@ -185,6 +194,42 @@ impl<E: Fn(SyncEvent) + Sync> Resolver for Ask<'_, E> {
     }
 }
 
+/// 書き込む前の確認の答えの受け口。同期1回につき、確認の画面を見せている間だけ埋まる。
+#[derive(Default)]
+pub struct WriteAnswers(Mutex<Option<oneshot::Sender<bool>>>);
+
+/// 確認の画面の答えを渡す(`write`が真なら書き込む)。見せている確認が無ければ`false`。
+pub fn approve_write(answers: &WriteAnswers, write: bool) -> bool {
+    let sender = answers.0.lock().expect("write answers poisoned").take();
+    match sender {
+        Some(sender) => sender.send(write).is_ok(),
+        None => false,
+    }
+}
+
+/// 書き込む前に、件数を画面に出し、答えを待つ。
+struct ConfirmAsk<'a, E> {
+    answers: &'a WriteAnswers,
+    events: &'a E,
+}
+
+impl<E: Fn(SyncEvent) + Sync> Confirmer for ConfirmAsk<'_, E> {
+    fn confirm(&self, plan: WritePlan) -> BoxFuture<'_, Option<WriteAnswer>> {
+        let (reply, answer) = oneshot::channel();
+        *self.answers.0.lock().expect("write answers mutex poisoned") = Some(reply);
+        (self.events)(SyncProgress::Confirm { plan }.into());
+        Box::pin(async move {
+            answer.await.ok().map(|write| {
+                if write {
+                    WriteAnswer::Write
+                } else {
+                    WriteAnswer::Back
+                }
+            })
+        })
+    }
+}
+
 /// 待ち受けて、つないできた相手と同期する。
 pub async fn listen(
     request: Request<'_>,
@@ -205,6 +250,7 @@ pub async fn listen(
         cancel_label: i18n::text(request.lang, "common.cancel").to_string(),
     };
     let answers = request.answers;
+    let write_answers = request.write_answers;
     let target = async { Ok(()) };
     run(
         request,
@@ -233,7 +279,7 @@ pub async fn listen(
                 Ok((device_id, listener.accept(local_versions()).await?))
             })
             .await?;
-            sync_over(session, ctx, &device_id, &stop, answers, &events).await
+            sync_over(session, ctx, &device_id, &stop, answers, write_answers, &events).await
         },
     )
     .await
@@ -301,6 +347,7 @@ async fn connect_with(
         }
     };
     let answers = request.answers;
+    let write_answers = request.write_answers;
     run(
         request,
         target,
@@ -314,7 +361,7 @@ async fn connect_with(
                 Ok((device_id, session))
             })
             .await?;
-            sync_over(session, ctx, &device_id, &stop, answers, &events).await
+            sync_over(session, ctx, &device_id, &stop, answers, write_answers, &events).await
         },
     )
     .await
@@ -326,6 +373,7 @@ async fn sync_over(
     device_id: &str,
     stop: &StopSignal,
     answers: &ConflictAnswers,
+    write_answers: &WriteAnswers,
     events: &(impl Fn(SyncEvent) + Sync),
 ) -> Result<Outcome, SyncError> {
     events(SyncProgress::Syncing.into());
@@ -333,15 +381,25 @@ async fn sync_over(
         events(
             match stage {
                 Stage::PeerChoosing => SyncProgress::PeerChoosing,
+                Stage::PeerConfirming => SyncProgress::PeerConfirming,
                 Stage::Finishing => SyncProgress::Finishing,
             }
             .into(),
         )
     };
     let ask = Ask { answers, events };
-    let outcome = sync(&mut session, ctx, device_id, stop, stage, &ask).await;
-    // 止めたあとに届いた選択を受け取らない。
+    let confirm = ConfirmAsk {
+        answers: write_answers,
+        events,
+    };
+    let outcome = sync(&mut session, ctx, device_id, stop, stage, &ask, &confirm).await;
+    // 止めたあとに届いた選択・答えを受け取らない。
     answers.0.lock().expect("answers mutex poisoned").take();
+    write_answers
+        .0
+        .lock()
+        .expect("write answers mutex poisoned")
+        .take();
     session.close().await;
     outcome
 }
@@ -534,6 +592,7 @@ mod tests {
                 generating: &generating,
                 queries: &QueryPause::default(),
                 answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
                 lang: Language::DEFAULT,
             };
             let report = connect_to(request, address, code, no_dialog, |_| {}).await;
@@ -555,6 +614,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, no_dialog, |_| {}).await;
@@ -575,6 +635,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let scan = async { panic!("the scanner must not be opened") };
@@ -602,6 +663,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let scan = async {
@@ -629,6 +691,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let scan = async { Ok(Some("scitl-sync;1;012345;example.com:443".to_string())) };
@@ -652,6 +715,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(
@@ -686,6 +750,7 @@ mod tests {
                 generating: &generating,
                 queries: &QueryPause::default(),
                 answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
                 lang: Language::DEFAULT,
             };
             // 承認したら、つながらない宛先へつなごうとして失敗する。
@@ -727,6 +792,7 @@ mod tests {
             generating: &generating,
             queries,
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -756,6 +822,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, |_| DialogAnswer::NotShown, |_| {}).await;
@@ -777,6 +844,7 @@ mod tests {
             generating: &generating,
             queries: &QueryPause::default(),
             answers: &ConflictAnswers::default(),
+                write_answers: &WriteAnswers::default(),
             lang: Language::DEFAULT,
         };
         let report = listen(request, no_dialog, |_| {}).await;

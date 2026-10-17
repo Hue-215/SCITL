@@ -10,6 +10,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
+use scitl_core::CoreError;
 
 use crate::transport::{
     AttachmentRow, MemoryRow, MessageRow, StepRow, TaskRow, Transport, Version,
@@ -435,6 +436,50 @@ pub(crate) struct Plan {
     pub records: Vec<TaskStateRecord>,
     /// 同じ`uid`で、書いたあと変わらない列が違う行。
     pub invalid: Vec<InvalidRow>,
+}
+
+/// 選んだ単位の解決の行(選んだ側の値、版は両方の最大に自分の分を進める。8節・9節)。
+/// 書き込むときは`number`に確定の番号、`now`にそのときの日時を渡す。書き込む前の件数は
+/// (`write_plan`集め方に現れない)番号と日時を受け取らない。
+pub(crate) fn resolution_rows(
+    plan: &Plan,
+    picks: &HashMap<String, Pick>,
+    me: &str,
+    number: i64,
+    now: &str,
+) -> Result<Transport, CoreError> {
+    let mut out = Transport::default();
+    for conflict in &plan.conflicts {
+        let pick = picks
+            .get(&conflict.unit.id())
+            .copied()
+            .ok_or_else(|| CoreError::Internal("a conflict was not chosen".to_string()))?;
+        let resolved = resolve(conflict, pick, me, number, now);
+        out.tasks.extend(resolved.tasks);
+        out.steps.extend(resolved.steps);
+        out.memories.extend(resolved.memories);
+        out.messages.extend(resolved.messages);
+        out.attachments.extend(resolved.attachments);
+    }
+    Ok(out)
+}
+
+/// Aに書く行(計画の行と解決の行。重複は無い)。確定の書き込み(`transfer::commit`)に使う。
+pub(crate) fn written_rows(
+    plan: &Plan,
+    picks: &HashMap<String, Pick>,
+    me: &str,
+    number: i64,
+    now: &str,
+) -> Result<Transport, CoreError> {
+    let resolution = resolution_rows(plan, picks, me, number, now)?;
+    let mut out = plan.rows.clone();
+    out.tasks.extend(resolution.tasks);
+    out.steps.extend(resolution.steps);
+    out.memories.extend(resolution.memories);
+    out.messages.extend(resolution.messages);
+    out.attachments.extend(resolution.attachments);
+    Ok(out)
 }
 
 /// 結合に使うもの。

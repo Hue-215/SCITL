@@ -17,6 +17,7 @@ use scitl_core::tools;
 
 use super::*;
 use crate::conflict::ChosenSide;
+use crate::write_plan::WriteCounts;
 use crate::{connect, Limits, Listener, LocalVersions};
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nnot really a picture";
@@ -360,6 +361,36 @@ impl Resolver for NoConflicts {
     }
 }
 
+/// 確認では書き込む。
+struct AutoWrite;
+
+impl Confirmer for AutoWrite {
+    fn confirm(&self, _: WritePlan) -> BoxFuture<'_, Option<WriteAnswer>> {
+        Box::pin(async { Some(WriteAnswer::Write) })
+    }
+}
+
+/// 確認の答えを操作・計画を覚える。
+struct Confirming {
+    /// 最初に返す答え。そのあとは書き込む。
+    first: WriteAnswer,
+    seen: Mutex<Vec<WritePlan>>,
+}
+
+impl Confirmer for Confirming {
+    fn confirm(&self, plan: WritePlan) -> BoxFuture<'_, Option<WriteAnswer>> {
+        let seen = self.seen.lock().unwrap().len();
+        if seen == 0 {
+            self.seen.lock().unwrap().push(plan);
+            let first = self.first;
+            Box::pin(async move { Some(first) })
+        } else {
+            self.seen.lock().unwrap().push(plan);
+            Box::pin(async { Some(WriteAnswer::Write) })
+        }
+    }
+}
+
 /// 2台をループバックでつなぎ、それぞれの側で同期する。`listener`の側で競合を`resolver`で選ぶ。
 /// `on_connector_stage`は、つなぐ側の段ごとに呼ぶ(途中で書き込みを挟む試験に使う)。
 async fn sync_with(
@@ -375,6 +406,17 @@ async fn sync_with_stages(
     listener: &Device,
     connector: &Device,
     resolver: &dyn Resolver,
+    on_listener_stage: impl Fn(Stage) + Sync,
+    on_connector_stage: impl Fn(Stage) + Sync,
+) -> (Result<Outcome, SyncError>, Result<Outcome, SyncError>) {
+    sync_with_confirmed(listener, connector, resolver, &AutoWrite, on_listener_stage, on_connector_stage).await
+}
+
+async fn sync_with_confirmed(
+    listener: &Device,
+    connector: &Device,
+    resolver: &dyn Resolver,
+    confirmer: &dyn Confirmer,
     on_listener_stage: impl Fn(Stage) + Sync,
     on_connector_stage: impl Fn(Stage) + Sync,
 ) -> (Result<Outcome, SyncError>, Result<Outcome, SyncError>) {
@@ -401,6 +443,7 @@ async fn sync_with_stages(
             a_stop.stop_signal(),
             on_listener_stage,
             resolver,
+            confirmer,
         )
         .await;
         session.close().await;
@@ -415,6 +458,7 @@ async fn sync_with_stages(
             b_stop.stop_signal(),
             on_connector_stage,
             &NoConflicts,
+            &AutoWrite,
         )
         .await;
         session.close().await;
@@ -860,6 +904,7 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
             a_stop.stop_signal(),
             |_| {},
             &NoConflicts,
+            &AutoWrite,
         )
         .await
     };
@@ -872,6 +917,7 @@ async fn a_stop_request_before_writing_ends_as_cancelled() {
             b_stop.stop_signal(),
             |_| {},
             &NoConflicts,
+            &AutoWrite,
         )
         .await
     };
@@ -1442,4 +1488,127 @@ async fn a_conflict_that_changed_after_it_was_chosen_is_asked_again() {
         );
         assert_same(&a, &b);
     }
+}
+
+/// 書き込む前の確認に出す計画を、計画どおりに書く場合の結果と比べる。
+#[tokio::test]
+async fn the_confirm_plan_tells_whose_writes() {
+    // 相手にしか無いデータを受け取る側。この端末に書くことになるすべての単位を数える。
+    let (a, b) = (Device::new(), Device::new());
+    populate(&b).await;
+    let confirming = Confirming {
+        first: WriteAnswer::Write,
+        seen: Mutex::new(Vec::new()),
+    };
+    let (ra, rb) = sync_with_confirmed(&a, &b, &NoConflicts, &confirming, |_| {}, |_| {}).await;
+    ra.unwrap();
+    rb.unwrap();
+    assert_eq!(
+        *confirming.seen.lock().unwrap(),
+        vec![WritePlan {
+            ours: WriteCounts {
+                tasks: 2,
+                conversations: 2,
+                memories: 2,
+            },
+            theirs: WriteCounts::default(),
+        }]
+    );
+
+    // 送るだけの側。相手に書き込むことになるものだけが変わる。
+    let (a, b) = (Device::new(), Device::new());
+    populate(&a).await;
+    let confirming = Confirming {
+        first: WriteAnswer::Write,
+        seen: Mutex::new(Vec::new()),
+    };
+    let (ra, rb) = sync_with_confirmed(&a, &b, &NoConflicts, &confirming, |_| {}, |_| {}).await;
+    ra.unwrap();
+    assert_eq!(
+        *confirming.seen.lock().unwrap(),
+        vec![WritePlan {
+            ours: WriteCounts::default(),
+            theirs: WriteCounts {
+                tasks: 2,
+                conversations: 2,
+                memories: 2,
+            },
+        }]
+    );
+    // 相手は、この端末にあったすべての行を書き込む(4節7)。
+    assert_eq!(rb.unwrap().changed.tasks, 2);
+}
+
+/// 確認の計画には、同じ本文のメモリを畳む書き込みも含まれる(8節)。
+#[tokio::test]
+async fn the_confirm_plan_counts_the_folded_memories() {
+    let (a, b) = (Device::new(), Device::new());
+    populate(&b).await;
+    memories::add(&a.conn(), &["朝型".to_string()]).unwrap();
+    let confirming = Confirming {
+        first: WriteAnswer::Write,
+        seen: Mutex::new(Vec::new()),
+    };
+    let (ra, rb) = sync_with_confirmed(&a, &b, &NoConflicts, &confirming, |_| {}, |_| {}).await;
+    ra.unwrap();
+    rb.unwrap();
+    // この端末に書くのは、相手のメモリ2行と、同じ本文を畳む行1つ。送り返す行の数は、1の大きい方
+    // がAの行とBの行のどちらか(乱数)に応じて1または2になる。
+    let plans = confirming.seen.lock().unwrap();
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].ours.tasks, 2);
+    assert_eq!(plans[0].ours.conversations, 2);
+    assert_eq!(plans[0].ours.memories, 3);
+    assert!(plans[0].theirs.memories == 1 || plans[0].theirs.memories == 2);
+    assert_eq!(plans[0].theirs.tasks, 0);
+    assert_eq!(plans[0].theirs.conversations, 0);
+}
+
+/// 競合が無い確認での「戻る」は、書き込まずに終わる(戻る先が無い)。
+#[tokio::test]
+async fn back_from_the_confirm_without_conflicts_cancels() {
+    let (a, b) = (Device::new(), Device::new());
+    populate(&b).await;
+    let confirming = Confirming {
+        first: WriteAnswer::Back,
+        seen: Mutex::new(Vec::new()),
+    };
+    let (ra, rb) = sync_with_confirmed(&a, &b, &NoConflicts, &confirming, |_| {}, |_| {}).await;
+    assert!(matches!(ra, Err(SyncError::Cancelled)), "{ra:?}");
+    assert!(rb.is_err(), "{rb:?}");
+    assert_eq!(a.transport().tasks, []);
+    assert_eq!(b.transport().tasks.len(), 2);
+}
+
+/// 競合がある確認での「戻る」は、競合の選択に戻る。選び直したときは、その計画でもう一度出す。
+#[tokio::test]
+async fn back_from_the_confirm_returns_to_the_conflicts() {
+    let (a, b) = (Device::new(), Device::new());
+    populate(&a).await;
+    sync(&a, &b).await;
+    let task = a.task_uid("夕飯");
+    let (a_task, b_task) = (a.task_id(&task), b.task_id(&task));
+    a.conn()
+        .execute("UPDATE tasks SET title = '晩ご飯' WHERE id = ?1", [a_task])
+        .unwrap();
+    b.conn()
+        .execute("UPDATE tasks SET title = '夕食' WHERE id = ?1", [b_task])
+        .unwrap();
+    let choose = Choose::new(ChosenSide::Ours);
+    let confirming = Confirming {
+        first: WriteAnswer::Back,
+        seen: Mutex::new(Vec::new()),
+    };
+    let (ra, rb) = sync_with_confirmed(&a, &b, &choose, &confirming, |_| {}, |_| {}).await;
+    assert_eq!(ra.unwrap().conflicts, 1);
+    rb.unwrap();
+    // 競合は2回見せられ、出された計画は2つ(選び直した結果の値でもう一度)。
+    assert_eq!(choose.seen().len(), 2);
+    let plans = confirming.seen.lock().unwrap();
+    assert_eq!(plans.len(), 2);
+    assert_eq!(plans[1].ours.tasks, 1);
+    assert_eq!(plans[1].ours.conversations, 1);
+    assert_eq!(plans[1].ours.memories, 0);
+    assert_eq!(plans[1].theirs.tasks, 1);
+    assert_same(&a, &b);
 }

@@ -22,8 +22,9 @@ use scitl_core::CoreError;
 use crate::conflict::{self, ConflictChoice, ConflictView};
 use crate::convert::{self, Ids, Snapshot, Writer};
 use crate::merge::{self, Conflict, Inputs, Pick, Units};
-use crate::transport::{AbortReason, AttachmentRow, Counts, Message, MessageRow, Transport};
+use crate::transport::{AbortReason, AttachmentRow, Counts, Message, Transport};
 use crate::validate::{self, Known};
+use crate::write_plan::{self, WritePlan};
 use crate::{device, files, DeviceRegistry, InvalidRow, Session, SyncError};
 
 /// 1つのメッセージに詰める行の量の目安(直列化した大きさ)。
@@ -59,13 +60,28 @@ pub struct Outcome {
 pub enum Stage {
     /// 待ち受ける側が、利用者に競合を選ばせている(つなぐ側で知らせる)。
     PeerChoosing,
+    /// 待ち受ける側が、書き込む前に確認を見せている(つなぐ側で知らせる)。
+    PeerConfirming,
     /// 書き始める段に入った。ここからは止められない。
     Finishing,
 }
 
-/// 競合を利用者に選ばせる(待ち受ける側)。取りやめたら`None`。
+/// 選んだ競合を利用者に選ばせる(待ち受ける側)。取りやめたら`None`。
 pub trait Resolver: Sync {
     fn choose(&self, conflicts: Vec<ConflictView>) -> BoxFuture<'_, Option<Vec<ConflictChoice>>>;
+}
+
+/// 書き込む前の確認の答え。「戻る」は競合の選択に戻る(競合が無ければ止める)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteAnswer {
+    Write,
+    Back,
+}
+
+/// 書き込む前に、書き込む行の件数を利用者に確かめさせる(待ち受ける側)。取りやめたら`None`
+/// (画面を閉じた。止めるのと同じ)。`docs/sync/index.md` 4節の6の前。
+pub trait Confirmer: Sync {
+    fn confirm(&self, plan: WritePlan) -> BoxFuture<'_, Option<WriteAnswer>>;
 }
 
 /// 確かめ終えた接続の上で同期する。`device_id`は確かめた端末ID(`device::confirm_device_id`)。
@@ -82,8 +98,9 @@ pub async fn sync(
     stop: &StopSignal,
     stage: impl Fn(Stage) + Sync,
     resolver: &dyn Resolver,
+    confirmer: &dyn Confirmer,
 ) -> Result<Outcome, SyncError> {
-    let result = run(session, ctx, device_id, stop, &stage, resolver).await;
+    let result = run(session, ctx, device_id, stop, &stage, resolver, confirmer).await;
     if let Err(e) = &result {
         if let Some(reason) = reason_to_tell(e) {
             let _ = session.send(&Message::Abort { reason }).await;
@@ -143,11 +160,12 @@ async fn run(
     stop: &StopSignal,
     stage: &(dyn Fn(Stage) + Sync),
     resolver: &dyn Resolver,
+    confirmer: &dyn Confirmer,
 ) -> Result<Outcome, SyncError> {
     let agreed = cancellable(stop, introduce(session, ctx, device_id)).await?;
     match session.side() {
         Side::Connector => connector(session, ctx, &agreed, stop, stage).await,
-        Side::Listener => listener(session, ctx, &agreed, stop, stage, resolver).await,
+        Side::Listener => listener(session, ctx, &agreed, stop, stage, resolver, confirmer).await,
     }
 }
 
@@ -503,6 +521,7 @@ async fn serve_listener(
                 serve_files(session, ctx, &sent_attachments, hashes).await?
             }
             Message::Choosing => stage(Stage::PeerChoosing),
+            Message::Confirming => stage(Stage::PeerConfirming),
             Message::Tasks { rows } => merged.tasks.extend(rows),
             Message::Steps { rows } => merged.steps.extend(rows),
             Message::Memories { rows } => merged.memories.extend(rows),
@@ -531,6 +550,10 @@ struct LocalView {
     changed: Transport,
     /// 受け取った行と同じ`uid`の行と、そろった単位のすべての行。
     local: Transport,
+    /// 消えていないメモリの(`uid`,本文)。書き込む前の確認で、同じ本文を畳む分を数えるため。
+    alive: Vec<(String, String)>,
+    /// 発言のすべての`uid`。確認で、既にある結合後の全体の記録を数えないため。
+    message_uids: HashSet<String>,
 }
 
 async fn listener(
@@ -540,6 +563,7 @@ async fn listener(
     stop: &StopSignal,
     stage: &(dyn Fn(Stage) + Sync),
     resolver: &dyn Resolver,
+    confirmer: &dyn Confirmer,
 ) -> Result<Outcome, SyncError> {
     // Bから受け取る行の大きさの合計(差分と、求めた単位の行)。
     let mut received = 0;
@@ -551,6 +575,8 @@ async fn listener(
     let mut checked_files: HashSet<String> = HashSet::new();
     let mut files_received = 0;
     let mut finishing = false;
+    // 確認は、書き込む前の一度だけ。競合を選び直したときは、選び直した結果でもう一度。
+    let mut confirmed = false;
     let send_from = agreed.send_from;
 
     let (mut changed, merged_counter, back, digest) = loop {
@@ -575,11 +601,21 @@ async fn listener(
                 extend_unique(&mut local, units);
                 validate::check(&incoming, &known).map_err(SyncError::InvalidRows)?;
                 check_own_numbers(&incoming, &state)?;
+                // 確認に使うもの。書き込む前に別プロセスが書いていたら、確定のときに比べて分かる。
+                let alive = tx
+                    .alive_memories()?
+                    .into_iter()
+                    .map(|m| (m.uid, m.content))
+                    .collect();
+                let message_uids: HashSet<String> =
+                    tx.uids()?.messages.iter().map(|(_, uid)| uid.clone()).collect();
                 Ok(LocalView {
                     counter: state.counter,
                     device_id: state.device_id,
                     changed,
                     local,
+                    alive,
+                    message_uids,
                 })
             })
             .await?
@@ -679,6 +715,51 @@ async fn listener(
             }
         }
 
+        // 書き込む前に、書き込む行の件数を確かめさせる(4節の6の前)。確認中に別の書き込みが
+        // あったら、確定のときに比べて版を振るところからやり直し、その計画でもう一度確認する。
+        let picks: HashMap<String, Pick> = choices
+            .iter()
+            .map(|(id, chosen)| (id.clone(), chosen.pick))
+            .collect();
+        if !confirmed {
+            let counts = write_plan::counts(
+                &plan.rows,
+                &plan,
+                &picks,
+                &view.changed,
+                &incoming,
+                &view.alive,
+                &view.message_uids,
+            )?;
+            if counts.empty() {
+                confirmed = true;
+            } else {
+                // 待っていることをBにも知らせる。
+                session.send(&Message::Confirming).await?;
+                let answer = cancellable(stop, async {
+                    tokio::select! {
+                        answer = confirmer.confirm(counts) => Ok(answer),
+                        message = session.recv::<Message>() => Err(match message {
+                            Ok(message) => unexpected(&message),
+                            Err(e) => e,
+                        }),
+                    }
+                })
+                .await?;
+                match answer.ok_or(SyncError::Cancelled)? {
+                    WriteAnswer::Write => confirmed = true,
+                    // 「戻る」は競合の選択に戻る。競合が無いときは、戻る先が無いので止める。
+                    WriteAnswer::Back if plan.conflicts.is_empty() => {
+                        return Err(SyncError::Cancelled)
+                    }
+                    WriteAnswer::Back => {
+                        choices.clear();
+                        continue;
+                    }
+                }
+            }
+        }
+
         // 6: 確定する。版を振ってから別の書き込みがあれば、振るところからやり直す。
         // 確定をやり直す間に選び直したときも、止められない段へ戻ったことを知らせ直す。
         if !finishing || chose {
@@ -688,10 +769,6 @@ async fn listener(
             stage(Stage::Finishing);
             finishing = true;
         }
-        let picks: HashMap<String, Pick> = choices
-            .iter()
-            .map(|(id, chosen)| (id.clone(), chosen.pick))
-            .collect();
         let committed = transaction(ctx.db.clone(), move |tx| {
             if tx.device_state()?.counter != view.counter {
                 return Ok(None);
@@ -818,19 +895,7 @@ fn commit(
 ) -> Result<(Counts, i64, Transport, String), SyncError> {
     let number = tx.next_number()?;
     let now = db::now_iso8601();
-    let mut rows = plan.rows.clone();
-    for conflict in &plan.conflicts {
-        let pick = choices
-            .get(&conflict.unit.id())
-            .copied()
-            .ok_or_else(|| CoreError::Internal("a conflict was not chosen".to_string()))?;
-        let resolved = merge::resolve(conflict, pick, me, number, &now);
-        rows.tasks.extend(resolved.tasks);
-        rows.steps.extend(resolved.steps);
-        rows.memories.extend(resolved.memories);
-        rows.messages.extend(resolved.messages);
-        rows.attachments.extend(resolved.attachments);
-    }
+    let rows = merge::written_rows(plan, choices, me, number, &now)?;
     let mut writer = Writer::new(tx, &Snapshot::load(tx)?);
     for r in &rows.tasks {
         writer.task(r)?;
@@ -878,7 +943,7 @@ fn commit(
     if !invalid.is_empty() {
         return Err(SyncError::InvalidRows(invalid));
     }
-    let back = without_echo(written, incoming);
+    let back = write_plan::without_echo(written, incoming);
     validate::check(&back, &Known::new(&snapshot)).map_err(SyncError::InvalidRows)?;
     let mut uids = incoming.uids();
     uids.extend(back.uids());
@@ -886,53 +951,6 @@ fn commit(
     Ok((changed, counter, back, digest))
 }
 
-/// `incoming`と同じ行を除く(試行は端末ごとに見え方が違いうるので比べない)。
-fn without_echo(mut written: Transport, incoming: &Transport) -> Transport {
-    fn keep<R>(
-        rows: &mut Vec<R>,
-        incoming: &[R],
-        uid: impl Fn(&R) -> &str,
-        same: impl Fn(&R, &R) -> bool,
-    ) {
-        let sent: HashMap<&str, &R> = incoming.iter().map(|r| (uid(r), r)).collect();
-        rows.retain(|r| !sent.get(uid(r)).is_some_and(|s| same(s, r)));
-    }
-    let without_attempt = |m: &MessageRow| MessageRow {
-        attempt: None,
-        ..m.clone()
-    };
-    keep(
-        &mut written.tasks,
-        &incoming.tasks,
-        |r| &r.uid,
-        PartialEq::eq,
-    );
-    keep(
-        &mut written.steps,
-        &incoming.steps,
-        |r| &r.uid,
-        PartialEq::eq,
-    );
-    keep(
-        &mut written.memories,
-        &incoming.memories,
-        |r| &r.uid,
-        PartialEq::eq,
-    );
-    keep(
-        &mut written.messages,
-        &incoming.messages,
-        |r| &r.uid,
-        |a, b| without_attempt(a) == without_attempt(b),
-    );
-    keep(
-        &mut written.attachments,
-        &incoming.attachments,
-        |r| &r.uid,
-        PartialEq::eq,
-    );
-    written
-}
 
 /// 照合の値(「同期1回の流れ」)。今回やり取りした行の、確定後の状態を、運ぶ形で`uid`の順に並べたもののハッシュ。
 /// 試行は入れない。`ids`は書いたあとに読んだもの。
