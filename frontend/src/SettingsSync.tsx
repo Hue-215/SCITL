@@ -177,12 +177,12 @@ function ConfirmCounts({ label, counts }: { label: string; counts: WriteCounts }
     ['settings.sync.count_memories', counts.memories],
   ] as const
   return (
-    <div>
-      <p>{label}</p>
+    <section className="sync-box">
+      <h2 className="sync-box-head">{label}</h2>
       {rows.every(([, count]) => count === 0) ? (
-        <p>{t('settings.sync.confirm_nothing')}</p>
+        <p className="sync-device-body settings-hint">{t('settings.sync.confirm_nothing')}</p>
       ) : (
-        <dl className="sync-counts">
+        <dl className="sync-device-body sync-counts">
           {rows.map(([key, count]) => (
             <div key={key} className="sync-count">
               <dt>{t(key)}</dt>
@@ -191,7 +191,7 @@ function ConfirmCounts({ label, counts }: { label: string; counts: WriteCounts }
           ))}
         </dl>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -264,9 +264,9 @@ function ConflictChooser({
         {(['ours', 'theirs'] as const).map((side) => (
           <label
             key={side}
-            className={chosen[conflict.id] === side ? 'sync-side selected' : 'sync-side'}
+            className={chosen[conflict.id] === side ? 'sync-box sync-side selected' : 'sync-box sync-side'}
           >
-            <span className="sync-side-choice">
+            <span className="sync-box-head sync-side-choice">
               <input
                 type="radio"
                 name={conflict.id}
@@ -551,8 +551,10 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
           </>
         }
       >
-        <ConfirmCounts label={t('settings.sync.ours')} counts={confirm.ours} />
-        <ConfirmCounts label={t('settings.sync.theirs')} counts={confirm.theirs} />
+        <div className="sync-devices">
+          <ConfirmCounts label={t('settings.sync.ours')} counts={confirm.ours} />
+          <ConfirmCounts label={t('settings.sync.theirs')} counts={confirm.theirs} />
+        </div>
       </SyncPage>
     )
   }

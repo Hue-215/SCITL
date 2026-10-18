@@ -1831,11 +1831,45 @@ details[open] > summary > .disclosure-mark,
   letter-spacing: 0.12em;
 }
 
+/* 端末ごと・競合の側ごとの枠。見出しの帯の下に中身を置く。枠は.provider-cardと同じく枠線だけで
+   塗らない。 */
+.sync-box {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.sync-box-head {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-weight: var(--font-weight-strong);
+}
+
+/* 書き込む前の確認。中央寄せの本文の中で、両方の枠を本文の幅いっぱいに揃える。 */
+.sync-devices {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  text-align: start;
+}
+
+.sync-device-body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
 .sync-counts {
   display: grid;
   grid-template-columns: max-content max-content;
   gap: var(--space-1) var(--space-5);
   text-align: start;
+}
+
+/* 枠の中では件数を右端に寄せる。 */
+.sync-device-body.sync-counts {
+  grid-template-columns: 1fr max-content;
+  column-gap: var(--space-4);
 }
 
 .sync-count {
@@ -1848,7 +1882,7 @@ details[open] > summary > .disclosure-mark,
 }
 
 /* 競合の両側は上下に積み、枠ごとに中身をスクロールさせる。選んだ側は枠の色で示す(選択状態は
-   ラジオボタン自身も持つ)。枠は.provider-cardと同じく枠線だけで塗らない。 */
+   ラジオボタン自身も持つ)。 */
 .sync-sides {
   flex: 1;
   min-height: 0;
@@ -1866,10 +1900,6 @@ details[open] > summary > .disclosure-mark,
   flex: 1 1 0;
   /* 低い窓でも中身が少しは見える高さ。ここでしか使わない値なのでトークン化しない。 */
   min-height: 8rem;
-  display: flex;
-  flex-direction: column;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
   cursor: pointer;
 }
 
@@ -1881,9 +1911,6 @@ details[open] > summary > .disclosure-mark,
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: var(--border-width) solid var(--color-border);
-  font-weight: var(--font-weight-strong);
 }
 
 .sync-side-scroll {
