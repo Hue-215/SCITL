@@ -30,7 +30,6 @@ impl NumberField {
     }
 }
 
-/// 受け付けなかった理由の1つ。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -42,6 +41,10 @@ pub enum InputRejection {
         field: NumberField,
         #[cfg_attr(test, ts(type = "number"))]
         max: u64,
+    },
+    PortOutOfRange {
+        min: u16,
+        max: u16,
     },
     McpServerNameRequired,
     /// MCPサーバーの識別子に使えない文字・並びがあるか、長すぎる
@@ -68,6 +71,9 @@ impl fmt::Display for InputRejection {
             }
             Self::NumberTooLarge { field, max } => {
                 write!(f, "{} must be at most {max}", field.name())
+            }
+            Self::PortOutOfRange { min, max } => {
+                write!(f, "listen port must be an integer from {min} to {max}")
             }
             Self::McpServerNameRequired => f.write_str("MCP server name must not be empty"),
             Self::McpServerNameInvalid { max_chars } => write!(

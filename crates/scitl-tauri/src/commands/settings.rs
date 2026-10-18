@@ -21,8 +21,7 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     state.settings.view()
 }
 
-/// 数値の欄は文字列のまま受け取る(解釈はcore)。数値の欄と真偽値の欄の`None`は保存済みの値のまま。欄の誤りは
-/// `FormOutcome::Rejected`で返す。
+/// 数値の欄は文字列のまま受け取る(解釈はcore)。欄の誤りは`FormOutcome::Rejected`で返す。
 // 引数は「一般」タブの欄に1つずつ対応させる(欄を足すたびに増える)。構造体にまとめると、画面との
 // 取り決めを型として書き直すことになり、ほかのコマンドの引数の渡し方とも揃わなくなる。
 #[allow(clippy::too_many_arguments)]
@@ -78,6 +77,18 @@ pub async fn update_tool_settings(
             max_rounds_per_turn.as_deref(),
             total_timeout_secs.as_deref(),
         ))
+    })
+    .await
+}
+
+/// 数値の欄は文字列のまま受け取る(`update_general_settings`と同じ)。
+#[tauri::command]
+pub async fn update_sync_settings(
+    state: State<'_, AppState>,
+    listen_port: String,
+) -> CommandResult<FormOutcome<SettingsView>> {
+    with_settings(&state, move |s| {
+        FormOutcome::from_result(s.update_sync(&listen_port))
     })
     .await
 }

@@ -117,7 +117,7 @@ fn retrying_a_reply_is_refused_without_deleting_while_the_chat_is_unavailable() 
     assert_eq!(stdout_json(&data.run(&["chat", "show"])), before);
 }
 
-/// 返信の無い会話にだけ応答を生成する。エラー発言で終わったあとは断る(作り直しを使う)。
+/// エラー発言で終わったあとは断る(作り直しを使う)。
 #[test]
 fn reply_answers_only_a_conversation_without_a_reply() {
     let data = DataDir::new();
@@ -195,7 +195,6 @@ fn sent_files_are_listed_and_only_unreferenced_stored_files_are_removed() {
 /// 1×1のPNG。
 const DOT_PNG: &[u8] = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0d\x49\x44\x41\x54\x78\xda\x63\x64\xf8\xcf\x50\x0f\x00\x03\x86\x01\x80\x5a\x34\x7d\x6b\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82";
 
-/// 画像として扱う形式でもUTF-8のテキストでもないファイル(「その他」)は受け付けず、何も送らない。
 #[test]
 fn an_unsupported_file_sends_nothing() {
     let data = DataDir::new();
@@ -360,7 +359,6 @@ fn a_secret_whose_variable_is_unset_registers_nothing() {
     assert_eq!(shown["mcp_servers"], serde_json::json!([]));
 }
 
-/// 値そのものを名前の位置に書いても、端末へ書き戻さない。
 #[test]
 fn a_secret_written_in_place_of_a_variable_name_is_not_echoed() {
     let data = DataDir::new();

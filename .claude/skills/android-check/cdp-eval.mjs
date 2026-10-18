@@ -1,7 +1,7 @@
 // AndroidのWebViewで式を評価し、結果をJSONで出す(Chrome DevTools Protocol)。Node 22以上
 // (組み込みの`WebSocket`を使う)。
 // 使い方: node cdp-eval.mjs <port> '<式>'
-// <port>は`adb forward tcp:<port> localabstract:webview_devtools_remote_<pid>`で転送したもの(SKILL.md 4節)。
+// <port>は`adb forward tcp:<port> localabstract:webview_devtools_remote_<pid>`で転送したもの(SKILL.md「実寸を測る(WebViewのDevTools)」)。
 const [port, expression] = process.argv.slice(2);
 if (!port || !expression) {
   console.error("usage: node cdp-eval.mjs <port> '<expression>'");

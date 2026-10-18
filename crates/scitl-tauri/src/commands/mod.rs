@@ -4,9 +4,11 @@ pub mod export;
 pub mod link;
 pub mod mcp;
 pub mod memories;
+pub mod notification_prompt;
 pub mod requested_chat;
 pub mod settings;
 pub mod startup;
+pub mod sync;
 pub mod tasks;
 
 use std::sync::Arc;

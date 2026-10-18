@@ -7,6 +7,10 @@ frontend/src/bindings/*.ts text eol=lf
 # 配布用のビルドのたびに「変更あり」と出る
 crates/scitl-tauri/Cargo.toml text eol=lf
 
+# `scitl-tauri`のテストが`include_str!`で読み、改行を含む文字列と比べる。CRLFだとWindowsで落ちる
+crates/scitl-tauri/gen/android/**/*.kt text eol=lf
+crates/scitl-tauri/gen/android/**/*.xml text eol=lf
+
 # Gradleのwrapperの起動スクリプトは、OSごとの改行でないと動かない(Gradleが`gradle init`で付けるものと同じ)
 crates/scitl-tauri/gen/android/gradlew text eol=lf
 crates/scitl-tauri/gen/android/*.bat text eol=crlf

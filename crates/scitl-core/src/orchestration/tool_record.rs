@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::operations;
+use crate::tools::{self, IdPositions};
+
 /// フィールドをcoreの外に開かないのは、記録を作るのがcoreの中(ターンの処理と、応答生成以外の
 /// 経路での操作)だけだから(外へは直列化した形で渡るだけ)。操作の記録は`call_id`を持たない。
 ///
@@ -23,10 +26,34 @@ pub struct ToolExecutionRecord {
     pub(crate) call_id: Option<String>,
 }
 
+/// 記録のどこに端末の中の連番が入るか(`docs/sync/index.md`「IDと行の変換」)。
+#[derive(Debug)]
+pub enum RecordIds {
+    /// 内部ツールと、画面・CLIからの操作。
+    Declared(&'static IdPositions),
+    /// 外部ツール。SCITLのIDを持たない。
+    External,
+    /// 宣言の無い名前。
+    Unknown,
+}
+
+pub fn record_ids(tool: &str) -> RecordIds {
+    if let Some(ids) = tools::id_positions(tool) {
+        RecordIds::Declared(ids)
+    } else if tool == operations::DELETE_TASK {
+        RecordIds::Declared(&operations::DELETE_TASK_IDS)
+    } else if tool.contains(tools::external::SEPARATOR) {
+        RecordIds::External
+    } else {
+        RecordIds::Unknown
+    }
+}
+
 /// ツール結果が失敗を表すか。最上位の`error`キーを作るのはSCITL自身だけ
 /// (実行の失敗と`mcp::to_result_value`。サーバーの構造化出力は`structured_content`の下に入る)。
-/// 画面の失敗の印([`ToolExecutionView::is_error`])も同じ基準。
-pub(super) fn is_error_result(result: &Value) -> bool {
+/// 画面の失敗の印([`ToolExecutionView::is_error`])も同じ基準。失敗の記録は、引数のIDが存在しない行や
+/// 型の違う値でありうる(同期は置き換えない)。
+pub fn is_error_result(result: &Value) -> bool {
     result.get("error").is_some()
 }
 
@@ -37,7 +64,6 @@ pub(super) fn is_error_result(result: &Value) -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct ToolExecutionView {
-    /// 呼び出したツールの名前。記録から読めなければ`None`。
     tool: Option<String>,
     arguments: String,
     result: String,
@@ -45,7 +71,7 @@ pub struct ToolExecutionView {
     /// 引数の1行の要約(`キー: 値`を並べたもの。値はJSONの形)。長い値と全体は省略する。
     /// 引数が無ければ空。
     summary: String,
-    /// 失敗の文言の1行(結果の`error`の値)。失敗でなければ`None`。
+    /// 失敗の文言の1行(結果の`error`の値)。
     error: Option<String>,
 }
 
@@ -188,7 +214,6 @@ mod tests {
         assert_eq!(view.error, None);
     }
 
-    /// 引数は、モデルが出した順(保存した順)のまま要約する。
     #[test]
     fn summary_keeps_the_order_the_model_wrote_the_arguments_in() {
         let content = r#"{"tool":"update_task","arguments":{"title":"買い物","deadline":"2026-10-12"},"result":{}}"#;
@@ -212,8 +237,6 @@ mod tests {
         assert_eq!(view.error.as_deref(), Some("first second"));
     }
 
-    /// キーに区切りを書いても、キーはJSONの文字列として出るので並びを偽れない。全体に収まらない
-    /// 項目は途中で切らずに落とす。
     #[test]
     fn keys_cannot_forge_the_separators_and_items_are_not_cut_midway() {
         let content = json!({

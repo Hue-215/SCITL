@@ -16,38 +16,55 @@ use tokio::sync::watch;
 
 /// 処理中の対象と、それぞれへの止める指示。
 pub struct InFlightSet<K> {
-    entries: Mutex<HashMap<K, watch::Sender<bool>>>,
+    entries: Mutex<Entries<K>>,
     long_running: LongRunningCount,
+}
+
+struct Entries<K> {
+    keys: HashMap<K, watch::Sender<bool>>,
+    /// 全体を押さえている処理([`InFlightSet::try_begin_all`])への止める指示。
+    all: Option<watch::Sender<bool>>,
+}
+
+impl<K> Entries<K> {
+    fn new() -> Self {
+        Self {
+            keys: HashMap::new(),
+            all: None,
+        }
+    }
 }
 
 impl<K: Eq + Hash + Clone> InFlightSet<K> {
     pub fn new() -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            entries: Mutex::new(Entries::new()),
             long_running: LongRunningCount::new(None),
         }
     }
 
-    /// 長く掛かる部分([`InFlight::long_running`])に入っている処理が、無い状態から在る状態に
-    /// なったら`on_change(true)`を、在る状態から無い状態になったら`on_change(false)`を呼ぶ集合。
+    /// 長く掛かる部分([`InFlight::long_running`]・[`InFlightAll::long_running`])に入っている処理が、
+    /// 無い状態から在る状態になったら`on_change(true)`を、在る状態から無い状態になったら
+    /// `on_change(false)`を呼ぶ集合。
     /// 呼び出しは起きた順に1つずつ行う。次の出入りを待たせるので、`on_change`に待つ処理を置かない。
     /// `on_change`がpanicしても数は狂わないが、知らせた状態と食い違ったままになる。
     pub fn watching_long_running(on_change: impl Fn(bool) + Send + Sync + 'static) -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            entries: Mutex::new(Entries::new()),
             long_running: LongRunningCount::new(Some(Box::new(on_change))),
         }
     }
 
     /// `key`が処理中でなければ処理中にし、ガードを返す。ガードを落とすと処理中が外れる。
     /// 既に処理中なら`None`。
+    /// 全体を押さえている間も`None`。
     pub fn try_begin(&self, key: K) -> Option<InFlight<'_, K>> {
         let mut entries = self.lock();
-        if entries.contains_key(&key) {
+        if entries.all.is_some() || entries.keys.contains_key(&key) {
             return None;
         }
         let (sender, receiver) = watch::channel(false);
-        entries.insert(key.clone(), sender);
+        entries.keys.insert(key.clone(), sender);
         Some(InFlight {
             set: self,
             key,
@@ -56,10 +73,10 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
     }
 
     /// 処理中の`key`に止める指示を出す。処理中でなければ何もせず`false`。`true`は指示を
-    /// 出したことを表すだけで、止まったことは表さない。指示は今の処理だけに効き、次に
+    /// 出したことを表すだけで、止まったことは表さない。指示は今の処理だけのもので、次に
     /// `try_begin`した処理には持ち越さない。
     pub fn request_stop(&self, key: &K) -> bool {
-        match self.lock().get(key) {
+        match self.lock().keys.get(key) {
             Some(sender) => {
                 sender.send_replace(true);
                 true
@@ -68,8 +85,70 @@ impl<K: Eq + Hash + Clone> InFlightSet<K> {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<K, watch::Sender<bool>>> {
+    /// 処理中の対象が1つも無ければ全体を押さえ、ガードを返す。押さえている間は、どの対象も
+    /// [`try_begin`](Self::try_begin)できない(同期の間、送信・編集・タスクの操作を受け付けない。
+    /// `docs/sync/index.md`「同期1回の流れ」)。押さえられなければ、その理由。
+    pub fn try_begin_all(&self) -> Result<InFlightAll<'_, K>, Occupied> {
+        let mut entries = self.lock();
+        if entries.all.is_some() {
+            return Err(Occupied::All);
+        }
+        if !entries.keys.is_empty() {
+            return Err(Occupied::Keys);
+        }
+        let (sender, receiver) = watch::channel(false);
+        entries.all = Some(sender);
+        Ok(InFlightAll {
+            set: self,
+            stop: StopSignal(receiver),
+        })
+    }
+
+    /// 全体を押さえている処理に止める指示を出す。押さえていなければ`false`。
+    pub fn request_stop_all(&self) -> bool {
+        match &self.lock().all {
+            Some(sender) => {
+                sender.send_replace(true);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Entries<K>> {
         self.entries.lock().expect("in-flight set mutex poisoned")
+    }
+}
+
+/// 全体を押さえられなかった理由([`InFlightSet::try_begin_all`])。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Occupied {
+    /// 処理中の対象がある。
+    Keys,
+    /// 既に全体を押さえている。
+    All,
+}
+
+/// 全体を押さえている間持つガード([`InFlightSet::try_begin_all`])。
+pub struct InFlightAll<'a, K: Eq + Hash + Clone> {
+    set: &'a InFlightSet<K>,
+    stop: StopSignal,
+}
+
+impl<K: Eq + Hash + Clone> InFlightAll<'_, K> {
+    pub fn stop_signal(&self) -> &StopSignal {
+        &self.stop
+    }
+
+    /// 全体を押さえた処理が長く掛かる部分に入ったことにする。返ったガードを落とすと出たことになる。
+    pub fn long_running(&self) -> LongRunning<'_> {
+        self.set.long_running.enter()
+    }
+}
+
+impl<K: Eq + Hash + Clone> Drop for InFlightAll<'_, K> {
+    fn drop(&mut self) {
+        self.set.lock().all = None;
     }
 }
 
@@ -86,7 +165,6 @@ pub struct InFlight<'a, K: Eq + Hash + Clone> {
 }
 
 impl<K: Eq + Hash + Clone> InFlight<'_, K> {
-    /// この処理への止める指示。
     pub fn stop_signal(&self) -> &StopSignal {
         &self.stop
     }
@@ -99,18 +177,20 @@ impl<K: Eq + Hash + Clone> InFlight<'_, K> {
 
 impl<K: Eq + Hash + Clone> Drop for InFlight<'_, K> {
     fn drop(&mut self) {
-        self.set.lock().remove(&self.key);
+        self.set.lock().keys.remove(&self.key);
     }
 }
+
+type OnChange = Box<dyn Fn(bool) + Send + Sync>;
 
 /// 長く掛かる部分に入っている処理の数と、その有無が変わったことの知らせ先。
 struct LongRunningCount {
     count: Mutex<usize>,
-    on_change: Option<Box<dyn Fn(bool) + Send + Sync>>,
+    on_change: Option<OnChange>,
 }
 
 impl LongRunningCount {
-    fn new(on_change: Option<Box<dyn Fn(bool) + Send + Sync>>) -> Self {
+    fn new(on_change: Option<OnChange>) -> Self {
         Self {
             count: Mutex::new(0),
             on_change,
@@ -127,9 +207,9 @@ impl LongRunningCount {
     }
 
     /// 知らせる順が出入りの順と入れ替わらないよう、数のロックを持ったまま呼ぶ。
-    fn notify(&self, any: bool) {
+    fn notify(&self, running: bool) {
         if let Some(on_change) = &self.on_change {
-            on_change(any);
+            on_change(running);
         }
     }
 
@@ -212,7 +292,7 @@ mod tests {
         let reported = std::sync::Arc::new(Mutex::new(Vec::new()));
         let set = InFlightSet::watching_long_running({
             let reported = reported.clone();
-            move |any| reported.lock().unwrap().push(any)
+            move |running| reported.lock().unwrap().push(running)
         });
         let first = set.try_begin(1).unwrap();
         let second = set.try_begin(2).unwrap();
@@ -231,6 +311,19 @@ mod tests {
 
         let _again = first.long_running();
         assert_eq!(*reported.lock().unwrap(), [true, false, true]);
+    }
+
+    #[test]
+    fn holding_everything_is_reported_too() {
+        let reported = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let set = InFlightSet::<i32>::watching_long_running({
+            let reported = reported.clone();
+            move |running| reported.lock().unwrap().push(running)
+        });
+        let all = set.try_begin_all().unwrap();
+        assert!(reported.lock().unwrap().is_empty());
+        drop(all.long_running());
+        assert_eq!(*reported.lock().unwrap(), [true, false]);
     }
 
     #[tokio::test]
@@ -268,5 +361,25 @@ mod tests {
         let guard = set.try_begin(1).unwrap();
         let result = guard.stop_signal().unless_requested(async { 7 }).await;
         assert_eq!(result, Some(7));
+    }
+
+    #[test]
+    fn holding_everything_waits_for_none_and_keeps_others_out() {
+        let set = InFlightSet::new();
+        let one = set.try_begin(1).unwrap();
+        assert_eq!(
+            set.try_begin_all().err(),
+            Some(Occupied::Keys),
+            "処理中があれば押さえない"
+        );
+        drop(one);
+        let all = set.try_begin_all().unwrap();
+        assert!(set.try_begin(1).is_none());
+        assert_eq!(set.try_begin_all().err(), Some(Occupied::All));
+        assert!(set.request_stop_all());
+        assert!(all.stop_signal().is_requested());
+        drop(all);
+        assert!(!set.request_stop_all());
+        assert!(set.try_begin(1).is_some());
     }
 }

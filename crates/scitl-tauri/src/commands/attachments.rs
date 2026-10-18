@@ -14,14 +14,13 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 use super::{with_db, CommandResult};
 use crate::AppState;
 
-/// 預けた添付を取り消す。知らないトークンは何もしない。
+/// 預けた添付を取り消す([`scitl_core::attachments::Attachments::discard`])。
 #[tauri::command]
 pub fn discard_staged_attachment(state: State<'_, AppState>, token: String) {
     state.attachments.discard(&token);
 }
 
-/// 送っていない添付をすべて捨てる。画面が起動のたびに呼ぶ(読み込み直された画面は入力欄の添付を
-/// 持たないので、残った預かりが1つの発言に付けられる数を埋めたままにならないように)。
+/// 送っていない添付をすべて捨てる([`scitl_core::attachments::Attachments::discard_all`])。
 #[tauri::command]
 pub fn discard_all_staged_attachments(state: State<'_, AppState>) {
     state.attachments.discard_all();
@@ -31,7 +30,7 @@ pub fn discard_all_staged_attachments(state: State<'_, AppState>) {
 /// 置き換える。受け取るのは知らせ先だけで、パスは受け取らない。
 #[tauri::command]
 pub fn watch_dropped_files(state: State<'_, AppState>, on_drop: Channel<ReceivedFiles>) {
-    *state.dropped.lock().expect("dropped files mutex poisoned") = Some(on_drop);
+    state.dropped.set(on_drop);
 }
 
 /// 窓に落とされたファイルを受け取り、名前だけを画面へ知らせる。ここでは読まない。受け付けるか
@@ -41,12 +40,7 @@ pub fn receive_drop(app: &AppHandle, paths: Vec<PathBuf>) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    let Some(channel) = state
-        .dropped
-        .lock()
-        .expect("dropped files mutex poisoned")
-        .clone()
-    else {
+    let Some(channel) = state.dropped.current() else {
         return;
     };
     let files = paths.into_iter().map(ReceivedFile::Path).collect();
@@ -149,9 +143,9 @@ fn clipboard_image(_app: &AppHandle) -> scitl_core::error::Result<Option<Receive
     Ok(None)
 }
 
-/// 受け取ったファイル(落とした・選んだ・貼り付けた)のうち1つを読んで預け、判定の結果を返す。
-/// ファイルは受け取りの番号と並びの位置で指し、パスは受け取らない。最後に受け取った分の、まだ
-/// 読んでいないものだけを読める。
+/// 受け取ったファイル(落とした・選んだ・貼り付けた)のうち1つを読んで預ける
+/// ([`scitl_core::attachments::Attachments::stage_received`])。ファイルは受け取りの番号と並びの
+/// 位置で指す。
 #[tauri::command]
 pub async fn stage_received_file(
     state: State<'_, AppState>,
@@ -174,7 +168,7 @@ pub async fn read_text_attachment(
     .await
 }
 
-/// 画像の添付をdata URLで返す(サムネイルと拡大表示)。
+/// サムネイルと拡大表示に使う([`scitl_core::attachments::Attachments::image_data_url`])。
 #[tauri::command]
 pub async fn read_image_attachment(
     state: State<'_, AppState>,
@@ -186,7 +180,7 @@ pub async fn read_image_attachment(
         .await?)
 }
 
-/// 添付を元の名前で書き出し、入っているフォルダを開く。
+/// [`scitl_core::attachments::Attachments::reveal`]を呼ぶ。
 #[tauri::command]
 pub async fn reveal_attachment(
     state: State<'_, AppState>,

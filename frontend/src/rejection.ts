@@ -9,6 +9,8 @@ export function rejectionText(reason: InputRejection): string {
       return t('errors.positive_integer')
     case 'number_too_large':
       return t('errors.number_too_large', { max: reason.max })
+    case 'port_out_of_range':
+      return t('errors.port_out_of_range', { min: reason.min, max: reason.max })
     case 'mcp_server_name_required':
       return t('settings.tools.id_required')
     case 'mcp_server_name_invalid':

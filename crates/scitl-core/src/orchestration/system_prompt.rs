@@ -98,10 +98,9 @@ fn state_note(chat: Chat, start: ConversationStart) -> String {
 
 /// ニックネームの注記(設定したときだけ) + 基本システムプロンプト + タスクチャット用システム
 /// プロンプト(総合チャットなら代わりに総合チャットの注記) + 状態とメモリの読み方 +
-/// 予約タグと囲みの外にあるものの読み方。会話と設定と会話の始まりの見え方([`ConversationStart`])だけで決まり、
-/// リクエストごとには変わらない。現在日時と状態は添えず、
-/// モデルがユーザー発言の送信日時とツールで知る(`docs/spec/architecture/prompt-shape.md`
-/// 「状態と日時の伝え方」)。
+/// 予約タグと囲みの外にあるものの読み方。会話と設定と会話の始まりの見え方([`ConversationStart`])
+/// だけで決まり、リクエストごとには変わらない。現在日時と状態は添えず、モデルがユーザー発言の
+/// 送信日時とツールで知る(`docs/spec/architecture/prompt-shape.md`「状態と日時の伝え方」)。
 ///
 /// 利用者が書いたものは、設定のプロンプトとニックネームだけを載せる(会話の中身は載せない)。
 pub fn build_system_prompt(
@@ -153,7 +152,6 @@ mod tests {
         assert!(base_pos < task_chat_pos);
     }
 
-    /// ニックネームは設定したときだけ、どちらの会話でも先頭で伝える。
     #[test]
     fn tells_the_nickname_first_only_when_set() {
         let nickname = "Hal \"9000\"";
@@ -204,7 +202,6 @@ mod tests {
         assert!(state_note(Chat::General, ConversationStart::Other).contains(get_task_list::NAME));
     }
 
-    /// 聞き取りから始まった会話を最初から送っている間だけ、始めた時点で空だったと伝える。
     /// 総合チャットはタスクを対象にしないので、見え方によらず同じ注記にする。
     #[test]
     fn tells_that_the_task_started_blank_only_while_the_start_is_in_view() {

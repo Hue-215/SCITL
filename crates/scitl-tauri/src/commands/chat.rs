@@ -119,7 +119,7 @@ pub async fn chat_lacks_reply(state: State<'_, AppState>, chat: Chat) -> Command
     with_db(&state, move |conn| orchestration::lacks_reply(conn, chat)).await
 }
 
-/// 会話の発言を表示用に取得する。
+/// [`orchestration::list_chat`]を呼ぶ。
 #[tauri::command]
 pub async fn list_chat_messages(
     state: State<'_, AppState>,

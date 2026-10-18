@@ -466,7 +466,6 @@ mod tests {
         assert!(!out.contains("provider body"));
     }
 
-    /// 失敗したターンで受け取り終えた中身は、エラーの文言より前に出す。
     #[test]
     fn a_failed_reply_keeps_the_text_received_before_the_error() {
         let error = message(Role::Error, Kind::Normal, "The request failed.", None);
@@ -485,7 +484,6 @@ mod tests {
         assert!(partial < failure, "{out}");
     }
 
-    /// ツールを実行しただけで失敗したターンには、受け取った返信の一言を添えない。
     #[test]
     fn a_failure_after_only_tool_calls_does_not_claim_a_reply() {
         let error = message(

@@ -15,7 +15,7 @@ use chrono::{Datelike, Timelike};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use super::{io_error, write, ExportOutcome, ExportSummary, Snapshot};
+use super::{io_error, write, ExportOutcome, ExportScope, ExportSummary, Snapshot};
 use crate::attachments::{AttachmentStore, Attachments};
 use crate::blocking;
 use crate::db::{with_conn, SharedConnection};
@@ -52,11 +52,12 @@ pub async fn export_to_chosen_file(
     db: SharedConnection,
     attachments: &Attachments,
     staging: PathBuf,
+    scope: ExportScope,
     choose: impl FnOnce(&str) -> Option<OpenChosen> + Send + 'static,
 ) -> Result<ExportOutcome> {
     let building = Building::begin()
         .ok_or_else(|| CoreError::Export("another export is in progress".to_string()))?;
-    let snapshot = with_conn(db, Snapshot::read).await?;
+    let snapshot = with_conn(db, move |conn| Snapshot::read(conn, scope)).await?;
     let store = attachments.store();
     blocking::run(move || {
         let _building = building;
@@ -235,8 +236,12 @@ mod tests {
     }
 
     impl Fixture {
-        /// 総合チャットに、テキストと画像の添付を付けた発言が1つある。
         fn new() -> Self {
+            Self::with_scope(ExportScope::All)
+        }
+
+        /// 総合チャットに、テキストと画像の添付を付けた発言が1つある。
+        fn with_scope(scope: ExportScope) -> Self {
             let temp = TempStore::new();
             let conn = db::open_in_memory().unwrap();
             let message = messages::insert_message(
@@ -275,7 +280,7 @@ mod tests {
                 };
                 attachments::insert(&conn, message, &new).unwrap();
             }
-            let snapshot = Snapshot::read(&conn).unwrap();
+            let snapshot = Snapshot::read(&conn, scope).unwrap();
             Self { temp, snapshot }
         }
 
@@ -350,6 +355,35 @@ mod tests {
             .unwrap();
         assert_eq!(image, b"\x89PNG\r\n\x1a\nbody");
         assert!(staged_files(&f.staging()).is_empty());
+    }
+
+    #[test]
+    fn a_chat_export_names_its_scope_and_leaves_out_the_memories() {
+        let f = Fixture::with_scope(ExportScope::Chat(Chat::General));
+        let mut suggested = String::new();
+        let outcome = f.export(|name| {
+            suggested = name.to_string();
+            f.open_chosen()
+        });
+
+        let ExportOutcome::Saved { summary } = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!(
+            summary.folder.ends_with("-general-chat"),
+            "{}",
+            summary.folder
+        );
+        assert_eq!(suggested, format!("scitl-export-{}.zip", summary.folder));
+        let zip = zip::ZipArchive::new(File::open(f.chosen()).unwrap()).unwrap();
+        let folder = &summary.folder;
+        assert!(zip
+            .file_names()
+            .all(|n| n.starts_with(&format!("{folder}/"))));
+        assert!(zip
+            .file_names()
+            .any(|n| n == format!("{folder}/general-chat.md")));
+        assert!(!zip.file_names().any(|n| n.ends_with("memories.md")));
     }
 
     #[test]

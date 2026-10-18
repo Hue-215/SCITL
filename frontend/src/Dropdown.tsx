@@ -22,7 +22,6 @@ interface DropdownProps {
   options: DropdownOption[]
   selectedKey: string | null
   onSelect: (key: string) => void
-  // 一覧が空のときの一文。
   emptyText?: string
   // 一覧をボタンの上下どちらに開くか。下に場所の無い所(チャット入力欄の下)では上に開く。
   direction: 'up' | 'down'

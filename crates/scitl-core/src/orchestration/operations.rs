@@ -16,13 +16,24 @@ use crate::error::Result;
 use crate::in_flight::InFlightSet;
 use crate::orchestration::tool_record::ToolExecutionRecord;
 use crate::orchestration::turn::begin_generating;
-use crate::tools::update_task;
+use crate::tools::{
+    get_current_task_detail, update_task, IdPosition, IdPositions, IdTable, Segment, NO_IDS,
+};
 
 /// 削除の記録に載せる操作名。モデルには公開しないツールだが、記録の語彙は他の操作と同じく
 /// ツール名に揃える。
-const DELETE_TASK: &str = "delete_task";
+pub(super) const DELETE_TASK: &str = "delete_task";
 
-/// タイトルの変更。整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
+/// 削除の記録のうち、IDの入る位置(内部ツールの宣言と同じ形。`tools::IdPositions`)。
+pub(super) const DELETE_TASK_IDS: IdPositions = IdPositions {
+    arguments: NO_IDS,
+    result: &[IdPosition {
+        path: &[Segment::Key("id")],
+        table: IdTable::Task,
+    }],
+};
+
+/// 整形すると空になる・長すぎるタイトルは、モデルの`update_task`と同じく断る。
 pub async fn rename_task(
     db: SharedConnection,
     generating: &InFlightSet<Chat>,
@@ -105,6 +116,19 @@ async fn update(
     .await
 }
 
+/// 同期が置く、結合後のタスクの全体の記録の`content`(`docs/sync/index.md`「版と結合」)。モデルが状態を
+/// 読むツールの呼び出しと同じ形にし、形式の説明(`llm::user_message_format_note`)を変えずに済ませる。
+pub(crate) fn task_state_record(conn: &Connection, task_id: i64) -> Result<String> {
+    let result = get_current_task_detail::task_detail(conn, task_id)?;
+    Ok(serde_json::to_string(&ToolExecutionRecord {
+        tool: get_current_task_detail::NAME.to_string(),
+        arguments: json!({}),
+        result,
+        call_id: None,
+    })
+    .expect("a record of JSON values serializes"))
+}
+
 fn record(
     conn: &Connection,
     source: OperationSource,
@@ -143,6 +167,7 @@ mod tests {
     use super::*;
     use crate::db;
     use crate::error::CoreError;
+    use crate::orchestration::{record_ids, RecordIds};
 
     struct Fixture {
         db: SharedConnection,
@@ -312,6 +337,42 @@ mod tests {
         assert!(messages::list_for_chat(&conn, Chat::General)
             .unwrap()
             .is_empty());
+    }
+
+    /// 操作の記録も、同期で置き換えるIDを宣言している(`tool_record::record_ids`)。
+    #[tokio::test]
+    async fn operation_records_declare_their_ids() {
+        let f = Fixture::new();
+        crate::db::task_steps::add_steps(
+            &f.db.lock().unwrap(),
+            f.task_id,
+            &["買い出し".to_string()],
+        )
+        .unwrap();
+        rename_task(
+            f.db.clone(),
+            &f.generating,
+            OperationSource::Ui,
+            f.task_id,
+            "買い物".to_string(),
+        )
+        .await
+        .unwrap();
+        delete_task(f.db.clone(), &f.generating, OperationSource::Ui, f.task_id)
+            .await
+            .unwrap();
+        let conn = f.db.lock().unwrap();
+        let rows = messages::list_for_chat(&conn, Chat::Task(f.task_id)).unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            let content: Value = serde_json::from_str(&row.content).unwrap();
+            let tool = content["tool"].as_str().unwrap();
+            let RecordIds::Declared(ids) = record_ids(tool) else {
+                panic!("{tool} is not declared");
+            };
+            crate::tools::assert_ids_declared(tool, &content["arguments"], ids.arguments);
+            crate::tools::assert_ids_declared(tool, &content["result"], ids.result);
+        }
     }
 
     #[tokio::test]

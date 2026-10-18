@@ -2,11 +2,7 @@
 import type { ApiFormat } from "./ApiFormat";
 import type { ModelView } from "./ModelView";
 
-export type ProviderView = { id: string, name: string, api_format: ApiFormat, base_url: string, models: Array<ModelView>, active_model: string | null, has_api_key: boolean, 
-/**
- * 登録したカスタムヘッダーの名前。値は秘密情報なので渡さない。
- */
-header_names: Array<string>, 
+export type ProviderView = { id: string, name: string, api_format: ApiFormat, base_url: string, models: Array<ModelView>, active_model: string | null, has_api_key: boolean, header_names: Array<string>, 
 /**
  * モデルの能力を推論サーバーに問い合わせられる(「能力を検出」を出す)。
  */

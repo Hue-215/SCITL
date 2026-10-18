@@ -1,5 +1,7 @@
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+#[cfg(target_os = "android")]
+use tauri::Manager;
+use tauri::{AppHandle, State};
 
 use scitl_core::db::messages::Chat;
 
@@ -14,26 +16,14 @@ pub fn watch_requested_chats(
     state: State<'_, AppState>,
     on_request: Channel<Chat>,
 ) {
-    *state
-        .requested_chat
-        .lock()
-        .expect("requested chat mutex poisoned") = Some(on_request);
+    state.requested_chat.set(on_request);
     deliver(&app);
-}
-
-/// 画面が読み込み直されるときに、前の画面の知らせ先を捨てる。
-pub fn forget_watcher(app: &AppHandle) {
-    if let Some(state) = app.try_state::<AppState>() {
-        *state
-            .requested_chat
-            .lock()
-            .expect("requested chat mutex poisoned") = None;
-    }
 }
 
 /// 通知を押して届いた、開く会話の頼みがあれば、確かめてから画面へ知らせる
 /// (`scitl_core::reply_notification`)。頼みはActivityが持っていて、アプリが前に出たときと、画面が
-/// 知らせ先を渡したときに引き取る。画面が知らせ先を渡す前なら、引き取らずに残す。
+/// 知らせ先を渡したときに引き取る。画面が知らせ先を渡す前なら、引き取らずに残す。確かめている間に
+/// 画面が読み込み直されたら、渡し直された知らせ先へ送る。
 #[cfg(target_os = "android")]
 pub fn deliver(app: &AppHandle) {
     let app = app.clone();
@@ -41,14 +31,9 @@ pub fn deliver(app: &AppHandle) {
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
-        let Some(channel) = state
-            .requested_chat
-            .lock()
-            .expect("requested chat mutex poisoned")
-            .clone()
-        else {
+        if state.requested_chat.current().is_none() {
             return;
-        };
+        }
         let Some(code) = scitl_core::reply_notification::take_requested_chat() else {
             return;
         };
@@ -58,8 +43,12 @@ pub fn deliver(app: &AppHandle) {
             ))
         })
         .await;
-        if let Ok(Some(chat)) = resolved {
-            let _ = channel.send(chat);
+        match resolved {
+            Ok(Some(chat)) => state.requested_chat.send_or_keep(chat),
+            Ok(None) => {}
+            Err(e) => scitl_core::diagnostics::report(format_args!(
+                "could not check the chat to open: {e}"
+            )),
         }
     });
 }

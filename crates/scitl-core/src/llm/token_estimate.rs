@@ -58,7 +58,6 @@ pub fn estimate_message(message: &ChatMessage) -> usize {
     MESSAGE_OVERHEAD + body
 }
 
-/// ツールの定義もリクエストの一部としてコンテキストを消費する。
 pub fn estimate_tools(tools: &[ToolSchema]) -> usize {
     tools
         .iter()

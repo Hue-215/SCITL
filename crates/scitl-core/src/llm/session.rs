@@ -1,6 +1,6 @@
 //! 会話ごとのセッションID。プロバイダーのカスタムヘッダーの値に`{session_id}`と書くと、
 //! 送るときにこの値へ置き換わる(`providers::CustomHeaders`)。会話ごとに変わらないIDで
-//! 振り分けとプロンプトキャッシュを効かせる送り先(OpenCode Go等)のため。
+//! 振り分けとプロンプトキャッシュに使う送り先(OpenCode Go等)のため。
 
 use std::sync::OnceLock;
 

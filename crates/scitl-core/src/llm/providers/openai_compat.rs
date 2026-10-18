@@ -28,9 +28,8 @@ pub struct OpenAiCompatAdapter {
 
 impl OpenAiCompatAdapter {
     /// 鍵とカスタムヘッダーの値は`credentials`の中で`SecretString`のまま持ち、平文`String`を
-    /// 経由させない。`request_timeout`は
-    /// 設定の応答タイムアウト(`config::GeneralConfig::response_timeout`)で、データの届かない
-    /// 時間の上限として使う。
+    /// 経由させない。`request_timeout`は設定の応答タイムアウト
+    /// (`config::GeneralConfig::response_timeout`)で、データの届かない時間の上限として使う。
     pub fn new(
         base_url: impl Into<String>,
         credentials: Credentials,
@@ -89,15 +88,14 @@ pub async fn list_models(
     )
     .await?;
     let parsed: ModelList = super::read_success_json(response, credentials.secrets()).await?;
-    let mut names: Vec<String> = parsed
-        .data
-        .into_iter()
-        .map(|m| m.id)
-        .filter(|id| !id.trim().is_empty())
-        .collect();
-    names.sort();
-    names.dedup();
-    Ok(names)
+    Ok(super::sorted_unique(
+        parsed
+            .data
+            .into_iter()
+            .map(|m| m.id)
+            .filter(|id| !id.trim().is_empty())
+            .collect(),
+    ))
 }
 
 /// `GET /models`の応答。`object`・`owned_by`等は使わない(互換を名乗るサーバーには

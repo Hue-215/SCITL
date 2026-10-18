@@ -70,7 +70,6 @@ impl TaskStatus {
 }
 
 /// サイドバーのタスク一覧表示に必要な最小限の情報。
-/// 本文(description)は一覧に出さないため含めない。
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 pub struct TaskSummary {
@@ -152,7 +151,7 @@ pub fn list_summaries(conn: &Connection) -> Result<Vec<TaskSummary>> {
     Ok(rows)
 }
 
-/// 新規タスクの追加。タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う。
+/// タイトル・締切は未設定(null)で作り、聞き取りはチャットで行う。
 pub fn create_task(conn: &Connection) -> Result<Task> {
     let now = now_iso8601();
     conn.execute(
@@ -208,16 +207,8 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
         if let FieldChange::Set(deadline) = &update.deadline {
             validate_deadline(deadline)?;
         }
-        // 空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので、
-        // 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない。
         if let FieldChange::Set(description) = &update.description {
-            if description.trim().is_empty() {
-                return Err(CoreError::InvalidArgument {
-                    name: "description".to_string(),
-                    reason: "must not be empty (to remove the description, use clear)".to_string(),
-                });
-            }
-            check_max_chars("description", description, MAX_DESCRIPTION_CHARS)?;
+            check_description(description)?;
         }
 
         let now = now_iso8601();
@@ -228,7 +219,6 @@ pub fn update_task(conn: &Connection, task_id: i64, update: TaskUpdate) -> Resul
             .transpose()?
             .or(current.title);
         // 既にアーカイブ済みなら元の日時を保つ(`task_steps::update_step`の`done_at`と同じ)。
-        // 状態の列は現在の状態だけを表し、いつ何をしたかは会話ログのツール実行記録が持つ。
         let archived_at = match update.status {
             Some(TaskStatus::Archived) => current.archived_at.or_else(|| Some(now.clone())),
             Some(TaskStatus::Unarchived) => None,
@@ -295,7 +285,7 @@ pub(crate) fn normalize_title(raw: &str) -> Result<String> {
 /// `deadline`として書き込める形(`YYYY-MM-DD`)かを検証する。タイトルと違い、外れた値を
 /// 丸めずエラーとして返す。日時形式や自然文を受け付けると、辞書順=時系列順という前提と、
 /// タイムゾーンで締切が前後しない性質が壊れる。
-fn validate_deadline(raw: &str) -> Result<()> {
+pub(crate) fn validate_deadline(raw: &str) -> Result<()> {
     let invalid = || CoreError::InvalidArgument {
         name: "deadline".to_string(),
         reason: "expected a date in YYYY-MM-DD format".to_string(),
@@ -323,8 +313,19 @@ fn validate_deadline(raw: &str) -> Result<()> {
         .ok_or_else(invalid)
 }
 
-/// 画面でタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を
-/// 付け、続きがあることを示す。
+/// 説明として書き込めるか。空の説明は「未設定」ではなく誤りとして返す。未設定はNULLで表すので、
+/// 空文字列を書くと未設定の表し方が2つになる。黙って消去に読み替えもしない。
+pub(crate) fn check_description(description: &str) -> Result<()> {
+    if description.trim().is_empty() {
+        return Err(CoreError::InvalidArgument {
+            name: "description".to_string(),
+            reason: "must not be empty (to remove the description, use clear)".to_string(),
+        });
+    }
+    check_max_chars("description", description, MAX_DESCRIPTION_CHARS)
+}
+
+/// 画面でタイトルの代わりに出す文字列の上限文字数。切り詰めた場合は末尾に省略記号を付ける。
 const MAX_FALLBACK_LABEL_CHARS: usize = 30;
 
 /// タイトル未設定のタスク(`only`を渡せばそのタスクだけ)の、タイトルの代わりに出す1行。
@@ -344,7 +345,7 @@ fn fallback_labels(conn: &Connection, only: Option<i64>) -> Result<HashMap<i64, 
     let mut messages = conn.prepare_cached(
         "SELECT content FROM messages
          WHERE task_id = ?1 AND role = 'user' AND kind = 'normal' AND deleted_at IS NULL
-         ORDER BY created_at ASC, id ASC",
+         ORDER BY id ASC",
     )?;
     let mut labels = HashMap::new();
     for task_id in task_ids {
@@ -939,6 +940,25 @@ mod tests {
                 .fallback_label
                 .as_deref(),
             Some("写真の件")
+        );
+    }
+
+    /// 呼び名は`id`の順で最初の発言から作る。`created_at`は端末の時計で決まるので見ない。
+    #[test]
+    fn fallback_comes_from_the_first_message_in_id_order() {
+        let conn = db::open_in_memory().unwrap();
+        let id = seed_task(&conn);
+        seed_user_message(&conn, id, "最初の発言");
+        seed_user_message(&conn, id, "時計が戻ったあとの発言");
+        conn.execute(
+            "UPDATE messages SET created_at = '2000-01-01T00:00:00Z' WHERE content = '時計が戻ったあとの発言'",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            list_tasks(&conn).unwrap()[0].fallback_label.as_deref(),
+            Some("最初の発言")
         );
     }
 

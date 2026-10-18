@@ -25,8 +25,7 @@ impl ApiFormat {
     pub const ALL: [Self; 3] = [Self::OpenAiCompat, Self::Anthropic, Self::Gemini];
 }
 
-/// 1つのLLMプロバイダー設定。秘密情報を含まないため、そのままログに出しても
-/// TOMLファイルとして保存してもよい。
+/// 秘密情報を含まないため、そのままログに出してもTOMLファイルとして保存してもよい。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: String,
@@ -104,12 +103,11 @@ pub enum Capability {
     Thinking,
 }
 
-/// 思考の強さ。リクエストでの書き方は方言ごとにアダプタが決める。
+/// リクエストでの書き方は方言ごとにアダプタが決める。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
-    /// 思考させない。
     Off,
     Low,
     /// まだ選んでいないモデルの値。OpenAIがAPIの既定としている強さに合わせる。
@@ -215,6 +213,17 @@ pub struct ToolConfig {
     pub total_timeout_secs: Option<u64>,
 }
 
+/// 端末間の同期(設定画面「同期」タブ)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// 待ち受けるポート。未設定はOSが空いている番号を選ぶ。手で書いた下限未満の値も
+    /// そのまま使う(黙って別の番号で待ち受けない。`scitl_sync::Listener::bind`)。
+    pub listen_port: Option<u16>,
+}
+
+/// 画面とCLIで受け付ける、待ち受けるポートの下限。1024未満は特権が要る(Android・Linux)。
+pub const MIN_LISTEN_PORT: u16 = 1024;
+
 /// [`crate::secrets`]に保存した1つの値(HTTPヘッダーの値)を指す参照。
 /// `key_ref`はULIDで払い出し、`name`からは組み立てない(`name`はユーザー入力で、`:`等を
 /// 含んで衝突しうるため)。
@@ -236,7 +245,7 @@ pub enum McpEndpoint {
     },
 }
 
-/// 1つの外部ツールサーバー(MCP)設定。秘密情報を含まない。ツール一覧(名前・説明)は
+/// 秘密情報を含まない。ツール一覧(名前・説明)は
 /// 永続化せず、アプリ起動中だけ[`crate::mcp::ToolCatalog`]に持つ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
@@ -256,7 +265,7 @@ pub struct McpServerConfig {
 pub const MCP_SERVER_NAME_MAX_CHARS: usize = 16;
 
 /// サーバー識別子を検証する([`MCP_SERVER_NAME_MAX_CHARS`]字以内、英数字とアンダースコア
-/// のみ)。画面の入力チェックはセキュリティ境界ではないので、ここでも検証する。
+/// のみ)。画面の入力チェックは守りにならないので、ここでも検証する。
 pub fn validate_mcp_server_name(name: &str) -> Result<(), CoreError> {
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(CoreError::InvalidSettings(
@@ -291,6 +300,8 @@ pub struct Config {
     #[serde(default)]
     pub tools: ToolConfig,
     #[serde(default)]
+    pub sync: SyncConfig,
+    #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -324,7 +335,7 @@ impl Config {
     }
 }
 
-/// 設定ファイルを読み込む。ファイルが存在しない場合は初回起動として空の設定を返す
+/// ファイルが存在しない場合は初回起動として空の設定を返す
 /// (プロバイダー未登録のまま起動し、設定画面で登録する)。
 pub fn load(path: &Path) -> Result<Config, CoreError> {
     match std::fs::read_to_string(path) {
@@ -334,7 +345,7 @@ pub fn load(path: &Path) -> Result<Config, CoreError> {
     }
 }
 
-/// 設定ファイルを保存する。呼び出し元が親ディレクトリの存在を保証する。
+/// 呼び出し元が親ディレクトリの存在を保証する。
 ///
 /// 書き込み途中で落ちても`config.toml`が壊れないように書く([`crate::files::write_durably`])。
 /// 置き換えまで同期するのは、呼び出し元が保存の直後に古い鍵を消すため(置き換えが電源断で
@@ -402,6 +413,9 @@ mod tests {
             tools: ToolConfig {
                 max_rounds_per_turn: Some(8),
                 total_timeout_secs: Some(90),
+            },
+            sync: SyncConfig {
+                listen_port: Some(2000),
             },
             mcp_servers: vec![McpServerConfig {
                 id: "srv".to_string(),
@@ -589,7 +603,6 @@ models = ["a"]
         assert!(toml::from_str::<Config>(text).is_err());
     }
 
-    /// 知らない表示言語は既定の言語として読み、ほかの設定を変えて保存しても書かれた値を残す。
     #[test]
     fn unknown_language_falls_back_to_the_default_and_survives_a_save() {
         let dir = tempfile::tempdir().unwrap();
@@ -611,8 +624,8 @@ models = ["a"]
         assert_eq!(known.unknown_language(), None);
     }
 
-    /// `task_chat_system_prompt`を含まないTOMLも読める。`#[serde(default)]`の無い`Option`が
-    /// 欠損時に`None`になるserde_deriveの挙動に頼っているため、その確認。
+    /// `#[serde(default)]`の無い`Option`が欠損時に`None`になるserde_deriveの挙動に頼っているため、
+    /// その確認。
     #[test]
     fn load_reads_config_without_task_chat_system_prompt_key() {
         let dir = tempfile::tempdir().unwrap();

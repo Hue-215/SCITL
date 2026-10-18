@@ -6,11 +6,14 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::get_memories::memory_list;
+use super::get_memories::MEMORY_LIST;
 use super::Run;
+use super::{IdPosition, IdTable, Segment};
 
 internal_tool! {
     name: "update_memory",
     run: Run::Write(execute),
+    ids: super::IdPositions { arguments: MEMORY_ID_ARGUMENT, result: MEMORY_LIST },
     "Rewrite a memory, for example when the fact has changed.",
     json!({
         "type": "object",
@@ -22,6 +25,12 @@ internal_tool! {
         "additionalProperties": false
     }),
 }
+
+/// メモリの削除ツールも同じ引数を持つ。
+pub(super) const MEMORY_ID_ARGUMENT: &[IdPosition] = &[IdPosition {
+    path: &[Segment::Key("memory_id")],
+    table: IdTable::Memory,
+}];
 
 pub fn execute(conn: &Connection, arguments: &Value) -> Result<Value> {
     let args = Args::parse(arguments, schema())?;

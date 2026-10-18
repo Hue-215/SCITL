@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import type { McpServerView, NewMcpEndpoint, SettingsView } from './types'
+import type { McpServerView, McpToolView, NewMcpEndpoint, SettingsView } from './types'
 import { ConfirmButton } from './Dialog'
+import { DisclosureMark } from './Icon'
 import { isolated, t } from './i18n'
 import type { AddResult } from './rejection'
 import { CollapseToggle, NumberField, ServerNotice } from './settingsFields'
@@ -64,7 +65,7 @@ export function McpTab({
       />
 
       {/* ツール呼び出し全体の上限。内部ツールにも
-          効くので、MCPサーバーの一覧より後ろ、タブの末尾に置く。サーバーの追加とは
+          掛かるので、MCPサーバーの一覧より後ろ、タブの末尾に置く。サーバーの追加とは
           別の話なので、追加フォームと同じ形の仕切り線で切る。 */}
       <section className="settings-section settings-section-break">
         <NumberField
@@ -164,26 +165,14 @@ function McpServerCard({
             />
           )}
           <ul className="model-list">
-            {visibleTools.map((tool) => {
-              const checked = server.enabled_tools.includes(tool.name)
-              return (
-                <li key={tool.name} className="model-row">
-                  <label className="choice" title={tool.description ?? undefined}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      // 公開できないツールは有効にさせない。既に有効なら外す操作だけは残す。
-                      disabled={!tool.exposable && !checked}
-                      onChange={(e) => onSetToolEnabled(tool.name, e.target.checked)}
-                    />
-                    {tool.label}
-                  </label>
-                  {!tool.exposable && (
-                    <span className="provider-card-meta">{t('settings.tools.not_exposable')}</span>
-                  )}
-                </li>
-              )
-            })}
+            {visibleTools.map((tool) => (
+              <ToolRow
+                key={tool.name}
+                tool={tool}
+                checked={server.enabled_tools.includes(tool.name)}
+                onSetEnabled={(enabled) => onSetToolEnabled(tool.name, enabled)}
+              />
+            ))}
           </ul>
         </>
       )}
@@ -192,6 +181,52 @@ function McpServerCard({
       <button type="button" onClick={onFetchTools} disabled={fetching}>
         {fetching ? t('common.fetching') : t('settings.tools.fetch_tools_button')}
       </button>
+    </li>
+  )
+}
+
+interface ToolRowProps {
+  tool: McpToolView
+  checked: boolean
+  onSetEnabled: (enabled: boolean) => void
+}
+
+// 説明はツールチップにせず行の下に開く。モデルへ渡す説明と同じ文字列なので、全文を読めるようにする
+// (ツールチップは指で操作する端末では出ず、長いと切られることもある)。
+function ToolRow({ tool, checked, onSetEnabled }: ToolRowProps) {
+  const [descriptionOpen, setDescriptionOpen] = useState(false)
+
+  return (
+    <li>
+      <div className="model-row">
+        <label className="choice">
+          <input
+            type="checkbox"
+            checked={checked}
+            // 公開できないツールは有効にさせない。既に有効なら外す操作だけは残す。
+            disabled={!tool.exposable && !checked}
+            onChange={(e) => onSetEnabled(e.target.checked)}
+          />
+          {tool.label}
+        </label>
+        {tool.description && (
+          <button
+            type="button"
+            className="tool-description-toggle"
+            aria-expanded={descriptionOpen}
+            onClick={() => setDescriptionOpen((open) => !open)}
+          >
+            <DisclosureMark />
+            {t('common.description_toggle')}
+          </button>
+        )}
+        {!tool.exposable && (
+          <span className="provider-card-meta">{t('settings.tools.not_exposable')}</span>
+        )}
+      </div>
+      {tool.description && descriptionOpen && (
+        <p className="settings-hint tool-description detail-box">{tool.description}</p>
+      )}
     </li>
   )
 }

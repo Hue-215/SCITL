@@ -2,13 +2,13 @@
 
 | 領域 | 選定 | 理由 |
 |---|---|---|
-| フロントエンド | React + TypeScript + Vite | 普及度が高く(月間DL数でReactは代替候補の約40倍)、エコシステムが厚い。WebViewが信頼できないモデル出力を描画する境界であることは他フレームワークでも変わらないため、Markdownサニタイズ・多言語化の枯れた部品が揃うJS側を選ぶ |
+| フロントエンド | React + TypeScript + Vite | 普及度が高く(月間DL数でReactは代替候補の約40倍)、エコシステムが厚い。WebViewで信頼できないモデル出力を描画することは他フレームワークでも変わらないため、Markdownサニタイズ・多言語化の枯れた部品が揃うJS側を選ぶ |
 | データベース | SQLite | 「データを特定ソフトに依存させない」(`../principles.md` 1節)に合い、Rustから扱うライブラリも揃っている |
 | SQLiteドライバ | `rusqlite` | 同期API。単一プロセス内は明示的な排他制御で足り、非同期ランタイムへの結合を避ける(`concurrency.md`「同期(DB)と非同期(オーケストレーション)の境界」) |
 | マイグレーション | 自前(`db::migrate_to`) | 版番号で管理する通常のマイグレーションは、番号順のSQLと`user_version`だけで足りる。GUIとCLIが同時に開いても二重に適用しないよう、版の読み取りを適用と同じ即時トランザクションに収める必要があり(`../data-model/tables.md`「マイグレーション」)、既存のクレート(`rusqlite_migration`)は版をトランザクションの外で読むため使わない |
 | 秘密情報ストア | `keyring-core` + OSごとの保存先クレート | keyringの現行の構成。保存先は`network-secrets.md`「保存先の選び方」 |
 | Tauriバージョン | Tauri 2.x | 権限・CSPの設定機構がこのバージョン系列を前提にしている |
-| LLMプロバイダ第一弾 | OpenAI互換チャットコンプリーションAPI | クラウド本家に加え、ローカル推論サーバー(llama.cpp/LM Studio/Ollama等)の多くが対応。`../principles.md` 1節「クラウド/ローカルLLMの自由な切替」を安く検証できる |
+| LLMプロバイダ第一弾 | OpenAI互換チャットコンプリーションAPI | クラウド本家に加え、ローカル推論サーバー(llama.cpp/LM Studio/Ollama等)の多くが対応。`../principles.md` 1節「クラウドとローカルのLLMを自由に切り替えられるようにする」を安く検証できる |
 | 設定ファイル形式 | TOML | 秘密情報は含まず参照のみを持つ(`network-secrets.md`「秘密情報」) |
 | 言語ファイル形式 | JSON | フロントエンド(Vite)が追加プラグイン無しに読み込める |
 | 多重起動の防止(デスクトップのみ) | `tauri-plugin-single-instance` | 公式プラグインで、通信はローカルのIPCだけ。自前で持つとOSごとのIPCを2通り書くことになり、攻撃面も保守量も増える(`concurrency.md`「多重起動の防止」) |
@@ -19,6 +19,8 @@
 | 秘密情報の保存先(Androidのみ) | `android-native-keyring-store`・`ndk-context` | `keyring-core`と同じ組織の保存先で、Keystoreの鍵で暗号化してSharedPreferencesに置く(`network-secrets.md`「Androidの保存先」)。Kotlinの部品を持たず、JavaVMとContextを`ndk-context`から取る。`jni`はTauriと同じ0.21を使い、ほかの依存(`regex`・`tracing`等)も既にある版で足りる |
 | クリップボードの画像を読む(デスクトップのみ) | `tauri-plugin-clipboard-manager` | 公式プラグイン(`arboard`)。WebKitGTKは画像だけが載ったクリップボードを画面に渡さないので、画面ではなくRust側で読む(`attachments.md`「受け取り方」)。Android側は文字しか読めないので登録しない。2.4はTauri 2.12を要求するので2.3に留める。Linuxのクリップボードのために`wl-clipboard-rs`(Wayland)と`x11rb`が入り、`hashbrown`(0.15)・`foldhash`(0.1)・proc-macro経由の`quick-xml`(0.41)が既存と別の版で同居する。`arboard`は`image`のfeatureをOSごとに足す。Windowsでは`bmp`(クリップボードにPNGが載っていないときに、DIB(`CF_DIBV5`)を読むため)が統合されてGUIに入る。添付の正規化は先頭バイトで決めた形式を指定して読む(`attachments.md`「画像の正規化」)ので、`bmp`のデコーダーを使うのは`arboard`だけ。Linuxで足すのは既に有効な`png`だけで、Androidには`arboard`自体が入らない。Cargo.lockに載る`tiff`とその依存(`fax`・`half`等)は、`arboard`がmacOSでだけ`image`の`tiff`を有効にするためのもので、配布するLinux・Windows・Androidのビルドには入らない(macOSは対象外。`cargo tree -e features -i image --target …`で確認、2026-10) |
 | zipを書く | `zip` 8.6 | Androidで、エクスポートを1つのzipにまとめて保存画面で選んだ場所へ書く(`export.md`「Androidでの書き出し先」)。書くのはdeflateだけで、既定のfeature(ほかの圧縮方式・暗号化)は切る。新しく入るのは`zip`と`typed-path`だけで、`crc32fast`・`indexmap`・`memchr`は既にある版、deflateの`flate2`(`rust_backend`)は`image` → `png`の依存として既にあるものを使う。9.0はリリースされたばかり(2026-10)なので8に留める |
+| 同期の接続 | `tokio-rustls`・`aws-lc-rs`・`spake2` 0.4・`if-addrs` | `crates/scitl-sync`だけが使う(`../../sync/index.md` 3節)。TLS 1.3は`reqwest`と同じ`rustls`・`tokio-rustls`・`aws-lc-rs`を、既にある版とfeatureのまま使う。待ち受けのたびに作る鍵は、証明書にせず公開鍵をそのまま見せる(RFC 7250)ので、証明書を作るクレートは入れない。`aws-lc-rs`は、その鍵の生成と、数字で鍵を合わせたあとの確認(HKDF・HMAC)にも使う。PAKEはRustCryptoの`spake2`で、新しく入るのは`spake2`・`curve25519-dalek`(と、x86_64でだけ使う`curve25519-dalek-derive`)・`rand_core` 0.6(0.9と同居する)。乱数は`aws-lc-rs`から渡し、`spake2`の`getrandom`のfeatureは切る(`getrandom` 0.2を入れないため)。`fiat-crypto`はCargo.lockに載るが、`curve25519-dalek`のバックエンドを`fiat`に切り替えたときにしかビルドされない。`if-addrs`は、待ち受ける側が出すアドレスの候補を列挙する(`libc`・`windows-sys`は既にある版)。`spake2`は第三者の監査を受けていない(READMEの警告)。実装はmagic-wormhole(python-spake2)互換で、RFC 9382とは定数と鍵の導出が違い、受け取った点の位数の小さい成分を確かめず、余因子も掛けない。それで困らないのは、TLSの中でだけ使い、確認の鍵にTLSのexporterを混ぜ、待ち受けは1回限りで、確認をつなぐ側が先に示すため(`../../sync/index.md` 3節)。どれかを崩すときは、PAKEの選び方から見直す |
+| 同期のQR | `qrcode` 0.14(Rust)・CameraX 1.5・ZXingの`core`(AndroidのGradle) | 待ち受ける側が出すQRの升目を`crates/scitl-sync`で作り、画面がSVGで描く(`../../sync/index.md` 3節)。`qrcode`は画像・SVGのfeatureを切り、依存が無い。読むのはAndroidのKotlin(`ScanActivity`)で、カメラの映像をCameraXで受け、ZXingのcore(純粋なJava、依存が無い)で読む。どちらもApache-2.0(CameraXは取り込んだlibyuvのBSD-3-Clauseも持つ)で、Google Play開発者サービスに頼らない(`../../sync/index.md` 11節)。CameraXは1.6からKotlin 2.1で作られ、このプロジェクトのKotlin(1.9)では読めないので1.5に留める。新しく入るGradleの依存は、CameraXの部品(`camera-*`・`featurecombinationquery`)とZXingのほかに、`auto-value-annotations`・`concurrent-futures-ktx`・`exifinterface`・`tracing-ktx`(`kotlinx-coroutines`はlifecycleの依存として既にある) |
 
 トークン数の見積もりは、現状は文字数からのフォールバック(`llm::token_estimate`)だけを持つ
 (Issue #66)。トークナイザはモデルごとに違い、クレートを足しても登録されたモデルに合う保証が
@@ -29,8 +31,8 @@
 
 ## 対象のOS
 
-- **デスクトップ**: LinuxとWindows。macOSは対象にしない(資格情報の保存先が無い。`network-secrets.md`)
-- **Android**: 対応を進めている(Issue #440)。Android 10以上(「AndroidのSDKの版」)。
+- デスクトップはLinuxとWindows。macOSは対象にしない(資格情報の保存先が無い。`network-secrets.md`)
+- AndroidはAndroid 10以上(「AndroidのSDKの版」)。
   APKを直接入れて使う形で、ストアでの配布は考えない。
   添付・エクスポートのフォルダを開く操作は、コンパイルは通るが動かない(`open`クレートが
   デスクトップの`xdg-open`等を探して失敗を返す。open 5.4のソースで確認、2026-10)。添付のほうは
@@ -38,7 +40,7 @@
   `tauri-plugin-opener`で開く(Issue #492)。iOSは対象にしない
   - エクスポートは、Androidではフォルダを開く操作を出さず、保存画面で選んだ場所へzipで書く
     (`export.md`「Androidでの書き出し先」)
-  - 応答を生成している間だけフォアグラウンドサービスにする。公式のプラグインが無いので、
+  - 応答を生成している間と同期の間だけフォアグラウンドサービスにする。公式のプラグインが無いので、
     サービスは`gen/android`にKotlinで書いてある(`concurrency.md`「Androidで裏へ回ったとき」)
 
 ## Androidのビルド
@@ -56,7 +58,7 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
 
 要る道具:
 
-- **Android Studio**(SDKとエミュレーター、同梱のJDK)。SDK Managerで「NDK (Side by side)」と
+- Android Studio(SDKとエミュレーター、同梱のJDK)。SDK Managerで「NDK (Side by side)」と
   「Android SDK Command-line Tools」も入れる
 - 環境変数: `ANDROID_HOME`(SDK)、`NDK_HOME`(`$ANDROID_HOME/ndk/<版>`)、`JAVA_HOME`(Android Studio同梱の
   JDK。Linuxなら`<Android Studio>/jbr`、Windowsなら`C:\Program Files\Android\Android Studio\jbr`)。
@@ -82,6 +84,13 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
   タグ`RustStdoutStderr`でlogcatに出るので、`adb logcat -s SCITL RustStdoutStderr`で両方を読む
   (`sanitize.md`「無害化」の表の下)
 
+デバッグビルド(`--debug`・`tauri android dev`)は、開発版(applicationId`net.niigo.scitl.dev`、ランチャーの名前
+「SCITL Dev」)として入り、リリース版(`net.niigo.scitl`)と並べて入れられる。データと登録(秘密情報を含む)は
+リリース版と別に持つ。applicationIdの接尾辞は`tauri.conf.json`の`bundle.android.debugApplicationIdSuffix`に、
+名前は`gen/android/app/src/debug`の`strings.xml`に書く。Tauriの`identifier`・Kotlinのパッケージ(`namespace`)・
+`scitl_core::APP_IDENTIFIER`は`net.niigo.scitl`のまま揃える(RustからJNIでクラスを名前で引くため)。
+実機に入れる手順は`android-check`スキル5節。
+
 配布するAPK(署名したリリースビルド)の作り方、署名の鍵の扱い、版(`versionCode`)の決まり方は
 `.claude/skills/release-build` 7節。リリースビルドはR8が使われていないクラスを消すので、RustからJNIで
 呼ぶクラスを足したら`gen/android/app/proguard-rules.pro`に残す指定を書く(デバッグビルドでは気付けない)。
@@ -94,21 +103,21 @@ Gradleのwrapper(`gradle-wrapper.jar`)は実行されるバイナリなので、
 | targetSdk(どの版の動き方の決まりに従うか) | 36(Android 16) | `gen/android/app/build.gradle.kts` |
 | compileSdk | 36 | `gen/android/app/build.gradle.kts`。targetSdk以上にする |
 
-**minSdkを29にする理由**: AndroidのWebViewはChromeと同じ版の系列で更新され、Android 7.xでは
+minSdkは29にする。AndroidのWebViewはChromeと同じ版の系列で更新され、Android 7.xでは
 Chrome 119相当、Android 8・9ではChrome 138相当(2025-08)で更新が止まった。画面はモデルの出力を
-描画する境界(`webview-boundary.md`)なので、既知の脆弱性が直らないWebViewでは動かさない。
+描画する場所(`webview-boundary.md`)なので、既知の脆弱性が直らないWebViewでは動かさない。
 WebViewの更新が止まる版が上がったら、minSdkもそこまで上げる。依存が求める下限はこれより低い
 (Tauriの本体21、`tauri-plugin-dialog`・`tauri-plugin-opener`24、`tauri-plugin-fs`21、
 `rustls-platform-verifier-android`22。2026-10)。ライブラリの下限がアプリより高いとGradleの
 マニフェストの統合が止まるので、Gradleに組み込んだ依存の超過はビルドで分かる。
 
-**minSdkの書く場所**: tauri-cliはRust側のビルドで、NDKのclangを選ぶ版(`aarch64-linux-android29-clang`等)に
+minSdkは`tauri.conf.json`に書く。tauri-cliはRust側のビルドで、NDKのclangを選ぶ版(`aarch64-linux-android29-clang`等)に
 `tauri.conf.json`の値を使う。APKの下限とネイティブのコードの版が食い違わないよう、Gradleと
 CIの`rust-android`ジョブも同じ値を読む。GradleとCIが読むのは`tauri.conf.json`だけなので、
 minSdkを`tauri.android.conf.json`や`--config`で上書きしない(tauri-cliだけが上書き後の値を使い、
 食い違う)。`tauri.conf.json`にtargetSdkの項目は無いので、targetSdkとcompileSdkはGradleに置く。
 
-**targetSdkを36に留める理由**: APKを直接渡すので、Google Playのtarget SDKの下限には縛られない。
+targetSdkは36に留める。APKを直接渡すので、Google Playのtarget SDKの下限には縛られない。
 37以上にすると、Android 17の端末ではLAN上の機器への通信に実行時の権限`ACCESS_LOCAL_NETWORK`
 (権限のグループは「付近のデバイス」)が要る。36以下なら`INTERNET`だけで暗黙に許される
 (一時的な措置とされている)。許可を求める処理はKotlinで書くことになる(RustからはOSの許可の
@@ -128,17 +137,17 @@ targetSdk 36で既に掛かっている決まり(Android 16以上の端末):
 
 targetSdkを37以上へ上げるときに見直すこと:
 
-- **ローカルネットワークの権限**: マニフェストでの宣言と、実行時に許可を求める処理(Tauriの
+- ローカルネットワークの権限の、マニフェストでの宣言と、実行時に許可を求める処理(Tauriの
   プラグインの権限の仕組み`@Permission`を使うKotlin)。求める時機(プロバイダーの登録時か、
   プライベートIPへの初めての送信時か)。拒否・後からの取り消し・使っていないアプリの権限の
   自動リセットのどれでも、通信の失敗として画面に出すこと。拒否されているときのTCPの接続は
   多くがタイムアウトで失敗する(公式文書)ので、失敗の種類の出し方も見直す
-- **端末の中の推論サーバー**: Android 16の動作の変更の文書が挙げるローカルネットワークの範囲
+- 端末の中の推論サーバーにつながるか。Android 16の動作の変更の文書が挙げるローカルネットワークの範囲
   (ブロードキャストできるインターフェースのリンクローカル・CGNAT・プライベートIP、マルチキャスト)に
   ループバック(`127.0.0.0/8`)は含まれないが、対象外とする明記は無い(2026-10。別の仕事用
   プロファイルとの間のループバックを止める変更は別にある)。上げる前に、権限の無い状態で
   エミュレーターから確かめる
-- **証明書の検証**: Certificate Transparencyの検査が既定で有効になる。HTTPSの検証はAndroidの
+- Certificate Transparencyの検査が既定で有効になる。HTTPSの検証はAndroidの
   証明書の検証を呼ぶ(`rustls-platform-verifier`)ので、この検査が掛かるか、掛かって困る
   通信先が無いかを確かめる
 - 大きい画面(最小幅600dp以上)では向き・縦横比・サイズ変更の制限が無視され、36で使えた
@@ -146,21 +155,22 @@ targetSdkを37以上へ上げるときに見直すこと:
 
 ## ライセンス
 
-- **MPL-2.0は許容する**(ファイル単位の弱いコピーレフトで、SCITL自身のコードのライセンスを縛らない)。
+- MPL-2.0は許容する(ファイル単位の弱いコピーレフトで、SCITL自身のコードのライセンスを縛らない)。
   実行バイナリに入るのは`option-ext`(`dirs`経由。Tauri自身も使う)だけで、`selectors`・`cssparser`・
   `dtoa-short`はビルド時のみ。npmのMPL-2.0は開発依存の`lightningcss`だけ。GPL・LGPL・AGPLは無い。
   同梱フォントはSIL OFL 1.1(同梱は可、フォント自体はOFLのまま)。同梱アイコン(Material Symbolsの
   SVGの形を`frontend/src/Icon.tsx`に写したもの)はApache-2.0で、配布物の第三者ライセンスの一覧に
   ライセンス文(`frontend/src/icons/MaterialSymbols-LICENSE.txt`)を入れる(`scripts/assemble-dist.mjs`)。
-  npmのパッケージとしては入れていない(写し元は`@material-symbols/svg-400`)。ライセンスはMIT予定なので、
+  npmのパッケージとしては入れていない(写し元は`@material-symbols/svg-400`)。ライセンスはMITなので、
   コピーレフトのライブラリは使わない
-- **BSL-1.0(Boost Software License)は許容する**(MITと同じ許容型で、コピーレフトではない。バイナリでの
+- BSL-1.0(Boost Software License)は許容する(MITと同じ許容型で、コピーレフトではない。バイナリでの
   配布には表示も求めない)。入るのはWindowsのクリップボードを読む`clipboard-win`と、その依存の`error-code`
   (`tauri-plugin-clipboard-manager`経由。Issue #476)
-- **AndroidのAPKには、Gradleで解決する依存も入る**(androidx・Material・Kotlinの標準ライブラリ・
+- AndroidのAPKには、Gradleで解決する依存も入る(androidx・Material・Kotlinの標準ライブラリ・
   Tauri本体が使うJackson等と、`rustls-platform-verifier`のKotlinの部品)。Gradleの依存はcargo-aboutの
   一覧に現れないので、Gradleに書き出させて別の一覧(`android.txt`)にし、同じ`about.toml`の`accepted`で
-  確かめる。POMの書くライセンスはすべてApache-2.0(2026-10)。Jacksonは、取り込んだ別の部品
+  確かめる。POMの書くライセンスは、CameraXのcamera-coreが取り込んだlibyuv(BSD-3-Clause。文面は
+  `licenses/libyuv`)を除いてすべてApache-2.0(2026-10)。Jacksonは、取り込んだ別の部品
   (FastDoubleParser: MIT、bigint: BSD-2-Clause)の文面をjarの中に持つ。POMに現れないので機械では
   照らせず、一覧には載る。Kotlinの部品は、クレート
   `rustls-platform-verifier-android`(MIT OR Apache-2.0)と同じリポジトリから出ていてライセンスも同じ
@@ -168,17 +178,16 @@ targetSdkを37以上へ上げるときに見直すこと:
   Rustのクレートの一覧は、Android向けを`about.toml`の`targets`とは別に洗い出す(デスクトップの
   配布物にAndroidだけのクレートを載せないため)。一覧はAPKの中に入れる
   (`.claude/skills/release-build` 7節)
-- **Windowsの実行ファイルには、MicrosoftのWebView2 SDKのローダーが入る**(`webview2-com-sys`が
+- Windowsの実行ファイルには、MicrosoftのWebView2 SDKのローダーが入る(`webview2-com-sys`が
   `WebView2LoaderStatic.lib`を静的にリンクする)。SDKのライセンスはBSD-3-Clauseと同じ形の条項で、
   バイナリでの配布にも著作権表示とライセンス文の同梱を求める。クレートのライセンス(MIT)とは別に、
   配布物の第三者ライセンスの一覧に載せる(`licenses/README.md`)
 
 ## 依存の脆弱性
 
-- **GitHubのDependabotアラートで知らせる**。`Cargo.lock`と`frontend/package-lock.json`の依存に既知の
+- GitHubのDependabotアラートで知らせる。`Cargo.lock`と`frontend/package-lock.json`の依存に既知の
   脆弱性が公開されると通知が来る。自動でPRを作る機能(security updates)は使わない。依存の更新は、
-  実行時依存の変化をOpusで見る条件(CLAUDE.md)や、版を留めている依存
-  (`concurrency.md`「多重起動の防止」のプラグイン)があり、機械的には上げられない
+  版を留めている依存(`concurrency.md`「多重起動の防止」のプラグイン)があり、機械的には上げられない
 - CIでは走らせない。PRと関係なく新しい脆弱性が公開されただけで落ち、無関係な変更を止めるため
 - リリースの前に、開いているアラートが無いことを確かめる(`.claude/skills/release-build`「リリースの流れ」)。
   上げられないもの(GTK3のRustバインディングが0.18系で止まっているため、Linuxの`glib`は0.18系に留まる等)は、

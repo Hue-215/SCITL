@@ -17,6 +17,7 @@ mod input;
 mod mcp_settings;
 mod model_settings;
 mod provider_settings;
+mod query_pause;
 mod rejection;
 pub mod view;
 
@@ -47,6 +48,7 @@ pub use destination::DestinationDialog;
 pub use input::HeaderInput;
 pub use mcp_settings::{McpServerAdded, NewMcpEndpoint};
 pub use provider_settings::NewProvider;
+pub use query_pause::{PausedQueries, QueryPause};
 pub use rejection::{FormOutcome, InputRejection, NumberField, Rejections};
 pub use view::{AvailableModel, ChatModelsView, SettingsView};
 
@@ -168,17 +170,17 @@ pub struct Settings {
     config_error: Option<String>,
     current: Mutex<Current>,
     writer: Mutex<()>,
-    /// 取得済みのMCPツール一覧([`crate::mcp::ToolCatalog`])。
     mcp_tools: Arc<ToolCatalog>,
     /// [`Self::fetch_mcp_tools`]の同時実行を1サーバーにつき1本に絞る。
     fetching: InFlightSet<String>,
-    /// モデル能力の自動検出の結果([`DetectedCatalog`])。
     detected: DetectedCatalog,
     /// [`Self::detect_model_capabilities`]の同時実行を1プロバイダーにつき1本に絞る。
     detecting: InFlightSet<String>,
     /// [`Self::reload_unavailable_key`]を1本ずつにする(同時に始まったターンが、ロックの
     /// 解除を求める承認を重ねて出さないように)。
     reloading_key: tokio::sync::Mutex<()>,
+    /// 同期の間、推論サーバー・MCPサーバーへの問い合わせを断る([`QueryPause`])。
+    queries: QueryPause,
 }
 
 impl Settings {
@@ -215,7 +217,13 @@ impl Settings {
             detected: DetectedCatalog::new(),
             detecting: InFlightSet::new(),
             reloading_key: tokio::sync::Mutex::new(()),
+            queries: QueryPause::default(),
         }
+    }
+
+    /// 同期が押さえる、問い合わせを止める印。
+    pub fn query_pause(&self) -> &QueryPause {
+        &self.queries
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -432,6 +440,19 @@ impl Settings {
         }
         draft.commit()
     }
+
+    /// 同期で待ち受けるポート。未設定はOSに選ばせる。
+    pub fn sync_listen_port(&self) -> Option<u16> {
+        self.current().config.sync.listen_port
+    }
+
+    /// 空欄は未設定に戻す。
+    pub fn update_sync(&self, listen_port: &str) -> Result<SettingsView> {
+        let listen_port = input::listen_port(listen_port)?;
+        let mut draft = self.edit();
+        draft.config.sync.listen_port = listen_port;
+        draft.commit()
+    }
 }
 
 /// 書き込みロックを持った設定の複製。[`Self::commit`]せずに落とせば何も変わらない。
@@ -484,7 +505,7 @@ impl Draft<'_> {
             current.config = Arc::clone(&config);
             // 入力を変えない変更で組み立て直した結果は、その間に読み直し
             // ([`Settings::reload_unavailable_key`])が使える状態にしていれば当てはめない
-            // (読み直しの成功を、こちらの失敗で潰さないため)。
+            // (読み直しの成功を、こちらの失敗で上書きしないため)。
             if let Some(adapter) = rebuilt {
                 if inputs_changed || !matches!(current.adapter, AdapterState::Ready(_)) {
                     current.adapter = adapter;

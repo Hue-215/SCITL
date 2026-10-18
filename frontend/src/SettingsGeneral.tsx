@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react'
 import { exportMarkdown, getExportTarget, openExportFolder, updateGeneralSettings } from './api'
 import type { ExportOutcome, ExportTarget, Language, SettingsView } from './types'
 import Dropdown from './Dropdown'
+import ExportOutcomeText from './ExportOutcomeText'
 import { currentLanguage, isolated, languageName, LANGUAGES, t } from './i18n'
 import { DisclosureMark } from './Icon'
 import { NumberField } from './settingsFields'
@@ -206,15 +207,15 @@ export function GeneralTab({ settings, onSave, onSaveLanguage }: GeneralTabProps
 
 // 押すと確認なしで書き出し(保存画面を出すOSでは、そこで場所を選ぶ)、成否はこの欄に出す。タブ全体の
 // エラー欄を使わないのは、設定の保存とは別の操作の結果だから。フォルダを開く操作は、書き出す先が
-// フォルダのOSでだけ出す(`ExportTarget`。Rust側が決める)。結果の文言は結果の種類で出し分ける。
+// フォルダのOSでだけ出す(`ExportTarget`。Rust側が決める)。
 function ExportSection() {
   const [target, setTarget] = useState<ExportTarget | null>(null)
   const [outcome, setOutcome] = useState<ExportOutcome | null>(null)
   const exporting = useAsyncAction((error) =>
-    t('settings.general.export_failed', { error: isolated(error) }),
+    t('export.failed', { error: isolated(error) }),
   )
   const opening = useAsyncAction((error) =>
-    t('settings.general.open_export_folder_failed', { error: isolated(error) }),
+    t('export.open_folder_failed', { error: isolated(error) }),
   )
 
   useEffect(() => {
@@ -235,39 +236,20 @@ function ExportSection() {
     void opening.run(openExportFolder)
   }
 
-  const summary =
-    outcome?.status === 'written' || outcome?.status === 'saved' ? outcome.summary : null
   return (
     <div className="settings-field settings-section-break">
       <span>{t('settings.general.export_label')}</span>
       <div className="button-row">
         <button type="button" onClick={runExport} disabled={exporting.running}>
-          {exporting.running
-            ? t('settings.general.exporting')
-            : t('settings.general.export_button')}
+          {exporting.running ? t('export.exporting') : t('export.button')}
         </button>
         {target === 'folder' && (
           <button type="button" onClick={openFolder}>
-            {t('settings.general.open_export_folder')}
+            {t('export.open_folder')}
           </button>
         )}
       </div>
-      {outcome?.status === 'written' && (
-        <p>{t('settings.general.export_done', { folder: isolated(outcome.summary.folder) })}</p>
-      )}
-      {outcome?.status === 'saved' && <p>{t('settings.general.export_saved')}</p>}
-      {summary && summary.missing_attachments > 0 && (
-        <p className="error">
-          {t('settings.general.export_missing_attachments', {
-            count: summary.missing_attachments,
-          })}
-        </p>
-      )}
-      {outcome?.status === 'left_incomplete' && (
-        <p className="error">
-          {t('settings.general.export_left_incomplete', { error: isolated(outcome.reason) })}
-        </p>
-      )}
+      {outcome && <ExportOutcomeText outcome={outcome} />}
       {exporting.error && <p className="error">{exporting.error}</p>}
       {opening.error && <p className="error">{opening.error}</p>}
     </div>

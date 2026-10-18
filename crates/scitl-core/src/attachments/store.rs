@@ -49,6 +49,10 @@ impl AttachmentStore {
         }
     }
 
+    pub fn contains(&self, hash: &str) -> Result<bool> {
+        Ok(self.blob_path(hash)?.is_file())
+    }
+
     pub fn read(&self, hash: &str) -> Result<Vec<u8>> {
         fs::read(self.blob_path(hash)?).map_err(io_error("read an attachment"))
     }
@@ -154,7 +158,6 @@ impl AttachmentStore {
     }
 }
 
-/// 置き場所にある実体1つ。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StoredBlob {
     pub hash: String,

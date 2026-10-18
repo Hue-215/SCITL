@@ -6,11 +6,12 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::Run;
+use super::{IdPosition, IdTable, Segment, NO_IDS};
 
 internal_tool! {
-    /// 引数なし。`task_id`はターン開始時にオーケストレーション層が束縛するため公開しない。
     name: "get_current_task_detail",
     run: Run::ReadTask(execute),
+    ids: super::IdPositions { arguments: NO_IDS, result: TASK_DETAIL },
     "Get this conversation's task.",
     json!({
         "type": "object",
@@ -18,6 +19,26 @@ internal_tool! {
         "additionalProperties": false
     }),
 }
+
+/// [`task_detail`]の形のうち、IDの入る位置。
+pub(super) const TASK_DETAIL: &[IdPosition] = &[
+    IdPosition {
+        path: &[Segment::Key("task"), Segment::Key("id")],
+        table: IdTable::Task,
+    },
+    IdPosition {
+        path: &[Segment::Key("steps"), Segment::Each, Segment::Key("id")],
+        table: IdTable::Step,
+    },
+    IdPosition {
+        path: &[
+            Segment::Key("steps"),
+            Segment::Each,
+            Segment::Key("task_id"),
+        ],
+        table: IdTable::Task,
+    },
+];
 
 pub fn execute(conn: &Connection, task_id: i64, arguments: &Value) -> Result<Value> {
     Args::parse(arguments, schema())?;

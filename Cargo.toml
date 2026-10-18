@@ -5,10 +5,11 @@ members = [
     "crates/scitl-tauri",
     "crates/scitl-cli",
     "crates/scitl-debug-cli",
+    "crates/scitl-sync",
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
 
@@ -39,8 +40,8 @@ thiserror = "2"
 secrecy = { version = "0.10", features = ["serde"] }
 url = "2"
 # URLの区間の符号化・復号(Markdownエクスポートのリンク先、OSへ渡すリンク、Androidの選択画面が
-# 返す`content://`のURIから取る添付の名前)。同じ版が`url`の依存として既にビルドされている。上流の版が上がったら合わせて上げる
-# (`cargo tree -d -i percent-encoding`で確認)
+# 返す`content://`のURIから取る添付の名前)。同じ版が`url`の依存として既にビルドされている。
+# 上流の版が上がったら合わせて上げる(`cargo tree -d -i percent-encoding`で確認)
 percent-encoding = "2.3.2"
 # UTC日時の文字列化と、締切の日付が実在するかの確認(`scitl-core/src/db/`)、モデルへ渡す送信日時を
 # OSのタイムゾーンで表す(`scitl-core/src/llm/prompt.rs`の`SentAt`)。同じ版と`clock`(OSの
@@ -101,11 +102,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # 書くのはdeflateだけなので既定のfeatureは切る。deflateの実装(`flate2`の`rust_backend`)は`image` → `png`の
 # 依存として既にビルドされているものを使う
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
-# MCPクライアント。`default-features = false`にした上で必要なfeatureだけを明示する。
-# OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない先へ通信しうるので
-# 有効にしない。
-# `client`(素朴なクライアント)・`transport-streamable-http-client-reqwest`(streamable_http、
-# 内部でreqwestを使う)のみ。サーバーを子プロセスとして起動するstdio方式は持たない
+# MCPクライアント。OAuth/認可系(`auth`)や`.well-known`ディスカバリは、ユーザーが登録していない
+# 先へ通信しうるので有効にしない。`client`(素朴なクライアント)・
+# `transport-streamable-http-client-reqwest`(streamable_http、内部でreqwestを使う)のみ。サーバーを子プロセスとして起動するstdio方式は持たない
 # (`docs/spec/tools.md`「外部(MCP)ツールの公開」)。
 rmcp = { version = "=3.4.0", default-features = false, features = [
     "client",
@@ -116,15 +115,37 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
 # ビルドされている
 futures = { version = "0.3", default-features = false, features = ["std"] }
 
+# 同期の接続(`scitl-sync`。docs/sync/index.md「接続」)。TLSと暗号の実装は、reqwestが使うものと同じ版と
+# featureが既にビルドされている。`aws-lc-rs`は、待ち受けのたびに使い捨ての鍵を作るのと、数字で
+# 互いを確かめたあとの確認(HKDF・HMAC)に使う。証明書は作らず、公開鍵をそのまま渡す(RFC 7250)
+tokio-rustls = { version = "0.26.5", default-features = false, features = ["aws_lc_rs"] }
+aws-lc-rs = { version = "1.18.1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
+# 数字から鍵を合わせる(PAKE)。乱数は`aws-lc-rs`から渡すので`getrandom`のfeatureは切る(切らないと
+# 0.2が別に入る)。新しく入るのは`spake2`・`curve25519-dalek`・`rand_core`(0.6。0.9と同居する)
+spake2 = { version = "0.4", default-features = false }
+rand_core = "0.6"
+# 待ち受ける側が出すアドレスの候補(インターフェースのアドレス)を列挙する。`libc`・`windows-sys`は
+# 既にある版
+if-addrs = "0.15"
+# 待ち受ける側のアドレスと数字をQRにする(`scitl-sync/src/invitation.rs`)。描くのは画面なので、
+# 画像・SVGを作るfeature(`image`を引き込む)は切る。切ると依存が無い
+qrcode = { version = "0.14", default-features = false }
+
 # テストの一時ディレクトリ(開発時のみ)。落とすと中身ごと消えるので、テストが後始末を書かずに済む
 tempfile = "3"
 # 画面へ渡す型のTypeScript定義を生成する(開発時のみ。`frontend/src/bindings/`)。Rust側の型を
-# 正本にし、TS側に写しを手で持たない。生成は`cargo test`が行い、CIが生成物との差分を検査する
+# 元にし、TS側に写しを手で持たない。生成は`cargo test`が行い、CIが生成物との差分を検査する
 ts-rs = "12"
+
+# 開発用のビルドのデバッグ情報は、panicのバックトレースに出る行番号までにする(依存のクレートは
+# 持たない)。cargoは依存の版が変わるたびに別の生成物を作るので、デバッグ情報の分だけ`target/`が膨らむ
+[profile.dev]
+debug = "line-tables-only"
 
 # 添付画像の正規化は最適化しないと遅すぎる(12MPの写真で数秒)。開発ビルドでも画像の
 # デコード・縮小・エンコードに関わるクレートだけは最適化する
 [profile.dev.package]
+"*" = { debug = false }
 image = { opt-level = 3 }
 zune-jpeg = { opt-level = 3 }
 png = { opt-level = 3 }

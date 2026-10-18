@@ -6,11 +6,14 @@ use crate::error::Result;
 
 use super::args::Args;
 use super::get_memories::memory_list;
+use super::get_memories::MEMORY_LIST;
+use super::update_memory::MEMORY_ID_ARGUMENT;
 use super::Run;
 
 internal_tool! {
     name: "delete_memory",
     run: Run::Write(execute),
+    ids: super::IdPositions { arguments: MEMORY_ID_ARGUMENT, result: MEMORY_LIST },
     "Delete a memory that is wrong or no longer true, or that the user asked you to forget.",
     json!({
         "type": "object",

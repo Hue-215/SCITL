@@ -15,6 +15,8 @@ pub struct FinishedTurn {
     /// タスクチャットなら、タスクのタイトル(無ければ最初の発言から作った呼び名)。総合チャットと、
     /// どちらも無いタスクは`None`。
     pub task_name: Option<String>,
+    /// 応答したアシスタントの名前([`crate::orchestration::TurnContext::assistant_name`])。
+    pub assistant_name: String,
     pub outcome: TurnOutcome,
 }
 
@@ -40,6 +42,7 @@ pub(super) fn finished_turn(
     chat: Chat,
     turn_id: &str,
     attempt_no: i64,
+    assistant_name: &str,
 ) -> Result<Option<FinishedTurn>> {
     let Some(reply) = messages::reply_of_attempt(conn, turn_id, attempt_no)? else {
         return Ok(None);
@@ -64,6 +67,7 @@ pub(super) fn finished_turn(
     Ok(Some(FinishedTurn {
         chat,
         task_name,
+        assistant_name: assistant_name.to_string(),
         outcome,
     }))
 }
@@ -91,7 +95,7 @@ mod tests {
         }
     }
 
-    /// ツールを呼ぶ前の前置きではなく、最後に書いた本文を取る。思考とツールの呼び出しは取らない。
+    /// 思考とツールの呼び出しは取らない。
     #[test]
     fn the_last_text_is_the_one_written_after_the_tools() {
         let parts = [

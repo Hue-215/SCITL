@@ -49,7 +49,6 @@ fn http_endpoint() -> NewMcpEndpoint {
     }
 }
 
-/// 新しい通信先は、検証を通ったあとで利用者に確かめ、取りやめたら何も保存しない。
 /// 欄の誤りがあれば確かめない(確かめてから断ることはしない)。
 #[test]
 fn a_new_destination_is_saved_only_when_the_user_confirms_it() {
@@ -93,7 +92,6 @@ fn a_new_destination_is_saved_only_when_the_user_confirms_it() {
     assert_eq!(settings.view().providers.len(), 1);
 }
 
-/// 追加に続く能力の検出とツール一覧の取得に失敗しても、登録は残る。
 #[tokio::test]
 async fn adding_keeps_the_registration_when_the_following_query_fails() {
     let (settings, _path, _dir) = temp_settings();
@@ -135,7 +133,6 @@ async fn adding_keeps_the_registration_when_the_following_query_fails() {
     assert!(added.tools_error.is_some());
 }
 
-/// 予約したヘッダー名・載せられない値・重複した名前は、資格情報ストアに触れる前に断る。
 #[test]
 fn add_provider_refuses_bad_headers_before_storing_anything() {
     let (settings, _path, _dir) = temp_settings();
@@ -166,7 +163,7 @@ fn add_provider_refuses_bad_headers_before_storing_anything() {
     assert!(settings.view().providers.is_empty());
 }
 
-/// 空白だけの鍵・ヘッダーに載せられない鍵は、資格情報ストアに触れる前に断る。
+/// 資格情報ストアに触れる前に断る。
 #[test]
 fn add_provider_refuses_a_key_that_is_not_visible_ascii() {
     let (settings, _path, _dir) = temp_settings();
@@ -225,7 +222,6 @@ fn a_settings_change_reloads_an_unreadable_key() {
     ready_adapter(&settings);
 }
 
-/// 思考に対応するモデルには強さを必ず送り、対応しないモデルには送らない。
 #[test]
 fn reasoning_effort_is_sent_only_to_models_that_think() {
     let (_, path, _dir) = temp_settings();
@@ -434,8 +430,6 @@ fn deleting_active_provider_activates_first_remaining() {
     ));
 }
 
-/// 選択中のプロバイダーやその最後のモデルを消しても、モデルのあるプロバイダーが
-/// 残っていればチャットを続けられる。
 #[test]
 fn selection_moves_to_a_provider_that_has_a_model() {
     let (settings, _, _dir) = temp_settings();
@@ -751,7 +745,6 @@ fn language_is_saved_apart_from_the_other_general_settings() {
     assert_eq!(Settings::load(path).display_language(), Language::En);
 }
 
-/// 設定ファイルの知らない表示言語は画面へ伝え、選び直すと消える。
 #[test]
 fn unknown_language_is_reported_until_a_language_is_chosen() {
     let (_, path, _dir) = temp_settings();
@@ -769,6 +762,29 @@ fn unknown_language_is_reported_until_a_language_is_chosen() {
 }
 
 #[test]
+fn listen_port_is_saved_and_blank_goes_back_to_unset() {
+    let (settings, path, _dir) = temp_settings();
+    assert_eq!(settings.sync_listen_port(), None);
+
+    let view = settings.update_sync("２０００").unwrap();
+    assert_eq!(view.sync.listen_port, Some(2000));
+    assert_eq!(settings.sync_listen_port(), Some(2000));
+    assert_eq!(Settings::load(path).sync_listen_port(), Some(2000));
+
+    // 断られた値は保存しない。
+    assert!(settings.update_sync("1023").is_err());
+    assert_eq!(settings.sync_listen_port(), Some(2000));
+
+    // ほかの欄の保存では変えない。
+    settings.update_language(Language::En).unwrap();
+    assert_eq!(settings.sync_listen_port(), Some(2000));
+
+    let view = settings.update_sync(" ").unwrap();
+    assert_eq!(view.sync.listen_port, None);
+    assert_eq!(settings.sync_listen_port(), None);
+}
+
+#[test]
 fn failed_save_leaves_current_settings_unchanged() {
     let (settings, path, _dir) = temp_settings();
     // 保存先をディレクトリにして書き込みを失敗させる。
@@ -779,7 +795,6 @@ fn failed_save_leaves_current_settings_unchanged() {
     assert!(settings.current().config.general.system_prompt.is_none());
 }
 
-/// フォームが送るヘッダーの欄の文字列を、`SecretString`のまま受け取ってから分ける。
 #[test]
 fn new_mcp_endpoint_reads_the_header_field_as_a_secret() {
     let endpoint: NewMcpEndpoint = serde_json::from_value(serde_json::json!({
@@ -795,7 +810,6 @@ fn new_mcp_endpoint_reads_the_header_field_as_a_secret() {
     assert_eq!(headers[0].1.expose_secret(), "Bearer token");
 }
 
-/// 識別子・URL・ヘッダーの欄の誤りは、画面が欄の近くに出す種類でまとめて返す。
 #[test]
 fn mcp_form_mistakes_are_returned_together_as_kinds() {
     let (settings, _, _dir) = temp_settings();
@@ -840,7 +854,7 @@ fn mcp_form_mistakes_are_returned_together_as_kinds() {
     );
 }
 
-/// 子プロセスとして起動する方式(stdio)の登録は、画面からもCLIからも受け付けない。
+/// 画面からもCLIからも受け付けない。
 #[test]
 fn new_mcp_endpoint_refuses_stdio() {
     let endpoint = serde_json::from_value::<NewMcpEndpoint>(serde_json::json!({
@@ -850,7 +864,7 @@ fn new_mcp_endpoint_refuses_stdio() {
     assert!(endpoint.is_err());
 }
 
-/// 試すのをやめたサーバーも、有効にし直せば次のターンでまた試す。無効にしただけでは数え直さない。
+/// 無効にしただけでは数え直さない。
 #[test]
 fn re_enabling_an_mcp_server_tries_it_again() {
     let (settings, _, _dir) = temp_settings();
@@ -946,8 +960,7 @@ fn enabling_more_external_tools_than_the_limit_is_refused() {
         .unwrap();
 }
 
-/// 設定ファイルを読めなくても起動し、理由を画面とターンへ渡す。読めなかったファイルは
-/// 上書きしない。
+/// 理由は画面とターンへ渡す。
 #[test]
 fn unreadable_config_file_starts_empty_and_refuses_to_save() {
     let dir = tempfile::tempdir().unwrap();
@@ -968,8 +981,7 @@ fn unreadable_config_file_starts_empty_and_refuses_to_save() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "providers = [");
 }
 
-/// アクティブなプロバイダーを組み立てられなくても起動し、そのプロバイダーを使えない
-/// ものとして扱う。無関係な変更は通し、削除すれば直る。
+/// 削除すれば直る。
 #[test]
 fn broken_active_provider_does_not_block_startup_or_unrelated_changes() {
     let dir = tempfile::tempdir().unwrap();
@@ -1037,7 +1049,7 @@ fn adapter_is_rebuilt_only_when_its_inputs_change() {
         .unwrap();
     assert!(Arc::ptr_eq(&after_model, &ready_adapter(&settings)));
 
-    // ストリーミングの切り替えは、次のターンから効くように組み立て直す。
+    // ストリーミングの切り替えは、次のターンから使われるよう組み立て直す。
     let off = GeneralUpdate {
         streaming: Some(false),
         response_timeout_secs: None,
@@ -1092,7 +1104,7 @@ fn capability_overrides_are_kept_only_while_they_differ_from_the_default() {
     assert!(settings.set_model_visible(&id, "missing", true).is_err());
 }
 
-/// 自動検出の結果は、手動設定を外す基準と、ターンに渡す能力の両方に効く。
+/// 自動検出の結果は、手動設定を外す基準と、ターンに渡す能力の両方に使われる。
 #[test]
 fn detected_capabilities_are_the_layer_below_manual_settings() {
     let (settings, _path, _dir) = temp_settings();
@@ -1157,8 +1169,7 @@ fn serve_in_order(bodies: Vec<&'static str>) -> String {
     format!("http://{addr}")
 }
 
-/// 今は答えられないモデル(llama.cppのルーターで読み込まれていない)は覚えず、次の機会に問い
-/// 合わせ直す。答えたモデルは覚える。
+/// 答えたモデルは覚える。
 #[tokio::test]
 async fn models_that_cannot_answer_now_are_asked_again_later() {
     let (settings, _path, _dir) = temp_settings();
@@ -1196,4 +1207,43 @@ async fn models_that_cannot_answer_now_are_asked_again_later() {
         Some(65_536)
     );
     assert!(settings.detected.get(&id, "unloaded").is_none());
+}
+
+/// モデルの登録は済ませ、検出だけ省く。
+#[tokio::test]
+async fn servers_are_not_queried_while_syncing() {
+    let (settings, _path, _dir) = temp_settings();
+    let settings = Arc::new(settings);
+    let provider = add_local_provider(&settings, "local").providers[0]
+        .id
+        .clone();
+    let (server, _) = settings
+        .register_mcp_server("tools", http_endpoint(), |_| true)
+        .unwrap();
+
+    let paused = settings.query_pause().pause();
+    assert!(matches!(
+        settings.list_provider_models(&provider).await,
+        Err(CoreError::Syncing)
+    ));
+    assert!(matches!(
+        settings.detect_model_capabilities(&provider).await,
+        Err(CoreError::Syncing)
+    ));
+    assert!(matches!(
+        settings.fetch_mcp_tools(&server).await,
+        Err(CoreError::Syncing)
+    ));
+    let added = settings
+        .add_models(&provider, vec!["m".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(added.providers[0].models[0].name, "m");
+    drop(paused);
+
+    // 落としたら問い合わせる(サーバーは無いので、つながらずに失敗する)。
+    assert!(!matches!(
+        settings.list_provider_models(&provider).await,
+        Err(CoreError::Syncing)
+    ));
 }

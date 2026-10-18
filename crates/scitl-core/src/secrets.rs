@@ -1,8 +1,5 @@
-//! OS資格情報ストア呼び出しの唯一の入口。他のどのモジュール(LLMアダプタ・Tauriコマンド・CLI)
-//! も、ここを経由せず`keyring_core`に直接触れてはいけない。呼び出し元は不透明な`key_ref`
-//! だけを扱い、値は`SecretString`から出し入れする(平文`String`を経由させない)。
-//!
-//! プロバイダーのAPIキーもMCPサーバーの秘密情報も、同じこの入口を使う。
+//! OS資格情報ストア呼び出しの唯一の入口。呼び出し元は不透明な`key_ref`だけを扱い、値は
+//! `SecretString`から出し入れする(平文`String`を経由させない)。
 
 use std::sync::{Arc, Mutex};
 
@@ -208,24 +205,49 @@ fn os_store() -> keyring_core::Result<Arc<CredentialStore>> {
     ))
 }
 
-/// `key_ref`の指す秘密情報を保存する(既存があれば上書き)。
+/// 既存があれば上書きする。
 pub fn store(key_ref: &str, secret: &SecretString) -> Result<(), CoreError> {
     with_entry(key_ref, |entry| entry.set_password(secret.expose_secret()))
 }
 
-/// `key_ref`の指す秘密情報を読み出す。未登録の場合はエラーにする
+/// 未登録の場合はエラーにする
 /// (呼び出し元が「キーが空」と「キーが未設定」を区別できるように、値を持たない
 /// `Option`ではなく明示的なエラーで返す)。
 pub fn load(key_ref: &str) -> Result<SecretString, CoreError> {
     with_entry(key_ref, |entry| entry.get_password()).map(SecretString::from)
 }
 
-/// `key_ref`の指す秘密情報を削除する。プロバイダー設定を削除する際に呼ぶ。既に無ければ
-/// 成功にする(やり直したとき、1回目で消えていることがあるため)。
+/// 既に無ければ成功にする(やり直したとき、1回目で消えていることがあるため)。
 pub fn delete(key_ref: &str) -> Result<(), CoreError> {
     with_entry(key_ref, |entry| match entry.delete_credential() {
         Err(keyring_core::Error::NoEntry) => Ok(()),
         result => result,
+    })
+}
+
+/// 同期の端末IDの項目の名前(`docs/sync/index.md`「端末ID」)。1台のマシンにデータが複数あっても
+/// 取り違えないよう、端末IDを名前に含める。
+fn sync_device_key(device_id: &str) -> String {
+    format!("sync-device:{device_id}")
+}
+
+/// このマシンの資格情報ストアに端末IDの項目があり、値がDBの持つ`token`と同じか。無いことと
+/// 読めないことを分ける(無いか値が違えば、写したDBか戻したDBとみなして端末IDを作り直す。読めない
+/// ときは、作り直した項目を書けたときだけ続ける。`docs/sync/index.md`「端末ID」)。
+pub fn sync_device_is_current(device_id: &str, token: &str) -> Result<bool, CoreError> {
+    with_entry(&sync_device_key(device_id), |entry| {
+        match entry.get_password() {
+            Ok(value) => Ok(value == token),
+            Err(keyring_core::Error::NoEntry) => Ok(false),
+            Err(e) => Err(e),
+        }
+    })
+}
+
+/// 端末IDの項目を作るか、値を`token`に替える。
+pub fn register_sync_device(device_id: &str, token: &str) -> Result<(), CoreError> {
+    with_entry(&sync_device_key(device_id), |entry| {
+        entry.set_password(token)
     })
 }
 

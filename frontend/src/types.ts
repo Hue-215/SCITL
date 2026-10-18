@@ -1,5 +1,5 @@
-// 画面とRust側でやり取りする型。Rust側の型を正本とし、`bindings/`は`cargo test`がそこから
-// 生成する(手で直さない)。ここは生成した型の入口と、画面だけが使う型を持つ。
+// 画面とRust側でやり取りする型。`bindings/`は`cargo test`がRust側の型から生成する
+// (手で直さない)。ここは生成した型の入口と、画面だけが使う型を持つ。
 export type { ApiFormat } from './bindings/ApiFormat'
 export type { ApiFormatChoice } from './bindings/ApiFormatChoice'
 export type { AttachmentDeliveries } from './bindings/AttachmentDeliveries'
@@ -7,6 +7,7 @@ export type { AttachmentKind } from './bindings/AttachmentKind'
 export type { AttachmentView } from './bindings/AttachmentView'
 export type { AvailableModel } from './bindings/AvailableModel'
 export type { BaseUrlHint } from './bindings/BaseUrlHint'
+export type { CameraPermission } from './bindings/CameraPermission'
 export type { Capability } from './bindings/Capability'
 export type { Chat } from './bindings/Chat'
 export type { ChatModelsView } from './bindings/ChatModelsView'
@@ -54,6 +55,16 @@ export type { ToolArguments } from './bindings/ToolArguments'
 export type { ToolExecutionView } from './bindings/ToolExecutionView'
 export type { ToolSettingsView } from './bindings/ToolSettingsView'
 export type { TurnEvent } from './bindings/TurnEvent'
+export type { Counts } from './bindings/Counts'
+export type { ChosenSide } from './bindings/ChosenSide'
+export type { ConflictChoice } from './bindings/ConflictChoice'
+export type { ConflictSide } from './bindings/ConflictSide'
+export type { ConflictView } from './bindings/ConflictView'
+export type { QrModules } from './bindings/QrModules'
+export type { SyncEvent } from './bindings/SyncEvent'
+export type { SyncReport } from './bindings/SyncReport'
+export type { WriteCounts } from './bindings/WriteCounts'
+export type { WritePlan } from './bindings/WritePlan'
 
 // 送信直後の楽観表示専用のプレースホルダ。確定後はlist_chat_messagesで引き直して置き換える。
 // `pending`は応答を生成するコマンドの実行中の印。文言は持たず、会話欄にはそれまでに届いた

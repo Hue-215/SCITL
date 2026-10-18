@@ -198,7 +198,7 @@ fn reasoning(text: String) -> ResponseEvent {
     ResponseEvent::ReasoningDelta { text }
 }
 
-/// 本文・思考の断片を渡す。空の断片は渡さない。
+/// 空の断片は渡さない。
 fn emit(event: ResponseEvent, on_event: &mut (dyn FnMut(ResponseEvent) + Send)) {
     match &event {
         ResponseEvent::TextDelta { text } | ResponseEvent::ReasoningDelta { text }
@@ -333,8 +333,7 @@ mod tests {
         );
     }
 
-    /// 差分から組み立て直したステップは、ストリーミングしないときに受け取るステップと(キーの順を
-    /// 除いて)同じになる。
+    /// キーの順は比べない。
     #[tokio::test]
     async fn the_rebuilt_steps_equal_the_steps_received_without_streaming() {
         let (result, _, _) = send_streamed(THOUGHT_TEXT_AND_CALL).await;
@@ -375,8 +374,7 @@ mod tests {
         );
     }
 
-    /// 途中の`error`は、方針・安全上の判定で止めたものなら断られたものとし、本文は流れたあとだが
-    /// 返信にはしない。
+    /// 本文は流れたあとだが、返信にはしない。
     #[tokio::test]
     async fn an_error_event_is_a_refusal_when_blocked_and_otherwise_a_provider_error() {
         let (result, events, _) = send_streamed(&[
@@ -413,7 +411,7 @@ mod tests {
         );
     }
 
-    /// 状態の届かないまま終わった応答は、`[DONE]`が届いても途中で切れたものとする。
+    /// `[DONE]`が届いても、状態が無ければ途中で切れたものとする。
     #[tokio::test]
     async fn a_stream_without_the_final_status_is_a_connection_error() {
         for pieces in [
@@ -458,7 +456,6 @@ mod tests {
         );
     }
 
-    /// サーバー側のツール等のステップは、ストリーミングしないときと同じく送り返さない。
     #[tokio::test]
     async fn leaves_steps_other_than_the_output_out_of_the_replay() {
         let (result, _, _) = send_streamed(&[
@@ -477,7 +474,6 @@ mod tests {
         assert_eq!(types, ["\"thought\"", "\"model_output\""]);
     }
 
-    /// 署名は置き換える。開始のステップと差分の両方で届いても、2度つながない。
     #[tokio::test]
     async fn a_signature_sent_twice_is_kept_once() {
         let (result, _, _) = send_streamed(&[
@@ -491,7 +487,6 @@ mod tests {
         assert_eq!(step, json!({"type": "thought", "signature": "sig"}));
     }
 
-    /// 引数の届かない呼び出しも、送り返すステップに空の`arguments`を持たせる。
     #[tokio::test]
     async fn a_call_without_arguments_is_replayed_with_an_empty_object() {
         let (result, events, _) = send_streamed(&[

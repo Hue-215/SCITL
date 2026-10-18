@@ -19,12 +19,13 @@ pub struct TaskStep {
 /// [`row_to_step`]の並び。
 const STEP_COLUMNS: &str = "id, task_id, description, done_at, order_index, created_at";
 
-/// 削除済み(deleted_at)を除く工程を`order_index`順で返す。
+/// 削除済み(deleted_at)を除く工程を`order_index`順で返す。同じ`order_index`は`uid`の順
+/// (2台で足した工程は重なる。`docs/sync/index.md`「IDと行の変換」)。
 pub fn list_for_task(conn: &Connection, task_id: i64) -> Result<Vec<TaskStep>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {STEP_COLUMNS} FROM task_steps
          WHERE task_id = ?1 AND deleted_at IS NULL
-         ORDER BY order_index ASC"
+         ORDER BY order_index ASC, uid ASC"
     ))?;
     let rows = stmt
         .query_map([task_id], row_to_step)?
@@ -38,9 +39,9 @@ pub(crate) const MAX_STEP_DESCRIPTION_CHARS: usize = 100;
 /// 件数に上限が無いと1回の結果が際限なく大きくなる。
 pub(crate) const MAX_STEPS: usize = 100;
 
-/// 工程の説明の正規化。前後の空白を落とし(落とさないと重複排除が効かない)、空なら
+/// 工程の説明の正規化。前後の空白を落とし(落とさないと重複排除で同じ説明と見なせない)、空なら
 /// エラーにする。追加と更新で同じ規則を通す。
-fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
+pub(crate) fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(CoreError::InvalidArgument {
@@ -52,7 +53,7 @@ fn normalize_description(raw: &str, arg_name: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-/// 工程の追加。`descriptions`内の重複、および既存の未削除工程と同一の説明は除外する。空・
+/// `descriptions`内の重複、および既存の未削除工程と同一の説明は除外する。空・
 /// 長すぎる説明が1つでもあるか、追加すると[`MAX_STEPS`]を超えるなら、1件も追加せずにエラーを
 /// 返す。`order_index`は連番で既存の最大値の続きから振る。戻り値は新規に追加された工程のみ。
 pub fn add_steps(

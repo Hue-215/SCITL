@@ -620,8 +620,8 @@ function AddProviderForm({ choices, onAdd }: AddProviderFormProps) {
   )
 }
 
-// 入力中のベースURLへのヒントの文言。判定はRust側(アダプタの知識)に問い合わせ、入力が
-// 変わったら古い問い合わせの答えは捨てる。問い合わせに失敗したら何も出さない(登録の
+// 入力中のベースURLへのヒントの文言。判定はRust側に問い合わせ、入力が変わったら
+// 古い問い合わせの答えは捨てる。問い合わせに失敗したら何も出さない(登録の
 // 可否はRust側が登録のときに決める)。
 function useBaseUrlHint(apiFormat: ApiFormat, baseUrl: string): MessageKey | null {
   const [hint, setHint] = useState<{ key: string; message: MessageKey | null }>({

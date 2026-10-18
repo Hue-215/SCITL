@@ -159,7 +159,7 @@ fn message_key(kind: &str) -> String {
     format!("{MESSAGE_KEY_PREFIX}{kind}")
 }
 
-/// アダプタが構成不足で呼び出しに進めない場合の分類。準備が整っていれば`None`。
+/// アダプタが構成不足で呼び出しに進めない場合の分類。
 pub fn from_readiness(readiness: Readiness) -> Option<TurnFailure> {
     match readiness {
         Readiness::Ready => None,
@@ -201,6 +201,8 @@ pub fn classify(err: &CoreError) -> TurnFailure {
         CoreError::Rejected(_) => unexpected("rejected"),
         // 通信先の登録でだけ起きる。ターンの経路には来ない。
         CoreError::Cancelled => unexpected("cancelled"),
+        // 設定からの問い合わせでだけ起きる(同期の間はターンを始めない)。ターンの経路には来ない。
+        CoreError::Syncing => unexpected("syncing"),
         // リンクを開く操作でだけ起きる。ターンの経路には来ない。
         CoreError::Link(_) => unexpected("link"),
         // エクスポートでだけ起きる。ターンの経路には来ない。
@@ -307,7 +309,6 @@ mod tests {
         }
     }
 
-    /// アダプタが作った詳細は詳細の列にだけ載せ、定型文言には混ぜない。
     #[test]
     fn llm_failures_keep_their_detail_out_of_the_user_message() {
         let with_detail = [
@@ -398,7 +399,7 @@ mod tests {
         }
     }
 
-    /// 保存する文言は英語(エクスポートの固定文言と揃える)。
+    /// エクスポートの固定文言と揃える。
     #[test]
     fn stored_message_is_english() {
         assert_eq!(
@@ -459,7 +460,7 @@ mod tests {
         assert!(!failure.user_message().contains("42"));
     }
 
-    /// 上限に達したときの2種類は別の種別にする(文言がそれぞれの上限を案内するため)。
+    /// 文言がそれぞれの上限を案内するので分ける。
     #[test]
     fn tool_limit_failures_are_distinct_kinds() {
         assert_ne!(

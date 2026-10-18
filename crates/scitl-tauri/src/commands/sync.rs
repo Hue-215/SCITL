@@ -1,0 +1,114 @@
+//! 端末間の同期(`docs/sync/index.md`「画面とCLI」)。どちらの役も、始める前にRust側からネイティブの
+//! ダイアログで確かめる。途中経過と競合は`Channel`で知らせ、結果は失敗も含めて`SyncReport`で返す。
+
+use scitl_sync::{ConflictChoice, Request, SyncEvent, SyncReport};
+use tauri::ipc::Channel;
+use tauri::{AppHandle, State};
+
+use crate::{dialog, AppState};
+
+#[tauri::command]
+pub async fn sync_listen(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    on_event: Channel<SyncEvent>,
+) -> Result<SyncReport, ()> {
+    Ok(scitl_sync::listen(
+        request(&state),
+        state.settings.sync_listen_port(),
+        dialog::confirm_sync(&app),
+        forward(on_event),
+    )
+    .await)
+}
+
+/// `address`と`code`は利用者が打ったまま渡す(読むのも確かめるのもRust側)。
+#[tauri::command]
+pub async fn sync_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    address: String,
+    code: String,
+    on_event: Channel<SyncEvent>,
+) -> Result<SyncReport, ()> {
+    Ok(scitl_sync::connect_to(
+        request(&state),
+        &address,
+        &code,
+        dialog::confirm_sync(&app),
+        forward(on_event),
+    )
+    .await)
+}
+
+/// カメラで待ち受ける側のQRを読み、その相手へつないで同期する。読み取りはRust側からOSに頼み、
+/// 読んだ中身は画面へ渡さない。
+#[tauri::command]
+pub async fn sync_connect_scanned(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    on_event: Channel<SyncEvent>,
+) -> Result<SyncReport, ()> {
+    Ok(scitl_sync::connect_scanned(
+        request(&state),
+        scitl_core::qr_scan::scan(),
+        dialog::confirm_sync(&app),
+        forward(on_event),
+    )
+    .await)
+}
+
+/// 読み取りのボタンを出すかの判定([`scitl_core::qr_scan::available`])。
+#[tauri::command]
+pub fn can_scan_sync_qr() -> bool {
+    scitl_core::qr_scan::available()
+}
+
+/// 読む前に説明を挟むかの判定([`scitl_core::permissions::camera`])。
+#[tauri::command]
+pub fn sync_scan_permission() -> scitl_core::permissions::CameraPermission {
+    scitl_core::permissions::camera()
+}
+
+/// カメラの許可を、OSがもう求めない状態のときだけ、このアプリの設定画面を開く
+/// ([`scitl_core::permissions::open_camera_settings`])。
+#[tauri::command]
+pub fn open_camera_settings() {
+    scitl_core::permissions::open_camera_settings();
+}
+
+/// 進んでいる同期を止める([`scitl_sync::cancel`])。
+#[tauri::command]
+pub fn cancel_sync(state: State<'_, AppState>) {
+    scitl_sync::cancel(&state.generating);
+}
+
+/// 競合で選んだ側を渡す([`scitl_sync::answer`])。
+#[tauri::command]
+pub fn resolve_sync_conflicts(state: State<'_, AppState>, choices: Vec<ConflictChoice>) -> bool {
+    scitl_sync::answer(&state.sync_answers, choices)
+}
+
+/// 書き込む前の確認で、書き込むか戻るかを渡す([`scitl_sync::approve_write`])。
+#[tauri::command]
+pub fn approve_sync_write(state: State<'_, AppState>, write: bool) -> bool {
+    scitl_sync::approve_write(&state.write_answers, write)
+}
+
+/// 途中経過を画面へ流す。画面が閉じていて届かなくても、同期は続ける。
+fn forward(on_event: Channel<SyncEvent>) -> impl Fn(SyncEvent) + Sync {
+    move |event| {
+        let _ = on_event.send(event);
+    }
+}
+
+fn request<'a>(state: &'a State<'_, AppState>) -> Request<'a> {
+    Request {
+        ctx: &state.sync,
+        generating: &state.generating,
+        queries: state.settings.query_pause(),
+        answers: &state.sync_answers,
+        write_answers: &state.write_answers,
+        lang: state.settings.display_language(),
+    }
+}

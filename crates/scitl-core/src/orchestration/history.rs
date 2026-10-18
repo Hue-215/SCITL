@@ -151,8 +151,9 @@ pub(super) struct HistoryOptions {
 /// 名前だけを送る。
 ///
 /// エラー発言は送らない。返信のある試行は、返信の行の中身(`messages.parts`)からラウンドごとの
-/// 本文と呼び出し・結果の組にして送る(失敗でない結果だけ。[`reply_messages`])。それ以外の実行記録(会話の外での操作、失敗したターンと捨てた試行での実行)は、失敗で
-/// ない結果を操作の記録にまとめ、行の並びだけで決まる位置に置く
+/// 本文と呼び出し・結果の組にして送る(失敗でない結果だけ。[`reply_messages`])。それ以外の
+/// 実行記録(会話の外での操作、失敗したターンと捨てた試行での実行)は、失敗でない結果を操作の
+/// 記録にまとめ、行の並びだけで決まる位置に置く
 /// (`docs/spec/architecture/prompt-shape.md`「会話の外での操作の伝え方」)。位置が行の並びだけで
 /// 決まるので、次のターンでも同じ位置に並ぶ。
 pub(super) fn build_history(
@@ -522,14 +523,14 @@ fn reissue_call_ids(messages: &mut [ChatMessage], records: &[i64]) -> Option<()>
 }
 
 /// 表示される行と捨てた試行の記録を、行の並び(`db::messages::list_rows_for_chat`と同じ
-/// `created_at`・`id`の順)に合わせる。`bool`は表示される行か。
+/// `id`の順)に合わせる。`bool`は表示される行か。
 fn in_order<'a>(shown: &'a [Message], discarded: &'a [Message]) -> Vec<(&'a Message, bool)> {
     let mut rows: Vec<_> = shown
         .iter()
         .map(|m| (m, true))
         .chain(discarded.iter().map(|m| (m, false)))
         .collect();
-    rows.sort_by(|(a, _), (b, _)| (&a.created_at, a.id).cmp(&(&b.created_at, b.id)));
+    rows.sort_by_key(|(m, _)| m.id);
     rows
 }
 
@@ -766,8 +767,8 @@ mod tests {
 
     const OPENING: &str = "開始の発言";
 
-    /// 長さの上限で切れた印は、モデルへ送る並びを変えない(本文に付いた印も、本文の無いラウンドに
-    /// 残った印も)。保存の無いターンを中身から組み立てても、印の無いときと同じ発言列になる。
+    /// 本文に付いた印と、本文の無いラウンドに残った印の両方を確かめる。保存の無いターンを中身から
+    /// 組み立てても、印の無いときと同じ発言列になる。
     #[test]
     fn truncation_marks_do_not_change_what_is_sent() {
         let text = |round, truncated| ResolvedPart::Text {
@@ -1082,8 +1083,7 @@ mod tests {
         assert!(tool_contents(&f.history()).is_empty());
     }
 
-    /// 返信の中身はラウンドごとに、本文と呼び出しを1つのassistantの発言にして送る。呼び出しが
-    /// すべて送られないラウンドの本文は、次のラウンドの本文の前につなぐ。
+    /// 呼び出しがすべて送られないラウンドの本文は、次のラウンドの本文の前につなぐ。
     #[test]
     fn sends_each_round_of_a_reply_with_its_text() {
         let f = Fixture::new();
@@ -1142,7 +1142,6 @@ mod tests {
         );
     }
 
-    /// 最後のラウンドが本文も思考も残さなかった返信は、結果で終わらせず本文の無いassistantで閉じる。
     #[test]
     fn closes_a_reply_whose_last_round_left_nothing() {
         let f = Fixture::new();
@@ -1235,8 +1234,7 @@ mod tests {
         assert_eq!(operations[0]["result"], json!({ "text": "x" }));
     }
 
-    /// 失敗したターンの記録のうち、読み取りの内部ツールは効果が残らないので伝えない。更新系と
-    /// 外部ツールは伝える。
+    /// 更新系と外部ツールは伝える。
     #[test]
     fn leaves_out_reads_from_a_failed_turn() {
         let f = Fixture::new();
@@ -1283,8 +1281,7 @@ mod tests {
         assert_eq!(operations[0]["at"], at);
     }
 
-    /// 返信のある試行の途中に挟まった記録(別プロセスの書き込み)は、その試行の中に差し込まず、
-    /// 次のユーザー発言の前に回す。
+    /// 別プロセスの書き込みで挟まった記録は、次のユーザー発言の前に回す。
     #[test]
     fn moves_operations_made_during_a_turn_after_that_turn() {
         let f = Fixture::new();
@@ -1331,8 +1328,6 @@ mod tests {
         );
     }
 
-    /// 記録から組み立てた添付の読み込みの結果は、画像を渡したと伝えたままにしない(記録は画像を
-    /// 持たない)。
     #[test]
     fn a_replayed_attachment_read_does_not_claim_the_image_it_no_longer_carries() {
         let f = Fixture::new();
@@ -1352,8 +1347,7 @@ mod tests {
         );
     }
 
-    /// 再試行で捨てた試行の記録は、そのターンのユーザー発言の後ろに置く。再試行を生成している間
-    /// (新しい試行の行がまだ無い)と、生成し終えたあとで同じ位置に並ぶ。
+    /// 再試行を生成している間(新しい試行の行がまだ無い)と、生成し終えたあとで同じ位置に並ぶ。
     #[test]
     fn reports_results_from_a_retried_attempt_after_its_user_message() {
         let f = Fixture::new();
@@ -1400,8 +1394,7 @@ mod tests {
         );
     }
 
-    /// 再試行で置き換えた試行と新しい試行は同じ`turn_id`を持つ。古い試行の記録は操作の記録に、
-    /// 新しい試行の記録は呼び出しと結果の組にする。
+    /// 再試行で置き換えた試行と新しい試行は同じ`turn_id`を持つ。
     #[test]
     fn keeps_the_new_attempts_calls_as_pairs_and_reports_the_old_ones() {
         let f = Fixture::new();
@@ -1438,8 +1431,7 @@ mod tests {
         assert_eq!(operations_in(texts[1])[0]["result"], json!({ "n": 2 }));
     }
 
-    /// 返信のあとに記録があり、ユーザー発言が続かない(新しい発言の無い送信内容のプレビュー)なら、
-    /// 返信より前の発言に付けず、返信の後ろに操作の記録だけの発言として置く。
+    /// 新しい発言の無い送信内容のプレビューで起きる。返信より前の発言には付けない。
     #[test]
     fn puts_operations_after_the_last_reply_when_no_user_message_follows() {
         let f = Fixture::new();
@@ -1512,7 +1504,7 @@ mod tests {
         ));
     }
 
-    /// 複数の記録は行の順に並べ、読めない記録と失敗した結果は飛ばす。
+    /// 飛ばすのは読めない記録と失敗した結果。
     #[test]
     fn lists_operations_in_order_and_skips_what_cannot_be_reported() {
         let f = Fixture::new();
@@ -1527,8 +1519,6 @@ mod tests {
         assert_eq!(results, vec![json!({ "n": 1 }), json!({ "n": 2 })]);
     }
 
-    /// 新しい入力は、最後の返信のある試行より後ろ。入力に含めた行(ユーザー発言と、それに置いた
-    /// 操作の記録)を追える。
     #[test]
     fn marks_where_the_new_input_starts_and_which_rows_it_holds() {
         let f = Fixture::new();
@@ -1576,7 +1566,6 @@ mod tests {
         assert_eq!(history.first_row(0), None);
     }
 
-    /// 送った形の保存がある試行は、記録から組み立て直さずに保存をそのまま並べる。
     #[test]
     fn places_a_saved_attempt_as_it_was_sent() {
         let f = Fixture::new();
@@ -1601,7 +1590,6 @@ mod tests {
         assert_eq!(history.rows_from(2), vec![next]);
     }
 
-    /// 保存した入力に含まれていない操作の記録は、保存の前に差し込まず、新しい入力に積む。
     #[test]
     fn carries_operations_missing_from_a_saved_input_to_the_new_input() {
         let f = Fixture::new();
@@ -1619,8 +1607,6 @@ mod tests {
         assert!(history.rows_from(history.input_from).contains(&op));
     }
 
-    /// 間引く単位は保存から並べた区間の途中から始めず、間引きの位置(行)からは、その行か後ろの
-    /// 行で始まる最初の単位から並べる。
     #[test]
     fn starts_units_outside_saved_segments_and_at_the_kept_row() {
         let f = Fixture::new();
@@ -1787,8 +1773,7 @@ mod tests {
         (calls, results)
     }
 
-    /// 呼び出しは実行記録に実行した順で対応させ、結果は同じIDの呼び出しに(IDが無ければ並んだ
-    /// 順に)対応させる。
+    /// 結果は同じIDの呼び出しに(IDが無ければ並んだ順に)対応させる。
     #[test]
     fn reissued_call_ids_follow_the_records_in_the_order_they_were_run() {
         let id = |row| Some(history_call_id(row));
@@ -1846,7 +1831,7 @@ mod tests {
         assert_eq!(reissue_call_ids(&mut twice, &[1]), None);
     }
 
-    /// 払い出した送り先かは、方言と要求URLのオリジンで見る。モデルはOpenAI互換でだけ見る。
+    /// モデルはOpenAI互換でだけ見る。
     #[test]
     fn call_ids_are_kept_for_the_format_and_server_that_issued_them() {
         let identity = |api_format, model: &str, server: &str| AdapterIdentity {
@@ -1878,7 +1863,6 @@ mod tests {
         assert!(!issued(compat("a", SERVER), None));
     }
 
-    /// 呼び出しを置き換えた発言の思考は外す(思考のブロックは元のIDを含む)。
     #[test]
     fn reissuing_call_ids_drops_the_thinking_that_carries_the_old_ones() {
         let replay: Replay =
@@ -1907,7 +1891,6 @@ mod tests {
         assert_eq!(replays, [Replay::default(), replay]);
     }
 
-    /// 送り先が保存と違えば、保存から並べた試行の呼び出しIDを実行記録の行idから作る。
     #[test]
     fn a_saved_attempt_sent_elsewhere_carries_ids_made_from_its_records() {
         let f = Fixture::new();
@@ -1976,7 +1959,6 @@ mod tests {
         );
     }
 
-    /// 置き換えられない保存は使わず、返信の行の中身から組み立てる。
     #[test]
     fn a_saved_attempt_whose_ids_cannot_be_reissued_is_rebuilt_from_the_records() {
         let f = Fixture::new();
@@ -2107,5 +2089,66 @@ mod tests {
         };
         assert!(!text.as_str().contains("scitl:attachments"));
         assert!(images.is_empty());
+    }
+
+    /// `created_at`は端末の時計で決まるので見ない。
+    #[test]
+    fn rows_and_discarded_records_are_merged_in_id_order() {
+        let conn = db::open_in_memory().unwrap();
+        let chat = Chat::General;
+        let insert = |role, kind, origin| {
+            messages::insert_message(
+                &conn,
+                NewMessage {
+                    chat,
+                    role,
+                    content: if kind == Kind::Normal { "本文" } else { "{}" },
+                    kind,
+                    origin,
+                    error_kind: None,
+                    error_detail: None,
+                    parts: None,
+                },
+            )
+            .unwrap()
+        };
+        let user = insert(Role::User, Kind::Normal, Origin::User);
+        let operation = insert(
+            Role::Tool,
+            Kind::ToolExecution,
+            Origin::Operation(OperationSource::Ui),
+        );
+        // 返信の無いまま終わった試行の記録。
+        let discarded = insert(
+            Role::Tool,
+            Kind::ToolExecution,
+            Origin::Turn {
+                turn_id: "turn-1",
+                attempt_no: 1,
+            },
+        );
+        conn.execute(
+            "UPDATE messages SET created_at = CASE id WHEN ?1 THEN '2001-01-01T00:00:00Z'
+                                                      ELSE '2000-01-01T00:00:00Z' END
+             WHERE id IN (?1, ?2)",
+            [operation, discarded],
+        )
+        .unwrap();
+        let shown = messages::list_rows_for_chat(&conn, chat).unwrap();
+        let records: Vec<Message> = messages::list_tool_records_for_chat(&conn, chat)
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.id == discarded)
+            .collect();
+
+        let order: Vec<(i64, bool)> = in_order(&shown, &records)
+            .into_iter()
+            .map(|(m, shown)| (m.id, shown))
+            .collect();
+
+        assert_eq!(
+            order,
+            vec![(user, true), (operation, true), (discarded, false)]
+        );
     }
 }

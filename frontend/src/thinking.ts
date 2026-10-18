@@ -18,7 +18,7 @@ export interface PlainEntry {
 export type DisplayItem = TurnGroup | PlainEntry
 
 /**
- * `list_chat_messages`が返す発言列(created_at, id順)を、SCITL自身の応答生成に属する行
+ * `list_chat_messages`が返す発言列(id順)を、SCITL自身の応答生成に属する行
  * (`turn_id`が同じ行)ごとにまとめる。ユーザー発言・応答生成以外の経路での操作の
  * 記録は`turn_id`を持たないため常に独立した`plain`項目になる。
  *
@@ -76,6 +76,7 @@ export function stoppedTurnAtEnd(messages: MessageView[]): number | null {
 export function operationSourceLabel(source: string | null): MessageKey {
   if (source === 'ui') return 'chat.source_ui'
   if (source === 'cli') return 'chat.source_cli'
+  if (source === 'sync') return 'chat.source_sync'
   if (source === 'mcp' || source?.startsWith('mcp:')) return 'chat.source_mcp'
   return 'chat.source_unknown'
 }
@@ -154,9 +155,9 @@ export interface LiveTurn {
    */
   open: 'reasoning' | 'text' | null
   /**
-   * モデルの応答を待っているアシスタントの名前(`awaiting_model`で入る。ニックネームかプロバイダー名)。本文が届き始めるか、
-   * ラウンドが終わったら外す。ストリーミングしないときは本文がラウンドの終わりにまとめて届くので、
-   * 応答が返り終わるまで残る。思考が流れている間は残す。
+   * モデルの応答を待っているアシスタントの名前(`awaiting_model`で入る。ニックネームかプロバイダー名)。
+   * 本文が届き始めるか、ラウンドが終わったら外す。ストリーミングしないときは本文がラウンドの終わりに
+   * まとめて届くので、応答が返り終わるまで残る。思考が流れている間は残す。
    */
   awaiting: string | null
 }

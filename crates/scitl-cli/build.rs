@@ -43,7 +43,7 @@ fn link_vcruntime_statically() {
 }
 
 /// Rustが決め打ちでリンクする`msvcrt.lib`を、(ほぼ)空のオブジェクトファイルで置き換える。
-/// `/NODEFAULTLIB`は名指しでリンクされるライブラリには効かないため。
+/// `/NODEFAULTLIB`は名指しでリンクされるライブラリには及ばないため。
 fn override_msvcrt_lib() {
     // 空のライブラリに書く機種の種別。
     let machine: &[u8] = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {

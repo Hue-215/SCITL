@@ -112,7 +112,6 @@ pub(super) fn insert_user_message(conn: &Connection, chat: Chat, text: &str) -> 
     )
 }
 
-/// [`create_task`]の結果。
 #[derive(Debug, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -377,10 +376,10 @@ pub async fn delete_message(
 /// 実行したツールの記録と、止めたことを表すエラー発言(`TurnFailure::Stopped`)を残して終わり、
 /// その保存は生成を始めた呼び出し([`run_turn`]等)が返るまでに済む。
 ///
-/// 同じプロセスの中で生成している会話にしか効かない。生成中でなければ何もせず`false`を返す
+/// 止められるのは同じプロセスの中で生成している会話だけ。生成中でなければ何もせず`false`を返す
 /// (止める指示と生成の終わりが行き違った場合を含む)。`true`は指示を出したことを表すだけで、
-/// 最後の応答を受け取り終えたあとに出した指示では、応答はそのまま保存される。発言の削除・タスクの操作も同じ集合で
-/// 生成中として扱うが、それらは指示を見ないので止まらない。
+/// 最後の応答を受け取り終えたあとに出した指示では、応答はそのまま保存される。発言の削除・
+/// タスクの操作も同じ集合で生成中として扱うが、それらは指示を見ないので止まらない。
 pub fn stop_response(generating: &InFlightSet<Chat>, chat: Chat) -> bool {
     generating.request_stop(&chat)
 }
@@ -508,8 +507,15 @@ async fn respond(
 /// 知らせる中身を作れなくてもターンは失敗にしない。
 async fn report_finished(db: SharedConnection, ctx: &TurnContext<'_>, attempt: &Attempt) {
     let attempt = attempt.clone();
+    let assistant_name = ctx.assistant_name.to_string();
     let finished = with_conn(db, move |conn| {
-        turn_end::finished_turn(conn, attempt.chat, &attempt.turn_id, attempt.attempt_no)
+        turn_end::finished_turn(
+            conn,
+            attempt.chat,
+            &attempt.turn_id,
+            attempt.attempt_no,
+            &assistant_name,
+        )
     })
     .await;
     match finished {

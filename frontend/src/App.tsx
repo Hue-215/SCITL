@@ -22,7 +22,9 @@ import ChatCompose, { type ComposedMessage } from './ChatCompose'
 import ChatLog, { TypingIndicator } from './ChatLog'
 import { chatKey, GENERAL_CHAT, taskChat } from './chat'
 import { Drawer, DrawerToggle } from './Drawer'
+import { useChatExport } from './useChatExport'
 import { t, turnErrorText } from './i18n'
+import MenuButton from './MenuButton'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import TaskHeader from './TaskHeader'
@@ -58,6 +60,7 @@ export default function App() {
   // `requests`が会話ごとに持つ。
   const [error, setError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const chatExport = useChatExport()
   // 会話欄に思考を出すか(設定「一般」)。設定画面を閉じるたびに読み直す。最初に読めるまでは
   // 出さない(切っている人に、起動直後の一瞬だけ見せないため)。最初から読めなければ出し、
   // 読み直しに失敗したら直前の値のままにする。
@@ -100,7 +103,7 @@ export default function App() {
       return summaries
     } catch (e) {
       setError(failureText(e))
-      return []
+      return null
     }
   }, [])
 
@@ -368,10 +371,21 @@ export default function App() {
   // 表示のとき。設定画面から戻ったときは会話欄が作り直されて先頭に戻るので、それも含める。
   useLayoutEffect(follow, [follow, messages, pending.length, live, failure, settingsOpen])
 
+  // 設定画面では同期で一覧と会話が変わりうるので、閉じたら引き直す。表示中のタスクが同期で
+  // 消えていれば、総合チャットへ戻る。
   const closeSettings = () => {
     stick()
     setAddBlocked(null)
     setSettingsOpen(false)
+    const shown = chat
+    void loadTasks().then((summaries) => {
+      if (selectedRef.current !== chatKey(shown)) return
+      if (shown.kind === 'task' && summaries && !summaries.some((t) => t.id === shown.task_id)) {
+        selectChat(GENERAL_CHAT)
+      } else {
+        void loadChat(shown)
+      }
+    })
   }
 
   // 通知を押して届いた会話を開く(Android)。どの会話を開くかはRust側が決めて知らせてくる。
@@ -439,12 +453,25 @@ export default function App() {
                   leaveIfShown(task.id)
                 })
               }
+              onExport={() => chatExport.start(taskChat(task.id))}
             />
           ) : (
             <header className="chat-header">
               <div className="chat-header-row">
                 {drawerToggle}
                 <h1>{chat.kind === 'general' ? t('chat.general_title') : t('common.app_name')}</h1>
+                {chat.kind === 'general' && (
+                  <MenuButton
+                    label={t('chat.general_menu_label')}
+                    items={[
+                      {
+                        key: 'export',
+                        label: t('export.button'),
+                        onSelect: () => chatExport.start(GENERAL_CHAT),
+                      },
+                    ]}
+                  />
+                )}
               </div>
             </header>
           )}
@@ -493,6 +520,7 @@ export default function App() {
           onModelChanged={() => setAddBlocked(null)}
         />
       </main>
+      {chatExport.dialog}
     </div>
   )
 }

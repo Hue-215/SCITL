@@ -27,8 +27,24 @@
 # 応答が終わったことの通知と、通知を押して開く会話の引き取りで、RustからJNIで呼ぶ
 # (`scitl_core::reply_notification`)。クラスも名前で引くので、名前を変えさせない。
 -keep class net.niigo.scitl.ReplyNotifier {
-    public static void post(android.content.Context, long, java.lang.String, java.lang.String, java.lang.String);
+    public static void post(android.content.Context, long, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
 }
 -keep class net.niigo.scitl.MainActivity {
     public static long takeRequestedChat();
+}
+
+# 同期の相手のQRを読む画面を開き、結果を引き取る(`scitl_core::qr_scan`)。
+-keep class net.niigo.scitl.QrScanner {
+    public static boolean available(android.content.Context);
+    public static long start(android.content.Context);
+    public static java.lang.String poll(long);
+    public static void cancel(long);
+}
+
+# カメラと通知の許可の状態を引き、求める・設定アプリを開く(`scitl_core::permissions`)。
+-keep class net.niigo.scitl.Permissions {
+    public static int camera(android.content.Context);
+    public static void openSettings(android.content.Context);
+    public static boolean notificationPromptDue(android.content.Context);
+    public static void answerNotificationPrompt(android.content.Context, boolean);
 }

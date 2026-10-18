@@ -123,7 +123,7 @@ pub async fn list_models(
     )?;
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
-    loop {
+    for _ in 0..super::MAX_MODEL_PAGES {
         let mut url = super::endpoint(&base_url, MODELS)?;
         url.query_pairs_mut().append_pair("pageSize", "1000");
         if let Some(token) = &page_token {
@@ -146,12 +146,11 @@ pub async fn list_models(
         );
         match page.next_page_token.filter(|t| !t.is_empty()) {
             Some(token) if page_token.as_ref() != Some(&token) => page_token = Some(token),
-            _ => break,
+            _ => return Ok(super::sorted_unique(names)),
         }
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    super::report_model_page_limit(&base_url);
+    Ok(super::sorted_unique(names))
 }
 
 /// `models/gemini-…`の`models/`を除く。
@@ -883,7 +882,6 @@ mod tests {
         assert!(text.contains(&format!(r#"}}]}},{thought},{call}]"#)));
     }
 
-    /// 受け取ったまま返した呼び出しにも、続く結果に呼び出しの名前を添える。
     #[test]
     fn names_the_result_of_a_replayed_call() {
         let messages = [
@@ -934,8 +932,7 @@ mod tests {
         assert!(image["data"].as_str().unwrap().starts_with("… ("));
     }
 
-    /// プレビューでは、送り返す思考の署名とツール結果の画像も縮める。ツールの引数の中は、
-    /// 同じ形の値でも縮めない(モデルに渡る値を隠さない)。
+    /// ツールの引数の中は、同じ形の値でも縮めない。
     #[test]
     fn preview_shortens_the_signature_and_the_result_image_but_not_the_arguments() {
         let image = InlineImage::from_bytes(b"\x89PNG\r\n\x1a\n0000").unwrap();
@@ -1152,8 +1149,7 @@ mod tests {
         assert_eq!(events.len(), 2, "本文とDoneが1回ずつ");
     }
 
-    /// 送り返した思考の署名が断られたら、呼び直さずに思考の拒否として返す(外して送り直すのは
-    /// ターンの側)。
+    /// 思考を外して送り直すのはターンの側。
     #[tokio::test]
     async fn reports_a_rejected_thought_signature_without_retrying() {
         let (base_url, handle) = spawn_server(vec![(
@@ -1271,7 +1267,7 @@ mod tests {
         ));
     }
 
-    /// 無効なキーは400で返るが、`details`の`reason`で見分けて認証の失敗にする。
+    /// `details`の`reason`で見分ける。
     #[test]
     fn classifies_an_invalid_key_reported_with_400_as_auth() {
         let body = r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}"#;
@@ -1320,6 +1316,28 @@ mod tests {
         assert_eq!(names, ["gemini-a", "gemini-b"]);
         assert!(received[0].headers.starts_with("get /v1beta/models?"));
         assert!(received[1].headers.contains("pagetoken=p2"));
+    }
+
+    #[tokio::test]
+    async fn stops_listing_after_the_page_limit() {
+        let pages = (0..super::super::MAX_MODEL_PAGES)
+            .map(|i| {
+                let page = format!(
+                    r#"{{"models":[{{"name":"models/m{i}","supportedGenerationMethods":["generateContent"]}}],"nextPageToken":"p{i}"}}"#
+                );
+                (200, &*Box::leak(page.into_boxed_str()))
+            })
+            .collect();
+        let (base_url, handle) = spawn_server(pages);
+        let names = list_models(
+            &base_url,
+            &Credentials::key_only(SecretString::from("key-test".to_string())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(names.len(), super::super::MAX_MODEL_PAGES);
+        assert_eq!(handle.join().unwrap().len(), super::super::MAX_MODEL_PAGES);
     }
 
     #[tokio::test]

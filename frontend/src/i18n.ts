@@ -18,7 +18,7 @@ import type { CommandFailure, Language } from './types'
 
 export type MessageKey = keyof typeof ja
 
-// 正本(すべてのキーを持つ)で、未設定のときの表示言語。core側の`Language::DEFAULT`を
+// すべてのキーを持つ言語で、未設定のときの表示言語。core側の`Language::DEFAULT`を
 // `cargo test`が書き出したもの(`bindings/SharedConstants.ts`)。キーと差し込む値の名前が
 // 言語間で揃っていることは、core側のテスト(scitl_core::i18n)が確かめる。
 export { DEFAULT_LANGUAGE }
@@ -29,7 +29,7 @@ export const LANGUAGES = Object.keys(CATALOGS) as Language[]
 
 interface Current {
   language: Language
-  // 正本の上に表示言語を重ねたもの。表示言語に無いキーは正本の文言になる。
+  // 既定の言語(`DEFAULT_LANGUAGE`)の上に表示言語を重ねたもの。
   messages: Map<string, string>
   dateTime: Intl.DateTimeFormat
 }
@@ -83,7 +83,7 @@ export function isolated(value: string): string {
   return `\u2068${value}\u2069`
 }
 
-/** `key`の文言。表示言語に無ければ正本、そこにも無ければキーそのものを返す。 */
+/** `key`の文言。表示言語に無ければ既定の言語、そこにも無ければキーそのものを返す。 */
 export function t(key: MessageKey, params: Record<string, string | number> = {}): string {
   return fill(state().messages.get(key) ?? key, params)
 }

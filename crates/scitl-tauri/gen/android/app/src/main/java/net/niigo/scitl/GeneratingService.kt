@@ -11,7 +11,7 @@ import android.os.IBinder
 import android.util.Log
 
 /**
- * 応答の生成中だけ動かすフォアグラウンドサービス。動いている間、裏へ回ったアプリのプロセスを
+ * 応答の生成中と同期の間だけ動かすフォアグラウンドサービス。動いている間、裏へ回ったアプリのプロセスを
  * OSが止めにくくなる(docs/spec/architecture/concurrency.md「Androidで裏へ回ったとき」)。
  *
  * 仕事は持たない。始める・止める時機はRust側が決め(scitl_core::foreground_service)、
@@ -29,20 +29,18 @@ class GeneratingService : Service() {
       )
     } catch (e: Exception) {
       // アプリが前に出ていないときや、dataSyncの時間(下のonTimeout)を使い切っているときは、OSが断る。
-      // 応答の生成は続くが、裏へ回ると止まりうる。
+      // 応答の生成や同期は続くが、裏へ回ると止まりうる。
       Log.w(TAG, "could not enter the foreground", e)
       stopSelf()
     }
-    // 初めて応答を生成するときに、応答が終わったことの通知(ReplyNotifier)のための許可を求める。
-    MainActivity.requestNotificationPermissionOnce()
-    // プロセスごと終わらされたら、生成も終わっている。サービスだけを作り直させない。
+    // プロセスごと終わらされたら、生成も同期も終わっている。サービスだけを作り直させない。
     return START_NOT_STICKY
   }
 
   /**
    * dataSyncのサービスが動ける時間(24時間で合計6時間。利用者がアプリを前に出すと戻る)を使い切った
    * ときに、Android 15以上で呼ばれる。
-   * 数秒以内に止めないとアプリごと落とされる。応答の生成は続くが、裏では止まりうる。
+   * 数秒以内に止めないとアプリごと落とされる。応答の生成や同期は続くが、裏では止まりうる。
    */
   override fun onTimeout(startId: Int, fgsType: Int) {
     stopSelf()

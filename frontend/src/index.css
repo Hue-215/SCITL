@@ -1,14 +1,6 @@
 /*
- * スタイルは2層で構成する。
- *
- *   1. 基盤層(要素セレクタ): アプリで使う要素の既定の見た目をここで決める。
- *      ブラウザとOS(WebKitGTK/GTKテーマ)の既定値は、クラスを付け忘れた要素にも
- *      必ず適用されるため、クラス側で個別に打ち消すのでは必ず漏れる。
- *   2. 画面層(クラスセレクタ): 基盤層との差分だけを書く。基盤層で足りているものを
- *      再掲しない。
- *
- * 新しい要素を画面に足すときは、まず基盤層に既定があるかを確認すること。無ければ
- * 画面側ではなく基盤層に足す。
+ * 基盤層(要素セレクタ)でアプリで使う要素の既定の見た目を決め、画面層(クラスセレクタ)には
+ * 基盤層との差分だけを書く(docs/spec/ui.md「スタイルシートの2層構成」)。
  */
 
 /* ---- 基盤層 ---- */
@@ -25,11 +17,11 @@
 :root {
   color-scheme: light dark;
   font-family: var(--font-family);
-  /* 同梱していないウェイトを太字として合成させない(字形が潰れる)。斜体の合成は残す
+  /* 同梱していないウェイトを太字として合成させない(字形が崩れる)。斜体の合成は残す
      (日本語の書体は斜体を持たず、.entry-tool等の斜体はこれで作られる)。 */
   font-synthesis: style;
   /* AndroidのWebViewが押した部品に重ねる青い塗りを消す。押した手応えは部品自身の
-     :active・:hoverの塗りで出す。継承される値なので、根に置けば全体に効く。 */
+     :active・:hoverの塗りで出す。継承される値なので、根に置けば全体に掛かる。 */
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -81,6 +73,24 @@ ul,
 ol {
   list-style: none;
   margin: 0;
+  padding: 0;
+}
+
+dl,
+dd {
+  margin: 0;
+}
+
+/* 選択肢のまとまり。枠と余白は使う側が持つ。UAのmin-inline-size: min-contentは、切れない語で
+   入れ物より広がるので外す。 */
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+legend {
   padding: 0;
 }
 
@@ -251,6 +261,8 @@ input[type='checkbox'] {
   display: inline-grid;
   place-content: center;
   vertical-align: middle;
+  /* 選択行(.choice)の名前が長くても箱を潰さない。 */
+  flex-shrink: 0;
   cursor: pointer;
 }
 
@@ -325,7 +337,7 @@ option {
 
 /* 平らなボタン: 一覧の行や補助的な操作のように、並べたときに塗りがうるさくなるもの。
    普段は塗りも影も持たず、指し示すと浮き、押すと沈む。選択中(.selected)は沈んだまま
-   残す。ホバーは指し示せる端末でだけ効かせる(タッチ端末では浮いたまま残るため)。
+   残す。ホバーは指し示せる端末でだけ当てる(タッチ端末では浮いたまま残るため)。
    対象の一覧を1回だけ書くため、状態ごとの指定は入れ子(&)で持つ。アイコンだけのボタンも既定は
    平らにし、塗りを持たせたいもの(入力欄の下の添付・送信)は.raised・.primaryで外す。 */
 :is(
@@ -363,6 +375,7 @@ option {
   .code-block button,
   .chat-model-toggle,
   .chat-header-description-toggle,
+  .tool-description-toggle,
   .chip,
   .choice {
     min-height: var(--control-size-md);
@@ -541,7 +554,7 @@ option {
 
 .chat-compose textarea {
   /* 基盤層の--textarea-min-heightより低い、1行分の高さを下限にする。1行の中身がある限り内容側の
-     高さ(1行分とpadding・border)がこの下限を上回るため実質効かないが、フォントサイズを変えた
+     高さ(1行分とpadding・border)がこの下限を上回るため実質使われないが、フォントサイズを変えた
      ときの保険として床に置く。 */
   min-height: var(--control-size-md);
 }
@@ -739,7 +752,7 @@ option {
 }
 
 /* 引き出したカラムと暗幕の上では、ブラウザに縦のスクロールだけを任せ、横の指の動きは閉じる
-   スワイプ(useDrawerSwipe.ts)に使う。内容側には付けない(コードの塊・表の横スクロールが効かなくなる)。 */
+   スワイプ(useDrawerSwipe.ts)に使う。内容側には付けない(コードの塊・表の横スクロールが動かなくなる)。 */
 .narrow .drawer,
 .drawer-backdrop {
   touch-action: pan-y;
@@ -1015,7 +1028,7 @@ details[open] > summary > .disclosure-mark,
   color: var(--color-text-secondary);
 }
 
-/* Markdownとして描画しない本文(エラー発言・応答待ち)。改行入りの文言を空白に潰さない。 */
+/* Markdownとして描画しない本文(エラー発言・応答待ち)。改行入りの文言の改行を空白にしない。 */
 .entry-content {
   white-space: pre-wrap;
   word-break: break-word;
@@ -1469,9 +1482,13 @@ details[open] > summary > .disclosure-mark,
 
 .model-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* 注記(非対応)だけを右端に寄せる。ツールの説明の開閉は名前の直後に置く(右端だと名前から離れる)。 */
+.model-row > .provider-card-meta {
+  margin-left: auto;
 }
 
 /* 名前(モデル名・ツール名)は区切りの無い英数字の連続でも折り返し、右側の操作や注記を
@@ -1485,7 +1502,26 @@ details[open] > summary > .disclosure-mark,
   flex-shrink: 0;
 }
 
-/* 一覧が空のときの一文。プロバイダー・モデル・MCPサーバー・ツールで共通。 */
+/* 開閉はツール呼び出しの行(.tool-call)と同じく、塗りも浮きも持たない文字だけの形にする。
+   <details>にすると開いた中身が行の中に入るので、ボタンで開いて行の下に出す。 */
+.tool-description-toggle,
+.tool-description-toggle:not(:disabled):active {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  background-color: transparent;
+  --elevation: initial;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* サーバーが書いた説明は改行で段落や引数の一覧を書くことが多いので、改行を残す。 */
+.tool-description {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* プロバイダー・モデル・MCPサーバー・ツールで共通。 */
 .list-empty {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
@@ -1532,7 +1568,7 @@ details[open] > summary > .disclosure-mark,
 }
 
 /* 名前の列だけが残りの幅を取り、区切りの無い英数字の連続でも折り返す。狭い窓では
-   1文字ずつに潰れないよう下限を持たせ、足りない分は表の横スクロールに回す。
+   1文字ずつで折り返さないよう下限を持たせ、足りない分は表の横スクロールに回す。
    下限はここでしか使わない値なのでトークン化しない。 */
 .model-table .model-name {
   width: 100%;
@@ -1708,6 +1744,201 @@ details[open] > summary > .disclosure-mark,
   gap: var(--space-5);
 }
 
+/* 同期の画面(SettingsSync.tsx)。入れ物は設定の本文と同じ.settings-mainで、見出しの帯・本文・下の
+   ボタンの行を縦に並べる。見出しと本文は設定画面と同じ列(.settings-header・.settings-content)に置く。 */
+.sync-screen-aside {
+  margin-inline-start: auto;
+}
+
+.sync-screen-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* 情報の少ない画面は、本文を上下左右の中央に寄せる(下のボタンから遠くならないように)。収まらない
+   ときは上端から並べる(中央のままだと上が切れて、スクロールしても届かない)。 */
+.sync-screen-body.centered {
+  min-height: 100%;
+  justify-content: safe center;
+  align-items: center;
+  text-align: center;
+}
+
+/* 入力と書き込む前の確認は、上下だけ中央に寄せる(欄と枠は左揃えのまま)。 */
+.sync-screen-body.middle {
+  min-height: 100%;
+  justify-content: safe center;
+}
+
+/* 競合の画面は、両側の枠を高さいっぱいに分け合う。 */
+.sync-screen-body.fill {
+  height: 100%;
+}
+
+.sync-screen-footer {
+  flex-shrink: 0;
+  border-top: var(--border-width) solid var(--color-border);
+  padding-block: var(--space-3) var(--pane-padding);
+}
+
+/* 下のボタンの行は本文と同じ列に置く。主ボタンは右端、ほかは左端。 */
+.sync-screen-actions {
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+.sync-screen-actions > .primary {
+  margin-inline-start: auto;
+}
+
+.sync-connect-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.sync-code-input {
+  font-family: var(--font-family-mono);
+}
+
+/* 入力欄の下に並べるボタン(コードを発行する・QRを読み取る)。同じ幅で分け合い、1つだけ(カメラの
+   無い端末)なら行の幅いっぱいにする。 */
+.sync-alt-actions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/* 待ち受けのQR。画面の色によらず白地に黒で描く(読み取りに要る)。 */
+.sync-qr {
+  display: block;
+  width: min(100%, 240px);
+  height: auto;
+}
+
+.sync-addresses code {
+  font-size: var(--font-size-lg);
+}
+
+/* 待ち受けのコード。打ち写す値なので、ほかの文字より大きく出し、字間を空ける。大きさと字間は
+   ここでしか使わない値なのでトークン化しない。 */
+.sync-code {
+  font-size: 2.5rem;
+  line-height: var(--line-height-tight);
+  letter-spacing: 0.12em;
+}
+
+/* 端末ごと・競合の側ごとの枠。.provider-cardと同じく枠線だけで塗らない。 */
+.sync-box {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.sync-box-head {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-weight: var(--font-weight-strong);
+}
+
+.sync-box-body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.sync-counts {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: var(--space-1) var(--space-5);
+  text-align: start;
+}
+
+/* 枠の中では件数を右端に寄せる。 */
+.sync-box .sync-counts {
+  grid-template-columns: 1fr max-content;
+  column-gap: var(--space-4);
+}
+
+.sync-count {
+  display: contents;
+}
+
+.sync-count dd {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 競合の両側は上下に積み、枠ごとに中身をスクロールさせる。選んだ側は枠の色で示す(選択状態は
+   ラジオボタン自身も持つ)。 */
+.sync-sides {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sync-sides legend {
+  margin-bottom: var(--space-2);
+  font-weight: var(--font-weight-strong);
+}
+
+.sync-side {
+  flex: 1 1 0;
+  /* 低い窓でも中身が少しは見える高さ。ここでしか使わない値なのでトークン化しない。 */
+  min-height: 8rem;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.sync-side.selected {
+  border-color: var(--color-primary);
+}
+
+.sync-side-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sync-side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-block: var(--space-2) var(--space-3);
+}
+
+.sync-side-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-inline: var(--space-3);
+  min-width: 0;
+}
+
+.sync-side-title {
+  font-weight: var(--font-weight-strong);
+  overflow-wrap: anywhere;
+}
+
+.sync-side-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sync-side-steps {
+  padding-left: var(--space-5);
+  list-style: disc;
+  overflow-wrap: anywhere;
+}
+
+.sync-step-done {
+  color: var(--color-text-secondary);
+  text-decoration: line-through;
+}
+
 /* 主ボタン(タスクを追加・送信)。アクセント色そのものでは影が塗りに溶けるため、専用の塗りに
    する(ui.md「塗りと奥行き」)。 */
 button.primary {
@@ -1755,7 +1986,7 @@ button.danger {
   border-color: var(--color-danger);
 }
 
-/* 受け付けなかった添付。送られない。 */
+/* 受け付けなかった添付。 */
 .chip-error {
   background: var(--color-danger-container);
   color: var(--color-on-danger-container);

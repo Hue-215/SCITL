@@ -1,0 +1,163 @@
+use std::fmt;
+use std::io;
+
+use scitl_core::qr_scan::ScanError;
+use serde::Serialize;
+
+use crate::transport::AbortReason;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SyncError {
+    /// 宛先・待ち受けのアドレスとして受け付けない(プライベートIP・ループバックのリテラル以外)。
+    #[error("address not allowed: {0}")]
+    AddressNotAllowed(String),
+    #[error("no private address to listen on")]
+    NoLocalAddress,
+    #[error("failed to listen: {0}")]
+    Bind(io::Error),
+    /// 指定した待ち受けのポートが、既に使われている。
+    #[error("port {0} is already in use")]
+    PortInUse(u16),
+    /// どの候補にもつながらなかった。最後の候補の失敗を持つ。
+    #[error("failed to connect: {0}")]
+    Connect(io::Error),
+    #[error("connection failed: {0}")]
+    Io(#[from] io::Error),
+    #[error("TLS failed: {0}")]
+    Tls(#[from] rustls::Error),
+    #[error("timed out")]
+    TimedOut,
+    /// 待ち受けの時間が来て、相手が来ないまま閉じた。
+    #[error("no peer connected in time")]
+    WindowExpired,
+    /// 数字で鍵が合わなかった(数字の打ち間違いか、間に入った相手)。
+    #[error("pairing code did not match")]
+    CodeMismatch,
+    #[error("peer closed the connection")]
+    PeerClosed,
+    #[error("message too large: {len} bytes (max {max})")]
+    FrameTooLarge { len: usize, max: usize },
+    #[error("malformed message: {0}")]
+    Malformed(String),
+    #[error("protocol version mismatch: ours {ours}, theirs {theirs}")]
+    ProtocolMismatch { ours: u32, theirs: u32 },
+    #[error("database version mismatch: ours {ours}, theirs {theirs}")]
+    DbVersionMismatch { ours: u32, theirs: u32 },
+    /// 資格情報ストアで端末IDを確かめられない(読めず、作り直した項目も書けない)。確かめずには
+    /// 始めない。
+    #[error("could not check this device's ID in the secret store: {0}")]
+    DeviceCheck(scitl_core::CoreError),
+    /// 同じ端末IDの2台(写したDBどうし)。
+    #[error("the peer has the same device ID (one database is a copy of the other)")]
+    SameDevice,
+    /// 運ぶ行が、本体が書く行の形に合わない。
+    #[error("{}", InvalidRows(.0))]
+    InvalidRows(Vec<InvalidRow>),
+    /// 同期の途中で、この端末のデータが別の書き込み(別のプロセス等)で変わった。
+    #[error("this device's data changed during the sync")]
+    Changed,
+    /// 書き終えた結果が、相手の結果と一致しない。
+    #[error("the result does not match the other device's")]
+    Mismatch,
+    #[error("the peer stopped: {0}")]
+    PeerRefused(AbortReason),
+    #[error(transparent)]
+    Core(#[from] scitl_core::CoreError),
+    /// 数字の形が違う(6桁でない)。
+    #[error("the pairing code must be 6 digits")]
+    InvalidCode,
+    /// 読んだQRが、SCITLの同期のQRではない。
+    #[error("the QR code is not a SCITL sync code")]
+    InvalidInvitation,
+    /// QRを読めなかった(カメラを使えない等)。
+    #[error(transparent)]
+    Scan(#[from] scitl_core::qr_scan::ScanError),
+    /// 応答を生成中の会話がある。
+    #[error("a response is being generated")]
+    Generating,
+    /// 別の同期の最中。
+    #[error("another sync is running")]
+    AlreadySyncing,
+    /// 始める前の確認のダイアログを出せなかった(別のダイアログが出ている)。
+    #[error("could not show the confirmation dialog")]
+    DialogUnavailable,
+    /// 止める指示で止めた。
+    #[error("stopped")]
+    Cancelled,
+}
+
+/// 同期の失敗の文言のキーの前置き(言語ファイルの`settings.sync.error.{種類}`)。画面は
+/// [`SyncError::kind`]を付けて引く。
+pub const MESSAGE_KEY_PREFIX: &str = "settings.sync.error.";
+
+impl SyncError {
+    /// 画面が文言を引く種類([`MESSAGE_KEY_PREFIX`]に付ける)。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::AddressNotAllowed(_) => "invalid_address",
+            Self::InvalidCode => "invalid_code",
+            Self::InvalidInvitation => "invalid_qr",
+            Self::Scan(ScanError::CameraDenied) => "camera_denied",
+            Self::Scan(ScanError::Unavailable(_)) => "scan_failed",
+            Self::NoLocalAddress => "no_local_address",
+            Self::Bind(_) => "listen_failed",
+            Self::PortInUse(_) => "port_in_use",
+            Self::Connect(_) => "connect_failed",
+            Self::Io(_)
+            | Self::Tls(_)
+            | Self::PeerClosed
+            | Self::Malformed(_)
+            | Self::FrameTooLarge { .. } => "connection_failed",
+            Self::TimedOut => "timed_out",
+            Self::WindowExpired => "no_peer",
+            Self::CodeMismatch => "code_mismatch",
+            Self::ProtocolMismatch { .. } | Self::DbVersionMismatch { .. } => "version_mismatch",
+            Self::DeviceCheck(_) => "device_check",
+            Self::SameDevice => "same_device",
+            Self::InvalidRows(_) => "invalid_rows",
+            Self::Changed => "changed",
+            Self::Mismatch => "mismatch",
+            Self::PeerRefused(AbortReason::InvalidRows) => "peer_invalid_rows",
+            Self::PeerRefused(AbortReason::Changed) => "peer_changed",
+            Self::PeerRefused(AbortReason::Mismatch) => "peer_mismatch",
+            Self::PeerRefused(AbortReason::Cancelled) => "peer_cancelled",
+            Self::PeerRefused(AbortReason::Failed) => "peer_failed",
+            Self::Generating => "generating",
+            Self::AlreadySyncing => "already_syncing",
+            Self::DialogUnavailable => "dialog_unavailable",
+            Self::Cancelled => "cancelled",
+            Self::Core(_) => "internal",
+        }
+    }
+}
+
+/// 同期できない行。`id`は送る側の端末の中の連番(受け取る側では分からない)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InvalidRow {
+    pub table: &'static str,
+    pub id: Option<i64>,
+    pub uid: String,
+    pub reason: String,
+}
+
+/// 示す行の数の上限。残りは数だけ出す。
+const SHOWN_ROWS: usize = 20;
+
+struct InvalidRows<'a>(&'a [InvalidRow]);
+
+impl fmt::Display for InvalidRows<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} rows cannot be synced:", self.0.len())?;
+        for row in self.0.iter().take(SHOWN_ROWS) {
+            match row.id {
+                Some(id) => write!(f, " {}#{id}", row.table)?,
+                None => write!(f, " {} {}", row.table, row.uid)?,
+            }
+            write!(f, " ({});", row.reason)?;
+        }
+        if self.0.len() > SHOWN_ROWS {
+            write!(f, " and {} more", self.0.len() - SHOWN_ROWS)?;
+        }
+        Ok(())
+    }
+}

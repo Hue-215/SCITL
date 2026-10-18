@@ -7,6 +7,7 @@
 
 mod chat;
 mod settings;
+mod sync;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -62,6 +63,9 @@ enum Command {
     /// Show and change the memories shared across all conversations.
     #[command(subcommand)]
     Memory(MemoryCommand),
+    /// Sync data with another device over the local network.
+    #[command(subcommand)]
+    Sync(sync::SyncCommand),
 }
 
 #[derive(Subcommand)]
@@ -137,6 +141,7 @@ async fn run(cli: Cli) -> Result<(), DebugError> {
                 session.db.clone(),
                 &attachments,
                 session.data.export(),
+                scitl_core::export::ExportScope::All,
             )
             .await?;
             print_json(&summary);
@@ -146,6 +151,7 @@ async fn run(cli: Cli) -> Result<(), DebugError> {
         Command::Model(command) => settings::run_model(&session, command).await?,
         Command::Mcp(command) => settings::run_mcp(&session, command).await?,
         Command::Memory(command) => run_memory(&session, command).await?,
+        Command::Sync(command) => sync::run(&session, command).await?,
     }
     Ok(())
 }
@@ -214,4 +220,6 @@ enum DebugError {
     },
     #[error("{} was not accepted as an attachment: {reason}", .path.display())]
     AttachmentRejected { path: PathBuf, reason: String },
+    #[error(transparent)]
+    Sync(#[from] scitl_sync::SyncError),
 }

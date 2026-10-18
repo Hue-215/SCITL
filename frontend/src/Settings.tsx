@@ -11,6 +11,7 @@ import {
   setMcpToolEnabled,
   updateGeneralSettings,
   updateLanguage,
+  updateSyncSettings,
   updateToolSettings,
 } from './api'
 import { type AddResult, rejectionText } from './rejection'
@@ -23,6 +24,7 @@ import { GeneralTab } from './SettingsGeneral'
 import { McpTab } from './SettingsMcp'
 import { MemoryTab } from './SettingsMemory'
 import { ProvidersTab } from './SettingsProviders'
+import { SyncScreen, SyncTab } from './SettingsSync'
 import { type Drafts, DraftsContext } from './settingsInput'
 import { useCloseOnBack } from './useCloseOnBack'
 import { useDrawer } from './useDrawer'
@@ -38,6 +40,7 @@ const TABS = [
   { id: 'memory', label: 'settings.nav.memory' },
   { id: 'providers', label: 'settings.nav.provider' },
   { id: 'mcp', label: 'settings.nav.tools' },
+  { id: 'sync', label: 'settings.nav.sync' },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -46,6 +49,8 @@ export default function Settings({ onClose }: SettingsProps) {
   const [tab, setTab] = useState<TabId>('general')
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 同期の画面を開いている間は、本文の代わりに窓全体へ出す(出るのは同期の画面の「戻る」だけ)。
+  const [syncOpen, setSyncOpen] = useState(false)
   // 自動保存の欄の書きかけ(`useDraft`)と、その保存でコマンド自体が失敗した回数。
   const [drafts] = useState<Drafts>(() => ({ entries: new Set(), closed: false }))
   const saveFailures = useRef(0)
@@ -197,7 +202,9 @@ export default function Settings({ onClose }: SettingsProps) {
   return (
     // 左のカラムはチャットのサイドバーと同じ形の入れ物で、設定を開いている間はサイドバーが設定の
     // メニューに切り替わったように見せる(畳み方・引き出し方もサイドバーと同じ)。
-    <div className={drawer.narrow ? 'settings narrow' : 'settings'}>
+    // 同期の画面を開いている間は、広い窓でも狭い窓と同じく左のカラムを畳む(窓を狭めたときと同じく
+    // 左の外へ滑る)。引き出すボタンは同期の画面に無いので、閉じるまで出てこない。
+    <div className={drawer.narrow || syncOpen ? 'settings narrow' : 'settings'}>
       <Drawer drawer={drawer}>
         <nav className="sidebar">
           <div className="sidebar-top-row">
@@ -228,84 +235,96 @@ export default function Settings({ onClose }: SettingsProps) {
         </nav>
       </Drawer>
 
-      <div className="settings-main" inert={drawer.shown} {...swipeToOpen}>
-        <header className="pane-top">
-          <div className="settings-header">
-            <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
-            <h1>{t(tabLabel)}</h1>
-          </div>
-        </header>
+      {syncOpen ? (
+        <SyncScreen onClose={() => setSyncOpen(false)} />
+      ) : (
+        <div className="settings-main" inert={drawer.shown} {...swipeToOpen}>
+          <header className="pane-top">
+            <div className="settings-header">
+              <DrawerToggle drawer={drawer} label={t('settings.nav_open_tooltip')} />
+              <h1>{t(tabLabel)}</h1>
+            </div>
+          </header>
 
-        <div className="settings-content">
-          <div className="settings-column">
-            {settings?.config_error && (
-              <p className="error">
-                {t('settings.config_unreadable', { error: isolated(settings.config_error) })}
-              </p>
-            )}
-            {error && <p className="error">{error}</p>}
-
-            <DraftsContext value={drafts}>
-              {settings === null ? (
-                <p>{t('common.loading')}</p>
-              ) : tab === 'general' ? (
-                <GeneralTab
-                  settings={settings}
-                  onSave={(update) => saveField(() => updateGeneralSettings(update))}
-                  onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
-                />
-              ) : tab === 'memory' ? (
-                <MemoryTab />
-              ) : tab === 'providers' ? (
-                <ProvidersTab
-                  settings={settings}
-                  onAddProvider={(name, format, baseUrl, apiKey, headers) =>
-                    applyAdded(
-                      () => addProvider(name, format, baseUrl, apiKey, headers),
-                      (next) => next,
-                    )
-                  }
-                  onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
-                  onUpdateModels={runOrReportError}
-                  onSaveModelField={saveField}
-                />
-              ) : (
-                <McpTab
-                  settings={settings}
-                  onSaveLimits={(maxRoundsPerTurn, totalTimeoutSecs) =>
-                    saveField(() => updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }))
-                  }
-                  onAddServer={(name, endpoint) =>
-                    // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
-                    applyAdded(
-                      () => addMcpServer(name, endpoint),
-                      ({ settings: next, server_id, tools_error }) => {
-                        if (tools_error !== null) {
-                          setToolFetchErrors((prev) => ({
-                            ...prev,
-                            [server_id]: t('common.fetch_failed', { error: isolated(tools_error) }),
-                          }))
-                        }
-                        return next
-                      },
-                    )
-                  }
-                  onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
-                  onSetServerEnabled={(id, enabled) =>
-                    runOrReportError(() => setMcpServerEnabled(id, enabled))
-                  }
-                  onSetToolEnabled={(id, toolName, enabled) =>
-                    runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
-                  }
-                  fetchingTools={fetchingTools}
-                  toolFetchErrors={toolFetchErrors}
-                  onFetchTools={(id) => void fetchTools(id)}
-                />
+          <div className="settings-content">
+            <div className="settings-column">
+              {settings?.config_error && (
+                <p className="error">
+                  {t('settings.config_unreadable', { error: isolated(settings.config_error) })}
+                </p>
               )}
-            </DraftsContext>
+              {error && <p className="error">{error}</p>}
+
+              <DraftsContext value={drafts}>
+                {settings === null ? (
+                  <p>{t('common.loading')}</p>
+                ) : tab === 'general' ? (
+                  <GeneralTab
+                    settings={settings}
+                    onSave={(update) => saveField(() => updateGeneralSettings(update))}
+                    onSaveLanguage={(language) => runOrReportError(() => updateLanguage(language))}
+                  />
+                ) : tab === 'memory' ? (
+                  <MemoryTab />
+                ) : tab === 'sync' ? (
+                  <SyncTab
+                    settings={settings}
+                    onStart={() => setSyncOpen(true)}
+                    onSaveListenPort={(text) => saveField(() => updateSyncSettings(text))}
+                  />
+                ) : tab === 'providers' ? (
+                  <ProvidersTab
+                    settings={settings}
+                    onAddProvider={(name, format, baseUrl, apiKey, headers) =>
+                      applyAdded(
+                        () => addProvider(name, format, baseUrl, apiKey, headers),
+                        (next) => next,
+                      )
+                    }
+                    onDeleteProvider={(id) => runOrReportError(() => deleteProvider(id))}
+                    onUpdateModels={runOrReportError}
+                    onSaveModelField={saveField}
+                  />
+                ) : (
+                  <McpTab
+                    settings={settings}
+                    onSaveLimits={(maxRoundsPerTurn, totalTimeoutSecs) =>
+                      saveField(() => updateToolSettings({ maxRoundsPerTurn, totalTimeoutSecs }))
+                    }
+                    onAddServer={(name, endpoint) =>
+                      // 追加に続くツール一覧の取得はRust側が行う。取得の失敗はそのカードに出す。
+                      applyAdded(
+                        () => addMcpServer(name, endpoint),
+                        ({ settings: next, server_id, tools_error }) => {
+                          if (tools_error !== null) {
+                            setToolFetchErrors((prev) => ({
+                              ...prev,
+                              [server_id]: t('common.fetch_failed', {
+                                error: isolated(tools_error),
+                              }),
+                            }))
+                          }
+                          return next
+                        },
+                      )
+                    }
+                    onDeleteServer={(id) => runOrReportError(() => deleteMcpServer(id))}
+                    onSetServerEnabled={(id, enabled) =>
+                      runOrReportError(() => setMcpServerEnabled(id, enabled))
+                    }
+                    onSetToolEnabled={(id, toolName, enabled) =>
+                      runOrReportError(() => setMcpToolEnabled(id, toolName, enabled))
+                    }
+                    fetchingTools={fetchingTools}
+                    toolFetchErrors={toolFetchErrors}
+                    onFetchTools={(id) => void fetchTools(id)}
+                  />
+                )}
+              </DraftsContext>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

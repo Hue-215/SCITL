@@ -1,6 +1,7 @@
 mod commands;
 mod dialog;
 mod navigation;
+mod watcher;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,9 +13,9 @@ use scitl_core::in_flight::InFlightSet;
 use scitl_core::orchestration::{FinishedTurn, TurnContext, TurnEvents};
 use scitl_core::paths::{self, DataDirError, DataLayout};
 use scitl_core::settings::{Settings, Snapshot};
-use tauri::ipc::Channel;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
+use watcher::Watcher;
 
 /// コマンド層(`commands/*.rs`)が触れる唯一の状態。ロックの扱いはどれもcore側に閉じる
 /// (DBは`db::with_conn`、設定は`settings::Settings`、生成中の会話は`in_flight`)。
@@ -30,11 +31,17 @@ pub struct AppState {
     /// 利用者が選んだファイルへ書き写す前に、エクスポートのzipを作る場所(キャッシュの中)。
     pub export_staging: PathBuf,
     /// 窓にファイルが落とされたことの知らせ先(`commands::attachments::watch_dropped_files`)。
-    pub dropped: Mutex<Option<Channel<ReceivedFiles>>>,
+    pub dropped: Watcher<ReceivedFiles>,
     /// 応答生成が終わったことの受け口(`orchestration::TurnContext::finished`)。
     pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
     /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
-    pub requested_chat: Mutex<Option<Channel<Chat>>>,
+    pub requested_chat: Watcher<Chat>,
+    /// 端末間の同期が触るもの(`commands::sync`)。
+    pub sync: scitl_sync::Context,
+    /// 同期の競合で、画面が選んだ側の受け口(`commands::sync::resolve_sync_conflicts`)。
+    pub sync_answers: scitl_sync::ConflictAnswers,
+    /// 書き込む前の確認で、書き込むか戻るかの受け口(`commands::sync::approve_sync_write`)。
+    pub write_answers: scitl_sync::WriteAnswers,
 }
 
 impl AppState {
@@ -51,6 +58,12 @@ impl AppState {
             events,
             self.finished.as_ref(),
         )
+    }
+
+    /// 読み込み直した画面は知らせ先を渡し直すので、前の画面の知らせ先をすべて捨てる。
+    fn forget_watchers(&self) {
+        self.dropped.forget();
+        self.requested_chat.forget();
     }
 }
 
@@ -115,10 +128,12 @@ pub fn run() {
         .on_page_load(|_webview, _payload| {
             #[cfg(target_os = "android")]
             init_jni_users(_webview);
-            // 読み込み直した画面は知らせ先を渡し直す。それまでに届いた頼みを、前の画面の知らせ先へ
-            // 送って失わないようにする(渡し直されるまで引き取らない)。
             if _payload.event() == PageLoadEvent::Started {
-                commands::requested_chat::forget_watcher(_webview.app_handle());
+                if let Some(state) = _webview.app_handle().try_state::<AppState>() {
+                    state.forget_watchers();
+                    // 前の画面が始めた同期は、新しい画面からは見えず止められないので止める。
+                    scitl_sync::cancel(&state.generating);
+                }
             }
         })
         // 窓に落としたファイルのパスは、OSのドロップからここへ直接届く(WebViewを通らない)。
@@ -160,12 +175,14 @@ pub fn run() {
             commands::attachments::reveal_attachment,
             commands::export::get_export_target,
             commands::export::export_markdown,
+            commands::export::export_chat_markdown,
             commands::export::open_export_folder,
             commands::settings::get_settings,
             commands::settings::update_general_settings,
             commands::settings::get_display_language,
             commands::settings::update_language,
             commands::settings::update_tool_settings,
+            commands::settings::update_sync_settings,
             commands::settings::add_provider,
             commands::settings::get_base_url_hint,
             commands::settings::delete_provider,
@@ -191,6 +208,17 @@ pub fn run() {
             commands::memories::delete_memory,
             commands::link::open_link,
             commands::requested_chat::watch_requested_chats,
+            commands::notification_prompt::notification_prompt_due,
+            commands::notification_prompt::answer_notification_prompt,
+            commands::sync::sync_listen,
+            commands::sync::sync_connect,
+            commands::sync::sync_connect_scanned,
+            commands::sync::can_scan_sync_qr,
+            commands::sync::sync_scan_permission,
+            commands::sync::open_camera_settings,
+            commands::sync::cancel_sync,
+            commands::sync::resolve_sync_conflicts,
+            commands::sync::approve_sync_write,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -257,12 +285,16 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     let db = Arc::new(Mutex::new(conn));
     // 前回の終了時に書き戻せなかった分(強制終了など)を、ここで本体へ書き戻す。
     scitl_core::db::checkpoint_wal(&db);
+    data.remove_stale_temp_files();
 
     let settings = Settings::load(data.config());
-    let attachments = Arc::new(Attachments::new(AttachmentStore::new(
-        data.attachments(),
-        paths::revealed_attachments(cache),
-    )));
+    let store = AttachmentStore::new(data.attachments(), paths::revealed_attachments(cache));
+    let sync = scitl_sync::Context {
+        db: db.clone(),
+        attachments: store.clone(),
+        registry: Arc::new(scitl_sync::SecretStore),
+    };
+    let attachments = Arc::new(Attachments::new(store));
 
     let settings = Arc::new(settings);
     Ok(AppState {
@@ -273,8 +305,11 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
         attachments,
         export_dir: data.export(),
         export_staging: paths::export_staging(cache),
-        dropped: Mutex::new(None),
-        requested_chat: Mutex::new(None),
+        dropped: Watcher::default(),
+        requested_chat: Watcher::default(),
+        sync,
+        sync_answers: scitl_sync::ConflictAnswers::default(),
+        write_answers: scitl_sync::WriteAnswers::default(),
     })
 }
 
@@ -283,8 +318,8 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
 #[cfg(target_os = "android")]
 fn generating_set(settings: &Arc<Settings>) -> InFlightSet<Chat> {
     let settings = Arc::clone(settings);
-    InFlightSet::watching_long_running(move |generating| {
-        scitl_core::foreground_service::set_running(generating, settings.display_language())
+    InFlightSet::watching_long_running(move |running| {
+        scitl_core::foreground_service::set_running(running, settings.display_language())
     })
 }
 
@@ -439,7 +474,7 @@ mod tests {
         assert_eq!(conf["productName"], scitl_core::PRODUCT_NAME);
     }
 
-    /// 応答の生成中のサービスを、coreが名前で指せ、通知の文面を渡せること
+    /// 応答の生成中と同期の間のサービスを、coreが名前で指せ、通知の文面を渡せること
     /// (`scitl_core::foreground_service`)。
     #[test]
     fn core_service_class_matches_android_manifest() {
@@ -475,8 +510,10 @@ mod tests {
         let notifier =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/ReplyNotifier.kt");
         assert!(notifier.contains(&format!("object {NOTIFIER_CLASS} {{")));
-        assert!(notifier.contains(
-            "fun post(context: Context, chat: Long, title: String, body: String, channelName: String)"
+        // Kotlin側の折り返しに左右されないよう、空白を詰めて比べる。
+        let flat = notifier.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains(
+            "fun post( context: Context, chat: Long, title: String, sender: String?, body: String, userName: String, channelName: String )"
         ));
         let activity =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
@@ -489,6 +526,136 @@ mod tests {
         for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
             assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
         }
+        // 外す指定がRustの呼ぶシグネチャとずれると、デバッグビルドでは通り、配布用のビルドでだけ
+        // 見つからなくなる。
+        let core = include_str!("../../scitl-core/src/reply_notification.rs");
+        for method in ["post", "takeRequestedChat"] {
+            let kept = proguard_member(method, called_signature(core, method));
+            assert!(proguard.contains(&kept), "{kept}");
+        }
+    }
+
+    /// `source`の中で、`jni_str!("{method}")`の次に書いた`jni_sig!`の文字列。
+    fn called_signature<'a>(source: &'a str, method: &str) -> &'a str {
+        let call = source
+            .find(&format!("jni_str!(\"{method}\")"))
+            .unwrap_or_else(|| panic!("{method}"));
+        let rest = &source[call..];
+        let rest = &rest[rest.find("jni_sig!(").expect(method)..];
+        let rest = &rest[rest.find('"').expect(method) + 1..];
+        &rest[..rest.find('"').expect(method)]
+    }
+
+    /// JNIのシグネチャ(`(Landroid/content/Context;J)V`等)を、proguardの静的メソッドの書き方にする。
+    fn proguard_member(method: &str, signature: &str) -> String {
+        fn java_type(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+            match chars.next().expect("型が途中で終わった") {
+                'Z' => "boolean".into(),
+                'B' => "byte".into(),
+                'C' => "char".into(),
+                'S' => "short".into(),
+                'I' => "int".into(),
+                'J' => "long".into(),
+                'F' => "float".into(),
+                'D' => "double".into(),
+                'V' => "void".into(),
+                '[' => format!("{}[]", java_type(chars)),
+                'L' => chars
+                    .by_ref()
+                    .take_while(|&c| c != ';')
+                    .map(|c| if c == '/' { '.' } else { c })
+                    .collect(),
+                other => panic!("知らない型: {other}"),
+            }
+        }
+        let mut chars = signature
+            .strip_prefix('(')
+            .expect(signature)
+            .chars()
+            .peekable();
+        let mut args = Vec::new();
+        while chars.peek() != Some(&')') {
+            args.push(java_type(&mut chars));
+        }
+        chars.next();
+        let ret = java_type(&mut chars);
+        format!("public static {ret} {method}({});", args.join(", "))
+    }
+
+    /// 許可の状態の問い合わせと求め方を、coreが名前と値で指せること(`scitl_core::permissions`)。
+    #[test]
+    fn core_permissions_names_match_kotlin() {
+        use scitl_core::permissions::{ASK, BLOCKED, GRANTED, PERMISSIONS_CLASS};
+        let kotlin =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/Permissions.kt");
+        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
+        assert!(kotlin.contains(&format!("object {PERMISSIONS_CLASS} {{")));
+        // Rust側は静的メソッドとして呼び、配布用のビルドでは名前で引く。
+        for (kotlin_method, kept) in [
+            (
+                "camera(context: Context): Int",
+                "public static int camera(android.content.Context);",
+            ),
+            (
+                "openSettings(context: Context)",
+                "public static void openSettings(android.content.Context);",
+            ),
+            (
+                "notificationPromptDue(context: Context): Boolean",
+                "public static boolean notificationPromptDue(android.content.Context);",
+            ),
+            (
+                "answerNotificationPrompt(context: Context, allow: Boolean)",
+                "public static void answerNotificationPrompt(android.content.Context, boolean);",
+            ),
+        ] {
+            assert!(
+                kotlin.contains(&format!("@JvmStatic\n  fun {kotlin_method}")),
+                "{kotlin_method}"
+            );
+            assert!(proguard.contains(kept), "{kept}");
+        }
+        for (name, value) in [("GRANTED", GRANTED), ("ASK", ASK), ("BLOCKED", BLOCKED)] {
+            assert!(kotlin.contains(&format!("const val {name} = {value}\n")));
+        }
+        assert!(proguard.contains(&format!(
+            "-keep class net.niigo.scitl.{PERMISSIONS_CLASS} {{"
+        )));
+    }
+
+    /// 同期のQRの読み取りを、coreが名前と値で指せること(`scitl_core::qr_scan`)。
+    #[test]
+    fn core_qr_scan_names_match_kotlin() {
+        use scitl_core::qr_scan::{CANCELLED, DENIED, FAILED, SCANNED, SCANNER_CLASS};
+        let scanner = include_str!("../gen/android/app/src/main/java/net/niigo/scitl/QrScanner.kt");
+        assert!(scanner.contains(&format!("object {SCANNER_CLASS} {{")));
+        assert!(scanner.contains("fun start(context: Context): Long"));
+        assert!(scanner.contains("fun poll(id: Long): String?"));
+        assert!(scanner.contains("fun cancel(id: Long)"));
+        assert!(scanner.contains("fun available(context: Context): Boolean"));
+        for (name, value) in [
+            ("SCANNED", SCANNED),
+            ("CANCELLED", CANCELLED),
+            ("DENIED", DENIED),
+            ("FAILED", FAILED),
+        ] {
+            assert!(scanner.contains(&format!("const val {name} = \"{value}\"")));
+        }
+        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
+        assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{SCANNER_CLASS} {{")));
+        // アプリがカメラの権限を持つので、画面(WebView)からのカメラ等の要求はネイティブの側で断る。
+        let activity =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
+        assert!(activity.contains("webView.webChromeClient = GuardedChromeClient(inner)"));
+        let guarded =
+            include_str!("../gen/android/app/src/main/java/net/niigo/scitl/GuardedChromeClient.kt");
+        assert!(guarded.contains(
+            "override fun onPermissionRequest(request: PermissionRequest) {\n    request.deny()\n  }"
+        ));
+        // 読み取りの画面は、ほかのアプリから開けない。
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        assert!(manifest
+            .contains("android:name=\".ScanActivity\"\n            android:exported=\"false\"\n"));
     }
 
     /// 応答の生成中のサービスを、ほかのアプリから始められないこと。

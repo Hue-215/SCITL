@@ -6,17 +6,13 @@
  * 閉じた状態で1行に出す引数の要約と失敗の文言も、同じ規則で作って渡す。
  * どの文字が見えないかの判定と、どこで切り詰めるかを画面に写さないため、ここで作る。
  */
-export type ToolExecutionView = { 
-/**
- * 呼び出したツールの名前。記録から読めなければ`None`。
- */
-tool: string | null, arguments: string, result: string, is_error: boolean, 
+export type ToolExecutionView = { tool: string | null, arguments: string, result: string, is_error: boolean, 
 /**
  * 引数の1行の要約(`キー: 値`を並べたもの。値はJSONの形)。長い値と全体は省略する。
  * 引数が無ければ空。
  */
 summary: string, 
 /**
- * 失敗の文言の1行(結果の`error`の値)。失敗でなければ`None`。
+ * 失敗の文言の1行(結果の`error`の値)。
  */
 error: string | null, };

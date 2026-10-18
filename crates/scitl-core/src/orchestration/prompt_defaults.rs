@@ -34,7 +34,7 @@ impl<'a> SystemPrompts<'a> {
     }
 }
 
-/// 聞き取りの開始に使う発言。未設定なら既定の文面。
+/// 未設定なら既定の文面。
 pub fn opening_message(general: &GeneralConfig) -> &str {
     or_default(
         general.task_opening_message.as_deref(),
@@ -64,7 +64,6 @@ fn is_blank(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// 空白だけのニックネームは、画面の表示名と同じく、モデルにも伝えない。
     #[test]
     fn a_blank_nickname_is_not_told_to_the_model() {
         let general = |nickname: &str| GeneralConfig {

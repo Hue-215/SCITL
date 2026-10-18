@@ -29,8 +29,8 @@ const MAX_DECODE_BYTES: u64 = 512 * 1024 * 1024;
 const JPEG_QUALITY: u8 = 90;
 
 /// 正規化した画像1枚の大きさの上限(バイト)。Anthropicの1枚5MB(base64にした長さで数える)に
-/// 収まるよう、base64で4/3倍になる分を見込む。5MBは小さいほう(10進)で数える。長辺を縮めても圧縮の効かないPNG(写真やノイズの
-/// 多い画像)はこれを超えうるので、超えたらさらに縮める。
+/// 収まるよう、base64で4/3倍になる分を見込む。5MBは小さいほう(10進)で数える。長辺を縮めても
+/// 圧縮で小さくならないPNG(写真やノイズの多い画像)はこれを超えうるので、超えたらさらに縮める。
 const MAX_ENCODED_BYTES: usize = 5_000_000 / 4 * 3;
 
 /// 大きさの上限に収めるために縮めるときの、1回あたりの長辺の倍率(分子/分母)。
@@ -43,8 +43,7 @@ pub(super) struct Normalized {
 }
 
 /// 画像として扱う形式の画像を正規化する。元がJPEGならJPEG、それ以外(アニメーションは
-/// 先頭のフレーム)はPNGにする。写真以外をJPEGにすると文字が潰れやすく、WebPはローカルの
-/// モデルに読めないものがあるため。デコードできない(壊れている・画素数が上限を超える)
+/// 先頭のフレーム)はPNGにする。デコードできない(壊れている・画素数が上限を超える)
 /// ときは`None`。
 pub(super) fn normalize_image(bytes: &[u8]) -> Option<Normalized> {
     // 形式は先頭バイトから決めたものを渡し、デコーダーに推測させない。
@@ -79,7 +78,7 @@ pub(super) fn normalize_image(bytes: &[u8]) -> Option<Normalized> {
     }
 }
 
-/// 16ビットの画像を8ビットにする。モデルにも画面にも8ビットで足り、PNGが倍の大きさになるのを避ける。
+/// モデルにも画面にも8ビットで足り、PNGが倍の大きさになるのを避ける。
 fn to_8bit(image: DynamicImage) -> DynamicImage {
     match (image.color().has_color(), image.color().has_alpha()) {
         (false, false) => image.into_luma8().into(),
@@ -152,7 +151,6 @@ mod tests {
         assert_eq!(decoded(&normalized).dimensions(), (1568, 523));
     }
 
-    /// 長辺を縮めても大きさの上限を超えるPNG(ノイズの多い画像)は、収まるまでさらに縮める。
     #[test]
     fn shrinks_further_until_the_encoded_size_fits() {
         let mut state: u32 = 1;

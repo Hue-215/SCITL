@@ -191,7 +191,7 @@ jobs:
           bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export CC_aarch64_linux_android="$bin/aarch64-linux-android${min_sdk}-clang"
           export AR_aarch64_linux_android="$bin/llvm-ar"
-          cargo clippy -p scitl-core -p scitl-tauri --target aarch64-linux-android --locked -- -D warnings
+          cargo clippy -p scitl-core -p scitl-sync -p scitl-tauri --target aarch64-linux-android --locked -- -D warnings
 
   frontend:
     runs-on: ubuntu-24.04

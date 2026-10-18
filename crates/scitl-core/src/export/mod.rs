@@ -1,4 +1,5 @@
-//! Markdownエクスポート。全タスクと総合チャットを、それぞれ1つのMarkdownファイルに書き出す。
+//! Markdownエクスポート。タスクと総合チャットを、それぞれ1つのMarkdownファイルに書き出す。
+//! 全部をまとめて書き出すか、会話1つだけを書き出すかは[`ExportScope`]で選ぶ。
 //! 書き出すのは画面から見られるものだけで、削除したタスク・工程・発言と、会話から外れた
 //! ターン(古い試行・破棄されたターン)は含めない。思考と`error_detail`も含めない。失敗した
 //! ターンで受け取り終えた中身(エラー発言の`parts`)は、画面と同じく含める。
@@ -36,6 +37,25 @@ const ATTACHMENTS_DIR: &str = "attachments";
 /// 上限に届かないよう短めにする(タイトルの全体はファイルの中にある)。
 const TITLE_CHARS_IN_FILE_NAME: usize = 40;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportScope {
+    /// 全タスク・総合チャット・メモリ。
+    All,
+    /// その会話だけ(タスクなら説明と工程を含む)。メモリは含めない。
+    Chat(Chat),
+}
+
+impl ExportScope {
+    /// フォルダの名前の日時に続けて付ける、何を書き出したか。
+    fn folder_suffix(self) -> Option<String> {
+        match self {
+            Self::All => None,
+            Self::Chat(Chat::General) => Some("general-chat".to_string()),
+            Self::Chat(Chat::Task(id)) => Some(format!("task-{id}")),
+        }
+    }
+}
+
 /// 書き出す先。画面は受け取って、押せる操作と結果の文言を出し分ける。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export))]
@@ -68,7 +88,7 @@ pub enum ExportOutcome {
     /// 選んだファイルへzipで書いた([`ExportTarget::ChosenFile`])。`summary.folder`はzipの中の
     /// フォルダの名前。
     Saved { summary: ExportSummary },
-    /// 保存画面を閉じた。何も書いていない。
+    /// 保存画面を閉じた。
     Cancelled,
     /// 選んだファイルへ書き写せなかった。選んだファイルは保存画面が作るので、書きかけ(空を含む)が
     /// 選んだ名前で残りうる。消す手段を持たないので、画面は利用者に消すよう伝える。
@@ -86,16 +106,17 @@ pub struct ExportSummary {
     pub missing_attachments: usize,
 }
 
-/// `root`の下に書き出した日時の名前のフォルダを作り、その中へ書き出す。前回までの書き出しには
-/// 触れない。
+/// `root`の下に書き出した日時の名前のフォルダを作り、その中へ`scope`を書き出す。前回までの
+/// 書き出しには触れない。
 ///
 /// DBは1回のロックの中で全部を読み、ファイルの書き込みにはロックを持ち込まない。
 pub async fn export_markdown(
     db: SharedConnection,
     attachments: &Attachments,
     root: PathBuf,
+    scope: ExportScope,
 ) -> Result<ExportSummary> {
-    let snapshot = with_conn(db, Snapshot::read).await?;
+    let snapshot = with_conn(db, move |conn| Snapshot::read(conn, scope)).await?;
     let store = attachments.store();
     blocking::run(move || write(&snapshot, &store, &root)).await
 }
@@ -127,26 +148,44 @@ impl ChatRows {
     }
 }
 
+/// 書き出す範囲のデータ。範囲に入らない総合チャット・メモリは`None`にし、そのファイルを書かない。
 struct Snapshot {
     tasks: Vec<(Task, Vec<TaskStep>, ChatRows)>,
-    general: ChatRows,
-    memories: Vec<Memory>,
+    general: Option<ChatRows>,
+    memories: Option<Vec<Memory>>,
+    folder_suffix: Option<String>,
 }
 
 impl Snapshot {
-    fn read(conn: &Connection) -> Result<Self> {
-        let tasks = tasks::list_all(conn)?
-            .into_iter()
-            .map(|task| {
-                let steps = task_steps::list_for_task(conn, task.id)?;
-                let chat = ChatRows::read(conn, Chat::Task(task.id))?;
-                Ok((task, steps, chat))
-            })
-            .collect::<Result<Vec<_>>>()?;
+    /// 削除したタスクを指すと`TaskNotFound`で断る。
+    fn read(conn: &Connection, scope: ExportScope) -> Result<Self> {
+        let tasks = match scope {
+            ExportScope::All => tasks::list_all(conn)?,
+            ExportScope::Chat(Chat::Task(id)) => vec![tasks::get_task(conn, id)?],
+            ExportScope::Chat(Chat::General) => Vec::new(),
+        }
+        .into_iter()
+        .map(|task| {
+            let steps = task_steps::list_for_task(conn, task.id)?;
+            let chat = ChatRows::read(conn, Chat::Task(task.id))?;
+            Ok((task, steps, chat))
+        })
+        .collect::<Result<Vec<_>>>()?;
+        let general = match scope {
+            ExportScope::All | ExportScope::Chat(Chat::General) => {
+                Some(ChatRows::read(conn, Chat::General)?)
+            }
+            ExportScope::Chat(Chat::Task(_)) => None,
+        };
+        let memories = match scope {
+            ExportScope::All => Some(memories::list(conn)?),
+            ExportScope::Chat(_) => None,
+        };
         Ok(Self {
             tasks,
-            general: ChatRows::read(conn, Chat::General)?,
-            memories: memories::list(conn)?,
+            general,
+            memories,
+            folder_suffix: scope.folder_suffix(),
         })
     }
 }
@@ -156,12 +195,16 @@ impl Snapshot {
 fn write(snapshot: &Snapshot, store: &AttachmentStore, root: &Path) -> Result<ExportSummary> {
     fs::create_dir_all(root).map_err(io_error("create the export folder"))?;
     let stamp = now_iso8601().replace(':', "-");
-    let temp = root.join(format!(".{stamp}.{}.tmp", Ulid::new()));
+    let name = match &snapshot.folder_suffix {
+        Some(suffix) => format!("{stamp}-{suffix}"),
+        None => stamp,
+    };
+    let temp = root.join(format!(".{name}.{}.tmp", Ulid::new()));
     fs::create_dir(&temp).map_err(io_error("create the export folder"))?;
 
     let finished = write_files(snapshot, store, &temp).and_then(|(attachments, missing)| {
         Ok(ExportSummary {
-            folder: move_into_place(&temp, root, &stamp)?,
+            folder: move_into_place(&temp, root, &name)?,
             tasks: snapshot.tasks.len(),
             attachments,
             missing_attachments: missing,
@@ -176,15 +219,19 @@ fn write(snapshot: &Snapshot, store: &AttachmentStore, root: &Path) -> Result<Ex
 /// 書いた添付の数と、書けなかった添付の数を返す。
 fn write_files(snapshot: &Snapshot, store: &AttachmentStore, dir: &Path) -> Result<(usize, usize)> {
     let mut counts = (0, 0);
-    let general = entries(&snapshot.general, store, dir, &mut counts);
-    write_file(
-        &dir.join("general-chat.md"),
-        &markdown::render_general_chat(&general),
-    )?;
-    write_file(
-        &dir.join("memories.md"),
-        &markdown::render_memories(&snapshot.memories),
-    )?;
+    if let Some(general) = &snapshot.general {
+        let general = entries(general, store, dir, &mut counts);
+        write_file(
+            &dir.join("general-chat.md"),
+            &markdown::render_general_chat(&general),
+        )?;
+    }
+    if let Some(memories) = &snapshot.memories {
+        write_file(
+            &dir.join("memories.md"),
+            &markdown::render_memories(memories),
+        )?;
+    }
     for (task, steps, chat) in &snapshot.tasks {
         let conversation = entries(chat, store, dir, &mut counts);
         let body = markdown::render_task(task, steps, &conversation);
@@ -279,15 +326,15 @@ fn task_file_name(task: &Task) -> String {
     format!("{stem}.md")
 }
 
-/// 一時フォルダを`root/<stamp>`へ移す。同じ秒の書き出しが既にあれば`-2`・`-3`…を付ける。
+/// 一時フォルダを`root/<name>`へ移す。同じ秒の同じ範囲の書き出しが既にあれば`-2`・`-3`…を付ける。
 /// 移し先を確かめてから移すまでの間に別の書き出しが同じ名前を取ることがあるので、移せなかった
 /// ときも名前が埋まっていれば次の番号を試す(中身のあるフォルダへは移せないので上書きはしない)。
-fn move_into_place(temp: &Path, root: &Path, stamp: &str) -> Result<String> {
+fn move_into_place(temp: &Path, root: &Path, name: &str) -> Result<String> {
     for n in 1.. {
         let name = if n == 1 {
-            stamp.to_string()
+            name.to_string()
         } else {
-            format!("{stamp}-{n}")
+            format!("{name}-{n}")
         };
         let target = root.join(&name);
         if target.exists() {
@@ -420,7 +467,11 @@ mod tests {
         }
 
         fn export(&self) -> (ExportSummary, PathBuf) {
-            let snapshot = Snapshot::read(&self.conn).unwrap();
+            self.export_scope(ExportScope::All)
+        }
+
+        fn export_scope(&self, scope: ExportScope) -> (ExportSummary, PathBuf) {
+            let snapshot = Snapshot::read(&self.conn, scope).unwrap();
             let out = self.temp.root().join("export");
             let summary = write(&snapshot, &self.temp.store, &out).unwrap();
             let folder = out.join(&summary.folder);
@@ -496,7 +547,7 @@ mod tests {
         assert!(read(folder.join("general-chat.md")).contains("general hello"));
     }
 
-    /// メモリは削除したものを除いて書き出す。本文はMarkdownの構造として読まれない形にする。
+    /// 本文はMarkdownの構造として読まれない形にする。
     #[test]
     fn writes_memories_except_deleted_ones() {
         let f = Fixture::new();
@@ -555,6 +606,104 @@ mod tests {
         assert!(
             task.contains("gone\\.png (application/octet-stream, size in bytes: 1, not exported)")
         );
+    }
+
+    fn file_names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// アーカイブしたタスクも書ける。
+    #[test]
+    fn a_task_export_writes_only_that_task() {
+        let f = Fixture::new();
+        let kept = f.task("残す");
+        let update = TaskUpdate {
+            description: tasks::FieldChange::Set("the description".to_string()),
+            status: Some(TaskStatus::Archived),
+            ..Default::default()
+        };
+        tasks::update_task(&f.conn, kept, update).unwrap();
+        task_steps::add_steps(&f.conn, kept, &["the step".to_string()]).unwrap();
+        let m = f.say(Chat::Task(kept), "mine");
+        f.attach(m, "mine.txt", AttachmentContent::Text("本文".to_string()));
+        let other = f.task("ほか");
+        let m = f.say(Chat::Task(other), "other");
+        f.attach(m, "other.txt", AttachmentContent::Text("本文".to_string()));
+        let m = f.say(Chat::General, "general");
+        f.attach(
+            m,
+            "general.txt",
+            AttachmentContent::Text("本文".to_string()),
+        );
+        memories::add(&f.conn, &["朝型".to_string()]).unwrap();
+
+        let (summary, folder) = f.export_scope(ExportScope::Chat(Chat::Task(kept)));
+
+        assert!(
+            summary.folder.ends_with(&format!("-task-{kept}")),
+            "{}",
+            summary.folder
+        );
+        assert_eq!((summary.tasks, summary.attachments), (1, 1));
+        assert_eq!(
+            file_names(&folder),
+            [ATTACHMENTS_DIR.to_string(), format!("task-{kept}-残す.md")]
+        );
+        assert_eq!(file_names(&folder.join(ATTACHMENTS_DIR)).len(), 1);
+        let body = read(folder.join(format!("task-{kept}-残す.md")));
+        for expected in ["the description", "the step", "mine", "- Status: archived"] {
+            assert!(body.contains(expected), "{expected}: {body}");
+        }
+        assert!(!body.contains("other"));
+    }
+
+    /// 範囲の違う書き出しとは名前が重ならない。
+    #[test]
+    fn exports_of_the_same_scope_get_their_own_folders() {
+        let f = Fixture::new();
+        let id = f.task("同じ");
+        let scope = ExportScope::Chat(Chat::Task(id));
+        let (first, _) = f.export_scope(scope);
+        let (second, _) = f.export_scope(scope);
+        let (all, _) = f.export();
+        assert_ne!(first.folder, second.folder);
+        assert!(first.folder.ends_with(&format!("-task-{id}")));
+        assert!(!all.folder.contains("task"));
+    }
+
+    #[test]
+    fn a_general_chat_export_writes_only_the_general_chat() {
+        let f = Fixture::new();
+        f.say(Chat::Task(f.task("ほか")), "other");
+        f.say(Chat::General, "general hello");
+        memories::add(&f.conn, &["朝型".to_string()]).unwrap();
+
+        let (summary, folder) = f.export_scope(ExportScope::Chat(Chat::General));
+
+        assert!(
+            summary.folder.ends_with("-general-chat"),
+            "{}",
+            summary.folder
+        );
+        assert_eq!(summary.tasks, 0);
+        assert_eq!(file_names(&folder), ["general-chat.md"]);
+        assert!(read(folder.join("general-chat.md")).contains("general hello"));
+    }
+
+    #[test]
+    fn a_deleted_task_is_not_exported() {
+        let f = Fixture::new();
+        let removed = f.task("消した");
+        tasks::delete_task(&f.conn, removed).unwrap();
+
+        let result = Snapshot::read(&f.conn, ExportScope::Chat(Chat::Task(removed)));
+
+        assert!(matches!(result, Err(CoreError::TaskNotFound(id)) if id == removed));
     }
 
     #[test]

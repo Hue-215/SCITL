@@ -4,6 +4,7 @@ import type {
   ApiFormat,
   BaseUrlHint,
   AvailableModel,
+  CameraPermission,
   Capability,
   Chat,
   ChatModelsView,
@@ -24,6 +25,9 @@ import type {
   StageOutcome,
   TaskCreation,
   TaskDetailView,
+  ConflictChoice,
+  SyncEvent,
+  SyncReport,
   TaskListItem,
   TaskOpeningEvent,
   TurnEvent,
@@ -96,8 +100,7 @@ export function discardStagedAttachment(token: string): Promise<void> {
   return invoke('discard_staged_attachment', { token })
 }
 
-// 送っていない添付をすべて捨てる。画面は起動のたびに呼ぶ(読み込み直した画面は入力欄の添付を
-// 持たないので、Rust側に残った預かりが数の上限を埋めないように)。
+// 送っていない添付をすべて捨てる。画面は起動のたびに呼ぶ。
 export function discardAllStagedAttachments(): Promise<void> {
   return invoke('discard_all_staged_attachments')
 }
@@ -115,6 +118,16 @@ export function watchDroppedFiles(onDrop: (files: ReceivedFiles) => void): Promi
 // 開くかはRust側が確かめて決め、画面はそれを表示するだけ。
 export function watchRequestedChats(onRequest: (chat: Chat) => void): Promise<void> {
   return invoke('watch_requested_chats', { onRequest: new Channel(onRequest) })
+}
+
+// 通知の許可を求める前の説明を出すか。
+export function notificationPromptDue(): Promise<boolean> {
+  return invoke('notification_prompt_due')
+}
+
+// 説明への答え。真ならOSのダイアログが出る。
+export function answerNotificationPrompt(allow: boolean): Promise<void> {
+  return invoke('answer_notification_prompt', { allow })
 }
 
 // OSの選択画面で選ばせる。取りやめたらnull。
@@ -152,6 +165,10 @@ export function getExportTarget(): Promise<ExportTarget> {
 
 export function exportMarkdown(): Promise<ExportOutcome> {
   return invoke('export_markdown')
+}
+
+export function exportChatMarkdown(chat: Chat): Promise<ExportOutcome> {
+  return invoke('export_chat_markdown', { chat })
 }
 
 export function openExportFolder(): Promise<void> {
@@ -249,6 +266,11 @@ export function updateToolSettings(args: {
   return invoke('update_tool_settings', args)
 }
 
+// 欄の文字列のまま送る。空欄は未設定に戻す。
+export function updateSyncSettings(listenPort: string): Promise<FormOutcome<SettingsView>> {
+  return invoke('update_sync_settings', { listenPort })
+}
+
 // `headers`はヘッダーの欄の文字列のまま送る(1行1件の解釈はRust側)。
 export function addProvider(
   name: string,
@@ -260,7 +282,7 @@ export function addProvider(
   return invoke('add_provider', { name, apiFormat, baseUrl, apiKey, headers })
 }
 
-// 入力中のベースURLへのヒント(版のパスまで書いた等)。判定はRust側(アダプタの知識)。
+// 入力中のベースURLへのヒント(版のパスまで書いた等)。判定はRust側。
 export function getBaseUrlHint(apiFormat: ApiFormat, baseUrl: string): Promise<BaseUrlHint | null> {
   return invoke('get_base_url_hint', { apiFormat, baseUrl })
 }
@@ -387,4 +409,51 @@ export function updateMemory(memoryId: number, content: string): Promise<void> {
 
 export function deleteMemory(memoryId: number): Promise<void> {
   return invoke('delete_memory', { memoryId })
+}
+
+// 端末間の同期。始める前にRust側がネイティブのダイアログで確かめ、途中経過を`onEvent`へ届ける。
+// 失敗・取りやめも結果(`SyncReport`)で返る。アドレスと数字は打ったまま渡す(読むのはRust側)。
+export function syncListen(onEvent: (event: SyncEvent) => void): Promise<SyncReport> {
+  return invoke('sync_listen', { onEvent: new Channel(onEvent) })
+}
+
+export function syncConnect(
+  address: string,
+  code: string,
+  onEvent: (event: SyncEvent) => void,
+): Promise<SyncReport> {
+  return invoke('sync_connect', { address, code, onEvent: new Channel(onEvent) })
+}
+
+// 待ち受ける側のQRをカメラで読んでつなぐ。読むのもRust側(OS)で、読んだ中身は画面に届かない。
+export function syncConnectScanned(onEvent: (event: SyncEvent) => void): Promise<SyncReport> {
+  return invoke('sync_connect_scanned', { onEvent: new Channel(onEvent) })
+}
+
+export function canScanSyncQr(): Promise<boolean> {
+  return invoke('can_scan_sync_qr')
+}
+
+// QRを読む前に説明を挟むか。
+export function syncScanPermission(): Promise<CameraPermission> {
+  return invoke('sync_scan_permission')
+}
+
+// カメラの許可をOSがもう求めない状態のときだけ、アプリの設定画面が開く。
+export function openCameraSettings(): Promise<void> {
+  return invoke('open_camera_settings')
+}
+
+export function cancelSync(): Promise<void> {
+  return invoke('cancel_sync')
+}
+
+// 見せている競合の、選んだ側を渡す。すべての競合に1つずつ選んでいなければ受け取られず`false`。
+export function resolveSyncConflicts(choices: ConflictChoice[]): Promise<boolean> {
+  return invoke('resolve_sync_conflicts', { choices })
+}
+
+// 書き込む前の確認の答えを渡す。真なら書き込む。偽は、競合があれば選択に戻り、無ければ止まる。
+export function approveSyncWrite(write: boolean): Promise<boolean> {
+  return invoke('approve_sync_write', { write })
 }

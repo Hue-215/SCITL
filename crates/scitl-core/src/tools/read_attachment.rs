@@ -8,6 +8,7 @@ use crate::error::{CoreError, Result};
 use crate::llm::AttachmentNote;
 
 use super::args::Args;
+use super::{IdPosition, IdTable, Segment};
 use super::{Run, ToolOutput};
 
 internal_tool! {
@@ -17,6 +18,7 @@ internal_tool! {
     /// 説明はモデルの能力で変えない(`docs/spec/tools.md`「添付の読み込み」)。
     name: "read_attachment",
     run: Run::ReadAttachment,
+    ids: super::IdPositions { arguments: ATTACHMENT_ID_ARGUMENT, result: ATTACHMENT_NOTE },
     "Read an attachment of this conversation by its id in a scitl:attachments block. Use it \
      for an attachment whose delivered is \"name_only\", or whose content is no longer in the \
      conversation. Images can be read only if the current model accepts images; other kinds \
@@ -30,6 +32,16 @@ internal_tool! {
         "additionalProperties": false
     }),
 }
+
+const ATTACHMENT_ID_ARGUMENT: &[IdPosition] = &[IdPosition {
+    path: &[Segment::Key("attachment_id")],
+    table: IdTable::Attachment,
+}];
+
+const ATTACHMENT_NOTE: &[IdPosition] = &[IdPosition {
+    path: &[Segment::Key("id")],
+    table: IdTable::Attachment,
+}];
 
 /// 渡し方は発言に付いた添付と同じく`attachments::delivery`で決める。読み込んだ中身は
 /// このターンでモデルに渡すので、直近の発言の添付と同じ扱いにする。名前しか渡せない添付
@@ -182,7 +194,6 @@ mod tests {
         assert_eq!(output.image_hashes, ["a".repeat(64)]);
     }
 
-    /// 記録に残した結果は、本文や画像を渡したと伝えたままにしない。
     #[test]
     fn a_recorded_result_placed_without_its_content_says_name_only() {
         let f = Fixture::new();
