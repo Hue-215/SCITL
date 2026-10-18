@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 
 use tauri::ipc::{Channel, IpcResponse};
 
 /// 画面が起動時に渡す知らせ先。知らせ先は、渡し直したら置き換え、画面を読み込み直すときに捨てる
-/// (`AppState::forget_watchers`)。複製は同じ知らせ先を指す。
-pub struct Watcher<T>(Arc<Mutex<State<T>>>);
+/// (`AppState::forget_watchers`)。
+pub struct Watcher<T>(Mutex<State<T>>);
 
 struct State<T> {
     channel: Option<Channel<T>>,
@@ -50,21 +50,17 @@ impl<T> Watcher<T> {
 
 impl<T> Default for Watcher<T> {
     fn default() -> Self {
-        Self(Arc::new(Mutex::new(State {
+        Self(Mutex::new(State {
             channel: None,
             unsent: None,
-        })))
-    }
-}
-
-impl<T> Clone for Watcher<T> {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use tauri::ipc::InvokeResponseBody;
 
     use super::*;
@@ -95,17 +91,6 @@ mod tests {
         assert_eq!(watcher.current().map(|c| c.id()), Some(second.id()));
         watcher.forget();
         assert!(watcher.current().is_none());
-    }
-
-    /// `finished_sink`が持つ複製にも、読み込み直したときに捨てたことが届く。
-    #[test]
-    fn clones_share_the_channel() {
-        let watcher = Watcher::default();
-        let held = watcher.clone();
-        watcher.set(channel());
-        assert!(held.current().is_some());
-        watcher.forget();
-        assert!(held.current().is_none());
     }
 
     #[test]

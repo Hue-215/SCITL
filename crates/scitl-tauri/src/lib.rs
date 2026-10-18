@@ -36,9 +36,6 @@ pub struct AppState {
     pub finished: Box<dyn Fn(FinishedTurn) + Send + Sync>,
     /// 通知を押して開くことになった会話の知らせ先(`commands::requested_chat::watch_requested_chats`)。
     pub requested_chat: Watcher<Chat>,
-    /// 通知の許可を求める説明を出す知らせ先(`commands::notification_prompt::watch_notification_prompt`)。
-    /// 応答生成が終わったことの受け口と分け持つ。
-    pub notification_prompt: Watcher<()>,
     /// 端末間の同期が触るもの(`commands::sync`)。
     pub sync: scitl_sync::Context,
     /// 同期の競合で、画面が選んだ側の受け口(`commands::sync::resolve_sync_conflicts`)。
@@ -67,7 +64,6 @@ impl AppState {
     fn forget_watchers(&self) {
         self.dropped.forget();
         self.requested_chat.forget();
-        self.notification_prompt.forget();
     }
 }
 
@@ -212,7 +208,7 @@ pub fn run() {
             commands::memories::delete_memory,
             commands::link::open_link,
             commands::requested_chat::watch_requested_chats,
-            commands::notification_prompt::watch_notification_prompt,
+            commands::notification_prompt::notification_prompt_due,
             commands::notification_prompt::answer_notification_prompt,
             commands::sync::sync_listen,
             commands::sync::sync_connect,
@@ -301,12 +297,10 @@ fn open_app_state(data: PathBuf, cache: &Path) -> Result<AppState, DataDirError>
     let attachments = Arc::new(Attachments::new(store));
 
     let settings = Arc::new(settings);
-    let notification_prompt = Watcher::default();
     Ok(AppState {
         db,
         generating: generating_set(&settings),
-        finished: finished_sink(&settings, &notification_prompt),
-        notification_prompt,
+        finished: finished_sink(&settings),
         settings,
         attachments,
         export_dir: data.export(),
@@ -336,30 +330,16 @@ fn generating_set(_settings: &Arc<Settings>) -> InFlightSet<Chat> {
 
 /// 応答生成が終わったことの受け口。Androidでは、利用者がアプリを見ていなければ通知で知らせる
 /// (`architecture/concurrency.md`「Androidで裏へ回ったとき」)。通知の文面は表示言語で出す。
-/// 通知の許可をまだ求めていなければ、求める前の説明を画面に出させる。
 #[cfg(target_os = "android")]
-fn finished_sink(
-    settings: &Arc<Settings>,
-    prompt: &Watcher<()>,
-) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+fn finished_sink(settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     let settings = Arc::clone(settings);
-    let prompt = prompt.clone();
     Box::new(move |finished| {
-        scitl_core::reply_notification::post(settings.display_language(), &finished);
-        let Some(channel) = prompt.current() else {
-            return;
-        };
-        if scitl_core::permissions::notification_prompt_due() {
-            let _ = channel.send(());
-        }
+        scitl_core::reply_notification::post(settings.display_language(), &finished)
     })
 }
 
 #[cfg(not(target_os = "android"))]
-fn finished_sink(
-    _settings: &Arc<Settings>,
-    _prompt: &Watcher<()>,
-) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
+fn finished_sink(_settings: &Arc<Settings>) -> Box<dyn Fn(FinishedTurn) + Send + Sync> {
     Box::new(scitl_core::orchestration::discard_finished)
 }
 
