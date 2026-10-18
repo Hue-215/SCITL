@@ -526,13 +526,60 @@ mod tests {
         for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
             assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
         }
-        // 引数が上のKotlinの宣言とずれると、デバッグビルドでは通り、配布用のビルドでだけ見つからなくなる。
-        for kept in [
-            "public static void post(android.content.Context, long, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);",
-            "public static long takeRequestedChat();",
-        ] {
-            assert!(proguard.contains(kept), "{kept}");
+        // 外す指定がRustの呼ぶシグネチャとずれると、デバッグビルドでは通り、配布用のビルドでだけ
+        // 見つからなくなる。
+        let core = include_str!("../../scitl-core/src/reply_notification.rs");
+        for method in ["post", "takeRequestedChat"] {
+            let kept = proguard_member(method, called_signature(core, method));
+            assert!(proguard.contains(&kept), "{kept}");
         }
+    }
+
+    /// `source`の中で、`jni_str!("{method}")`の次に書いた`jni_sig!`の文字列。
+    fn called_signature<'a>(source: &'a str, method: &str) -> &'a str {
+        let call = source
+            .find(&format!("jni_str!(\"{method}\")"))
+            .unwrap_or_else(|| panic!("{method}"));
+        let rest = &source[call..];
+        let rest = &rest[rest.find("jni_sig!(").expect(method)..];
+        let rest = &rest[rest.find('"').expect(method) + 1..];
+        &rest[..rest.find('"').expect(method)]
+    }
+
+    /// JNIのシグネチャ(`(Landroid/content/Context;J)V`等)を、proguardの静的メソッドの書き方にする。
+    fn proguard_member(method: &str, signature: &str) -> String {
+        fn java_type(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+            match chars.next().expect("型が途中で終わった") {
+                'Z' => "boolean".into(),
+                'B' => "byte".into(),
+                'C' => "char".into(),
+                'S' => "short".into(),
+                'I' => "int".into(),
+                'J' => "long".into(),
+                'F' => "float".into(),
+                'D' => "double".into(),
+                'V' => "void".into(),
+                '[' => format!("{}[]", java_type(chars)),
+                'L' => chars
+                    .by_ref()
+                    .take_while(|&c| c != ';')
+                    .map(|c| if c == '/' { '.' } else { c })
+                    .collect(),
+                other => panic!("知らない型: {other}"),
+            }
+        }
+        let mut chars = signature
+            .strip_prefix('(')
+            .expect(signature)
+            .chars()
+            .peekable();
+        let mut args = Vec::new();
+        while chars.peek() != Some(&')') {
+            args.push(java_type(&mut chars));
+        }
+        chars.next();
+        let ret = java_type(&mut chars);
+        format!("public static {ret} {method}({});", args.join(", "))
     }
 
     /// 許可の状態の問い合わせと求め方を、coreが名前と値で指せること(`scitl_core::permissions`)。
