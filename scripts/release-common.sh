@@ -44,7 +44,7 @@ check_no_absolute_paths() {
   local paths=("$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root" "$root_physical")
   # ホームの親(/home等)は、上のどれでもない形(別のリンク越しの場所等)で焼き込まれた分を拾うため。
   for path in "$(dirname "$home")" "$(dirname "$home_physical")"; do
-    [[ "$path" == / ]] || paths+=("$path")
+    [[ "$path" == / || " ${paths[*]} " == *" $path "* ]] || paths+=("$path")
   done
   found_list="$(mktemp)"
   for path in "${paths[@]}"; do
