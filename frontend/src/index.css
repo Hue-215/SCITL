@@ -1765,7 +1765,7 @@ details[open] > summary > .disclosure-mark,
   text-align: center;
 }
 
-/* 入力の画面は、上下だけ中央に寄せる(欄は左揃えのまま)。 */
+/* 入力と書き込む前の確認は、上下だけ中央に寄せる(欄と枠は左揃えのまま)。 */
 .sync-screen-body.middle {
   min-height: 100%;
   justify-content: safe center;
@@ -1831,8 +1831,7 @@ details[open] > summary > .disclosure-mark,
   letter-spacing: 0.12em;
 }
 
-/* 端末ごと・競合の側ごとの枠。見出しの帯の下に中身を置く。枠は.provider-cardと同じく枠線だけで
-   塗らない。 */
+/* 端末ごと・競合の側ごとの枠。.provider-cardと同じく枠線だけで塗らない。 */
 .sync-box {
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius);

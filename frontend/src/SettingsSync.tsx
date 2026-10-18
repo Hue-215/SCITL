@@ -134,8 +134,8 @@ function SideContent({ side, kind }: { side: ConflictSide; kind: ConflictView['k
 }
 
 // 同期の画面の1枚。見出しの帯・本文・下のボタンの行。情報の少ない画面(`centered`)は本文を
-// 上下左右の中央に、入力の画面(`middle`)は上下だけ中央に寄せる。競合の画面(`fill`)は本文を
-// 高さいっぱいに広げる。
+// 上下左右の中央に、入力と書き込む前の確認(`middle`)は上下だけ中央に寄せる。競合の画面(`fill`)は
+// 本文を高さいっぱいに広げる。
 function SyncPage({
   title,
   aside,
