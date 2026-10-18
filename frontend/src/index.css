@@ -1765,7 +1765,7 @@ details[open] > summary > .disclosure-mark,
   text-align: center;
 }
 
-/* 入力の画面は、上下だけ中央に寄せる(欄は左揃えのまま)。 */
+/* 入力と書き込む前の確認は、上下だけ中央に寄せる(欄と枠は左揃えのまま)。 */
 .sync-screen-body.middle {
   min-height: 100%;
   justify-content: safe center;
@@ -1831,11 +1831,33 @@ details[open] > summary > .disclosure-mark,
   letter-spacing: 0.12em;
 }
 
+/* 端末ごと・競合の側ごとの枠。.provider-cardと同じく枠線だけで塗らない。 */
+.sync-box {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.sync-box-head {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-weight: var(--font-weight-strong);
+}
+
+.sync-box-body {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
 .sync-counts {
   display: grid;
   grid-template-columns: max-content max-content;
   gap: var(--space-1) var(--space-5);
   text-align: start;
+}
+
+/* 枠の中では件数を右端に寄せる。 */
+.sync-box .sync-counts {
+  grid-template-columns: 1fr max-content;
+  column-gap: var(--space-4);
 }
 
 .sync-count {
@@ -1848,7 +1870,7 @@ details[open] > summary > .disclosure-mark,
 }
 
 /* 競合の両側は上下に積み、枠ごとに中身をスクロールさせる。選んだ側は枠の色で示す(選択状態は
-   ラジオボタン自身も持つ)。枠は.provider-cardと同じく枠線だけで塗らない。 */
+   ラジオボタン自身も持つ)。 */
 .sync-sides {
   flex: 1;
   min-height: 0;
@@ -1868,8 +1890,6 @@ details[open] > summary > .disclosure-mark,
   min-height: 8rem;
   display: flex;
   flex-direction: column;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
   cursor: pointer;
 }
 
@@ -1881,9 +1901,6 @@ details[open] > summary > .disclosure-mark,
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: var(--border-width) solid var(--color-border);
-  font-weight: var(--font-weight-strong);
 }
 
 .sync-side-scroll {

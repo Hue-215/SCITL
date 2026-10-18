@@ -134,8 +134,8 @@ function SideContent({ side, kind }: { side: ConflictSide; kind: ConflictView['k
 }
 
 // 同期の画面の1枚。見出しの帯・本文・下のボタンの行。情報の少ない画面(`centered`)は本文を
-// 上下左右の中央に、入力の画面(`middle`)は上下だけ中央に寄せる。競合の画面(`fill`)は本文を
-// 高さいっぱいに広げる。
+// 上下左右の中央に、入力と書き込む前の確認(`middle`)は上下だけ中央に寄せる。競合の画面(`fill`)は
+// 本文を高さいっぱいに広げる。
 function SyncPage({
   title,
   aside,
@@ -177,21 +177,23 @@ function ConfirmCounts({ label, counts }: { label: string; counts: WriteCounts }
     ['settings.sync.count_memories', counts.memories],
   ] as const
   return (
-    <div>
-      <p>{label}</p>
-      {rows.every(([, count]) => count === 0) ? (
-        <p>{t('settings.sync.confirm_nothing')}</p>
-      ) : (
-        <dl className="sync-counts">
-          {rows.map(([key, count]) => (
-            <div key={key} className="sync-count">
-              <dt>{t(key)}</dt>
-              <dd>{t('settings.sync.count', { count })}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-    </div>
+    <section className="sync-box">
+      <h2 className="sync-box-head">{label}</h2>
+      <div className="sync-box-body">
+        {rows.every(([, count]) => count === 0) ? (
+          <p className="settings-hint">{t('settings.sync.confirm_nothing')}</p>
+        ) : (
+          <dl className="sync-counts">
+            {rows.map(([key, count]) => (
+              <div key={key} className="sync-count">
+                <dt>{t(key)}</dt>
+                <dd>{t('settings.sync.count', { count })}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -264,9 +266,9 @@ function ConflictChooser({
         {(['ours', 'theirs'] as const).map((side) => (
           <label
             key={side}
-            className={chosen[conflict.id] === side ? 'sync-side selected' : 'sync-side'}
+            className={`sync-box sync-side${chosen[conflict.id] === side ? ' selected' : ''}`}
           >
-            <span className="sync-side-choice">
+            <span className="sync-box-head sync-side-choice">
               <input
                 type="radio"
                 name={conflict.id}
@@ -539,7 +541,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     return (
       <SyncPage
         title={t('settings.sync.confirm_heading')}
-        layout="centered"
+        layout="middle"
         actions={
           <>
             <button type="button" onClick={() => void approveSyncWrite(false)}>
