@@ -191,8 +191,8 @@ interface ToolRowProps {
   onSetEnabled: (enabled: boolean) => void
 }
 
-// 説明はツールチップにせず行の下に開く。指で操作する端末ではツールチップが出ず、長い説明は
-// 切られることもある(モデルへはこの説明がそのまま渡る)。
+// 説明はツールチップにせず行の下に開く。モデルへ渡す説明と同じ文字列なので、全文を読めるようにする
+// (ツールチップは指で操作する端末では出ず、長いと切られることもある)。
 function ToolRow({ tool, checked, onSetEnabled }: ToolRowProps) {
   const [descriptionOpen, setDescriptionOpen] = useState(false)
 

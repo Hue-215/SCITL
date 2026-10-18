@@ -530,7 +530,6 @@ option {
   color: var(--color-text-secondary);
 }
 
-/* タスクの見出しと外部ツールの行で共通。 */
 .description-toggle {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);

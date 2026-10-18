@@ -443,12 +443,15 @@ fn mcp_server_view(s: &McpServerConfig, catalog: &ToolCatalog) -> McpServerView 
 const MAX_LABEL_CHARS: usize = 100;
 
 /// `exposable`は公開できるかの判定(`tools::external`)の結果。一覧が未取得のツールは引数
-/// スキーマが分からないので、名前だけで判定した結果を渡す。
+/// スキーマが分からないので、名前だけで判定した結果を渡す。空白だけの説明は無いものとして渡す
+/// (画面に開いても何も見えない「説明」を出さないため)。
 fn mcp_tool_view(name: &str, description: Option<&str>, exposable: bool) -> McpToolView {
     McpToolView {
         name: name.to_string(),
         label: text::display_label(name, MAX_LABEL_CHARS),
-        description: description.map(external::description_of),
+        description: description
+            .map(external::description_of)
+            .filter(|d| !d.trim().is_empty()),
         exposable,
     }
 }
@@ -495,6 +498,12 @@ mod tests {
         assert_eq!(view.tools.len(), 2);
         assert_eq!(view.tools[1].name, "gone");
         assert!(view.tools[1].description.is_none());
+    }
+
+    #[test]
+    fn tool_view_drops_descriptions_that_are_only_blank() {
+        let tool = mcp_tool_view("search", Some(" \n\u{200B}\t"), true);
+        assert!(tool.description.is_none());
     }
 
     #[test]
