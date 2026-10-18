@@ -3,8 +3,8 @@ import { answerNotificationPrompt, notificationPromptDue } from './api'
 import { ChoiceDialog } from './Dialog'
 import { t } from './i18n'
 
-// 通知の許可を求める前の説明。起動時に出す。ボタンを押さずに閉じたときは答えたことにせず、
-// 次の起動時にまた出る。
+// 通知の許可を求める前の説明。画面を読み込んだときに出す。ボタンを押さずに閉じたときは
+// 答えたことにせず、次に読み込んだときにまた出る。
 export default function NotificationPrompt() {
   const [open, setOpen] = useState(false)
   useEffect(() => {
