@@ -522,17 +522,43 @@ mod tests {
         assert!(activity.contains(&format!("const val CHAT_GENERAL = {CHAT_GENERAL}L")));
         assert!(activity.contains(&format!("const val CHAT_NONE = {CHAT_NONE}L")));
         // 名前で引くクラスとメソッドを、配布用のビルドの難読化から外してあること。
+        assert_kept(
+            include_str!("../../scitl-core/src/reply_notification.rs"),
+            &[
+                ("NOTIFIER_CLASS", NOTIFIER_CLASS),
+                ("ACTIVITY_CLASS", ACTIVITY_CLASS),
+            ],
+        );
+    }
+
+    /// `core`が`app_class`で引いたクラスに続けて呼ぶメソッドが、そのクラスの`-keep`に同じシグネチャで
+    /// あること。ずれると、デバッグビルドでは通り、配布用のビルドでだけ見つからなくなる。
+    /// `classes`は、`core`で使う定数の名前と値。`core`の`jni_str!`は、すべて`app_class`の直後の呼び出しである前提。
+    fn assert_kept(core: &str, classes: &[(&str, &str)]) {
         let proguard = include_str!("../gen/android/app/proguard-rules.pro");
-        for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
-            assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
+        let mut rest = core;
+        let mut checked = 0;
+        while let Some((_, after)) = rest.split_once("app_class(env, context, ") {
+            let (name, after) = after.split_once(')').expect("app_class");
+            let (_, class) = classes
+                .iter()
+                .find(|(n, _)| *n == name)
+                .unwrap_or_else(|| panic!("classesに無い: {name}"));
+            let head = format!("-keep class net.niigo.scitl.{class} {{\n");
+            let (block, _) = proguard
+                .split_once(&head)
+                .and_then(|(_, rest)| rest.split_once("\n}"))
+                .unwrap_or_else(|| panic!("{head}"));
+            let (_, method) = after.split_once("jni_str!(\"").expect(name);
+            let (method, _) = method.split_once('"').expect(name);
+            let kept = proguard_member(method, called_signature(after, method));
+            assert!(block.lines().any(|line| line.trim() == kept), "{kept}");
+            checked += 1;
+            rest = after;
         }
-        // 外す指定がRustの呼ぶシグネチャとずれると、デバッグビルドでは通り、配布用のビルドでだけ
-        // 見つからなくなる。
-        let core = include_str!("../../scitl-core/src/reply_notification.rs");
-        for method in ["post", "takeRequestedChat"] {
-            let kept = proguard_member(method, called_signature(core, method));
-            assert!(proguard.contains(&kept), "{kept}");
-        }
+        // 書き方がずれて拾えなかった呼び出しを、黙って飛ばさない。
+        assert!(checked > 0);
+        assert_eq!(checked, core.matches("jni_str!(").count());
     }
 
     /// `source`の中で、`jni_str!("{method}")`の次に書いた`jni_sig!`の文字列。
@@ -588,39 +614,26 @@ mod tests {
         use scitl_core::permissions::{ASK, BLOCKED, GRANTED, PERMISSIONS_CLASS};
         let kotlin =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/Permissions.kt");
-        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
         assert!(kotlin.contains(&format!("object {PERMISSIONS_CLASS} {{")));
-        // Rust側は静的メソッドとして呼び、配布用のビルドでは名前で引く。
-        for (kotlin_method, kept) in [
-            (
-                "camera(context: Context): Int",
-                "public static int camera(android.content.Context);",
-            ),
-            (
-                "openSettings(context: Context)",
-                "public static void openSettings(android.content.Context);",
-            ),
-            (
-                "notificationPromptDue(context: Context): Boolean",
-                "public static boolean notificationPromptDue(android.content.Context);",
-            ),
-            (
-                "answerNotificationPrompt(context: Context, allow: Boolean)",
-                "public static void answerNotificationPrompt(android.content.Context, boolean);",
-            ),
+        // Rust側は静的メソッドとして呼ぶ。
+        for kotlin_method in [
+            "camera(context: Context): Int",
+            "openSettings(context: Context)",
+            "notificationPromptDue(context: Context): Boolean",
+            "answerNotificationPrompt(context: Context, allow: Boolean)",
         ] {
             assert!(
                 kotlin.contains(&format!("@JvmStatic\n  fun {kotlin_method}")),
                 "{kotlin_method}"
             );
-            assert!(proguard.contains(kept), "{kept}");
         }
         for (name, value) in [("GRANTED", GRANTED), ("ASK", ASK), ("BLOCKED", BLOCKED)] {
             assert!(kotlin.contains(&format!("const val {name} = {value}\n")));
         }
-        assert!(proguard.contains(&format!(
-            "-keep class net.niigo.scitl.{PERMISSIONS_CLASS} {{"
-        )));
+        assert_kept(
+            include_str!("../../scitl-core/src/permissions.rs"),
+            &[("PERMISSIONS_CLASS", PERMISSIONS_CLASS)],
+        );
     }
 
     /// 同期のQRの読み取りを、coreが名前と値で指せること(`scitl_core::qr_scan`)。
@@ -641,8 +654,10 @@ mod tests {
         ] {
             assert!(scanner.contains(&format!("const val {name} = \"{value}\"")));
         }
-        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
-        assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{SCANNER_CLASS} {{")));
+        assert_kept(
+            include_str!("../../scitl-core/src/qr_scan.rs"),
+            &[("SCANNER_CLASS", SCANNER_CLASS)],
+        );
         // アプリがカメラの権限を持つので、画面(WebView)からのカメラ等の要求はネイティブの側で断る。
         let activity =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
