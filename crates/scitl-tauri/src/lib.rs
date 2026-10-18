@@ -522,16 +522,22 @@ mod tests {
         assert!(activity.contains(&format!("const val CHAT_GENERAL = {CHAT_GENERAL}L")));
         assert!(activity.contains(&format!("const val CHAT_NONE = {CHAT_NONE}L")));
         // 名前で引くクラスとメソッドを、配布用のビルドの難読化から外してあること。
-        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
-        for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
-            assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
-        }
-        // 外す指定がRustの呼ぶシグネチャとずれると、デバッグビルドでは通り、配布用のビルドでだけ
-        // 見つからなくなる。
         let core = include_str!("../../scitl-core/src/reply_notification.rs");
-        for method in ["post", "takeRequestedChat"] {
+        assert_kept(core, NOTIFIER_CLASS, &["post"]);
+        assert_kept(core, ACTIVITY_CLASS, &["takeRequestedChat"]);
+    }
+
+    /// `class`の`-keep`に、`core`が呼ぶシグネチャのままの`methods`があること。
+    /// ずれると、デバッグビルドでは通り、配布用のビルドでだけ見つからなくなる。
+    fn assert_kept(core: &str, class: &str, methods: &[&str]) {
+        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
+        let head = format!("-keep class net.niigo.scitl.{class} {{\n");
+        let start = proguard.find(&head).unwrap_or_else(|| panic!("{head}")) + head.len();
+        let block = &proguard[start..];
+        let block = &block[..block.find("\n}").expect(class)];
+        for method in methods {
             let kept = proguard_member(method, called_signature(core, method));
-            assert!(proguard.contains(&kept), "{kept}");
+            assert!(block.contains(&kept), "{kept}");
         }
     }
 
@@ -588,39 +594,31 @@ mod tests {
         use scitl_core::permissions::{ASK, BLOCKED, GRANTED, PERMISSIONS_CLASS};
         let kotlin =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/Permissions.kt");
-        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
         assert!(kotlin.contains(&format!("object {PERMISSIONS_CLASS} {{")));
-        // Rust側は静的メソッドとして呼び、配布用のビルドでは名前で引く。
-        for (kotlin_method, kept) in [
-            (
-                "camera(context: Context): Int",
-                "public static int camera(android.content.Context);",
-            ),
-            (
-                "openSettings(context: Context)",
-                "public static void openSettings(android.content.Context);",
-            ),
-            (
-                "notificationPromptDue(context: Context): Boolean",
-                "public static boolean notificationPromptDue(android.content.Context);",
-            ),
-            (
-                "answerNotificationPrompt(context: Context, allow: Boolean)",
-                "public static void answerNotificationPrompt(android.content.Context, boolean);",
-            ),
+        for kotlin_method in [
+            "camera(context: Context): Int",
+            "openSettings(context: Context)",
+            "notificationPromptDue(context: Context): Boolean",
+            "answerNotificationPrompt(context: Context, allow: Boolean)",
         ] {
             assert!(
                 kotlin.contains(&format!("@JvmStatic\n  fun {kotlin_method}")),
                 "{kotlin_method}"
             );
-            assert!(proguard.contains(kept), "{kept}");
         }
         for (name, value) in [("GRANTED", GRANTED), ("ASK", ASK), ("BLOCKED", BLOCKED)] {
             assert!(kotlin.contains(&format!("const val {name} = {value}\n")));
         }
-        assert!(proguard.contains(&format!(
-            "-keep class net.niigo.scitl.{PERMISSIONS_CLASS} {{"
-        )));
+        assert_kept(
+            include_str!("../../scitl-core/src/permissions.rs"),
+            PERMISSIONS_CLASS,
+            &[
+                "camera",
+                "openSettings",
+                "notificationPromptDue",
+                "answerNotificationPrompt",
+            ],
+        );
     }
 
     /// 同期のQRの読み取りを、coreが名前と値で指せること(`scitl_core::qr_scan`)。
@@ -641,8 +639,11 @@ mod tests {
         ] {
             assert!(scanner.contains(&format!("const val {name} = \"{value}\"")));
         }
-        let proguard = include_str!("../gen/android/app/proguard-rules.pro");
-        assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{SCANNER_CLASS} {{")));
+        assert_kept(
+            include_str!("../../scitl-core/src/qr_scan.rs"),
+            SCANNER_CLASS,
+            &["available", "start", "poll", "cancel"],
+        );
         // アプリがカメラの権限を持つので、画面(WebView)からのカメラ等の要求はネイティブの側で断る。
         let activity =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/MainActivity.kt");
