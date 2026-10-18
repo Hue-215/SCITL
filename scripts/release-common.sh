@@ -37,7 +37,7 @@ export_remap_flags() {
   export CARGO_ENCODED_RUSTFLAGS
 }
 
-# 渡されたフォルダのすべてのファイルに、置き換えたはずのパスが残っていないかを確かめる。
+# 渡されたフォルダのすべてのファイルに、置き換えたはずのパスとホームの親が残っていないかを確かめる。
 # 残っていれば、その場所を書いて1を返す。
 check_no_absolute_paths() {
   local dir="$1" found=0 found_list path status file
