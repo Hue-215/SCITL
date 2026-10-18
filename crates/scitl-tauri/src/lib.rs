@@ -526,6 +526,13 @@ mod tests {
         for class in [NOTIFIER_CLASS, ACTIVITY_CLASS] {
             assert!(proguard.contains(&format!("-keep class net.niigo.scitl.{class} {{")));
         }
+        // 引数が上のKotlinの宣言とずれると、デバッグビルドでは通り、配布用のビルドでだけ見つからなくなる。
+        for kept in [
+            "public static void post(android.content.Context, long, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);",
+            "public static long takeRequestedChat();",
+        ] {
+            assert!(proguard.contains(kept), "{kept}");
+        }
     }
 
     /// 許可の状態の問い合わせと求め方を、coreが名前と値で指せること(`scitl_core::permissions`)。
