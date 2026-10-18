@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { MAX_TITLE_CHARS } from './bindings/SharedConstants'
 import { ConfirmDialog } from './Dialog'
 import { isolated, t } from './i18n'
-import { DescriptionToggle } from './DescriptionToggle'
+import { DisclosureMark } from './Icon'
 import { isCommitEnter } from './keyboard'
 import MenuButton from './MenuButton'
 import { taskName, taskProgress } from './taskName'
@@ -101,10 +101,15 @@ export default function TaskHeader({
           <div className="chat-header-meta">
             <p>{t('task_header.meta', taskProgress(task))}</p>
             {task.description && (
-              <DescriptionToggle
-                open={descriptionOpen}
-                onToggle={() => setDescriptionOpen((open) => !open)}
-              />
+              <button
+                type="button"
+                className="chat-header-description-toggle"
+                aria-expanded={descriptionOpen}
+                onClick={() => setDescriptionOpen((open) => !open)}
+              >
+                <DisclosureMark />
+                {t('common.description_toggle')}
+              </button>
             )}
           </div>
           {task.description && descriptionOpen && <p>{task.description}</p>}

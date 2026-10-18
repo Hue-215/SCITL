@@ -348,7 +348,7 @@ option {
   .entry-actions button,
   .code-block button,
   .chat-model-toggle,
-  .description-toggle
+  .chat-header-description-toggle
 ) {
   background-color: transparent;
   --elevation: initial;
@@ -374,7 +374,8 @@ option {
   .entry-actions button,
   .code-block button,
   .chat-model-toggle,
-  .description-toggle,
+  .chat-header-description-toggle,
+  .tool-description-toggle,
   .chip,
   .choice {
     min-height: var(--control-size-md);
@@ -530,14 +531,11 @@ option {
   color: var(--color-text-secondary);
 }
 
-.description-toggle {
+/* 締切と進捗の文に続けて置く。間隔はボタンの内側の余白が作る。 */
+.chat-header-description-toggle {
+  flex-shrink: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-}
-
-/* 締切と進捗の文に続けて置く。間隔はボタンの内側の余白が作る。 */
-.chat-header-meta > .description-toggle {
-  flex-shrink: 0;
 }
 
 /* 取り消せない操作のメニュー項目。 */
@@ -1504,10 +1502,17 @@ details[open] > summary > .disclosure-mark,
   flex-shrink: 0;
 }
 
-.tool-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+/* 開閉はツール呼び出しの行(.tool-call)と同じく、塗りも浮きも持たない文字だけの形にする。
+   <details>にすると開いた中身が行の中に入るので、ボタンで開いて行の下に出す。 */
+.tool-description-toggle,
+.tool-description-toggle:not(:disabled):active {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  background-color: transparent;
+  --elevation: initial;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 /* サーバーが書いた説明は改行で段落や引数の一覧を書くことが多いので、改行を残す。 */
