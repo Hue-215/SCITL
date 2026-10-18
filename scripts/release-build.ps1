@@ -139,6 +139,13 @@ try {
                 }
             }
         }
+        # 上の一覧に無い形(`subst`のドライブ越し等)や、UTF-8でない(MSVCが`__FILE__`をANSIコード
+        # ページで入れる)ユーザー名のパスも、この部分はASCIIなので拾える。
+        $match = [regex]::Match($text, '[A-Za-z]:[\\/]Users[\\/]', 'IgnoreCase')
+        if ($match.Success) {
+            Write-Host "ユーザーフォルダの形のパスが残っています: $($match.Value)($($file.FullName))"
+            $found = $true
+        }
     }
     if ($found) { exit 1 }
     Write-Host "絶対パスは残っておらず、VCランタイムのDLLも求めていません: $dist"

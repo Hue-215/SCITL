@@ -42,7 +42,8 @@ export_remap_flags() {
 check_no_absolute_paths() {
   local dir="$1" found=0 found_list path status file
   found_list="$(mktemp)"
-  for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root" "$root_physical"; do
+  # /homeは、ほかの6つのどれでもない形(別のリンク越しの場所等)で焼き込まれた分を拾うため。
+  for path in "$home" "$home_physical" "$cargo_home" "$cargo_home_physical" "$root" "$root_physical" /home; do
     # grepは見つからないと1、読めないファイルがあると2で終わる。2は検査の漏れなので止める。
     status=0
     LC_ALL=C grep -r -l -Z -a -F -- "$path/" "$dir" >"$found_list" || status=$?
