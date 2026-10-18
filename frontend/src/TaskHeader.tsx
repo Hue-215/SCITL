@@ -108,7 +108,7 @@ export default function TaskHeader({
                 onClick={() => setDescriptionOpen((open) => !open)}
               >
                 <DisclosureMark />
-                {t('task_header.description_toggle')}
+                {t('common.description_toggle')}
               </button>
             )}
           </div>
