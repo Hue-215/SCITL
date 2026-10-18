@@ -1834,8 +1834,6 @@ details[open] > summary > .disclosure-mark,
 /* 端末ごと・競合の側ごとの枠。見出しの帯の下に中身を置く。枠は.provider-cardと同じく枠線だけで
    塗らない。 */
 .sync-box {
-  display: flex;
-  flex-direction: column;
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius);
 }
@@ -1846,16 +1844,7 @@ details[open] > summary > .disclosure-mark,
   font-weight: var(--font-weight-strong);
 }
 
-/* 書き込む前の確認。中央寄せの本文の中で、両方の枠を本文の幅いっぱいに揃える。 */
-.sync-devices {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  text-align: start;
-}
-
-.sync-device-body {
+.sync-box-body {
   padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
@@ -1867,7 +1856,7 @@ details[open] > summary > .disclosure-mark,
 }
 
 /* 枠の中では件数を右端に寄せる。 */
-.sync-device-body.sync-counts {
+.sync-box .sync-counts {
   grid-template-columns: 1fr max-content;
   column-gap: var(--space-4);
 }
@@ -1900,6 +1889,8 @@ details[open] > summary > .disclosure-mark,
   flex: 1 1 0;
   /* 低い窓でも中身が少しは見える高さ。ここでしか使わない値なのでトークン化しない。 */
   min-height: 8rem;
+  display: flex;
+  flex-direction: column;
   cursor: pointer;
 }
 

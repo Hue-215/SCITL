@@ -179,18 +179,20 @@ function ConfirmCounts({ label, counts }: { label: string; counts: WriteCounts }
   return (
     <section className="sync-box">
       <h2 className="sync-box-head">{label}</h2>
-      {rows.every(([, count]) => count === 0) ? (
-        <p className="sync-device-body settings-hint">{t('settings.sync.confirm_nothing')}</p>
-      ) : (
-        <dl className="sync-device-body sync-counts">
-          {rows.map(([key, count]) => (
-            <div key={key} className="sync-count">
-              <dt>{t(key)}</dt>
-              <dd>{t('settings.sync.count', { count })}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
+      <div className="sync-box-body">
+        {rows.every(([, count]) => count === 0) ? (
+          <p className="settings-hint">{t('settings.sync.confirm_nothing')}</p>
+        ) : (
+          <dl className="sync-counts">
+            {rows.map(([key, count]) => (
+              <div key={key} className="sync-count">
+                <dt>{t(key)}</dt>
+                <dd>{t('settings.sync.count', { count })}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
     </section>
   )
 }
@@ -264,7 +266,7 @@ function ConflictChooser({
         {(['ours', 'theirs'] as const).map((side) => (
           <label
             key={side}
-            className={chosen[conflict.id] === side ? 'sync-box sync-side selected' : 'sync-box sync-side'}
+            className={`sync-box sync-side${chosen[conflict.id] === side ? ' selected' : ''}`}
           >
             <span className="sync-box-head sync-side-choice">
               <input
@@ -539,7 +541,7 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
     return (
       <SyncPage
         title={t('settings.sync.confirm_heading')}
-        layout="centered"
+        layout="middle"
         actions={
           <>
             <button type="button" onClick={() => void approveSyncWrite(false)}>
@@ -551,10 +553,8 @@ export function SyncScreen({ onClose }: { onClose: () => void }) {
           </>
         }
       >
-        <div className="sync-devices">
-          <ConfirmCounts label={t('settings.sync.ours')} counts={confirm.ours} />
-          <ConfirmCounts label={t('settings.sync.theirs')} counts={confirm.theirs} />
-        </div>
+        <ConfirmCounts label={t('settings.sync.ours')} counts={confirm.ours} />
+        <ConfirmCounts label={t('settings.sync.theirs')} counts={confirm.theirs} />
       </SyncPage>
     )
   }
