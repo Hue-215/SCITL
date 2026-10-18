@@ -113,7 +113,7 @@ mod android {
     }
 
     /// 通知の許可を求める説明を出すか。Android 13以上で、許可が無く、まだ求めていないとき。
-    /// 引けなければ出さない(応答生成のたびに呼ぶので、失敗が続くと説明を出し続けることになる)。
+    /// 引けなければ出さない(起動のたびに呼ぶので、失敗が続くと説明を出し続けることになる)。
     pub fn notification_prompt_due() -> bool {
         let due = with_application(|env, context| {
             let class = app_class(env, context, PERMISSIONS_CLASS)?;

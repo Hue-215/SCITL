@@ -120,9 +120,9 @@ export function watchRequestedChats(onRequest: (chat: Chat) => void): Promise<vo
   return invoke('watch_requested_chats', { onRequest: new Channel(onRequest) })
 }
 
-// 通知の許可を求める前の説明を出す知らせを受ける。出すかはRust側が決める。
-export function watchNotificationPrompt(onPrompt: () => void): Promise<void> {
-  return invoke('watch_notification_prompt', { onPrompt: new Channel<null>(onPrompt) })
+// 通知の許可を求める前の説明を出すか。
+export function notificationPromptDue(): Promise<boolean> {
+  return invoke('notification_prompt_due')
 }
 
 // 説明への答え。真ならOSのダイアログが出る。

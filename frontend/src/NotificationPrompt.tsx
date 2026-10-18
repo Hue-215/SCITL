@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
-import { answerNotificationPrompt, watchNotificationPrompt } from './api'
+import { answerNotificationPrompt, notificationPromptDue } from './api'
 import { ChoiceDialog } from './Dialog'
 import { t } from './i18n'
 
-// 通知の許可を求める前の説明。Rust側が応答生成の終わりに知らせてきたら出す。ボタンを押さずに
-// 閉じたときは答えたことにせず、次の応答生成の終わりにまた出る。
+// 通知の許可を求める前の説明。起動時に出す。ボタンを押さずに閉じたときは答えたことにせず、
+// 次の起動時にまた出る。
 export default function NotificationPrompt() {
   const [open, setOpen] = useState(false)
   useEffect(() => {
-    // 知らせ先は1つで、渡し直すと置き換わる。
-    watchNotificationPrompt(() => setOpen(true)).catch(() => undefined)
+    notificationPromptDue()
+      .then(setOpen)
+      .catch(() => undefined)
   }, [])
   if (!open) return null
   const answer = (allow: boolean) => {
