@@ -533,30 +533,32 @@ mod tests {
 
     /// `core`が`app_class`で引いたクラスに続けて呼ぶメソッドが、そのクラスの`-keep`に同じシグネチャで
     /// あること。ずれると、デバッグビルドでは通り、配布用のビルドでだけ見つからなくなる。
-    /// `classes`は、`core`で使う定数の名前と値。
+    /// `classes`は、`core`で使う定数の名前と値。`core`の`jni_str!`は、すべて`app_class`の直後の呼び出しである前提。
     fn assert_kept(core: &str, classes: &[(&str, &str)]) {
         let proguard = include_str!("../gen/android/app/proguard-rules.pro");
         let mut rest = core;
         let mut checked = 0;
         while let Some((_, after)) = rest.split_once("app_class(env, context, ") {
-            let (name, after) = after.split_once(')').unwrap();
+            let (name, after) = after.split_once(')').expect("app_class");
             let (_, class) = classes
                 .iter()
                 .find(|(n, _)| *n == name)
-                .unwrap_or_else(|| panic!("{name}"));
+                .unwrap_or_else(|| panic!("classesに無い: {name}"));
             let head = format!("-keep class net.niigo.scitl.{class} {{\n");
             let (block, _) = proguard
                 .split_once(&head)
                 .and_then(|(_, rest)| rest.split_once("\n}"))
                 .unwrap_or_else(|| panic!("{head}"));
-            let (_, method) = after.split_once("jni_str!(\"").unwrap();
-            let (method, _) = method.split_once('"').unwrap();
+            let (_, method) = after.split_once("jni_str!(\"").expect(name);
+            let (method, _) = method.split_once('"').expect(name);
             let kept = proguard_member(method, called_signature(after, method));
-            assert!(block.contains(&kept), "{kept}");
+            assert!(block.lines().any(|line| line.trim() == kept), "{kept}");
             checked += 1;
             rest = after;
         }
+        // 書き方がずれて拾えなかった呼び出しを、黙って飛ばさない。
         assert!(checked > 0);
+        assert_eq!(checked, core.matches("jni_str!(").count());
     }
 
     /// `source`の中で、`jni_str!("{method}")`の次に書いた`jni_sig!`の文字列。
@@ -613,6 +615,7 @@ mod tests {
         let kotlin =
             include_str!("../gen/android/app/src/main/java/net/niigo/scitl/Permissions.kt");
         assert!(kotlin.contains(&format!("object {PERMISSIONS_CLASS} {{")));
+        // Rust側は静的メソッドとして呼ぶ。
         for kotlin_method in [
             "camera(context: Context): Int",
             "openSettings(context: Context)",
