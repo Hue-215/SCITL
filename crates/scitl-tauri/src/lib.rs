@@ -522,23 +522,41 @@ mod tests {
         assert!(activity.contains(&format!("const val CHAT_GENERAL = {CHAT_GENERAL}L")));
         assert!(activity.contains(&format!("const val CHAT_NONE = {CHAT_NONE}L")));
         // 名前で引くクラスとメソッドを、配布用のビルドの難読化から外してあること。
-        let core = include_str!("../../scitl-core/src/reply_notification.rs");
-        assert_kept(core, NOTIFIER_CLASS, &["post"]);
-        assert_kept(core, ACTIVITY_CLASS, &["takeRequestedChat"]);
+        assert_kept(
+            include_str!("../../scitl-core/src/reply_notification.rs"),
+            &[
+                ("NOTIFIER_CLASS", NOTIFIER_CLASS),
+                ("ACTIVITY_CLASS", ACTIVITY_CLASS),
+            ],
+        );
     }
 
-    /// `class`の`-keep`に、`core`が呼ぶシグネチャのままの`methods`があること。
-    /// ずれると、デバッグビルドでは通り、配布用のビルドでだけ見つからなくなる。
-    fn assert_kept(core: &str, class: &str, methods: &[&str]) {
+    /// `core`が`app_class`で引いたクラスに続けて呼ぶメソッドが、そのクラスの`-keep`に同じシグネチャで
+    /// あること。ずれると、デバッグビルドでは通り、配布用のビルドでだけ見つからなくなる。
+    /// `classes`は、`core`で使う定数の名前と値。
+    fn assert_kept(core: &str, classes: &[(&str, &str)]) {
         let proguard = include_str!("../gen/android/app/proguard-rules.pro");
-        let head = format!("-keep class net.niigo.scitl.{class} {{\n");
-        let start = proguard.find(&head).unwrap_or_else(|| panic!("{head}")) + head.len();
-        let block = &proguard[start..];
-        let block = &block[..block.find("\n}").expect(class)];
-        for method in methods {
-            let kept = proguard_member(method, called_signature(core, method));
+        let mut rest = core;
+        let mut checked = 0;
+        while let Some((_, after)) = rest.split_once("app_class(env, context, ") {
+            let (name, after) = after.split_once(')').unwrap();
+            let (_, class) = classes
+                .iter()
+                .find(|(n, _)| *n == name)
+                .unwrap_or_else(|| panic!("{name}"));
+            let head = format!("-keep class net.niigo.scitl.{class} {{\n");
+            let (block, _) = proguard
+                .split_once(&head)
+                .and_then(|(_, rest)| rest.split_once("\n}"))
+                .unwrap_or_else(|| panic!("{head}"));
+            let (_, method) = after.split_once("jni_str!(\"").unwrap();
+            let (method, _) = method.split_once('"').unwrap();
+            let kept = proguard_member(method, called_signature(after, method));
             assert!(block.contains(&kept), "{kept}");
+            checked += 1;
+            rest = after;
         }
+        assert!(checked > 0);
     }
 
     /// `source`の中で、`jni_str!("{method}")`の次に書いた`jni_sig!`の文字列。
@@ -611,13 +629,7 @@ mod tests {
         }
         assert_kept(
             include_str!("../../scitl-core/src/permissions.rs"),
-            PERMISSIONS_CLASS,
-            &[
-                "camera",
-                "openSettings",
-                "notificationPromptDue",
-                "answerNotificationPrompt",
-            ],
+            &[("PERMISSIONS_CLASS", PERMISSIONS_CLASS)],
         );
     }
 
@@ -641,8 +653,7 @@ mod tests {
         }
         assert_kept(
             include_str!("../../scitl-core/src/qr_scan.rs"),
-            SCANNER_CLASS,
-            &["available", "start", "poll", "cancel"],
+            &[("SCANNER_CLASS", SCANNER_CLASS)],
         );
         // アプリがカメラの権限を持つので、画面(WebView)からのカメラ等の要求はネイティブの側で断る。
         let activity =
